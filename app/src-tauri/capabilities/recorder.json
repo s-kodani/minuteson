@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "recorder",
+  "description": "Recorder panel: read the same canonical session updates.",
+  "windows": ["recorder"],
+  "permissions": ["core:default", "core:event:allow-listen"]
+}
