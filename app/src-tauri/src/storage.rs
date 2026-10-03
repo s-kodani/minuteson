@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+mod analysis;
 mod drafts;
 mod jobs;
 mod recordings;

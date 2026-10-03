@@ -298,7 +298,7 @@ impl Storage {
     }
 }
 
-fn analysis_content_hash(
+pub(super) fn analysis_content_hash(
     transaction: &Transaction<'_>,
     revision_id: &str,
 ) -> Result<String, String> {
