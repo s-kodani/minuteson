@@ -8,6 +8,8 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+mod revisions;
+
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
 const MIGRATION_3: &str = include_str!("migrations/0003_revisions.sql");
