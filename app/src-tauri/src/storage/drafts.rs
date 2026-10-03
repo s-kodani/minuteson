@@ -188,6 +188,76 @@ impl Storage {
             updated_at: now,
         })
     }
+
+    #[allow(dead_code)]
+    pub fn undo_last_transcript_edit(
+        &self,
+        draft_id: &str,
+        expected_lock_version: i64,
+    ) -> Result<TranscriptDraft, String> {
+        if expected_lock_version < 0 {
+            return Err("下書きの版番号が不正です".into());
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let current: Option<(String, String, String, String, i64)> = transaction.query_row(
+            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript'",
+            params![draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let (meeting_id, base_analysis_id, current_json, current_hash, lock_version) =
+            current.ok_or("下書きが見つかりません")?;
+        if lock_version != expected_lock_version {
+            return Err("別の画面で下書きが更新されました。再読込してください".into());
+        }
+        if draft_hash(&current_json) != current_hash {
+            return Err("保存済み下書きの内容が変化しています".into());
+        }
+        let last_operation: Option<(i64, String, String, String)> = transaction.query_row(
+            "SELECT sequence, inverse_json, before_hash, after_hash FROM edit_operations WHERE draft_id = ?1 ORDER BY sequence DESC LIMIT 1",
+            params![draft_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let (sequence, inverse_json, prior_hash, last_hash) =
+            last_operation.ok_or("取り消せる編集がありません")?;
+        if last_hash != current_hash || draft_hash(&inverse_json) != prior_hash {
+            return Err("編集履歴と下書きの整合が取れません".into());
+        }
+        ensure_committed_analysis(&transaction, &meeting_id, &base_analysis_id)?;
+        let inverse_payload: TranscriptDraftPayload =
+            serde_json::from_str(&inverse_json).map_err(|error| error.to_string())?;
+        let payload = validate_payload(&transaction, &base_analysis_id, inverse_payload)?;
+        if serde_json::to_string(&payload).map_err(|error| error.to_string())? != inverse_json {
+            return Err("取り消しデータの形式が不正です".into());
+        }
+        let now = now_ms()?;
+        transaction.execute(
+            "INSERT INTO edit_operations (id, draft_id, sequence, operation_kind, payload_json, inverse_json, before_hash, after_hash, created_at) VALUES (?1, ?2, ?3, 'undo', ?4, ?5, ?6, ?7, ?8)",
+            params![Uuid::new_v4().to_string(), draft_id, sequence + 1, inverse_json, current_json, current_hash, prior_hash, now],
+        ).map_err(|error| error.to_string())?;
+        let changed = transaction.execute(
+            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
+            params![inverse_json, prior_hash, now, draft_id, lock_version],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("下書きの更新競合が発生しました".into());
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(TranscriptDraft {
+            id: draft_id.to_owned(),
+            meeting_id,
+            base_analysis_id,
+            payload,
+            content_hash: prior_hash,
+            lock_version: lock_version + 1,
+            updated_at: now,
+        })
+    }
 }
 
 fn load_draft(
@@ -450,6 +520,57 @@ mod tests {
         assert_eq!(
             storage.load_transcript_draft(&meeting.id).unwrap(),
             Some(draft)
+        );
+    }
+
+    #[test]
+    fn undo_requires_current_version_and_preserves_auditable_chain() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let original = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assert!(storage.undo_last_transcript_edit(&original.id, 0).is_err());
+        let first = storage
+            .save_transcript_draft(
+                &original.id,
+                0,
+                TranscriptDraftPayload {
+                    schema_version: 1,
+                    speaker_names: vec![],
+                    utterances: vec![UtteranceEdit {
+                        utterance_id: "utterance-1".into(),
+                        effective_text: "修正文".into(),
+                        speaker_ids: vec!["speaker-1".into()],
+                    }],
+                },
+            )
+            .unwrap();
+        assert!(storage.undo_last_transcript_edit(&original.id, 0).is_err());
+        let undone = storage.undo_last_transcript_edit(&original.id, 1).unwrap();
+        assert_eq!(undone.payload, original.payload);
+        assert_eq!(undone.content_hash, original.content_hash);
+        assert_eq!(undone.lock_version, 2);
+        let redone = storage.undo_last_transcript_edit(&original.id, 2).unwrap();
+        assert_eq!(redone.payload, first.payload);
+        assert_eq!(redone.content_hash, first.content_hash);
+        assert_eq!(redone.lock_version, 3);
+        let operations: i64 = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM edit_operations WHERE draft_id = ?1",
+                params![original.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(operations, 3);
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(redone)
         );
     }
 }
