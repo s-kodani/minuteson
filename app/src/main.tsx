@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
 import { TranscriptEditor } from "./transcript";
+import { flushPendingEdits } from "./draft-save";
+import type { RecordingSnapshot } from "./session";
 import "./style.css";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -83,7 +85,51 @@ function MainWindow() {
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState("");
   const [recoveredCount, setRecoveredCount] = useState(0);
+  const [navigationBusy, setNavigationBusy] = useState(false);
+  const navigating = useRef(false);
   const priorPhase = useRef<string | null>(null);
+  const withSavedEdits = async (action: () => void | Promise<void>) => {
+    if (navigating.current) return;
+    navigating.current = true;
+    setNavigationBusy(true);
+    setMeetingError("");
+    try {
+      await flushPendingEdits();
+      await action();
+    } catch (cause) {
+      setMeetingError(`操作を完了できませんでした。編集内容はこの画面に保持しています: ${String(cause)}`);
+    } finally {
+      navigating.current = false;
+      setNavigationBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ quit: boolean }>("main-close-requested", (event) => {
+      if (disposed) return;
+      void withSavedEdits(async () => {
+        if (event.payload.quit) {
+          let recording = await invoke<RecordingSnapshot>("get_recording_snapshot");
+          const active = () => ["preparing", "recording", "stopping", "saving"].includes(recording.phase);
+          if (active()) {
+            if (!window.confirm("録音を停止・保存してアプリを終了しますか？")) return;
+            if (recording.phase === "preparing" || recording.phase === "recording") await invoke("stop_recording");
+            const deadline = Date.now() + 60_000;
+            while (active()) {
+              if (Date.now() > deadline) throw new Error("録音の保存処理が続いています。保存完了後にもう一度終了してください。");
+              await new Promise((resolve) => window.setTimeout(resolve, 200));
+              recording = await invoke<RecordingSnapshot>("get_recording_snapshot");
+            }
+            if (recording.phase === "error") throw new Error(recording.errorMessage ?? "録音の保存状況を確認してください。");
+          }
+        }
+        await invoke("finish_main_close", { quit: event.payload.quit });
+      });
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((cause: unknown) => setMeetingError(String(cause)));
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
   useEffect(() => {
     if (!isTauri()) return;
     void invoke<Meeting[]>("list_meetings").then(setMeetings).catch((error: unknown) => setMeetingError(String(error)));
@@ -145,30 +191,26 @@ function MainWindow() {
   };
   const createMeeting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setMeetingBusy(true);
-    setMeetingError("");
-    try {
-      const created = await invoke<Meeting>("create_meeting", { title: meetingTitle });
-      setMeetingTitle("");
-      setMeetings(await invoke<Meeting[]>("list_meetings"));
-      setSelectedMeeting(created);
-      setRenameTitle(created.title);
-    } catch (error) {
-      setMeetingError(String(error));
-    } finally {
-      setMeetingBusy(false);
-    }
+    await withSavedEdits(async () => {
+      setMeetingBusy(true);
+      try {
+        const created = await invoke<Meeting>("create_meeting", { title: meetingTitle });
+        setMeetingTitle("");
+        setMeetings(await invoke<Meeting[]>("list_meetings"));
+        setSelectedMeeting(created);
+        setRenameTitle(created.title);
+      } finally {
+        setMeetingBusy(false);
+      }
+    });
   };
   const selectMeeting = async (id: string) => {
-    setMeetingError("");
-    try {
+    await withSavedEdits(async () => {
       const meeting = await invoke<Meeting | null>("get_meeting", { id });
       if (!meeting) throw new Error("会議が見つかりません");
       setSelectedMeeting(meeting);
       setRenameTitle(meeting.title);
-    } catch (error) {
-      setMeetingError(String(error));
-    }
+    });
   };
   const renameMeeting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -187,17 +229,14 @@ function MainWindow() {
     }
   };
   const reloadMeetings = async () => {
-    setMeetingError("");
-    try {
+    await withSavedEdits(async () => {
       setMeetings(await invoke<Meeting[]>("list_meetings"));
       if (selectedMeeting) {
         const current = await invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id });
         setSelectedMeeting(current);
         setRenameTitle(current?.title ?? "");
       }
-    } catch (error) {
-      setMeetingError(String(error));
-    }
+    });
   };
   const canPreview = state.kind === "ready" && state.snapshot.phase === "idle";
   return (
@@ -222,8 +261,8 @@ function MainWindow() {
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
             <div className="card-actions">
-              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || captureBusy || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
-              <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
+              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
+              <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
               <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
             </div>
             {!captureAvailable && <p className="capture-note">macOS録音プローブが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
@@ -231,17 +270,18 @@ function MainWindow() {
             {action.error && <p className="action-error" role="alert">{action.error}</p>}
           </section>
           <section className="meetings-card" aria-label="保存済み会議">
-            <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri()}>再読込</button></div>
+            <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri() || navigationBusy}>再読込</button></div>
+            {navigationBusy && <p role="status">編集内容を保存して操作を完了しています。</p>}
             {recoveredCount > 0 && <p role="status">前回の録音 {recoveredCount} 件を検証して復旧しました。</p>}
             <form className="meeting-form" onSubmit={createMeeting}>
               <label htmlFor="meeting-title">会議名</label>
-              <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy} /><button type="submit" disabled={!isTauri() || meetingBusy || !meetingTitle.trim()}>会議を作成</button></div>
+              <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy || navigationBusy} /><button type="submit" disabled={!isTauri() || meetingBusy || navigationBusy || !meetingTitle.trim()}>会議を作成</button></div>
             </form>
             {meetingError && <p className="action-error" role="alert">{meetingError}</p>}
-            {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)}>開く</button></li>)}</ul>}
-            {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}><h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label><div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy} /><button type="submit" disabled={meetingBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => setSelectedMeeting(null)}>閉じる</button></div><p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。文字起こしと議事録は準備中です。" : "録音状態を確認してください。"}</p></form>}
+            {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={navigationBusy}>開く</button></li>)}</ul>}
+            {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}><h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label><div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || navigationBusy} /><button type="submit" disabled={meetingBusy || navigationBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={navigationBusy}>閉じる</button></div><p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。文字起こしと議事録は準備中です。" : "録音状態を確認してください。"}</p></form>}
           </section>
-          {selectedMeeting && <TranscriptEditor key={selectedMeeting.id} meetingId={selectedMeeting.id} />}
+          {selectedMeeting && <TranscriptEditor key={selectedMeeting.id} meetingId={selectedMeeting.id} locked={navigationBusy} />}
           <div className="next-grid">
             <section><span className="step-number">01</span><h2>保存基盤</h2><p>会議名の保存・再読込に対応。音声と編集履歴はこれから接続します。</p><span className="soon">一部実装</span></section>
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>

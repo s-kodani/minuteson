@@ -4,8 +4,28 @@ mod storage;
 
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
+use std::sync::atomic::{AtomicBool, Ordering};
 use storage::{AnalysisView, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
-use tauri::{Emitter, Manager, State, WebviewWindow, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
+
+#[derive(Default)]
+struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can finish closing".into());
+    }
+    if window.state::<SessionStore>().snapshot().is_active() {
+        if quit {
+            return Err("録音の停止と保存が完了していません".into());
+        }
+        return window.hide().map_err(|error| error.to_string());
+    }
+    window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
+    window.app_handle().exit(0);
+    Ok(())
+}
 
 #[tauri::command]
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
@@ -200,6 +220,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SessionStore::default())
         .manage(RecorderController::default())
+        .manage(ExitGuard::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
@@ -232,7 +253,8 @@ pub fn run() {
             get_transcript_draft,
             begin_transcript_draft,
             save_transcript_draft,
-            undo_transcript_edit
+            undo_transcript_edit,
+            finish_main_close
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -244,15 +266,29 @@ pub fn run() {
                         let _ = window.hide();
                     }
                 } else if window.label() == "main" {
+                    api.prevent_close();
                     if window.state::<SessionStore>().snapshot().is_active() {
-                        api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        window.app_handle().exit(0);
+                        let _ =
+                            window.emit("main-close-requested", serde_json::json!({"quit": false}));
                     }
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start mon desktop");
+        .build(tauri::generate_context!())
+        .expect("failed to start mon desktop")
+        .run(|app, event| {
+            if let RunEvent::ExitRequested { api, .. } = event {
+                if !app.state::<ExitGuard>().0.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                        let _ =
+                            main.emit("main-close-requested", serde_json::json!({"quit": true}));
+                    }
+                }
+            }
+        });
 }

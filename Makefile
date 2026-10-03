@@ -4,6 +4,7 @@ check: lint test build-macos-probe check-app
 
 check-app:
 	npm --prefix app run build
+	npm --prefix app test
 	cd app/src-tauri && cargo fmt --check && cargo test --locked --offline
 
 test:

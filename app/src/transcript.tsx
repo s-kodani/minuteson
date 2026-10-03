@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 
 interface Speaker {
   id: string;
@@ -56,31 +57,35 @@ function timeLabel(microseconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function TranscriptEditor({ meetingId }: { meetingId: string }) {
+export function TranscriptEditor({ meetingId, locked = false }: { meetingId: string; locked?: boolean }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [payload, setPayload] = useState<DraftPayload | null>(null);
+  const [saveQueue] = useState(() => new DraftSaveQueue<DraftPayload, Draft>(
+    (draftId, expectedLockVersion, payload) => invoke<Draft>("save_transcript_draft", { draftId, expectedLockVersion, payload }),
+    canonicalPayload,
+  ));
+  const [saveSnapshot, setSaveSnapshot] = useState(() => saveQueue.snapshot());
+  const { draft, payload, dirty, saving, error: saveError } = saveSnapshot;
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveBlocked, setSaveBlocked] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(0);
-  const savingRef = useRef(false);
-  const dirty = Boolean(draft && payload && JSON.stringify(canonicalPayload(payload)) !== JSON.stringify(draft.payload));
+
+  useEffect(() => {
+    const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
+    const unregister = registerPendingEdits(() => saveQueue.flush());
+    return () => { unsubscribe(); unregister(); };
+  }, [saveQueue]);
 
   const reload = async () => {
     setLoading(true);
     setError("");
-    setSaveBlocked(false);
     try {
       const [current, working] = await Promise.all([
         invoke<Analysis | null>("get_current_analysis", { meetingId }),
         invoke<Draft | null>("get_transcript_draft", { meetingId }),
       ]);
       setAnalysis(current);
-      setDraft(working);
-      setPayload(working?.payload ?? null);
+      saveQueue.load(working);
       setPage(0);
     } catch (cause) {
       setError(String(cause));
@@ -95,29 +100,12 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
   }, [meetingId]);
 
   useEffect(() => {
-    if (!draft || !payload || !dirty || saveBlocked || draft.baseAnalysisId !== analysis?.id) return;
+    if (!draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
     const timer = window.setTimeout(() => {
-      if (savingRef.current) return;
-      savingRef.current = true;
-      setSaving(true);
-      const toSave = canonicalPayload(payload);
-      void invoke<Draft>("save_transcript_draft", {
-        draftId: draft.id,
-        expectedLockVersion: draft.lockVersion,
-        payload: toSave,
-      }).then((saved) => {
-        setDraft(saved);
-        setError("");
-      }).catch((cause: unknown) => {
-        setError(`自動保存できませんでした。競合または入力内容を確認し、必要なら再読込してください: ${String(cause)}`);
-        setSaveBlocked(true);
-      }).finally(() => {
-        savingRef.current = false;
-        setSaving(false);
-      });
+      void saveQueue.flush().catch(() => { /* The queue retains the error and local edit. */ });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [analysis?.id, draft, payload, dirty, saveBlocked]);
+  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue]);
 
   const begin = async () => {
     if (!analysis) return;
@@ -125,8 +113,7 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
     setError("");
     try {
       const created = await invoke<Draft>("begin_transcript_draft", { meetingId, analysisId: analysis.id });
-      setDraft(created);
-      setPayload(created.payload);
+      saveQueue.load(created);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -140,8 +127,7 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
     setError("");
     try {
       const previous = await invoke<Draft>("undo_transcript_edit", { draftId: draft.id, expectedLockVersion: draft.lockVersion });
-      setDraft(previous);
-      setPayload(previous.payload);
+      saveQueue.load(previous);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -150,16 +136,14 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
   };
 
   const changeName = (speakerId: string, value: string) => {
-    setPayload((current) => {
-      if (!current) return current;
+    saveQueue.edit((current) => {
       const other = current.speaker_names.filter((item) => item.speaker_id !== speakerId);
       return { ...current, speaker_names: [...other, { speaker_id: speakerId, display_name: value || null }] };
     });
   };
 
   const changeUtterance = (utterance: Utterance, update: Partial<DraftPayload["utterances"][number]>) => {
-    setPayload((current) => {
-      if (!current) return current;
+    saveQueue.edit((current) => {
       const previous = current.utterances.find((item) => item.utterance_id === utterance.id);
       const other = current.utterances.filter((item) => item.utterance_id !== utterance.id);
       return {
@@ -175,24 +159,25 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
   };
 
   const shown = analysis?.utterances.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
-  const editable = Boolean(draft && payload && draft.baseAnalysisId === analysis?.id);
+  const matchingBase = Boolean(draft && draft.baseAnalysisId === analysis?.id);
+  const editable = Boolean(matchingBase && payload && !locked && !loading && !busy);
 
   return (
     <section className="transcript-card" aria-label="文字起こし編集">
       <div className="card-head">
         <h2>文字起こし</h2>
-        <button type="button" className="small-secondary" onClick={() => { if (!dirty || window.confirm("未保存の編集を破棄して再読込しますか？")) void reload(); }} disabled={loading || saving}>再読込</button>
+        <button type="button" className="small-secondary" onClick={() => { if (!dirty || window.confirm("未保存の編集を破棄して再読込しますか？")) void reload(); }} disabled={loading || saving || busy || locked}>再読込</button>
       </div>
       {loading && <p>解析結果を読み込んでいます。</p>}
       {!loading && !analysis && !error && <p>確定済みの解析結果はまだありません。</p>}
       {analysis && <>
         <div className="transcript-actions">
-          {!draft && <button type="button" onClick={() => void begin()} disabled={busy}>編集を開始</button>}
-          {draft && <span role="status">{saveBlocked ? "保存要確認" : saving ? "保存中" : dirty ? "未保存" : "保存済み"}</span>}
-          {saveBlocked && <button type="button" className="small-secondary" onClick={() => { setError(""); setSaveBlocked(false); }} disabled={saving}>保存を再試行</button>}
-          {editable && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
+          {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
+          {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty ? "未保存" : "保存済み"}</span>}
+          {saveError && <button type="button" className="small-secondary" onClick={() => { void saveQueue.retry().catch(() => {}); }} disabled={saving || locked}>保存を再試行</button>}
+          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || locked || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
         </div>
-        {draft && !editable && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
+        {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         <div className="speaker-grid">
           {analysis.speakers.map((speaker) => {
             const edited = payload?.speaker_names.find((item) => item.speaker_id === speaker.id);
@@ -214,6 +199,7 @@ export function TranscriptEditor({ meetingId }: { meetingId: string }) {
         {analysis.utterances.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(analysis.utterances.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => setPage((value) => value + 1)} disabled={(page + 1) * PAGE_SIZE >= analysis.utterances.length}>次へ</button></div>}
       </>}
       {error && <p className="action-error" role="alert">{error}</p>}
+      {saveError && <p className="action-error" role="alert">自動保存できませんでした。編集は画面に保持しています。内容を確認して保存を再試行してください: {saveError}</p>}
     </section>
   );
 }
