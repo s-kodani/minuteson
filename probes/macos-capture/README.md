@@ -39,6 +39,8 @@ Core Audio Tapsの権限説明には`NSAudioCaptureUsageDescription`が必要な
 
 Core Audio Taps方式では、現在音声を扱っているプロセスのPIDを列挙して必要なものを複数指定する。子プロセスが後から開始された場合は今回のタップに自動追加されない。ブラウザの実行構成ごとに対象PIDを確認する。
 
+アプリから明示停止する場合は`--stop-on-file`を付ける。このモードでは`--duration`を上限として録音し、出力ディレクトリ内に`stop.request`が作成されると約200ms以内に停止・CAF確定を開始する。ファイルを置くだけで録音成功にはならず、プロセス終了と`manifest.json`の`state`、両CAFの検証を待つ。既定動作は従来どおり指定時間で停止する。
+
 ```sh
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture --list-audio-processes
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture \

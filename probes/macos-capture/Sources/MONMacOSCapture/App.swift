@@ -10,6 +10,7 @@ private struct Options {
   let mode: String
   let backend: String
   let targetPIDs: [pid_t]
+  let stopOnFile: Bool
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -18,6 +19,7 @@ private struct Options {
     var mode = "system"
     var backend = "screencapturekit"
     var targetPIDs: [pid_t] = []
+    var stopOnFile = false
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -59,6 +61,8 @@ private struct Options {
           throw ProbeError.usage("--backend must be screencapturekit or coreaudio")
         }
         backend = arguments[index]
+      case "--stop-on-file":
+        stopOnFile = true
       case "--help", "-h":
         throw ProbeError.help
       default:
@@ -84,7 +88,7 @@ private struct Options {
     }
     return Self(
       output: output.standardizedFileURL, duration: duration, scenario: scenario,
-      mode: mode, backend: backend, targetPIDs: targetPIDs)
+      mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile)
   }
 }
 
@@ -440,7 +444,17 @@ private enum Main {
         }
         manifest.state = "recording"
         try write(manifest, to: manifestURL)
-        try await Task.sleep(for: .seconds(options.duration))
+        if options.stopOnFile {
+          let stopRequest = options.output.appendingPathComponent("stop.request")
+          let deadline = ContinuousClock.now.advanced(by: .seconds(options.duration))
+          while ContinuousClock.now < deadline
+            && !FileManager.default.fileExists(atPath: stopRequest.path)
+          {
+            try await Task.sleep(for: .milliseconds(200))
+          }
+        } else {
+          try await Task.sleep(for: .seconds(options.duration))
+        }
         mic.stop()
         if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
         let micStats = mic.snapshot()
@@ -481,7 +495,7 @@ private enum Main {
            mon-macos-capture --list-audio-processes
            mon-macos-capture --output <directory> [--duration <seconds>]
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
-             [--backend screencapturekit|coreaudio]
+             [--backend screencapturekit|coreaudio] [--stop-on-file]
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
 
