@@ -516,5 +516,77 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
         .utterances
         .iter()
         .all(|utterance| utterance.attribution_state == "unknown"));
-    eprintln!("real whisper.cpp worker integration: {} verified utterances, 1 durable unit, candidate adopted manually", view.utterances.len());
+    let draft = storage
+        .create_transcript_draft(&meeting, &candidate)
+        .unwrap();
+    let mut payload = draft.payload.clone();
+    payload
+        .utterances
+        .push(super::super::drafts::UtteranceEdit {
+            utterance_id: view.utterances[0].id.clone(),
+            effective_text: "再試行後も保持する編集".into(),
+            speaker_ids: vec![],
+        });
+    let edited = storage
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+    let (mut spec, _) = storage.fixed_job_input(&job.id).unwrap();
+    spec.operation_id = "real-cancelled-source".into();
+    let source = storage.enqueue_job(spec).unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &source.id, &|| false, &|snapshot| {
+        if snapshot.state == "running" && snapshot.completed_units == 1 {
+            storage.request_job_pause(&source.id, "user").unwrap();
+        }
+    })
+    .unwrap()
+    .is_none());
+    let source = storage
+        .finish_job(&source.id, 1, "cancelled", None)
+        .unwrap();
+    let fixed = storage.fixed_job_input(&source.id).unwrap();
+    let asset_count = || {
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM file_assets", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    let before = asset_count();
+    let retry = RetryRequest {
+        meeting_id: meeting.clone(),
+        job_id: source.id.clone(),
+        operation_id: "real-retry".into(),
+        expected_spec_hash: source.spec_hash.clone(),
+    }
+    .enqueue(&storage)
+    .unwrap();
+    assert_eq!(retry.completed_units, 1);
+    assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, retry.id);
+    let retry_candidate = process(&storage, &retry.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(asset_count(), before); // No new unit WAV/JSON: all completed results are reused.
+    assert_eq!(storage.fixed_job_input(&retry.id).unwrap().1, fixed.1);
+    assert_eq!(storage.fixed_job_input(&source.id).unwrap(), fixed);
+    assert_eq!(storage.get_job(&source.id).unwrap(), source);
+    assert_eq!(storage.get_job(&retry.id).unwrap().state, "succeeded");
+    assert_eq!(
+        storage.load_current_analysis(&meeting).unwrap().unwrap(),
+        view
+    );
+    assert_eq!(
+        storage.load_transcript_draft(&meeting).unwrap().unwrap(),
+        edited
+    );
+    assert!(!storage
+        .load_visible_analysis(&meeting, &retry_candidate)
+        .unwrap()
+        .unwrap()
+        .utterances
+        .is_empty());
+    eprintln!("real whisper.cpp worker integration: {} verified utterances, 1 durable unit, candidate adopted manually; cancelled job retried with all result assets reused and current edits preserved", view.utterances.len());
 }

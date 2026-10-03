@@ -39,6 +39,14 @@ export interface AnalysisJob {
   errorCode: string | null;
   outputAnalysisId: string | null;
   pauseReason: string | null;
+  specHash: string;
+  retryOfJobId: string | null;
+  attempt: number;
+}
+
+export function canRetryJob(job: AnalysisJob, jobs: AnalysisJob[]): boolean {
+  return job.kind === "transcription" && ["failed", "cancelled"].includes(job.state)
+    && !jobs.some((child) => child.retryOfJobId === job.id && ["queued", "running", "pausing", "paused", "interrupted"].includes(child.state));
 }
 
 export function jobLabel(state: string): string {

@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
-import { assertReviewedVersion, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
+import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
 import { timeLabel, type Analysis, type Draft } from "./transcript";
 
 type Preferences = VersionedDraft<AnalysisPreferences>;
@@ -46,6 +46,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const [preview, setPreview] = useState<Preview | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const retryOperations = useRef(new Map<string, string>());
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const mounted = useRef(true);
 
@@ -125,6 +126,17 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const jobAction = (command: string, jobId: string) => run(async () => {
     await invoke(command, { jobId }); await refreshRef.current();
   });
+  const retryJob = (job: AnalysisJob) => {
+    if (!window.confirm(`この文字起こしを同じ固定条件で再試行しますか？ 保存済み ${job.completedUnits} 区間を再照合して引き継ぎます。現在の設定画面の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`)) return;
+    return run(async () => {
+      const operationId = retryOperations.current.get(job.id) ?? crypto.randomUUID();
+      retryOperations.current.set(job.id, operationId);
+      try {
+        await invoke("retry_transcription", { request: { meetingId, jobId: job.id, operationId, expectedSpecHash: job.specHash } });
+        retryOperations.current.delete(job.id);
+      } finally { await refreshRef.current(); }
+    });
+  };
   const openPreview = (summary: VersionSummary, restoring: boolean, opener: HTMLElement) => {
     returnFocus.current = opener;
     return run(() => saved(async () => {
@@ -182,10 +194,11 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     <label className="prompt-label">今回の用語ヒント（認識効果は未検証）<textarea value={prompt} maxLength={8000} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="例：点検日。自動置換ではなくエンジンへのヒントです。" /></label>
     <div className="analysis-actions"><button type="button" disabled={disabled || !recorded || recordingActive || pending || !engine || !engineConfigured(engine)} onClick={() => void start()}>文字起こしを開始</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先して解析を停止します" : "端末内で処理"}</span></div>
     {!recorded && <p>保存済み録音が必要です。音声ファイルの取り込みは今後接続します。</p>}
-    {jobs.length > 0 && <ul className="analysis-jobs" aria-label="解析ジョブ">{jobs.map((job) => <li key={job.id}><div><strong>{jobLabel(job.state)}</strong><span>{job.kind} · 保存済み {job.completedUnits}{job.totalUnits === null ? "" : ` / ${job.totalUnits}`} 区間{job.pauseReason === "recording" ? " · 録音のため停止" : ""}</span>{job.errorCode && <span className="action-error">{job.errorCode}</span>}</div><div className="analysis-actions">
+    {jobs.length > 0 && <ul className="analysis-jobs" aria-label="解析ジョブ">{jobs.map((job) => <li key={job.id}><div><strong>{jobLabel(job.state)}{job.attempt > 1 ? ` · 試行 ${job.attempt}` : ""}</strong><span>{job.kind} · 保存済み {job.completedUnits}{job.totalUnits === null ? "" : ` / ${job.totalUnits}`} 区間{job.pauseReason === "recording" ? " · 録音のため停止" : ""}</span><small>ジョブ {job.id.slice(0, 8)}{job.retryOfJobId ? ` · 再試行元 ${job.retryOfJobId.slice(0, 8)}` : ""}</small>{job.errorCode && <span className="action-error">{job.errorCode}</span>}</div><div className="analysis-actions">
       {["queued", "running"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", job.id)}>一時停止</button>}
       {["paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", job.id)}>再開</button>}
       {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("解析ジョブを取り消しますか？ 録音と現在版は削除しません。")) void jobAction("cancel_analysis_job", job.id); }}>取消</button>}
+      {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     {error && <p className="action-error" role="alert">{error}</p>}

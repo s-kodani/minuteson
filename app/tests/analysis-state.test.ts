@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertReviewedVersion, engineConfigured, jobLabel, type VersionState } from "../src/analysis-state.ts";
+import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type VersionState, type AnalysisJob } from "../src/analysis-state.ts";
 
 const state: VersionState = { meetingLockVersion: 2, currentId: "current", previousId: "previous", draft: null, versions: [
   { id: "candidate", revisionNo: 3, contentHash: "c", publicationState: "candidate", utteranceCount: 1, createdAt: 0, profile: {}, config: {} },
@@ -21,4 +21,17 @@ test("unconfigured engine cannot start and states are distinct", () => {
   assert.equal(jobLabel("pausing"), "停止処理中");
   assert.equal(jobLabel("interrupted"), "中断");
   assert.equal(jobLabel("other"), "other");
+});
+
+test("retry is distinct from resume and excludes unfinished descendants", () => {
+  const job: AnalysisJob = { id: "source", kind: "transcription", state: "failed", completedUnits: 1, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "a", retryOfJobId: null, attempt: 1 };
+  assert.ok(canRetryJob(job, [job]));
+  assert.ok(canRetryJob({ ...job, state: "cancelled" }, [job]));
+  for (const state of ["queued", "running", "pausing", "paused", "interrupted", "succeeded"]) assert.equal(canRetryJob({ ...job, state }, [job]), false);
+  assert.equal(canRetryJob({ ...job, kind: "minutes_generation" }, [job]), false);
+  for (const state of ["queued", "running", "pausing", "paused", "interrupted"]) {
+    const child = { ...job, id: "retry", retryOfJobId: job.id, attempt: 2, state };
+    assert.equal(canRetryJob(job, [job, child]), false);
+  }
+  assert.ok(canRetryJob(job, [job, { ...job, id: "retry", retryOfJobId: job.id, state: "failed", attempt: 2 }]));
 });

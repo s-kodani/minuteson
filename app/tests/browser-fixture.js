@@ -9,9 +9,10 @@ const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".r
 ] };
 const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: "b".repeat(64), utterances: analysis.utterances.map((item) => ({ ...item, id: `${item.id}-new`, effectiveText: `${item.effectiveText}（候補）` })) };
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
-const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, persistenceDelayMs: 0, draft: null,
+const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
   preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
-  jobs: [{ id: "job-existing", kind: "transcription", state: "paused", completedUnits: 1, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: "user" }],
+  jobs: [{ id: "job-existing", kind: "transcription", state: "paused", completedUnits: 1, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: "user", specHash: "a".repeat(64), retryOfJobId: null, attempt: 1 },
+    { id: "job-failed", kind: "transcription", state: "failed", completedUnits: 2, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "b".repeat(64), retryOfJobId: null, attempt: 1 }],
   currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
 };
 const currentAnalysis = () => fixture.currentId === analysis.id ? analysis : fixture.candidate;
@@ -53,8 +54,19 @@ mockIPC(async (command, args) => {
     case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);
     case "get_analysis_version_draft": return structuredClone(fixture.draft?.baseAnalysisId === args.analysisId ? fixture.draft : fixture.archivedDrafts[args.analysisId] ?? null);
     case "start_transcription": {
-      fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null });
+      fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "c".repeat(64), retryOfJobId: null, attempt: 1 });
       return structuredClone(fixture.jobs[0]);
+    }
+    case "retry_transcription": {
+      if (fixture.failRetry) throw new Error("模擬再試行エラー");
+      const request = args.request;
+      const source = fixture.jobs.find((job) => job.id === request.jobId);
+      if (!source || request.meetingId !== meetings[0].id || request.expectedSpecHash !== source.specHash || !["failed", "cancelled"].includes(source.state)) throw new Error("再試行条件不一致");
+      const existing = fixture.jobs.find((job) => job.operationId === request.operationId);
+      if (existing) return structuredClone(existing);
+      const next = { ...source, id: `retry-${request.operationId}`, state: "queued", retryOfJobId: source.id, attempt: source.attempt + 1, operationId: request.operationId, errorCode: null };
+      fixture.jobs.unshift(next);
+      return structuredClone(next);
     }
     case "pause_analysis_job":
     case "resume_analysis_job":
