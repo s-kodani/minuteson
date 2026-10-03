@@ -11,6 +11,8 @@ use uuid::Uuid;
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
 const MIGRATION_3: &str = include_str!("migrations/0003_revisions.sql");
+const MIGRATION_4: &str = include_str!("migrations/0004_audio.sql");
+const MIGRATION_5: &str = include_str!("migrations/0005_content.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -300,6 +302,8 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (1_i64, MIGRATION_1),
         (2_i64, MIGRATION_2),
         (3_i64, MIGRATION_3),
+        (4_i64, MIGRATION_4),
+        (5_i64, MIGRATION_5),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -451,7 +455,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 5);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 
@@ -642,5 +646,137 @@ mod tests {
                 params![minutes_id]
             )
             .is_err());
+    }
+
+    #[test]
+    fn recording_tracks_and_chunks_cannot_cross_meetings() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let one = storage.create_meeting("one").unwrap();
+        let two = storage.create_meeting("two").unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let track_id = Uuid::new_v4().to_string();
+        let insert_session = "INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, created_at, updated_at) VALUES (?1, ?2, 'preparing', 'system', '{}', ?3, 0, 0)";
+        {
+            let db = storage.connection.lock().unwrap();
+            assert!(db
+                .execute(insert_session, params![session_id, one.id, "start-one"])
+                .is_err());
+            db.execute(
+                "UPDATE meetings SET source_type = 'recording' WHERE id IN (?1, ?2)",
+                params![one.id, two.id],
+            )
+            .unwrap();
+            db.execute(insert_session, params![session_id, one.id, "start-one"])
+                .unwrap();
+            let insert_track = "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES (?1, ?2, ?3, 'mic', 'flac', 48000, 1, 'ready', 0, 0)";
+            assert!(db
+                .execute(insert_track, params![track_id, two.id, session_id])
+                .is_err());
+            db.execute(insert_track, params![track_id, one.id, session_id])
+                .unwrap();
+            db.execute(
+                "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES ('derived-track', ?1, ?2, 'processed', 'flac', 48000, 1, 'ready', 0, 0)",
+                params![one.id, session_id],
+            ).unwrap();
+            db.execute("INSERT INTO track_inputs (meeting_id, derived_track_id, input_track_id, role) VALUES (?1, 'derived-track', ?2, 'source')", params![one.id, track_id]).unwrap();
+            assert!(db.execute("INSERT INTO track_inputs (meeting_id, derived_track_id, input_track_id, role) VALUES (?1, ?2, 'derived-track', 'source')", params![one.id, track_id]).is_err());
+            assert!(db
+                .execute(
+                    "UPDATE meetings SET source_type = 'audio_import' WHERE id = ?1",
+                    params![one.id]
+                )
+                .is_err());
+        }
+        let relative = PathBuf::from(format!("meetings/{}/audio/chunk.flac", one.id));
+        let file = storage.managed_path(&relative).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"audio").unwrap();
+        let asset = storage
+            .register_ready_meeting_asset(&one.id, &relative, "audio/flac")
+            .unwrap();
+        let db = storage.connection.lock().unwrap();
+        let chunk_id = Uuid::new_v4().to_string();
+        let insert_chunk = "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES (?1, ?2, ?3, ?4, 0, 0, 1000000, 48000, 48000, 1, 'ready', 0)";
+        assert!(db
+            .execute(insert_chunk, params![chunk_id, two.id, track_id, asset.id])
+            .is_err());
+        db.execute(insert_chunk, params![chunk_id, one.id, track_id, asset.id])
+            .unwrap();
+        assert!(db
+            .execute(
+                insert_chunk,
+                params![Uuid::new_v4().to_string(), one.id, track_id, asset.id]
+            )
+            .is_err());
+        let problems: i64 = db
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(problems, 0);
+    }
+
+    #[test]
+    fn transcript_and_evidence_references_are_version_scoped_and_frozen() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("content").unwrap();
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE meetings SET source_type = 'recording' WHERE id = ?1",
+            params![meeting.id],
+        )
+        .unwrap();
+        db.execute("INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, created_at, updated_at) VALUES ('session', ?1, 'saved', 'system', '{}', 'start', 0, 0)", params![meeting.id]).unwrap();
+        db.execute("INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, created_at, updated_at) VALUES ('track', ?1, 'session', 'mic', 'flac', 48000, 1, 'ready', 0, 0)", params![meeting.id]).unwrap();
+        for (id, revision_no, hash) in [("analysis-1", 1, "b"), ("analysis-2", 2, "c")] {
+            db.execute("INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES (?1, ?2, ?3, 'engine', 'candidate', ?4, '{}', '{}', ?5, 1, 0)", params![id, meeting.id, revision_no, "a".repeat(64), hash.repeat(64)]).unwrap();
+        }
+        db.execute("INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, input_scope, identification_state, created_at) VALUES ('speaker-1', 'analysis-1', 'lineage-1', '話者1', 'all', 'unknown', 0)", []).unwrap();
+        db.execute("INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, input_scope, identification_state, created_at) VALUES ('speaker-2', 'analysis-2', 'lineage-2', '話者2', 'all', 'unknown', 0)", []).unwrap();
+        db.execute("INSERT INTO utterances (id, meeting_id, analysis_revision_id, track_id, lineage_id, sequence, start_us, end_us, recognized_text, effective_text, attribution_state) VALUES ('utterance-1', ?1, 'analysis-1', 'track', 'utterance-lineage', 0, 100, 1000, '発言', '発言', 'assigned')", params![meeting.id]).unwrap();
+        assert!(db.execute("INSERT INTO utterance_speakers (utterance_id, speaker_id, analysis_revision_id, role, assignment_source) VALUES ('utterance-1', 'speaker-2', 'analysis-1', 'primary', 'inferred')", []).is_err());
+        db.execute("INSERT INTO utterance_speakers (utterance_id, speaker_id, analysis_revision_id, role, assignment_source) VALUES ('utterance-1', 'speaker-1', 'analysis-1', 'primary', 'inferred')", []).unwrap();
+        assert!(db.execute("INSERT INTO speaker_segments (id, meeting_id, analysis_revision_id, track_id, speaker_id, start_us, end_us) VALUES ('segment-bad', ?1, 'analysis-1', 'track', 'speaker-2', 100, 1000)", params![meeting.id]).is_err());
+        db.execute(
+            "UPDATE analysis_revisions SET publication_state = 'committed' WHERE id = 'analysis-1'",
+            [],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE utterances SET effective_text = '改変' WHERE id = 'utterance-1'",
+                []
+            )
+            .is_err());
+        assert!(db.execute("INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, input_scope, identification_state, created_at) VALUES ('late', 'analysis-1', 'late', '後付け', 'all', 'unknown', 0)", []).is_err());
+        db.execute("INSERT INTO minutes_revisions (id, meeting_id, input_analysis_id, revision_no, publication_state, generated_document_json, effective_document_json, document_schema_version, input_content_hash, content_hash, model_snapshot_json, template_version, created_at) VALUES ('minutes-1', ?1, 'analysis-1', 1, 'candidate', '{}', '{}', 1, ?2, ?3, '{}', 'v1', 0)", params![meeting.id, "b".repeat(64), "d".repeat(64)]).unwrap();
+        let insert_item = "INSERT INTO minutes_items (id, minutes_revision_id, analysis_revision_id, kind, order_no, body, source_type) VALUES ('item-1', 'minutes-1', ?1, 'decision', 0, '決定', 'generated')";
+        assert!(db.execute(insert_item, params!["analysis-2"]).is_err());
+        db.execute(insert_item, params!["analysis-1"]).unwrap();
+        let insert_evidence = "INSERT INTO evidence_links (id, minutes_revision_id, minutes_item_id, analysis_revision_id, utterance_id, start_us, end_us, source_type, verification_state) VALUES ('evidence-1', 'minutes-1', 'item-1', 'analysis-1', 'utterance-1', ?1, ?2, 'generated', 'unverified')";
+        assert!(db.execute(insert_evidence, params![0, 1000]).is_err());
+        db.execute(insert_evidence, params![100, 1000]).unwrap();
+        db.execute(
+            "UPDATE minutes_revisions SET publication_state = 'committed' WHERE id = 'minutes-1'",
+            [],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE minutes_items SET body = '改変' WHERE id = 'item-1'",
+                []
+            )
+            .is_err());
+        assert!(db
+            .execute("DELETE FROM evidence_links WHERE id = 'evidence-1'", [])
+            .is_err());
+        let problems: i64 = db
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(problems, 0);
     }
 }
