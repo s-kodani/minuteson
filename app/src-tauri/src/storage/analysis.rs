@@ -44,7 +44,127 @@ pub struct AnalysisInput {
     pub utterances: Vec<UtteranceInput>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisSpeaker {
+    pub id: String,
+    pub label: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisUtterance {
+    pub id: String,
+    pub track_id: String,
+    pub start_us: i64,
+    pub end_us: i64,
+    pub recognized_text: String,
+    pub effective_text: String,
+    pub attribution_state: String,
+    pub speaker_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisView {
+    pub id: String,
+    pub meeting_id: String,
+    pub content_hash: String,
+    pub speakers: Vec<AnalysisSpeaker>,
+    pub utterances: Vec<AnalysisUtterance>,
+}
+
 impl Storage {
+    pub fn load_current_analysis(&self, meeting_id: &str) -> Result<Option<AnalysisView>, String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        let head: Option<(String, String)> = transaction.query_row(
+            "SELECT a.id, a.content_hash FROM meetings m JOIN analysis_revisions a ON a.id = m.current_analysis_id AND a.meeting_id = m.id AND a.publication_state = 'committed' WHERE m.id = ?1",
+            params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        let Some((id, content_hash)) = head else {
+            return Ok(None);
+        };
+        if super::revisions::analysis_content_hash(&transaction, &id)? != content_hash {
+            return Err("解析版の内容が変更されています".into());
+        }
+        let speakers = {
+            let mut statement = transaction.prepare(
+                "SELECT id, label, display_name FROM speakers WHERE analysis_revision_id = ?1 ORDER BY label, id",
+            ).map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map(params![id], |row| {
+                    Ok(AnalysisSpeaker {
+                        id: row.get(0)?,
+                        label: row.get(1)?,
+                        display_name: row.get(2)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let mut utterances = {
+            let mut statement = transaction.prepare(
+                "SELECT id, track_id, start_us, end_us, recognized_text, effective_text, attribution_state FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id",
+            ).map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map(params![id], |row| {
+                    Ok(AnalysisUtterance {
+                        id: row.get(0)?,
+                        track_id: row.get(1)?,
+                        start_us: row.get(2)?,
+                        end_us: row.get(3)?,
+                        recognized_text: row.get(4)?,
+                        effective_text: row.get(5)?,
+                        attribution_state: row.get(6)?,
+                        speaker_ids: Vec::new(),
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let assignment_map: HashMap<String, Vec<String>> = {
+            let mut statement = transaction.prepare(
+                "SELECT utterance_id, speaker_id FROM utterance_speakers WHERE analysis_revision_id = ?1 ORDER BY utterance_id, CASE role WHEN 'primary' THEN 0 ELSE 1 END, speaker_id",
+            ).map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map(params![id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            let mut assignments: HashMap<String, Vec<String>> = HashMap::new();
+            for row in rows {
+                let (utterance_id, speaker_id) = row.map_err(|e| e.to_string())?;
+                assignments
+                    .entry(utterance_id)
+                    .or_default()
+                    .push(speaker_id);
+            }
+            assignments
+        };
+        for utterance in &mut utterances {
+            utterance.speaker_ids = assignment_map
+                .get(&utterance.id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        Ok(Some(AnalysisView {
+            id,
+            meeting_id: meeting_id.to_owned(),
+            content_hash,
+            speakers,
+            utterances,
+        }))
+    }
+
     // Called by a local analysis worker after its output has been parsed. A
     // candidate does not replace the user's current analysis or draft.
     #[allow(dead_code)]
@@ -349,6 +469,11 @@ mod tests {
             .commit_analysis_candidate(&meeting.id, &first, meeting.lock_version, false)
             .unwrap();
         assert!(storage.verify_analysis_content_hash(&first).unwrap());
+        let view = storage.load_current_analysis(&meeting.id).unwrap().unwrap();
+        assert_eq!(view.id, first);
+        assert_eq!(view.speakers.len(), 2);
+        assert_eq!(view.utterances.len(), 1);
+        assert_eq!(view.utterances[0].speaker_ids.len(), 2);
         let draft = storage
             .create_transcript_draft(&meeting.id, &first)
             .unwrap();
@@ -356,6 +481,10 @@ mod tests {
             .create_analysis_candidate(&meeting.id, input())
             .unwrap();
         assert_ne!(first, second);
+        assert_eq!(
+            storage.load_current_analysis(&meeting.id).unwrap().unwrap(),
+            view
+        );
         assert_eq!(
             storage.load_transcript_draft(&meeting.id).unwrap().unwrap(),
             draft
@@ -384,6 +513,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(assignments, 2);
+    }
+
+    #[test]
+    fn read_rejects_changed_committed_transcript() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = saved_meeting(&storage);
+        assert!(storage
+            .load_current_analysis(&meeting.id)
+            .unwrap()
+            .is_none());
+        let candidate = storage
+            .create_analysis_candidate(&meeting.id, input())
+            .unwrap();
+        storage
+            .commit_analysis_candidate(&meeting.id, &candidate, meeting.lock_version, false)
+            .unwrap();
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute_batch("DROP TRIGGER utterances_frozen_update;")
+                .unwrap();
+            db.execute(
+                "UPDATE utterances SET effective_text = '書き換え' WHERE analysis_revision_id = ?1",
+                params![candidate],
+            )
+            .unwrap();
+        }
+        assert!(storage.load_current_analysis(&meeting.id).is_err());
     }
 
     #[test]

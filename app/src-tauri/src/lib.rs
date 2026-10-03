@@ -4,7 +4,7 @@ mod storage;
 
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
-use storage::{Meeting, Storage};
+use storage::{AnalysisView, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
 use tauri::{Emitter, Manager, State, WebviewWindow, WindowEvent};
 
 #[tauri::command]
@@ -131,6 +131,70 @@ fn rename_meeting(
     storage.rename_meeting(&id, &title, expected_lock_version)
 }
 
+#[tauri::command]
+fn get_current_analysis(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+) -> Result<Option<AnalysisView>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis".into());
+    }
+    storage.load_current_analysis(&meeting_id)
+}
+
+#[tauri::command]
+fn get_transcript_draft(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+) -> Result<Option<TranscriptDraft>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read drafts".into());
+    }
+    storage.load_transcript_draft(&meeting_id)
+}
+
+#[tauri::command]
+fn begin_transcript_draft(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+    analysis_id: String,
+) -> Result<TranscriptDraft, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit transcripts".into());
+    }
+    storage.create_transcript_draft(&meeting_id, &analysis_id)
+}
+
+#[tauri::command]
+fn save_transcript_draft(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    draft_id: String,
+    expected_lock_version: i64,
+    payload: TranscriptDraftPayload,
+) -> Result<TranscriptDraft, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit transcripts".into());
+    }
+    storage.save_transcript_draft(&draft_id, expected_lock_version, payload)
+}
+
+#[tauri::command]
+fn undo_transcript_edit(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    draft_id: String,
+    expected_lock_version: i64,
+) -> Result<TranscriptDraft, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit transcripts".into());
+    }
+    storage.undo_last_transcript_edit(&draft_id, expected_lock_version)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -163,7 +227,12 @@ pub fn run() {
             create_meeting,
             list_meetings,
             get_meeting,
-            rename_meeting
+            rename_meeting,
+            get_current_analysis,
+            get_transcript_draft,
+            begin_transcript_draft,
+            save_transcript_draft,
+            undo_transcript_edit
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

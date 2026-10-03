@@ -13,6 +13,8 @@ mod drafts;
 mod jobs;
 mod recordings;
 mod revisions;
+pub use analysis::AnalysisView;
+pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub use recordings::RecordingConfig;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
