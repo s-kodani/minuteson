@@ -5,7 +5,7 @@ mod storage;
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
 use storage::{Meeting, Storage};
-use tauri::{Manager, State, WebviewWindow, WindowEvent};
+use tauri::{Emitter, Manager, State, WebviewWindow, WindowEvent};
 
 #[tauri::command]
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
@@ -139,6 +139,17 @@ pub fn run() {
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                // Recovery can hash hours of audio, so never hold up window startup.
+                match handle.state::<Storage>().recover_completed_recordings() {
+                    Ok(ids) if !ids.is_empty() => {
+                        let _ = handle.emit("recordings-recovered", ids);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -99,6 +99,32 @@ pub struct RecordingSession {
 }
 
 impl Storage {
+    pub(crate) fn recover_completed_recordings(&self) -> Result<Vec<String>, String> {
+        let interrupted = {
+            let connection = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません".to_string())?;
+            let mut statement = connection
+                .prepare("SELECT id FROM recording_sessions WHERE state = 'interrupted' ORDER BY created_at, id")
+                .map_err(|error| error.to_string())?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            ids
+        };
+        let mut recovered = Vec::new();
+        for id in interrupted {
+            // Incomplete or tampered recordings stay interrupted; no files are removed.
+            if self.finalize_recording(&id).is_ok() {
+                recovered.push(id);
+            }
+        }
+        Ok(recovered)
+    }
+
     #[allow(dead_code)]
     pub fn prepare_recording(
         &self,
@@ -242,6 +268,23 @@ impl Storage {
         Ok(failed)
     }
 
+    pub fn interrupt_recording(&self, session_id: &str) -> Result<RecordingSession, String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let changed = connection
+            .execute(
+                "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE id = ?2 AND state IN ('preparing', 'recording', 'stopping')",
+                params![now_ms()?, session_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("録音を中断状態へ変更できません".into());
+        }
+        load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません".into())
+    }
+
     #[allow(dead_code)]
     pub fn finalize_recording(&self, session_id: &str) -> Result<RecordingSession, String> {
         let session = {
@@ -251,7 +294,10 @@ impl Storage {
                 .map_err(|_| "DBロックを取得できません".to_string())?;
             load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません")?
         };
-        if !matches!(session.state.as_str(), "recording" | "stopping") {
+        if !matches!(
+            session.state.as_str(),
+            "recording" | "stopping" | "interrupted"
+        ) {
             return Err("録音が確定可能な状態ではありません".into());
         }
         let base = PathBuf::from("meetings")
@@ -331,7 +377,7 @@ impl Storage {
         }
         let duration_us = mic_format.2.max(system_format.2);
         transaction.execute(
-            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?3 WHERE id = ?4 AND state IN ('recording', 'stopping')",
+            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?3 WHERE id = ?4 AND state IN ('recording', 'stopping', 'interrupted')",
             params![duration_us, manifest_file.hash, now, session_id],
         ).map_err(|error| error.to_string())?;
         transaction.execute(
@@ -523,6 +569,152 @@ mod tests {
                 .unwrap()
                 .state,
             "preparing"
+        );
+    }
+
+    #[test]
+    fn restart_commits_only_complete_saved_probe_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("復旧する録音").unwrap();
+        let session = storage
+            .prepare_recording(&meeting.id, &config(), "recover-start")
+            .unwrap();
+        storage.mark_recording_started(&session.id).unwrap();
+        let output = temp
+            .path()
+            .join("meetings")
+            .join(&meeting.id)
+            .join("audio")
+            .join(&session.id);
+        std::fs::create_dir_all(&output).unwrap();
+        let manifest = serde_json::json!({
+            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
+            "targetPIDs": [], "state": "saved", "errors": [],
+            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
+            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
+        });
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(output.join("microphone.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("system.caf"), b"caff000000000000").unwrap();
+        drop(storage);
+
+        let reopened = Storage::open(temp.path().to_owned()).unwrap();
+        assert_eq!(
+            reopened.recover_completed_recordings().unwrap(),
+            vec![session.id.clone()]
+        );
+        assert_eq!(
+            load_session(&reopened.connection.lock().unwrap(), &session.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "saved"
+        );
+        assert_eq!(
+            reopened
+                .get_meeting(&meeting.id)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            "recorded"
+        );
+        assert!(reopened.recover_completed_recordings().unwrap().is_empty());
+
+        let incomplete = reopened.create_meeting("未完成の録音").unwrap();
+        let pending = reopened
+            .prepare_recording(&incomplete.id, &config(), "pending-start")
+            .unwrap();
+        reopened.mark_recording_started(&pending.id).unwrap();
+        let pending_output = temp
+            .path()
+            .join("meetings")
+            .join(&incomplete.id)
+            .join("audio")
+            .join(&pending.id);
+        std::fs::create_dir_all(&pending_output).unwrap();
+        std::fs::write(
+            pending_output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(pending_output.join("microphone.caf"), b"caff000000000000").unwrap();
+        std::fs::write(pending_output.join("system.caf"), b"bad!000000000000").unwrap();
+        drop(reopened);
+
+        let final_open = Storage::open(temp.path().to_owned()).unwrap();
+        assert!(final_open
+            .recover_completed_recordings()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            load_session(&final_open.connection.lock().unwrap(), &pending.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "interrupted"
+        );
+        assert_eq!(
+            final_open
+                .get_meeting(&incomplete.id)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            "recording"
+        );
+        assert!(pending_output.join("system.caf").exists());
+    }
+
+    #[test]
+    fn failed_registration_keeps_files_retryable() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("確定再試行").unwrap();
+        let session = storage
+            .prepare_recording(&meeting.id, &config(), "retry-start")
+            .unwrap();
+        storage.mark_recording_started(&session.id).unwrap();
+        let output = temp
+            .path()
+            .join("meetings")
+            .join(&meeting.id)
+            .join("audio")
+            .join(&session.id);
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("microphone.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
+        let manifest = serde_json::json!({
+            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
+            "targetPIDs": [], "state": "saved", "errors": [],
+            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
+            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
+        });
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(storage.finalize_recording(&session.id).is_err());
+        assert_eq!(
+            storage.interrupt_recording(&session.id).unwrap().state,
+            "interrupted"
+        );
+        assert!(storage.recover_completed_recordings().unwrap().is_empty());
+        assert_eq!(
+            load_session(&storage.connection.lock().unwrap(), &session.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "interrupted"
+        );
+        std::fs::write(output.join("system.caf"), b"caff000000000000").unwrap();
+        assert_eq!(
+            storage.recover_completed_recordings().unwrap(),
+            vec![session.id]
         );
     }
 

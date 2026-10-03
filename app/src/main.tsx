@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
@@ -80,12 +81,33 @@ function MainWindow() {
   const [captureAvailable, setCaptureAvailable] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState("");
+  const [recoveredCount, setRecoveredCount] = useState(0);
   const priorPhase = useRef<string | null>(null);
   useEffect(() => {
     if (!isTauri()) return;
     void invoke<Meeting[]>("list_meetings").then(setMeetings).catch((error: unknown) => setMeetingError(String(error)));
     void invoke<boolean>("capture_available").then(setCaptureAvailable).catch(() => setCaptureAvailable(false));
   }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void listen<string[]>("recordings-recovered", (event) => {
+      if (!active) return;
+      setRecoveredCount(event.payload.length);
+      void invoke<Meeting[]>("list_meetings").then((items) => { if (active) setMeetings(items); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
+      if (selectedMeeting && event.payload.some((id) => id === selectedMeeting.id)) {
+        void invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }).then((item) => { if (active) setSelectedMeeting(item); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
+      }
+    }).then((stop) => {
+      if (!active) { stop(); return; }
+      unlisten = stop;
+      // Also refresh after subscribing in case recovery finished before the listener existed.
+      void invoke<Meeting[]>("list_meetings").then((items) => { if (active) setMeetings(items); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
+      if (selectedMeeting) void invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }).then((item) => { if (active) setSelectedMeeting(item); }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
+    }).catch((error: unknown) => { if (active) setMeetingError(String(error)); });
+    return () => { active = false; unlisten?.(); };
+  }, [selectedMeeting?.id]);
   useEffect(() => {
     const phase = state.kind === "ready" ? state.snapshot.phase : null;
     if (priorPhase.current && priorPhase.current !== phase && (phase === "idle" || phase === "error") && isTauri()) {
@@ -209,6 +231,7 @@ function MainWindow() {
           </section>
           <section className="meetings-card" aria-label="保存済み会議">
             <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri()}>再読込</button></div>
+            {recoveredCount > 0 && <p role="status">前回の録音 {recoveredCount} 件を検証して復旧しました。</p>}
             <form className="meeting-form" onSubmit={createMeeting}>
               <label htmlFor="meeting-title">会議名</label>
               <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy} /><button type="submit" disabled={!isTauri() || meetingBusy || !meetingTitle.trim()}>会議を作成</button></div>

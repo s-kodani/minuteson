@@ -266,21 +266,28 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
         std::thread::sleep(Duration::from_millis(200));
     };
     let storage = app.state::<Storage>();
-    let result = match exit {
+    let (result, recoverable) = match exit {
         Ok(true) => {
             if !announced {
                 let _ = storage.mark_recording_started(&session_id);
             }
             publish(&app, |snapshot| snapshot.phase = RecordingPhase::Saving);
-            storage.finalize_recording(&session_id).map(|_| ())
+            (storage.finalize_recording(&session_id).map(|_| ()), true)
         }
-        Ok(false) => Err(manifest_error(&output).unwrap_or_else(|| {
-            "録音プローブが失敗しました。録音権限と保存先を確認してください".into()
-        })),
-        Err(error) => Err(format!("録音プロセスを確認できません: {error}")),
+        Ok(false) => (
+            Err(manifest_error(&output).unwrap_or_else(|| {
+                "録音プローブが失敗しました。録音権限と保存先を確認してください".into()
+            })),
+            false,
+        ),
+        Err(error) => (Err(format!("録音プロセスを確認できません: {error}")), false),
     };
     if result.is_err() {
-        let _ = storage.fail_recording(&session_id);
+        if recoverable {
+            let _ = storage.interrupt_recording(&session_id);
+        } else {
+            let _ = storage.fail_recording(&session_id);
+        }
     }
     if let Ok(mut active) = app.state::<RecorderController>().0.lock() {
         if active
@@ -307,7 +314,11 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                 snapshot.phase = RecordingPhase::Error;
                 snapshot.microphone_connected = false;
                 snapshot.system_audio_connected = false;
-                snapshot.error_message = Some(error);
+                snapshot.error_message = Some(if recoverable {
+                    format!("録音ファイルの確定に失敗しました。元ファイルは保持し、次回起動時に再検証します: {error}")
+                } else {
+                    error
+                });
             });
         }
     }
