@@ -377,7 +377,7 @@ pub(super) fn analysis_content_hash(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn minutes_content_hash(
+pub(super) fn minutes_content_hash(
     transaction: &Transaction<'_>,
     revision_id: &str,
 ) -> Result<String, String> {

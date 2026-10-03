@@ -53,6 +53,7 @@ pub struct JobSnapshot {
     pub created_at: i64,
     pub updated_at: i64,
     pub output_analysis_id: Option<String>,
+    pub output_minutes_id: Option<String>,
     pub pause_reason: Option<String>,
     pub retry_of_job_id: Option<String>,
     pub attempt: i64,
@@ -278,7 +279,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
+        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![meeting_id], job_from_row)
             .map_err(|e| e.to_string())?;
@@ -500,6 +501,7 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         output_analysis_id: row.get(12)?,
+        output_minutes_id: row.get(16)?,
         pause_reason: row.get(13)?,
         retry_of_job_id: row.get(14)?,
         attempt: row.get(15)?,
@@ -536,7 +538,7 @@ pub(super) fn enqueue_in_transaction(
     let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
     let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
     if let Some(existing) = transaction.query_row(
-            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE operation_id = ?1",
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE operation_id = ?1",
             params![spec.operation_id],
             job_from_row,
         ).optional().map_err(|error| error.to_string())? {
@@ -573,7 +575,7 @@ pub(super) fn enqueue_in_transaction(
 
 pub(super) fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
     connection.query_row(
-        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE id = ?1",
+        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE id = ?1",
         params![id], job_from_row,
     ).optional().map_err(|error| error.to_string())
 }

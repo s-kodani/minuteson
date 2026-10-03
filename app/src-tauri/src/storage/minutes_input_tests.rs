@@ -39,23 +39,29 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
         connection: Mutex::new(connection),
     };
     let (request, original, draft) = fixture(&storage);
-    let legacy = storage
-        .enqueue_job(JobSpec {
-            meeting_id: request.meeting_id.clone(),
-            kind: JobKind::Transcription,
-            operation_id: "legacy-operation".into(),
-            input_analysis_id: None,
-            input_hash: "a".repeat(64),
-            profile_snapshot: json!({"engine":"legacy"}),
-            parameters: json!({}),
-            total_units: Some(1),
-        })
-        .unwrap();
-    let spec = storage.fixed_job_input(&legacy.id).unwrap();
+    let spec = JobSpec {
+        meeting_id: request.meeting_id.clone(),
+        kind: JobKind::Transcription,
+        operation_id: "legacy-operation".into(),
+        input_analysis_id: None,
+        input_hash: "a".repeat(64),
+        profile_snapshot: json!({"engine":"legacy"}),
+        parameters: json!({}),
+        total_units: Some(1),
+    };
+    // Encode the actual v12 row, without invoking v14 DTO queries on an old DB.
+    let mut hash = Sha256::new();
+    hash.update(b"mon-job-spec-v1");
+    hash.update(serde_json::to_vec(&spec).unwrap());
+    let hash = format!("{:x}", hash.finalize());
+    storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs (id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,total_units,created_at,updated_at) VALUES ('legacy',?1,'transcription','queued',?2,?3,?4,?5,?6,1,0,0)",params![spec.meeting_id,spec.operation_id,spec.input_hash,spec.profile_snapshot.to_string(),spec.parameters.to_string(),hash]).unwrap();
     drop(storage);
     let storage = Storage::open(root.path().to_owned()).unwrap();
-    assert_eq!(storage.get_job(&legacy.id).unwrap(), legacy);
-    assert_eq!(storage.fixed_job_input(&legacy.id).unwrap(), spec);
+    let legacy = storage.get_job("legacy").unwrap();
+    assert_eq!(legacy.spec_hash, hash);
+    assert_eq!(legacy.state, "queued");
+    assert_eq!(legacy.output_minutes_id, None);
+    assert_eq!(storage.fixed_job_input("legacy").unwrap(), (spec, None));
     assert_eq!(
         storage
             .load_current_analysis(&request.meeting_id)
@@ -85,7 +91,7 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
         db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

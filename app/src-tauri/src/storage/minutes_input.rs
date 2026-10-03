@@ -379,7 +379,7 @@ fn copy_snapshot(
     Ok(id)
 }
 
-fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<MinutesInput, String> {
+pub(super) fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<MinutesInput, String> {
     if spec.kind != JobKind::MinutesGeneration {
         return Err("議事録生成ジョブではありません".into());
     }
@@ -387,8 +387,17 @@ fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<MinutesInput, Stri
         .input_analysis_id
         .as_deref()
         .ok_or("固定入力版がありません")?;
-    let (hash,source,source_hash,draft,working,title,created_at,started_at,config): (String,String,String,Option<String>,String,String,i64,Option<i64>,String) = tx.query_row("SELECT a.content_hash,s.source_analysis_id,s.source_content_hash,s.source_draft_json,s.working_content_hash,s.meeting_title,s.meeting_created_at,s.meeting_started_at_utc_ms,a.config_json FROM analysis_input_snapshots s JOIN analysis_revisions a ON a.id = s.analysis_id AND a.meeting_id = s.meeting_id WHERE a.id = ?1 AND a.meeting_id = ?2 AND a.publication_state = 'internal_snapshot'", params![id,spec.meeting_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional().map_err(|e| e.to_string())?.ok_or("議事録の固定入力スナップショットがありません")?;
-    if hash != spec.input_hash || super::revisions::analysis_content_hash(tx, id)? != hash {
+    read_snapshot(tx, &spec.meeting_id, id, &spec.input_hash)
+}
+
+pub(super) fn read_snapshot(
+    tx: &Transaction<'_>,
+    meeting_id: &str,
+    id: &str,
+    input_hash: &str,
+) -> Result<MinutesInput, String> {
+    let (hash,source,source_hash,draft,working,title,created_at,started_at,config): (String,String,String,Option<String>,String,String,i64,Option<i64>,String) = tx.query_row("SELECT a.content_hash,s.source_analysis_id,s.source_content_hash,s.source_draft_json,s.working_content_hash,s.meeting_title,s.meeting_created_at,s.meeting_started_at_utc_ms,a.config_json FROM analysis_input_snapshots s JOIN analysis_revisions a ON a.id = s.analysis_id AND a.meeting_id = s.meeting_id WHERE a.id = ?1 AND a.meeting_id = ?2 AND a.publication_state = 'internal_snapshot'", params![id,meeting_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional().map_err(|e| e.to_string())?.ok_or("議事録の固定入力スナップショットがありません")?;
+    if hash != input_hash || super::revisions::analysis_content_hash(tx, id)? != hash {
         return Err("生成入力スナップショットが変更されています".into());
     }
     let config: Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
@@ -401,7 +410,7 @@ fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<MinutesInput, Stri
     {
         return Err("生成入力の由来情報が変更されています".into());
     }
-    let view = read_analysis_content(tx, &spec.meeting_id, id, &hash)?;
+    let view = read_analysis_content(tx, meeting_id, id, &hash)?;
     if working_hash(tx, &view, &title, created_at, started_at)? != working {
         return Err("生成入力の作業内容ハッシュが一致しません".into());
     }

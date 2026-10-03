@@ -1,5 +1,6 @@
 mod analysis_worker;
 mod audio;
+mod minutes_document;
 mod playback;
 mod recorder;
 mod session;
