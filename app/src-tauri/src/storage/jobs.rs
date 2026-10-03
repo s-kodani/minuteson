@@ -1,0 +1,622 @@
+use super::*;
+use rusqlite::{Row, TransactionBehavior};
+use serde_json::Value;
+
+const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Transcription,
+    Diarization,
+    TranscriptCleanup,
+    MinutesGeneration,
+}
+
+impl JobKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Transcription => "transcription",
+            Self::Diarization => "diarization",
+            Self::TranscriptCleanup => "transcript_cleanup",
+            Self::MinutesGeneration => "minutes_generation",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct JobSpec {
+    pub meeting_id: String,
+    pub kind: JobKind,
+    pub operation_id: String,
+    pub input_analysis_id: Option<String>,
+    pub input_hash: String,
+    pub profile_snapshot: Value,
+    pub parameters: Value,
+    pub total_units: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobSnapshot {
+    pub id: String,
+    pub meeting_id: String,
+    pub kind: String,
+    pub state: String,
+    pub operation_id: String,
+    pub input_hash: String,
+    pub spec_hash: String,
+    pub completed_units: i64,
+    pub total_units: Option<i64>,
+    pub error_code: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Storage {
+    #[allow(dead_code)]
+    pub fn enqueue_job(&self, spec: JobSpec) -> Result<JobSnapshot, String> {
+        if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
+            return Err("処理の操作IDが不正です".into());
+        }
+        if !valid_hash(&spec.input_hash) || spec.total_units.is_some_and(|total| total < 0) {
+            return Err("処理の入力ハッシュまたは総単位数が不正です".into());
+        }
+        if !spec.profile_snapshot.is_object() || !spec.parameters.is_object() {
+            return Err("処理設定はJSONオブジェクトが必要です".into());
+        }
+        if matches!(
+            spec.kind,
+            JobKind::MinutesGeneration | JobKind::TranscriptCleanup
+        ) != spec.input_analysis_id.is_some()
+        {
+            return Err("処理種別と入力解析版が一致しません".into());
+        }
+        let profile_json =
+            serde_json::to_string(&spec.profile_snapshot).map_err(|error| error.to_string())?;
+        let parameters_json =
+            serde_json::to_string(&spec.parameters).map_err(|error| error.to_string())?;
+        let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
+        let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = transaction.query_row(
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at FROM processing_jobs WHERE operation_id = ?1",
+            params![spec.operation_id],
+            job_from_row,
+        ).optional().map_err(|error| error.to_string())? {
+            if existing.spec_hash != spec_hash {
+                return Err("同じ操作IDで異なる処理条件が指定されました".into());
+            }
+            return Ok(existing);
+        }
+        let meeting_exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)",
+                params![spec.meeting_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !meeting_exists {
+            return Err("会議が見つかりません".into());
+        }
+        validate_job_input(
+            &transaction,
+            &spec.meeting_id,
+            spec.input_analysis_id.as_deref(),
+            &spec.input_hash,
+        )?;
+        let id = Uuid::new_v4().to_string();
+        let now = now_ms()?;
+        transaction.execute(
+            "INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![id, spec.meeting_id, spec.kind.as_str(), spec.operation_id, spec.input_analysis_id, spec.input_hash, profile_json, parameters_json, spec_hash, spec.total_units, now],
+        ).map_err(|error| error.to_string())?;
+        let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(snapshot)
+    }
+
+    #[allow(dead_code)]
+    pub fn acquire_next_job(&self) -> Result<Option<JobSnapshot>, String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let recording_active: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing', 'recording', 'stopping'))",
+            [], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        let job_active: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'))",
+            [], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if recording_active || job_active {
+            return Ok(None);
+        }
+        let queued: Option<(String, String, Option<String>, String)> = transaction.query_row(
+            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 1",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
+            return Ok(None);
+        };
+        validate_job_input(
+            &transaction,
+            &meeting_id,
+            analysis_id.as_deref(),
+            &input_hash,
+        )?;
+        verify_latest_checkpoint(&transaction, &id)?;
+        let now = now_ms()?;
+        transaction.execute(
+            "UPDATE processing_jobs SET state = 'running', started_at = COALESCE(started_at, ?1), updated_at = ?1 WHERE id = ?2 AND state = 'queued'",
+            params![now, id],
+        ).map_err(|error| error.to_string())?;
+        let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(Some(snapshot))
+    }
+
+    #[allow(dead_code)]
+    pub fn request_pause_for_recording(&self) -> Result<bool, String> {
+        let changed = self.connection.lock().map_err(|_| "DBロックを取得できません".to_string())?
+            .execute("UPDATE processing_jobs SET state = 'pausing', updated_at = ?1 WHERE state = 'running'", params![now_ms()?])
+            .map_err(|error| error.to_string())?;
+        Ok(changed > 0)
+    }
+
+    #[allow(dead_code)]
+    pub fn save_job_checkpoint(
+        &self,
+        job_id: &str,
+        expected_completed_units: i64,
+        completed_units: i64,
+        checkpoint: Value,
+    ) -> Result<JobSnapshot, String> {
+        if expected_completed_units < 0
+            || completed_units < expected_completed_units
+            || !checkpoint.is_object()
+        {
+            return Err("処理の再開位置が不正です".into());
+        }
+        let checkpoint_json =
+            serde_json::to_string(&checkpoint).map_err(|error| error.to_string())?;
+        if checkpoint_json.len() > MAX_CHECKPOINT_BYTES {
+            return Err("再開情報が大きすぎます".into());
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let current: Option<(String, i64, Option<i64>)> = transaction
+            .query_row(
+                "SELECT state, completed_units, total_units FROM processing_jobs WHERE id = ?1",
+                params![job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let (state, current_units, total_units) = current.ok_or("処理が見つかりません")?;
+        if !matches!(state.as_str(), "running" | "pausing")
+            || current_units != expected_completed_units
+        {
+            return Err("処理状態または再開位置が変わりました".into());
+        }
+        if total_units.is_some_and(|total| completed_units > total) {
+            return Err("再開位置が総単位数を超えています".into());
+        }
+        let sequence: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM job_checkpoints WHERE job_id = ?1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let spec_hash: String = transaction
+            .query_row(
+                "SELECT spec_hash FROM processing_jobs WHERE id = ?1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let checkpoint_hash = checkpoint_hash(&spec_hash, completed_units, &checkpoint_json);
+        let now = now_ms()?;
+        transaction.execute(
+            "INSERT INTO job_checkpoints (id, job_id, sequence, completed_units, checkpoint_json, checkpoint_hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![Uuid::new_v4().to_string(), job_id, sequence, completed_units, checkpoint_json, checkpoint_hash, now],
+        ).map_err(|error| error.to_string())?;
+        let next_state = if state == "pausing" {
+            "paused"
+        } else {
+            "running"
+        };
+        transaction.execute(
+            "UPDATE processing_jobs SET state = ?1, completed_units = ?2, updated_at = ?3 WHERE id = ?4 AND state = ?5 AND completed_units = ?6",
+            params![next_state, completed_units, now, job_id, state, current_units],
+        ).map_err(|error| error.to_string())?;
+        let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(snapshot)
+    }
+
+    #[allow(dead_code)]
+    pub fn resume_job(&self, job_id: &str) -> Result<JobSnapshot, String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let current: Option<(String, String, Option<String>, String)> = transaction.query_row(
+            "SELECT state, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE id = ?1",
+            params![job_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let (state, meeting_id, analysis_id, input_hash) = current.ok_or("処理が見つかりません")?;
+        if !matches!(state.as_str(), "paused" | "interrupted") {
+            return Err("再開可能な処理状態ではありません".into());
+        }
+        validate_job_input(
+            &transaction,
+            &meeting_id,
+            analysis_id.as_deref(),
+            &input_hash,
+        )?;
+        verify_latest_checkpoint(&transaction, job_id)?;
+        transaction.execute(
+            "UPDATE processing_jobs SET state = 'queued', updated_at = ?1 WHERE id = ?2 AND state = ?3",
+            params![now_ms()?, job_id, state],
+        ).map_err(|error| error.to_string())?;
+        let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(snapshot)
+    }
+
+    #[allow(dead_code)]
+    pub fn finish_job(
+        &self,
+        job_id: &str,
+        expected_completed_units: i64,
+        outcome: &str,
+        error_code: Option<&str>,
+    ) -> Result<JobSnapshot, String> {
+        if expected_completed_units < 0 {
+            return Err("処理の再開位置が不正です".into());
+        }
+        match outcome {
+            "succeeded" | "cancelled" if error_code.is_some() => {
+                return Err("成功・取消にエラーコードは付けられません".into());
+            }
+            "failed"
+                if error_code.is_none_or(|code| code.trim().is_empty() || code.len() > 128) =>
+            {
+                return Err("失敗にはエラーコードが必要です".into());
+            }
+            "succeeded" | "failed" | "cancelled" => {}
+            _ => return Err("処理の終了状態が不正です".into()),
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let current: Option<(String, i64, Option<i64>)> = transaction
+            .query_row(
+                "SELECT state, completed_units, total_units FROM processing_jobs WHERE id = ?1",
+                params![job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let (state, completed_units, total_units) = current.ok_or("処理が見つかりません")?;
+        if completed_units != expected_completed_units {
+            return Err("処理の再開位置が変わりました".into());
+        }
+        let permitted = match outcome {
+            "succeeded" => {
+                state == "running" && total_units.is_none_or(|total| completed_units == total)
+            }
+            "failed" => matches!(
+                state.as_str(),
+                "running" | "pausing" | "paused" | "interrupted"
+            ),
+            "cancelled" => matches!(state.as_str(), "queued" | "paused" | "interrupted"),
+            _ => false,
+        };
+        if !permitted {
+            return Err("現在の処理状態から終了できません".into());
+        }
+        verify_latest_checkpoint(&transaction, job_id)?;
+        let now = now_ms()?;
+        let changed = transaction.execute(
+            "UPDATE processing_jobs SET state = ?1, error_code = ?2, finished_at = ?3, updated_at = ?3 WHERE id = ?4 AND state = ?5 AND completed_units = ?6",
+            params![outcome, error_code, now, job_id, state, completed_units],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("処理の終了競合が発生しました".into());
+        }
+        let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(snapshot)
+    }
+}
+
+fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
+    Ok(JobSnapshot {
+        id: row.get(0)?,
+        meeting_id: row.get(1)?,
+        kind: row.get(2)?,
+        state: row.get(3)?,
+        operation_id: row.get(4)?,
+        input_hash: row.get(5)?,
+        spec_hash: row.get(6)?,
+        completed_units: row.get(7)?,
+        total_units: row.get(8)?,
+        error_code: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
+    connection.query_row(
+        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at FROM processing_jobs WHERE id = ?1",
+        params![id], job_from_row,
+    ).optional().map_err(|error| error.to_string())
+}
+
+fn validate_job_input(
+    connection: &Connection,
+    meeting_id: &str,
+    analysis_id: Option<&str>,
+    input_hash: &str,
+) -> Result<(), String> {
+    if let Some(analysis_id) = analysis_id {
+        let fixed: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed' AND content_hash = ?3)",
+            params![analysis_id, meeting_id, input_hash], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if !fixed {
+            return Err("処理の入力解析版が変更されています".into());
+        }
+    }
+    Ok(())
+}
+
+fn verify_latest_checkpoint(connection: &Connection, job_id: &str) -> Result<(), String> {
+    let job: (String, i64) = connection
+        .query_row(
+            "SELECT spec_hash, completed_units FROM processing_jobs WHERE id = ?1",
+            params![job_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    let latest: Option<(i64, String, String)> = connection.query_row(
+        "SELECT completed_units, checkpoint_json, checkpoint_hash FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1",
+        params![job_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional().map_err(|error| error.to_string())?;
+    match latest {
+        Some((units, json, hash))
+            if units == job.1 && checkpoint_hash(&job.0, units, &json) == hash =>
+        {
+            Ok(())
+        }
+        None if job.1 == 0 => Ok(()),
+        _ => Err("処理の再開情報が変更されています".into()),
+    }
+}
+
+fn valid_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn hash_bytes(domain: &[u8], bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"mon-job-checkpoint-v1");
+    hasher.update(spec_hash.as_bytes());
+    hasher.update(units.to_be_bytes());
+    hasher.update(json.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn audio_job(meeting_id: &str, operation_id: &str) -> JobSpec {
+        JobSpec {
+            meeting_id: meeting_id.into(),
+            kind: JobKind::Transcription,
+            operation_id: operation_id.into(),
+            input_analysis_id: None,
+            input_hash: "a".repeat(64),
+            profile_snapshot: json!({"engine": "test", "model_hash": "b".repeat(64)}),
+            parameters: json!({"window_seconds": 30}),
+            total_units: Some(10),
+        }
+    }
+
+    #[test]
+    fn job_pauses_at_checkpoint_and_recording_blocks_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("処理").unwrap();
+        let spec = audio_job(&meeting.id, "operation-1");
+        let queued = storage.enqueue_job(spec.clone()).unwrap();
+        assert_eq!(queued.state, "queued");
+        assert_eq!(storage.enqueue_job(spec.clone()).unwrap(), queued);
+        let mut changed = spec;
+        changed.parameters = json!({"window_seconds": 60});
+        assert!(storage.enqueue_job(changed).is_err());
+        let running = storage.acquire_next_job().unwrap().unwrap();
+        assert_eq!(running.id, queued.id);
+        assert_eq!(running.state, "running");
+        assert!(storage.acquire_next_job().unwrap().is_none());
+        assert!(storage.request_pause_for_recording().unwrap());
+        assert!(storage.acquire_next_job().unwrap().is_none());
+        assert!(storage
+            .save_job_checkpoint(&running.id, 1, 2, json!({"part": 2}))
+            .is_err());
+        let paused = storage
+            .save_job_checkpoint(&running.id, 0, 2, json!({"part": 2}))
+            .unwrap();
+        assert_eq!(paused.state, "paused");
+        assert_eq!(paused.completed_units, 2);
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE meetings SET source_type = 'recording' WHERE id = ?1",
+                params![meeting.id],
+            )
+            .unwrap();
+        storage.connection.lock().unwrap().execute(
+            "INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, created_at, updated_at) VALUES ('recording', ?1, 'recording', 'system', '{}', 'start', 0, 0)",
+            params![meeting.id],
+        ).unwrap();
+        assert_eq!(storage.resume_job(&running.id).unwrap().state, "queued");
+        assert!(storage.acquire_next_job().unwrap().is_none());
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE recording_sessions SET state = 'saved' WHERE id = 'recording'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            storage.acquire_next_job().unwrap().unwrap().completed_units,
+            2
+        );
+        assert!(storage
+            .save_job_checkpoint(&running.id, 2, 11, json!({}))
+            .is_err());
+        assert_eq!(
+            storage
+                .save_job_checkpoint(&running.id, 2, 10, json!({"part": 10}))
+                .unwrap()
+                .state,
+            "running"
+        );
+        assert!(storage
+            .finish_job(&running.id, 2, "succeeded", None)
+            .is_err());
+        assert_eq!(
+            storage
+                .finish_job(&running.id, 10, "succeeded", None)
+                .unwrap()
+                .state,
+            "succeeded"
+        );
+        assert!(storage.resume_job(&running.id).is_err());
+    }
+
+    #[test]
+    fn running_job_is_interrupted_on_reopen_and_corrupt_checkpoint_blocks_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("処理").unwrap();
+        let job = storage
+            .enqueue_job(audio_job(&meeting.id, "operation-2"))
+            .unwrap();
+        storage.acquire_next_job().unwrap().unwrap();
+        storage
+            .save_job_checkpoint(&job.id, 0, 3, json!({"part": 3}))
+            .unwrap();
+        drop(storage);
+        let reopened = Storage::open(temp.path().to_owned()).unwrap();
+        assert_eq!(
+            load_job(&reopened.connection.lock().unwrap(), &job.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "interrupted"
+        );
+        assert_eq!(reopened.resume_job(&job.id).unwrap().state, "queued");
+        assert_eq!(
+            reopened
+                .acquire_next_job()
+                .unwrap()
+                .unwrap()
+                .completed_units,
+            3
+        );
+        drop(reopened);
+        let reopened = Storage::open(temp.path().to_owned()).unwrap();
+        reopened
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE job_checkpoints SET checkpoint_json = '{\"part\":4}' WHERE job_id = ?1",
+                params![job.id],
+            )
+            .unwrap();
+        assert!(reopened.resume_job(&job.id).is_err());
+    }
+
+    #[test]
+    fn minutes_job_requires_matching_committed_analysis() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("処理").unwrap();
+        let other = storage.create_meeting("別会議").unwrap();
+        storage.connection.lock().unwrap().execute(
+            "INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES ('analysis', ?1, 1, 'engine', 'candidate', ?2, '{}', '{}', ?3, 1, 0)",
+            params![meeting.id, "a".repeat(64), "0".repeat(64)],
+        ).unwrap();
+        let committed = storage
+            .commit_analysis_candidate(&meeting.id, "analysis", 0, false)
+            .unwrap();
+        let mut spec = audio_job(&other.id, "minutes-1");
+        spec.kind = JobKind::MinutesGeneration;
+        spec.input_analysis_id = Some("analysis".into());
+        spec.input_hash = committed.content_hash.clone();
+        assert!(storage.enqueue_job(spec.clone()).is_err());
+        spec.meeting_id = meeting.id;
+        spec.input_hash = "f".repeat(64);
+        assert!(storage.enqueue_job(spec.clone()).is_err());
+        spec.input_hash = committed.content_hash;
+        assert_eq!(storage.enqueue_job(spec).unwrap().state, "queued");
+        let cancelled = storage
+            .enqueue_job(audio_job(&other.id, "cancel-1"))
+            .unwrap();
+        assert_eq!(
+            storage
+                .finish_job(&cancelled.id, 0, "cancelled", None)
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert!(storage
+            .finish_job(&cancelled.id, 0, "failed", Some("retry"))
+            .is_err());
+    }
+}

@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod drafts;
+mod jobs;
 mod revisions;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
@@ -17,6 +18,7 @@ const MIGRATION_3: &str = include_str!("migrations/0003_revisions.sql");
 const MIGRATION_4: &str = include_str!("migrations/0004_audio.sql");
 const MIGRATION_5: &str = include_str!("migrations/0005_content.sql");
 const MIGRATION_6: &str = include_str!("migrations/0006_drafts.sql");
+const MIGRATION_7: &str = include_str!("migrations/0007_jobs.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +53,14 @@ impl Storage {
         std::fs::create_dir_all(&root)?;
         let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
+        )?;
         apply_migrations(&mut connection)?;
+        connection.execute(
+            "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
+            params![now_ms()?],
+        )?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),
@@ -309,6 +317,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (4_i64, MIGRATION_4),
         (5_i64, MIGRATION_5),
         (6_i64, MIGRATION_6),
+        (7_i64, MIGRATION_7),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -460,7 +469,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 
