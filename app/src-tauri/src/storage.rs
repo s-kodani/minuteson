@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -17,6 +17,7 @@ pub struct Meeting {
     pub lifecycle: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub lock_version: i64,
 }
 
 pub struct Storage {
@@ -49,6 +50,7 @@ impl Storage {
             lifecycle: "draft".into(),
             created_at: now,
             updated_at: now,
+            lock_version: 0,
         };
         self.connection
             .lock()
@@ -67,7 +69,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
         let mut statement = connection
-            .prepare("SELECT id, title, lifecycle, created_at, updated_at FROM meetings ORDER BY updated_at DESC, id DESC")
+            .prepare("SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings ORDER BY updated_at DESC, id DESC")
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| {
@@ -77,10 +79,90 @@ impl Storage {
                     lifecycle: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
+                    lock_version: row.get(5)?,
                 })
             })
             .map_err(|error| error.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn get_meeting(&self, id: &str) -> Result<Option<Meeting>, String> {
+        self.connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?
+            .query_row(
+                "SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(Meeting {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        lifecycle: row.get(2)?,
+                        created_at: row.get(3)?,
+                        updated_at: row.get(4)?,
+                        lock_version: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn rename_meeting(
+        &self,
+        id: &str,
+        title: &str,
+        expected_lock_version: i64,
+    ) -> Result<Meeting, String> {
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 200 {
+            return Err("会議名は1～200文字で入力してください".into());
+        }
+        if expected_lock_version < 0 {
+            return Err("会議の版番号が不正です".into());
+        }
+        let now = now_ms()?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let changed = connection
+            .execute(
+                "UPDATE meetings SET title = ?1, updated_at = ?2, lock_version = lock_version + 1 WHERE id = ?3 AND lock_version = ?4",
+                params![title, now, id, expected_lock_version],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 0 {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            return Err(if exists {
+                "別の画面で会議が更新されました。再読込してください"
+            } else {
+                "会議が見つかりません"
+            }
+            .into());
+        }
+        connection
+            .query_row(
+                "SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(Meeting {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        lifecycle: row.get(2)?,
+                        created_at: row.get(3)?,
+                        updated_at: row.get(4)?,
+                        lock_version: row.get(5)?,
+                    })
+                },
+            )
             .map_err(|error| error.to_string())
     }
 
@@ -182,5 +264,30 @@ mod tests {
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         assert!(storage.create_meeting("  ").is_err());
         assert!(storage.list_meetings().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rename_requires_current_version_and_survives_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let created = storage.create_meeting("旧名称").unwrap();
+        let renamed = storage
+            .rename_meeting(&created.id, " 新名称 ", created.lock_version)
+            .unwrap();
+        assert_eq!(renamed.title, "新名称");
+        assert_eq!(renamed.lock_version, created.lock_version + 1);
+        assert!(storage
+            .rename_meeting(&created.id, "古い更新", created.lock_version)
+            .is_err());
+        drop(storage);
+        let reopened = Storage::open(temp.path().to_owned()).unwrap();
+        assert_eq!(reopened.get_meeting(&created.id).unwrap(), Some(renamed));
+    }
+
+    #[test]
+    fn missing_meeting_cannot_be_renamed() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        assert!(storage.rename_meeting("missing", "name", 0).is_err());
     }
 }

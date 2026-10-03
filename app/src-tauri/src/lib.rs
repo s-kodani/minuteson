@@ -79,6 +79,32 @@ fn list_meetings(
     storage.list_meetings()
 }
 
+#[tauri::command]
+fn get_meeting(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    id: String,
+) -> Result<Option<Meeting>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read meetings".into());
+    }
+    storage.get_meeting(&id)
+}
+
+#[tauri::command]
+fn rename_meeting(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    id: String,
+    title: String,
+    expected_lock_version: i64,
+) -> Result<Meeting, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can rename meetings".into());
+    }
+    storage.rename_meeting(&id, &title, expected_lock_version)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -94,7 +120,9 @@ pub fn run() {
             hide_recorder_preview,
             open_main_window,
             create_meeting,
-            list_meetings
+            list_meetings,
+            get_meeting,
+            rename_meeting
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
