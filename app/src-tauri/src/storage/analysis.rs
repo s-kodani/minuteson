@@ -77,6 +77,22 @@ pub struct AnalysisView {
 
 impl Storage {
     pub fn load_current_analysis(&self, meeting_id: &str) -> Result<Option<AnalysisView>, String> {
+        self.load_analysis_view(meeting_id, None)
+    }
+
+    pub(crate) fn load_visible_analysis(
+        &self,
+        meeting_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<AnalysisView>, String> {
+        self.load_analysis_view(meeting_id, Some(revision_id))
+    }
+
+    fn load_analysis_view(
+        &self,
+        meeting_id: &str,
+        revision_id: Option<&str>,
+    ) -> Result<Option<AnalysisView>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -85,8 +101,8 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
         let head: Option<(String, String)> = transaction.query_row(
-            "SELECT a.id, a.content_hash FROM meetings m JOIN analysis_revisions a ON a.id = m.current_analysis_id AND a.meeting_id = m.id AND a.publication_state = 'committed' WHERE m.id = ?1",
-            params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?)),
+            "SELECT a.id, a.content_hash FROM meetings m JOIN analysis_revisions a ON a.meeting_id = m.id WHERE m.id = ?1 AND ((?2 IS NULL AND a.id = m.current_analysis_id AND a.publication_state = 'committed') OR (?2 = a.id AND (a.publication_state = 'candidate' OR (a.publication_state = 'committed' AND a.id IN (m.current_analysis_id, m.previous_analysis_id)))))",
+            params![meeting_id, revision_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|e| e.to_string())?;
         let Some((id, content_hash)) = head else {
             return Ok(None);
@@ -406,10 +422,10 @@ fn valid_hash(hash: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn saved_meeting(storage: &Storage) -> Meeting {
+    pub(crate) fn saved_meeting(storage: &Storage) -> Meeting {
         let meeting = storage.create_meeting("解析候補").unwrap();
         let db = storage.connection.lock().unwrap();
         db.execute(
@@ -440,7 +456,7 @@ mod tests {
         meeting
     }
 
-    fn input() -> AnalysisInput {
+    pub(crate) fn input() -> AnalysisInput {
         AnalysisInput {
             audio_manifest_hash: "a".repeat(64),
             profile_snapshot: serde_json::json!({"engine": "test", "modelHash": "c".repeat(64)}),

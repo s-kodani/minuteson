@@ -18,6 +18,111 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 struct ExitGuard(AtomicBool);
 
 #[tauri::command]
+fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::PreferencesSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis settings".into());
+    }
+    window.state::<Storage>().analysis_preferences()
+}
+
+#[tauri::command]
+fn save_analysis_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::AnalysisPreferences,
+) -> Result<storage::PreferencesSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit analysis settings".into());
+    }
+    window
+        .state::<Storage>()
+        .save_analysis_preferences(expected_lock_version, payload)
+}
+
+#[tauri::command]
+fn get_analysis_versions(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::VersionState, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis versions".into());
+    }
+    window.state::<Storage>().analysis_versions(&meeting_id)
+}
+
+#[tauri::command]
+async fn get_analysis_preview(
+    window: WebviewWindow,
+    meeting_id: String,
+    analysis_id: String,
+) -> Result<Option<AnalysisView>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis candidates".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .load_visible_analysis(&meeting_id, &analysis_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn get_analysis_version_draft(
+    window: WebviewWindow,
+    meeting_id: String,
+    analysis_id: String,
+) -> Result<Option<TranscriptDraft>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read version drafts".into());
+    }
+    window
+        .state::<Storage>()
+        .visible_analysis_draft(&meeting_id, &analysis_id)
+}
+
+#[tauri::command]
+async fn adopt_analysis_candidate(
+    window: WebviewWindow,
+    request: storage::AdoptRequest,
+) -> Result<storage::CommittedAnalysis, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can adopt analysis candidates".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().adopt_analysis(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn restore_analysis_version(
+    window: WebviewWindow,
+    meeting_id: String,
+    expected_meeting_lock_version: i64,
+    expected_previous_id: String,
+    expected_content_hash: String,
+    expected_draft: Option<storage::DraftStamp>,
+) -> Result<storage::CommittedAnalysis, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can restore analysis".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().restore_analysis_checked(
+            &meeting_id,
+            expected_meeting_lock_version,
+            &expected_previous_id,
+            &expected_content_hash,
+            expected_draft,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn start_transcription(
     window: WebviewWindow,
     request: transcription::StartRequest,
@@ -427,7 +532,14 @@ pub fn run() {
             get_analysis_jobs,
             pause_analysis_job,
             resume_analysis_job,
-            cancel_analysis_job
+            cancel_analysis_job,
+            get_analysis_preferences,
+            save_analysis_preferences,
+            get_analysis_versions,
+            get_analysis_preview,
+            get_analysis_version_draft,
+            adopt_analysis_candidate,
+            restore_analysis_version
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

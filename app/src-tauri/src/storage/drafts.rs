@@ -71,6 +71,18 @@ impl Storage {
             }
             return Ok(existing);
         }
+        if let Some(existing) =
+            load_draft_for_base(&transaction, meeting_id, Some(base_analysis_id))?
+        {
+            transaction
+                .execute(
+                    "UPDATE working_drafts SET active = 1 WHERE id = ?1",
+                    params![existing.id],
+                )
+                .map_err(|e| e.to_string())?;
+            transaction.commit().map_err(|e| e.to_string())?;
+            return Ok(existing);
+        }
         let payload = TranscriptDraftPayload::default();
         let serialized = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
         let hash = draft_hash(&serialized);
@@ -122,7 +134,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let existing: Option<(String, String, String, String, i64)> = transaction.query_row(
-            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript'",
+            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript' AND active = 1",
             params![draft_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).optional().map_err(|error| error.to_string())?;
@@ -206,7 +218,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let current: Option<(String, String, String, String, i64)> = transaction.query_row(
-            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript'",
+            "SELECT meeting_id, base_analysis_id, payload_json, content_hash, lock_version FROM working_drafts WHERE id = ?1 AND target_kind = 'transcript' AND active = 1",
             params![draft_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).optional().map_err(|error| error.to_string())?;
@@ -260,13 +272,21 @@ impl Storage {
     }
 }
 
-fn load_draft(
+pub(super) fn load_draft(
     connection: &Connection,
     meeting_id: &str,
 ) -> Result<Option<TranscriptDraft>, String> {
+    load_draft_for_base(connection, meeting_id, None)
+}
+
+pub(super) fn load_draft_for_base(
+    connection: &Connection,
+    meeting_id: &str,
+    base: Option<&str>,
+) -> Result<Option<TranscriptDraft>, String> {
     let row: Option<(String, String, String, String, i64, i64)> = connection.query_row(
-        "SELECT id, base_analysis_id, payload_json, content_hash, lock_version, updated_at FROM working_drafts WHERE meeting_id = ?1 AND target_kind = 'transcript'",
-        params![meeting_id],
+        "SELECT id, base_analysis_id, payload_json, content_hash, lock_version, updated_at FROM working_drafts WHERE meeting_id = ?1 AND target_kind = 'transcript' AND ((?2 IS NULL AND active = 1) OR base_analysis_id = ?2)",
+        params![meeting_id, base],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
     ).optional().map_err(|error| error.to_string())?;
     let Some((id, base_analysis_id, serialized, content_hash, lock_version, updated_at)) = row
@@ -294,12 +314,12 @@ fn ensure_committed_analysis(
     base_analysis_id: &str,
 ) -> Result<(), String> {
     let exists: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed')",
+        "SELECT EXISTS(SELECT 1 FROM analysis_revisions a JOIN meetings m ON m.id = a.meeting_id AND m.current_analysis_id = a.id WHERE a.id = ?1 AND a.meeting_id = ?2 AND a.publication_state = 'committed')",
         params![base_analysis_id, meeting_id],
         |row| row.get(0),
     ).map_err(|error| error.to_string())?;
     if !exists {
-        return Err("同じ会議の確定済み解析版が必要です".into());
+        return Err("同じ会議の現在の確定済み解析版が必要です".into());
     }
     Ok(())
 }

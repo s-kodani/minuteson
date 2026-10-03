@@ -9,17 +9,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod analysis;
+mod analysis_ui;
 mod drafts;
 mod jobs;
 mod playback;
+mod preferences;
 mod recordings;
 mod revisions;
 mod transcription;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
+pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
+pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub use recordings::RecordingConfig;
+pub(crate) use revisions::CommittedAnalysis;
 pub(crate) use transcription::RecordedAudioPlan;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
@@ -31,6 +36,8 @@ const MIGRATION_6: &str = include_str!("migrations/0006_drafts.sql");
 const MIGRATION_7: &str = include_str!("migrations/0007_jobs.sql");
 const MIGRATION_8: &str = include_str!("migrations/0008_recording_guards.sql");
 const MIGRATION_9: &str = include_str!("migrations/0009_job_results.sql");
+const MIGRATION_10: &str = include_str!("migrations/0010_draft_history.sql");
+const MIGRATION_11: &str = include_str!("migrations/0011_app_settings.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,6 +343,8 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (7_i64, MIGRATION_7),
         (8_i64, MIGRATION_8),
         (9_i64, MIGRATION_9),
+        (10_i64, MIGRATION_10),
+        (11_i64, MIGRATION_11),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -531,7 +540,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 9);
+        assert_eq!(count, 11);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

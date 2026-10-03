@@ -1,7 +1,8 @@
 use super::*;
 use rusqlite::{types::ValueRef, Params, Transaction, TransactionBehavior};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommittedAnalysis {
     pub id: String,
     pub content_hash: String,
@@ -25,6 +26,23 @@ impl Storage {
         revision_id: &str,
         expected_meeting_lock_version: i64,
         confirm_replacing_previous: bool,
+    ) -> Result<CommittedAnalysis, String> {
+        self.commit_analysis_inner(
+            meeting_id,
+            revision_id,
+            expected_meeting_lock_version,
+            confirm_replacing_previous,
+            None,
+        )
+    }
+
+    pub(super) fn commit_analysis_inner(
+        &self,
+        meeting_id: &str,
+        revision_id: &str,
+        expected_meeting_lock_version: i64,
+        confirm_replacing_previous: bool,
+        checked: Option<(&str, Option<&super::analysis_ui::DraftStamp>)>,
     ) -> Result<CommittedAnalysis, String> {
         let mut connection = self
             .connection
@@ -60,6 +78,34 @@ impl Storage {
             return Err("採用可能な解析候補が見つかりません".into());
         }
         let content_hash = analysis_content_hash(&transaction, revision_id)?;
+        if let Some((expected_hash, draft)) = checked {
+            let (stored_hash, parent_id): (String, Option<String>) = transaction
+                .query_row(
+                    "SELECT content_hash, parent_revision_id FROM analysis_revisions WHERE id = ?1",
+                    params![revision_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|e| e.to_string())?;
+            if content_hash != expected_hash || stored_hash != expected_hash {
+                return Err("確認した解析候補の内容が変更されています".into());
+            }
+            if parent_id != current_id {
+                return Err("候補作成後に現在版が切り替わっています。再解析してください".into());
+            }
+            if let Some(current) = &current_id {
+                let expected: String = transaction
+                    .query_row(
+                        "SELECT content_hash FROM analysis_revisions WHERE id = ?1",
+                        params![current],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                if analysis_content_hash(&transaction, current)? != expected {
+                    return Err("現在の解析版の内容が変更されています".into());
+                }
+            }
+            super::analysis_ui::switch_draft(&transaction, meeting_id, revision_id, draft)?;
+        }
         transaction
             .execute(
                 "UPDATE analysis_revisions SET content_hash = ?1, publication_state = 'committed' WHERE id = ?2 AND meeting_id = ?3 AND publication_state = 'candidate'",
@@ -191,6 +237,15 @@ impl Storage {
         meeting_id: &str,
         expected_meeting_lock_version: i64,
     ) -> Result<CommittedAnalysis, String> {
+        self.restore_analysis_inner(meeting_id, expected_meeting_lock_version, None)
+    }
+
+    pub(super) fn restore_analysis_inner(
+        &self,
+        meeting_id: &str,
+        expected_meeting_lock_version: i64,
+        checked: Option<(&str, &str, Option<&super::analysis_ui::DraftStamp>)>,
+    ) -> Result<CommittedAnalysis, String> {
         if expected_meeting_lock_version < 0 {
             return Err("会議の版番号が不正です".into());
         }
@@ -227,6 +282,12 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         if expected_hash != analysis_content_hash(&transaction, &previous_id)? {
             return Err("直前の解析版の内容が変化しています".into());
+        }
+        if let Some((preview_id, preview_hash, draft)) = checked {
+            if preview_id != previous_id || preview_hash != expected_hash {
+                return Err("確認した直前版と復元対象が一致しません。再確認してください".into());
+            }
+            super::analysis_ui::switch_draft(&transaction, meeting_id, &previous_id, draft)?;
         }
         transaction.execute(
             "UPDATE meetings SET current_analysis_id = ?1, previous_analysis_id = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
