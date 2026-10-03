@@ -184,6 +184,118 @@ impl Storage {
         let expected = expected.ok_or("確定済み議事録版が見つかりません")?;
         Ok(expected == minutes_content_hash(&transaction, revision_id)?)
     }
+
+    #[allow(dead_code)]
+    pub fn restore_previous_analysis(
+        &self,
+        meeting_id: &str,
+        expected_meeting_lock_version: i64,
+    ) -> Result<CommittedAnalysis, String> {
+        if expected_meeting_lock_version < 0 {
+            return Err("会議の版番号が不正です".into());
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let heads: Option<(i64, Option<String>, Option<String>)> = transaction.query_row(
+            "SELECT lock_version, current_analysis_id, previous_analysis_id FROM meetings WHERE id = ?1",
+            params![meeting_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let (lock_version, current_id, previous_id) = heads.ok_or("会議が見つかりません")?;
+        if lock_version != expected_meeting_lock_version {
+            return Err("別の画面で会議が更新されました。再読込してください".into());
+        }
+        let current_id = current_id.ok_or("現在の解析版がありません")?;
+        let previous_id = previous_id.ok_or("復元できる直前の解析版がありません")?;
+        let current_hash: String = transaction.query_row(
+            "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed'",
+            params![current_id, meeting_id],
+            |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if current_hash != analysis_content_hash(&transaction, &current_id)? {
+            return Err("現在の解析版の内容が変化しています".into());
+        }
+        let expected_hash: String = transaction.query_row(
+            "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed'",
+            params![previous_id, meeting_id],
+            |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if expected_hash != analysis_content_hash(&transaction, &previous_id)? {
+            return Err("直前の解析版の内容が変化しています".into());
+        }
+        transaction.execute(
+            "UPDATE meetings SET current_analysis_id = ?1, previous_analysis_id = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
+            params![previous_id, current_id, now_ms()?, meeting_id, lock_version],
+        ).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(CommittedAnalysis {
+            id: previous_id,
+            content_hash: expected_hash,
+            previous_id: Some(current_id),
+            meeting_lock_version: lock_version + 1,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn restore_previous_minutes(
+        &self,
+        meeting_id: &str,
+        expected_meeting_lock_version: i64,
+    ) -> Result<CommittedMinutes, String> {
+        if expected_meeting_lock_version < 0 {
+            return Err("会議の版番号が不正です".into());
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let heads: Option<(i64, Option<String>, Option<String>)> = transaction.query_row(
+            "SELECT lock_version, current_minutes_id, previous_minutes_id FROM meetings WHERE id = ?1",
+            params![meeting_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|error| error.to_string())?;
+        let (lock_version, current_id, previous_id) = heads.ok_or("会議が見つかりません")?;
+        if lock_version != expected_meeting_lock_version {
+            return Err("別の画面で会議が更新されました。再読込してください".into());
+        }
+        let current_id = current_id.ok_or("現在の議事録版がありません")?;
+        let previous_id = previous_id.ok_or("復元できる直前の議事録版がありません")?;
+        let current_hash: String = transaction.query_row(
+            "SELECT content_hash FROM minutes_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed'",
+            params![current_id, meeting_id],
+            |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if current_hash != minutes_content_hash(&transaction, &current_id)? {
+            return Err("現在の議事録版の内容が変化しています".into());
+        }
+        let expected_hash: String = transaction.query_row(
+            "SELECT content_hash FROM minutes_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed'",
+            params![previous_id, meeting_id],
+            |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if expected_hash != minutes_content_hash(&transaction, &previous_id)? {
+            return Err("直前の議事録版の内容が変化しています".into());
+        }
+        transaction.execute(
+            "UPDATE meetings SET current_minutes_id = ?1, previous_minutes_id = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
+            params![previous_id, current_id, now_ms()?, meeting_id, lock_version],
+        ).map_err(|error| error.to_string())?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(CommittedMinutes {
+            id: previous_id,
+            content_hash: expected_hash,
+            previous_id: Some(current_id),
+            meeting_lock_version: lock_version + 1,
+        })
+    }
 }
 
 fn analysis_content_hash(
@@ -340,6 +452,21 @@ mod tests {
             .unwrap(),
             "committed"
         );
+        drop(db);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis-3")
+            .unwrap();
+        assert!(storage.restore_previous_analysis(&meeting.id, 2).is_err());
+        let restored = storage.restore_previous_analysis(&meeting.id, 3).unwrap();
+        assert_eq!(restored.id, "analysis-2");
+        assert_eq!(restored.previous_id.as_deref(), Some("analysis-3"));
+        assert_eq!(restored.meeting_lock_version, 4);
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(draft)
+        );
+        let switched_back = storage.restore_previous_analysis(&meeting.id, 4).unwrap();
+        assert_eq!(switched_back.id, "analysis-3");
     }
 
     #[test]
@@ -404,5 +531,15 @@ mod tests {
         let db = storage.connection.lock().unwrap();
         let heads: (String, String, i64) = db.query_row("SELECT current_minutes_id, previous_minutes_id, lock_version FROM meetings WHERE id = ?1", params![meeting.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
         assert_eq!(heads, ("minutes-3".into(), "minutes-2".into(), 4));
+        drop(db);
+        assert!(storage.restore_previous_minutes(&meeting.id, 3).is_err());
+        let restored = storage.restore_previous_minutes(&meeting.id, 4).unwrap();
+        assert_eq!(restored.id, "minutes-2");
+        assert_eq!(restored.previous_id.as_deref(), Some("minutes-3"));
+        assert_eq!(restored.meeting_lock_version, 5);
+        assert_eq!(
+            storage.restore_previous_minutes(&meeting.id, 5).unwrap().id,
+            "minutes-3"
+        );
     }
 }
