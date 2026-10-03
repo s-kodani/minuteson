@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
+import { TranscriptEditor } from "./transcript";
 import "./style.css";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -240,6 +241,7 @@ function MainWindow() {
             {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)}>開く</button></li>)}</ul>}
             {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}><h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label><div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy} /><button type="submit" disabled={meetingBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => setSelectedMeeting(null)}>閉じる</button></div><p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。文字起こしと議事録は準備中です。" : "録音状態を確認してください。"}</p></form>}
           </section>
+          {selectedMeeting && <TranscriptEditor key={selectedMeeting.id} meetingId={selectedMeeting.id} />}
           <div className="next-grid">
             <section><span className="step-number">01</span><h2>保存基盤</h2><p>会議名の保存・再読込に対応。音声と編集履歴はこれから接続します。</p><span className="soon">一部実装</span></section>
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>
