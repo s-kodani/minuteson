@@ -19,7 +19,7 @@ interface Utterance {
   speakerIds: string[];
 }
 
-interface Analysis {
+export interface Analysis {
   id: string;
   meetingId: string;
   contentHash: string;
@@ -27,13 +27,13 @@ interface Analysis {
   utterances: Utterance[];
 }
 
-interface DraftPayload {
+export interface DraftPayload {
   schema_version: number;
   speaker_names: { speaker_id: string; display_name: string | null }[];
   utterances: { utterance_id: string; effective_text: string; speaker_ids: string[] }[];
 }
 
-interface Draft {
+export interface Draft {
   id: string;
   meetingId: string;
   baseAnalysisId: string;
@@ -53,7 +53,7 @@ function canonicalPayload(payload: DraftPayload): DraftPayload {
   };
 }
 
-function timeLabel(microseconds: number): string {
+export function timeLabel(microseconds: number): string {
   const seconds = Math.floor(microseconds / 1_000_000);
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }

@@ -7,7 +7,20 @@ const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".r
   { id: "speech-a", trackId: "microphone", startUs: 0, endUs: 15000000, recognizedText: "次の点検日は来週です。", effectiveText: "次の点検日は来週です。", attributionState: "assigned", speakerIds: ["speaker-a"] },
   { id: "speech-b", trackId: "system", startUs: 20000000, endUs: 25000000, recognizedText: "はい、確認します。", effectiveText: "はい、確認します。", attributionState: "overlap", speakerIds: ["speaker-a", "speaker-b"] },
 ] };
-const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, persistenceDelayMs: 0, draft: null };
+const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: "b".repeat(64), utterances: analysis.utterances.map((item) => ({ ...item, id: `${item.id}-new`, effectiveText: `${item.effectiveText}（候補）` })) };
+const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
+const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, persistenceDelayMs: 0, draft: null,
+  preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
+  jobs: [{ id: "job-existing", kind: "transcription", state: "paused", completedUnits: 1, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: "user" }],
+  currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
+};
+const currentAnalysis = () => fixture.currentId === analysis.id ? analysis : fixture.candidate;
+const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
+  versions: [analysis, fixture.candidate].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
+const switchDraft = (nextId) => {
+  if (fixture.draft) fixture.archivedDrafts[fixture.draft.baseAnalysisId] = structuredClone(fixture.draft);
+  fixture.draft = fixture.archivedDrafts[nextId] ? structuredClone(fixture.archivedDrafts[nextId]) : null;
+};
 window.isTauri = true;
 mockWindows("main");
 mockIPC(async (command, args) => {
@@ -17,10 +30,10 @@ mockIPC(async (command, args) => {
     case "capture_available": return false;
     case "list_meetings": return meetings;
     case "get_meeting": return meetings.find((meeting) => meeting.id === args.id) ?? null;
-    case "get_current_analysis": return args.meetingId === meetings[0].id ? analysis : null;
+    case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
     case "get_transcript_draft": return args.meetingId === meetings[0].id ? fixture.draft : null;
     case "begin_transcript_draft":
-      fixture.draft = { id: "draft", meetingId: meetings[0].id, baseAnalysisId: analysis.id, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
+      fixture.draft = { id: `draft-${fixture.currentId}`, meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
       return structuredClone(fixture.draft);
     case "save_transcript_draft":
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
@@ -28,6 +41,49 @@ mockIPC(async (command, args) => {
       if (args.expectedLockVersion !== fixture.draft.lockVersion) throw new Error("版番号不一致");
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
       return structuredClone(fixture.draft);
+    case "get_analysis_preferences": return structuredClone(fixture.preferences);
+    case "save_analysis_preferences":
+      await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
+      if (fixture.failPreferences) throw new Error("模擬設定保存競合");
+      if (args.expectedLockVersion !== fixture.preferences.lockVersion) throw new Error("設定版番号不一致");
+      fixture.preferences = { ...fixture.preferences, payload: structuredClone(args.payload), lockVersion: fixture.preferences.lockVersion + 1 };
+      return structuredClone(fixture.preferences);
+    case "get_analysis_jobs": return args.meetingId === meetings[0].id ? structuredClone(fixture.jobs) : [];
+    case "get_analysis_versions": return args.meetingId === meetings[0].id ? structuredClone(versions()) : { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
+    case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);
+    case "get_analysis_version_draft": return structuredClone(fixture.draft?.baseAnalysisId === args.analysisId ? fixture.draft : fixture.archivedDrafts[args.analysisId] ?? null);
+    case "start_transcription": {
+      fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null });
+      return structuredClone(fixture.jobs[0]);
+    }
+    case "pause_analysis_job":
+    case "resume_analysis_job":
+    case "cancel_analysis_job": {
+      const job = fixture.jobs.find((item) => item.id === args.jobId);
+      job.state = command === "pause_analysis_job" ? "paused" : command === "resume_analysis_job" ? "running" : "cancelled";
+      return structuredClone(job);
+    }
+    case "adopt_analysis_candidate": {
+      if (fixture.failAdopt) throw new Error("模擬採用競合");
+      const request = args.request;
+      const state = versions();
+      if (request.expectedContentHash !== fixture.candidate.contentHash || request.expectedMeetingLockVersion !== state.meetingLockVersion || JSON.stringify(request.expectedDraft) !== JSON.stringify(state.draft)) throw new Error("採用時の競合");
+      fixture.previousId = fixture.currentId;
+      fixture.currentId = fixture.candidate.id;
+      fixture.candidateVisible = false;
+      switchDraft(fixture.currentId);
+      meetings[0].lockVersion++;
+      return {};
+    }
+    case "restore_analysis_version": {
+      const target = args.expectedPreviousId === analysis.id ? analysis : fixture.candidate;
+      const state = versions();
+      if (args.expectedPreviousId !== fixture.previousId || args.expectedContentHash !== target.contentHash || args.expectedMeetingLockVersion !== state.meetingLockVersion || JSON.stringify(args.expectedDraft) !== JSON.stringify(state.draft)) throw new Error("復元時の競合");
+      const prior = fixture.currentId;
+      fixture.currentId = fixture.previousId; fixture.previousId = prior;
+      switchDraft(fixture.currentId); meetings[0].lockVersion++;
+      return {};
+    }
     case "prepare_utterance_playback":
       if (fixture.failPlayback) throw new Error("音声ファイルのハッシュが保存時と一致しません");
       return { token: "audio-token", sampleRate: 48000, channels: 2, totalFrames: 720000, startUs: 0, endUs: 15000000, trackKind: "mic", alignment: "unverified" };

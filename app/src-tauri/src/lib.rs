@@ -91,9 +91,16 @@ async fn adopt_analysis_candidate(
         return Err("Only the main window can adopt analysis candidates".into());
     }
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().adopt_analysis(request))
-        .await
-        .map_err(|e| e.to_string())?
+    let meeting_id = request.meeting_id.clone();
+    let worker_app = app.clone();
+    let adopted = tauri::async_runtime::spawn_blocking(move || {
+        worker_app.state::<Storage>().adopt_analysis(request)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // The notification is an invalidation, never a substitute for a DB commit.
+    let _ = app.emit("analysis-version-changed", meeting_id);
+    Ok(adopted)
 }
 
 #[tauri::command]
@@ -109,8 +116,10 @@ async fn restore_analysis_version(
         return Err("Only the main window can restore analysis".into());
     }
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().restore_analysis_checked(
+    let changed_meeting = meeting_id.clone();
+    let worker_app = app.clone();
+    let restored = tauri::async_runtime::spawn_blocking(move || {
+        worker_app.state::<Storage>().restore_analysis_checked(
             &meeting_id,
             expected_meeting_lock_version,
             &expected_previous_id,
@@ -119,7 +128,9 @@ async fn restore_analysis_version(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("analysis-version-changed", changed_meeting);
+    Ok(restored)
 }
 
 #[tauri::command]
