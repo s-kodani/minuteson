@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+**/.build/
+probes/windows-capture/build/
+evaluation/data/
+evaluation/runs/*
+!evaluation/runs/.gitkeep
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/
+app/src-tauri/icons/android/
+app/src-tauri/icons/ios/

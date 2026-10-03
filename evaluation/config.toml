@@ -1,0 +1,118 @@
+schema_version = 1
+project = "MON"
+timezone = "Asia/Tokyo"
+
+[thresholds]
+max_standard_processing_ratio = 0.5
+max_minutes_processing_ratio = 0.0833333333
+max_recording_tail_loss_seconds = 5.0
+max_speaker_count = 10
+max_duration_seconds = 14400
+
+[[devices]]
+id = "mac-m1-max-local"
+platform = "macos"
+required = false
+status = "available"
+os_version = "27.0 (26A428)"
+architecture = "arm64"
+cpu = "Apple M1 Max (10 cores)"
+memory_gib = 32
+gpu = "Apple M1 Max integrated"
+power_mode = "record-at-run-time"
+notes = "2026-10-02 に開発端末から取得。性能基準の16GB端末とは別枠。"
+
+[[devices]]
+id = "macos-arm64-16gb"
+platform = "macos"
+required = true
+status = "needed"
+os_version = "macOS 15 or later"
+architecture = "arm64"
+cpu = "TBD"
+memory_gib = 16
+gpu = "Apple Silicon integrated"
+power_mode = "TBD"
+power_source = "AC"
+notes = "macOS側の16GB性能目標を実測する端末を割り当てる。"
+
+[[devices]]
+id = "windows-x64-16gb"
+platform = "windows"
+required = true
+status = "needed"
+os_version = "Windows 11 24H2 or later"
+architecture = "x86_64"
+cpu = "TBD"
+memory_gib = 16
+gpu = "No discrete GPU required"
+power_mode = "TBD"
+power_source = "AC"
+notes = "実機を割り当ててCPU型番、OSビルド、電源設定を確定する。"
+
+[[datasets]]
+id = "jp-meeting-10spk"
+required = true
+status = "needed"
+audio_path = "evaluation/data/jp-meeting-10spk/source.flac"
+transcript_path = "evaluation/data/jp-meeting-10spk/transcript.json"
+diarization_path = "evaluation/data/jp-meeting-10spk/diarization.json"
+minutes_truth_path = "evaluation/data/jp-meeting-10spk/minutes-truth.json"
+terms_path = "evaluation/data/jp-meeting-10spk/terms.json"
+language = "ja"
+speaker_count = 10
+duration_seconds = 3600
+contains_overlap = true
+contains_english_terms = true
+consent_confirmed = false
+sha256 = "TBD"
+notes = "提供者の同意を得た匿名化済み音声を配置する。"
+
+[[datasets]]
+id = "jp-meeting-3spk-pilot"
+required = false
+status = "needed"
+audio_path = "evaluation/data/jp-meeting-3spk-pilot/source.flac"
+transcript_path = "evaluation/data/jp-meeting-3spk-pilot/transcript.json"
+diarization_path = "evaluation/data/jp-meeting-3spk-pilot/diarization.json"
+minutes_truth_path = "evaluation/data/jp-meeting-3spk-pilot/minutes-truth.json"
+terms_path = "evaluation/data/jp-meeting-3spk-pilot/terms.json"
+language = "ja"
+speaker_count = 3
+duration_seconds = 3625.236
+contains_overlap = false
+contains_english_terms = false
+consent_confirmed = true
+sha256 = "d76949725864745629bc5aabbc918f689bb1c8f698bec2c96448cb8998f8a6a4"
+notes = "先行評価専用。音声は配置済み・利用同意はユーザー申告。3人以上との申告だが正確な話者数は未確認のためspeaker_count=3は仮値、status=neededを維持する。点検日のみユーザー確認済み、他の用語・重複発話は未確認。10話者の必須検証を代替しない。"
+
+[recording_matrix]
+platforms = ["macos", "windows"]
+clients = ["meet:chrome", "meet:edge", "zoom:desktop", "teams:desktop"]
+capture_modes = ["system", "application"]
+outputs = ["headset", "speaker"]
+duration_seconds = 900
+
+[[stability_scenarios]]
+id = "four-hour-recording"
+platforms = ["macos", "windows"]
+duration_seconds = 14400
+actions = ["record", "stop", "finalize", "analyze"]
+
+[[stability_scenarios]]
+id = "device-disconnect-reconnect"
+platforms = ["macos", "windows"]
+duration_seconds = 300
+actions = ["disconnect-microphone", "verify-system-continues", "reconnect-same-microphone", "verify-gap"]
+
+[[stability_scenarios]]
+id = "forced-termination-recovery"
+platforms = ["macos", "windows"]
+duration_seconds = 120
+actions = ["force-terminate", "restart", "recover-committed-audio", "measure-tail-loss"]
+
+[[stability_scenarios]]
+id = "explicit-sleep-resume"
+platforms = ["macos", "windows"]
+duration_seconds = 180
+actions = ["start-recording", "explicit-sleep", "resume", "verify-gap-and-recovery"]

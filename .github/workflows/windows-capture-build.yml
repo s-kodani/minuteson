@@ -1,0 +1,19 @@
+name: Windows capture build
+
+'on':
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure x64 probe
+        run: cmake -S probes/windows-capture -B probes/windows-capture/build -G "Visual Studio 17 2022" -A x64
+      - name: Build Release probe
+        run: cmake --build probes/windows-capture/build --config Release
