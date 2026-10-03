@@ -19,6 +19,43 @@ pub struct PreparedAudio {
     pub spans: Vec<AudioSpan>,
 }
 
+impl PreparedAudio {
+    pub fn total_frames(&self) -> u64 {
+        self.spans.iter().map(|span| span.frames).sum()
+    }
+
+    pub fn read_pcm(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
+        if frames == 0
+            || frames > PREVIEW_FRAMES
+            || offset
+                .checked_add(frames)
+                .is_none_or(|end| end > self.total_frames())
+        {
+            return Err("音声の読出し範囲が不正です".into());
+        }
+        let mut result = Vec::with_capacity(frames as usize * self.channels as usize * 4);
+        let mut span_start = 0;
+        let end = offset + frames;
+        for span in &mut self.spans {
+            let span_end = span_start + span.frames;
+            let from = offset.max(span_start);
+            let to = end.min(span_end);
+            if to > from {
+                result.extend_from_slice(
+                    &span
+                        .audio
+                        .read_frames(span.first_frame + from - span_start, to - from)?,
+                );
+            }
+            span_start = span_end;
+            if span_start >= end {
+                break;
+            }
+        }
+        Ok(result)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackInfo {
@@ -46,7 +83,7 @@ impl PlaybackStore {
             token: Uuid::new_v4().to_string(),
             sample_rate: audio.sample_rate,
             channels: audio.channels,
-            total_frames: audio.spans.iter().map(|span| span.frames).sum(),
+            total_frames: audio.total_frames(),
             start_us: audio.start_us,
             end_us: audio.end_us,
             track_kind: audio.track_kind.clone(),
@@ -89,24 +126,7 @@ impl PlaybackStore {
         result.extend_from_slice(&session.info.sample_rate.to_le_bytes());
         result.extend_from_slice(&session.info.channels.to_le_bytes());
         result.extend_from_slice(&(frames as u32).to_le_bytes());
-        let mut span_start = 0;
-        let end = offset_frames + frames;
-        for span in &mut session.audio.spans {
-            let span_end = span_start + span.frames;
-            let from = offset_frames.max(span_start);
-            let to = end.min(span_end);
-            if to > from {
-                result.extend_from_slice(
-                    &span
-                        .audio
-                        .read_frames(span.first_frame + from - span_start, to - from)?,
-                );
-            }
-            span_start = span_end;
-            if span_start >= end {
-                break;
-            }
-        }
+        result.extend_from_slice(&session.audio.read_pcm(offset_frames, frames)?);
         Ok(result)
     }
 }

@@ -186,17 +186,55 @@ impl Storage {
         analysis_id: &str,
         utterance_id: &str,
     ) -> Result<PreparedAudio, String> {
-        let (start, end, kind, config, chunks) = {
+        let (track, start, end) = {
             let connection = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let utterance: Option<(String, i64, i64, String, Option<String>)> = connection.query_row(
-                "SELECT u.track_id, u.start_us, u.end_us, t.kind, t.processing_config_json FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND a.publication_state = 'committed' AND t.state = 'ready'",
-                params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            let utterance: Option<(String, i64, i64)> = connection.query_row(
+                "SELECT u.track_id, u.start_us, u.end_us FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND a.publication_state = 'committed' AND t.state = 'ready'",
+                params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).optional().map_err(|e| e.to_string())?;
-            let (track, start, end, kind, config) =
-                utterance.ok_or("この会議・解析版の再生可能な発言がありません")?;
+            utterance.ok_or("この会議・解析版の再生可能な発言がありません")?
+        };
+        if !self.verify_analysis_content_hash(analysis_id)? {
+            return Err("解析版の内容が変更されています".into());
+        }
+        self.prepare_track_audio(meeting_id, &track, start, end)
+    }
+
+    // The analysis worker can read a verified source before a transcript exists.
+    // This is deliberately not exposed as an arbitrary-path IPC command.
+    pub(crate) fn prepare_track_audio(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<PreparedAudio, String> {
+        self.prepare_track_audio_cancellable(meeting_id, track, start, end, &|| false)
+    }
+
+    pub(crate) fn prepare_track_audio_cancellable(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        if start < 0 || end <= start {
+            return Err("音声区間が不正です".into());
+        }
+        let (kind, config, chunks) = {
+            let connection = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            let (kind, config): (String, Option<String>) = connection.query_row(
+                "SELECT kind, processing_config_json FROM audio_tracks WHERE id = ?1 AND meeting_id = ?2 AND state = 'ready'",
+                params![track, meeting_id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(|e| e.to_string())?.ok_or("この会議の確定済み音声トラックがありません")?;
             let gaps: bool = connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM audio_gaps WHERE track_id = ?1 AND start_us < ?3 AND end_us > ?2 AND recovered = 0)",
                 params![track, start, end], |row| row.get(0),
@@ -233,11 +271,8 @@ impl Storage {
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            (start, end, kind, config, chunks)
+            (kind, config, chunks)
         };
-        if !self.verify_analysis_content_hash(analysis_id)? {
-            return Err("解析版の内容が変更されています".into());
-        }
         if chunks.len() > 1024 {
             return Err("発言の音声セグメントが多すぎます".into());
         }
@@ -260,10 +295,11 @@ impl Storage {
             if file.canonicalize().map_err(|e| e.to_string())? != root.join(relative) {
                 return Err("音声ファイルが管理領域外を参照しています".into());
             }
-            let audio = VerifiedAudio::open(
+            let audio = VerifiedAudio::open_cancellable(
                 File::open(file).map_err(|e| e.to_string())?,
                 chunk.size as u64,
                 &chunk.hash,
+                cancelled,
             )?;
             let format = &audio.format;
             if format.frames != chunk.frame_count as u64

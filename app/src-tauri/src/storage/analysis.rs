@@ -173,10 +173,28 @@ impl Storage {
         meeting_id: &str,
         input: AnalysisInput,
     ) -> Result<String, String> {
+        self.create_analysis_candidate_inner(meeting_id, input, None)
+    }
+
+    pub(crate) fn finish_transcription_candidate(
+        &self,
+        meeting_id: &str,
+        job_id: &str,
+        completed_units: i64,
+        input: AnalysisInput,
+    ) -> Result<String, String> {
+        self.create_analysis_candidate_inner(meeting_id, input, Some((job_id, completed_units)))
+    }
+
+    fn create_analysis_candidate_inner(
+        &self,
+        meeting_id: &str,
+        input: AnalysisInput,
+        job: Option<(&str, i64)>,
+    ) -> Result<String, String> {
         if !valid_hash(&input.audio_manifest_hash)
             || !input.profile_snapshot.is_object()
             || !input.config.is_object()
-            || input.utterances.is_empty()
             || input.utterances.len() > 100_000
             || input.speakers.len() > 100
             || input.segments.len() > 500_000
@@ -195,6 +213,16 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        if let Some((job_id, completed_units)) = job {
+            let valid: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id = ?1 AND meeting_id = ?2 AND kind = 'transcription' AND state = 'running' AND completed_units = ?3 AND total_units = ?3 AND input_hash = ?4 AND profile_snapshot_json = ?5 AND output_analysis_id IS NULL)",
+                params![job_id, meeting_id, completed_units, input.audio_manifest_hash, profile], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if !valid {
+                return Err("解析ジョブの状態・入力・完了位置が一致しません".into());
+            }
+            super::jobs::verify_latest_checkpoint(&transaction, job_id)?;
+        }
         let source: Option<(String, String)> = transaction
             .query_row(
                 "SELECT m.lifecycle, r.audio_manifest_hash FROM meetings m JOIN recording_sessions r ON r.meeting_id = m.id WHERE m.id = ?1 AND r.state = 'saved'",
@@ -346,6 +374,9 @@ impl Storage {
                 params![content_hash, id],
             )
             .map_err(|e| e.to_string())?;
+        if let Some((job_id, _)) = job {
+            transaction.execute("UPDATE processing_jobs SET state = 'succeeded', output_analysis_id = ?1, finished_at = ?2, updated_at = ?2 WHERE id = ?3", params![id, now, job_id]).map_err(|e| e.to_string())?;
+        }
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(id)
     }

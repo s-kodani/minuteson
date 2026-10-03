@@ -322,4 +322,5 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
             });
         }
     }
+    crate::analysis_worker::AnalysisController::recording_finished(&app);
 }

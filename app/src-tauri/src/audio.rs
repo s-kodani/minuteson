@@ -27,7 +27,17 @@ pub struct VerifiedAudio {
 }
 
 impl VerifiedAudio {
-    pub fn open(mut file: File, expected_size: u64, expected_hash: &str) -> Result<Self, String> {
+    #[cfg(test)]
+    pub fn open(file: File, expected_size: u64, expected_hash: &str) -> Result<Self, String> {
+        Self::open_cancellable(file, expected_size, expected_hash, &|| false)
+    }
+
+    pub fn open_cancellable(
+        mut file: File,
+        expected_size: u64,
+        expected_hash: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         file.rewind().map_err(|e| e.to_string())?;
         let before = file.metadata().map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() != expected_size {
@@ -37,6 +47,9 @@ impl VerifiedAudio {
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 65_536];
         loop {
+            if cancelled() {
+                return Err("音声ファイルの照合を中断しました".into());
+            }
             let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
             if count == 0 {
                 break;

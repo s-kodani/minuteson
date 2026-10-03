@@ -14,9 +14,13 @@ mod jobs;
 mod playback;
 mod recordings;
 mod revisions;
+mod transcription;
 pub use analysis::AnalysisView;
+pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
+pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
 pub use recordings::RecordingConfig;
+pub(crate) use transcription::RecordedAudioPlan;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
@@ -26,6 +30,7 @@ const MIGRATION_5: &str = include_str!("migrations/0005_content.sql");
 const MIGRATION_6: &str = include_str!("migrations/0006_drafts.sql");
 const MIGRATION_7: &str = include_str!("migrations/0007_jobs.sql");
 const MIGRATION_8: &str = include_str!("migrations/0008_recording_guards.sql");
+const MIGRATION_9: &str = include_str!("migrations/0009_job_results.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,6 +335,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (6_i64, MIGRATION_6),
         (7_i64, MIGRATION_7),
         (8_i64, MIGRATION_8),
+        (9_i64, MIGRATION_9),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -525,7 +531,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 8);
+        assert_eq!(count, 9);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

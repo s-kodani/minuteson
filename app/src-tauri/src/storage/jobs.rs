@@ -1,10 +1,11 @@
 use super::*;
 use rusqlite::{Row, TransactionBehavior};
+use serde::Deserialize;
 use serde_json::Value;
 
 const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     Transcription,
@@ -24,7 +25,7 @@ impl JobKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobSpec {
     pub meeting_id: String,
     pub kind: JobKind,
@@ -51,9 +52,34 @@ pub struct JobSnapshot {
     pub error_code: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub output_analysis_id: Option<String>,
+    pub pause_reason: Option<String>,
 }
 
 impl Storage {
+    pub(crate) fn resume_recording_jobs(&self) -> Result<(), String> {
+        let ids = {
+            let connection = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            let mut statement = connection.prepare("SELECT id FROM processing_jobs WHERE state = 'paused' AND pause_reason = 'recording' ORDER BY created_at, rowid").map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for id in ids {
+            self.resume_job(&id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pause_for_exit(&self) -> Result<(), String> {
+        self.connection.lock().map_err(|_| "DBロックを取得できません")?.execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'exit', updated_at = ?1 WHERE state = 'running'", params![now_ms()?]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
     #[allow(dead_code)]
     pub fn enqueue_job(&self, spec: JobSpec) -> Result<JobSnapshot, String> {
         if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
@@ -76,6 +102,9 @@ impl Storage {
             serde_json::to_string(&spec.profile_snapshot).map_err(|error| error.to_string())?;
         let parameters_json =
             serde_json::to_string(&spec.parameters).map_err(|error| error.to_string())?;
+        if profile_json.len() > 65_536 || parameters_json.len() > MAX_CHECKPOINT_BYTES {
+            return Err("処理設定が大きすぎます".into());
+        }
         let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
         let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
         let mut connection = self
@@ -86,7 +115,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         if let Some(existing) = transaction.query_row(
-            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at FROM processing_jobs WHERE operation_id = ?1",
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE operation_id = ?1",
             params![spec.operation_id],
             job_from_row,
         ).optional().map_err(|error| error.to_string())? {
@@ -124,6 +153,13 @@ impl Storage {
 
     #[allow(dead_code)]
     pub fn acquire_next_job(&self) -> Result<Option<JobSnapshot>, String> {
+        self.acquire_job_kind(None)
+    }
+
+    pub(crate) fn acquire_job_kind(
+        &self,
+        kind: Option<JobKind>,
+    ) -> Result<Option<JobSnapshot>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -143,8 +179,8 @@ impl Storage {
             return Ok(None);
         }
         let queued: Option<(String, String, Option<String>, String)> = transaction.query_row(
-            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' ORDER BY created_at, rowid LIMIT 1",
-            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) ORDER BY created_at, rowid LIMIT 1",
+            params![kind.map(JobKind::as_str)], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional().map_err(|error| error.to_string())?;
         let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
             return Ok(None);
@@ -169,7 +205,7 @@ impl Storage {
     #[allow(dead_code)]
     pub fn request_pause_for_recording(&self) -> Result<bool, String> {
         let changed = self.connection.lock().map_err(|_| "DBロックを取得できません".to_string())?
-            .execute("UPDATE processing_jobs SET state = 'pausing', updated_at = ?1 WHERE state = 'running'", params![now_ms()?])
+            .execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'recording', updated_at = ?1 WHERE state = 'running'", params![now_ms()?])
             .map_err(|error| error.to_string())?;
         Ok(changed > 0)
     }
@@ -276,12 +312,93 @@ impl Storage {
         )?;
         verify_latest_checkpoint(&transaction, job_id)?;
         transaction.execute(
-            "UPDATE processing_jobs SET state = 'queued', updated_at = ?1 WHERE id = ?2 AND state = ?3",
+            "UPDATE processing_jobs SET state = 'queued', pause_reason = NULL, updated_at = ?1 WHERE id = ?2 AND state = ?3",
             params![now_ms()?, job_id, state],
         ).map_err(|error| error.to_string())?;
         let snapshot = load_job(&transaction, job_id)?.ok_or("処理を読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(snapshot)
+    }
+
+    pub(crate) fn get_job(&self, job_id: &str) -> Result<JobSnapshot, String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        load_job(&connection, job_id)?.ok_or_else(|| "処理が見つかりません".into())
+    }
+
+    pub(crate) fn list_jobs(&self, meeting_id: &str) -> Result<Vec<JobSnapshot>, String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map(params![meeting_id], job_from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn fixed_job_input(&self, job_id: &str) -> Result<(JobSpec, Option<Value>), String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        let spec: JobSpec = transaction.query_row("SELECT meeting_id, kind, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, total_units FROM processing_jobs WHERE id = ?1", params![job_id], |row| {
+            let kind: String = row.get(1)?;
+            let profile: String = row.get(5)?;
+            let parameters: String = row.get(6)?;
+            let decode = |index, error| rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error));
+            Ok(JobSpec { meeting_id: row.get(0)?, kind: serde_json::from_value(Value::String(kind)).map_err(|e| decode(1, e))?, operation_id: row.get(2)?, input_analysis_id: row.get(3)?, input_hash: row.get(4)?, profile_snapshot: serde_json::from_str(&profile).map_err(|e| decode(5, e))?, parameters: serde_json::from_str(&parameters).map_err(|e| decode(6, e))?, total_units: row.get(7)? })
+        }).map_err(|e| e.to_string())?;
+        let job = load_job(&transaction, job_id)?.ok_or("処理が見つかりません")?;
+        let hash = hash_bytes(
+            b"mon-job-spec-v1",
+            &serde_json::to_vec(&spec).map_err(|e| e.to_string())?,
+        );
+        if hash != job.spec_hash {
+            return Err("処理の固定設定が変更されています".into());
+        }
+        verify_latest_checkpoint(&transaction, job_id)?;
+        let checkpoint: Option<String> = transaction.query_row("SELECT checkpoint_json FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1", params![job_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+        Ok((
+            spec,
+            checkpoint
+                .map(|json| serde_json::from_str(&json))
+                .transpose()
+                .map_err(|e| e.to_string())?,
+        ))
+    }
+
+    pub(crate) fn request_job_pause(
+        &self,
+        job_id: &str,
+        reason: &str,
+    ) -> Result<JobSnapshot, String> {
+        if !matches!(reason, "user" | "recording" | "exit") {
+            return Err("一時停止理由が不正です".into());
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let job = load_job(&connection, job_id)?.ok_or("処理が見つかりません")?;
+        if matches!(job.state.as_str(), "paused" | "pausing") {
+            if reason == "user" {
+                connection.execute("UPDATE processing_jobs SET pause_reason = 'user', updated_at = ?1 WHERE id = ?2", params![now_ms()?, job_id]).map_err(|e| e.to_string())?;
+            }
+            return load_job(&connection, job_id)?.ok_or_else(|| "処理が見つかりません".into());
+        }
+        if !matches!(job.state.as_str(), "queued" | "running") {
+            return Err("一時停止可能な処理ではありません".into());
+        }
+        connection.execute("UPDATE processing_jobs SET state = ?1, pause_reason = ?2, updated_at = ?3 WHERE id = ?4", params![if job.state == "queued" {"paused"} else {"pausing"}, reason, now_ms()?, job_id]).map_err(|e| e.to_string())?;
+        load_job(&connection, job_id)?.ok_or_else(|| "処理が見つかりません".into())
     }
 
     #[allow(dead_code)]
@@ -369,12 +486,14 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
         error_code: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        output_analysis_id: row.get(12)?,
+        pause_reason: row.get(13)?,
     })
 }
 
 fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
     connection.query_row(
-        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at FROM processing_jobs WHERE id = ?1",
+        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE id = ?1",
         params![id], job_from_row,
     ).optional().map_err(|error| error.to_string())
 }
@@ -397,7 +516,10 @@ fn validate_job_input(
     Ok(())
 }
 
-fn verify_latest_checkpoint(connection: &Connection, job_id: &str) -> Result<(), String> {
+pub(super) fn verify_latest_checkpoint(
+    connection: &Connection,
+    job_id: &str,
+) -> Result<(), String> {
     let job: (String, i64) = connection
         .query_row(
             "SELECT spec_hash, completed_units FROM processing_jobs WHERE id = ?1",

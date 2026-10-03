@@ -1,9 +1,12 @@
+mod analysis_worker;
 mod audio;
 mod playback;
 mod recorder;
 mod session;
 mod storage;
+mod transcription;
 
+use analysis_worker::AnalysisController;
 use playback::{PlaybackInfo, PlaybackStore};
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
@@ -13,6 +16,92 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+async fn start_transcription(
+    window: WebviewWindow,
+    request: transcription::StartRequest,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can start analysis".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn get_analysis_jobs(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<Vec<storage::JobSnapshot>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis jobs".into());
+    }
+    window.state::<Storage>().list_jobs(&meeting_id)
+}
+
+#[tauri::command]
+fn pause_analysis_job(
+    window: WebviewWindow,
+    job_id: String,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can pause analysis".into());
+    }
+    window.state::<Storage>().request_job_pause(&job_id, "user")
+}
+
+#[tauri::command]
+fn resume_analysis_job(
+    window: WebviewWindow,
+    job_id: String,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can resume analysis".into());
+    }
+    let job = window.state::<Storage>().resume_job(&job_id)?;
+    AnalysisController::kick(window.app_handle())?;
+    Ok(job)
+}
+
+#[tauri::command]
+async fn cancel_analysis_job(
+    window: WebviewWindow,
+    job_id: String,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can cancel analysis".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let storage = app.state::<Storage>();
+        let job = storage.get_job(&job_id)?;
+        if job.state == "running" {
+            storage.request_job_pause(&job_id, "user")?;
+        }
+        let started = std::time::Instant::now();
+        loop {
+            let job = storage.get_job(&job_id)?;
+            if job.state != "pausing" {
+                return storage.finish_job(&job_id, job.completed_units, "cancelled", None);
+            }
+            if started.elapsed() > std::time::Duration::from_secs(15) {
+                return Err(
+                    "解析の安全な停止を待っています。完了後に取り消しを再試行してください".into(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
 #[tauri::command]
 async fn prepare_utterance_playback(
@@ -68,7 +157,7 @@ fn close_playback(
 }
 
 #[tauri::command]
-fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
+async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
@@ -78,6 +167,10 @@ fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
         }
         return window.hide().map_err(|error| error.to_string());
     }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || AnalysisController::shutdown(&app))
+        .await
+        .map_err(|e| e.to_string())??;
     window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
     window.app_handle().exit(0);
     Ok(())
@@ -97,11 +190,24 @@ fn capture_available(window: WebviewWindow) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn start_recording(window: WebviewWindow, meeting_id: String) -> Result<RecordingSnapshot, String> {
+async fn start_recording(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
     }
-    RecorderController::start(window.app_handle(), &meeting_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::prepare_recording(&app)?;
+        let result = RecorderController::start(&app, &meeting_id);
+        if result.is_err() {
+            AnalysisController::recording_finished(&app);
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -278,6 +384,7 @@ pub fn run() {
         .manage(RecorderController::default())
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
+        .manage(AnalysisController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
@@ -292,6 +399,7 @@ pub fn run() {
                     Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
                 }
             });
+            AnalysisController::kick(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -314,7 +422,12 @@ pub fn run() {
             prepare_utterance_playback,
             read_playback_chunk,
             close_playback,
-            finish_main_close
+            finish_main_close,
+            start_transcription,
+            get_analysis_jobs,
+            pause_analysis_job,
+            resume_analysis_job,
+            cancel_analysis_job
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
