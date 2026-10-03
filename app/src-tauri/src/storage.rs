@@ -38,6 +38,7 @@ const MIGRATION_8: &str = include_str!("migrations/0008_recording_guards.sql");
 const MIGRATION_9: &str = include_str!("migrations/0009_job_results.sql");
 const MIGRATION_10: &str = include_str!("migrations/0010_draft_history.sql");
 const MIGRATION_11: &str = include_str!("migrations/0011_app_settings.sql");
+const MIGRATION_12: &str = include_str!("migrations/0012_job_retry.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -345,6 +346,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (9_i64, MIGRATION_9),
         (10_i64, MIGRATION_10),
         (11_i64, MIGRATION_11),
+        (12_i64, MIGRATION_12),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -540,7 +542,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 11);
+        assert_eq!(count, 12);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

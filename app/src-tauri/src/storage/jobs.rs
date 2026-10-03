@@ -25,7 +25,7 @@ impl JobKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobSpec {
     pub meeting_id: String,
     pub kind: JobKind,
@@ -54,6 +54,8 @@ pub struct JobSnapshot {
     pub updated_at: i64,
     pub output_analysis_id: Option<String>,
     pub pause_reason: Option<String>,
+    pub retry_of_job_id: Option<String>,
+    pub attempt: i64,
 }
 
 impl Storage {
@@ -115,7 +117,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         if let Some(existing) = transaction.query_row(
-            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE operation_id = ?1",
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE operation_id = ?1",
             params![spec.operation_id],
             job_from_row,
         ).optional().map_err(|error| error.to_string())? {
@@ -333,7 +335,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
+        let mut query = connection.prepare("SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE meeting_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 100").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![meeting_id], job_from_row)
             .map_err(|e| e.to_string())?;
@@ -349,30 +351,98 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
-        let spec: JobSpec = transaction.query_row("SELECT meeting_id, kind, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, total_units FROM processing_jobs WHERE id = ?1", params![job_id], |row| {
-            let kind: String = row.get(1)?;
-            let profile: String = row.get(5)?;
-            let parameters: String = row.get(6)?;
-            let decode = |index, error| rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error));
-            Ok(JobSpec { meeting_id: row.get(0)?, kind: serde_json::from_value(Value::String(kind)).map_err(|e| decode(1, e))?, operation_id: row.get(2)?, input_analysis_id: row.get(3)?, input_hash: row.get(4)?, profile_snapshot: serde_json::from_str(&profile).map_err(|e| decode(5, e))?, parameters: serde_json::from_str(&parameters).map_err(|e| decode(6, e))?, total_units: row.get(7)? })
-        }).map_err(|e| e.to_string())?;
-        let job = load_job(&transaction, job_id)?.ok_or("処理が見つかりません")?;
-        let hash = hash_bytes(
-            b"mon-job-spec-v1",
-            &serde_json::to_vec(&spec).map_err(|e| e.to_string())?,
-        );
-        if hash != job.spec_hash {
-            return Err("処理の固定設定が変更されています".into());
+        read_fixed_input(&transaction, job_id)
+    }
+
+    // Expensive file verification occurs before this transaction. Recheck the
+    // exact DB snapshot before copying only its durable checkpoint references.
+    pub(crate) fn enqueue_retry_job(
+        &self,
+        source: &JobSnapshot,
+        verified_spec: &JobSpec,
+        verified_checkpoint: Option<&Value>,
+        operation_id: &str,
+    ) -> Result<JobSnapshot, String> {
+        if operation_id.trim().is_empty() || operation_id.len() > 128 {
+            return Err("再試行の操作IDが不正です".into());
         }
-        verify_latest_checkpoint(&transaction, job_id)?;
-        let checkpoint: Option<String> = transaction.query_row("SELECT checkpoint_json FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1", params![job_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-        Ok((
-            spec,
-            checkpoint
-                .map(|json| serde_json::from_str(&json))
-                .transpose()
-                .map_err(|e| e.to_string())?,
-        ))
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let original = load_job(&transaction, &source.id)?.ok_or("元の処理が見つかりません")?;
+        let (mut spec, checkpoint) = read_fixed_input(&transaction, &source.id)?;
+        if &original != source
+            || &spec != verified_spec
+            || checkpoint.as_ref() != verified_checkpoint
+        {
+            return Err("検証後に元ジョブまたは再開情報が変化しています".into());
+        }
+        if !matches!(original.state.as_str(), "failed" | "cancelled") {
+            return Err(
+                "失敗・取消済みの処理だけ再試行できます。一時停止・中断には再開を使ってください"
+                    .into(),
+            );
+        }
+        let attempt = original
+            .attempt
+            .checked_add(1)
+            .ok_or("再試行番号が範囲外です")?;
+        spec.operation_id = operation_id.into();
+        let hash = retry_spec_hash(&spec, &original.id, attempt)?;
+        if let Some(existing) = transaction
+            .query_row(
+                "SELECT id FROM processing_jobs WHERE operation_id = ?1",
+                params![operation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            let existing = load_job(&transaction, &existing)?.ok_or("再試行が見つかりません")?;
+            read_fixed_input(&transaction, &existing.id)?;
+            if existing.spec_hash != hash
+                || existing.retry_of_job_id.as_deref() != Some(&original.id)
+                || existing.attempt != attempt
+            {
+                return Err("同じ操作IDで別の再試行が指定されました".into());
+            }
+            return Ok(existing);
+        }
+        let unfinished: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE retry_of_job_id = ?1 AND state IN ('queued', 'running', 'pausing', 'paused', 'interrupted'))", params![original.id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if unfinished {
+            return Err(
+                "このジョブの再試行が既に存在します。再試行先の状態を確認してください".into(),
+            );
+        }
+        validate_job_input(
+            &transaction,
+            &spec.meeting_id,
+            spec.input_analysis_id.as_deref(),
+            &spec.input_hash,
+        )?;
+        let id = Uuid::new_v4().to_string();
+        let now = now_ms()?;
+        let profile = serde_json::to_string(&spec.profile_snapshot).map_err(|e| e.to_string())?;
+        let parameters = serde_json::to_string(&spec.parameters).map_err(|e| e.to_string())?;
+        transaction.execute("INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, retry_of_job_id, attempt, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)", params![id, spec.meeting_id, spec.kind.as_str(), operation_id, original.id, attempt, spec.input_analysis_id, spec.input_hash, profile, parameters, hash, spec.total_units, now]).map_err(|e| e.to_string())?;
+        if let Some(checkpoint) = checkpoint {
+            let json = serde_json::to_string(&checkpoint).map_err(|e| e.to_string())?;
+            transaction.execute("INSERT INTO job_checkpoints (id, job_id, sequence, completed_units, checkpoint_json, checkpoint_hash, created_at) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6)", params![Uuid::new_v4().to_string(), id, original.completed_units, json, checkpoint_hash(&hash, original.completed_units, &json), now]).map_err(|e| e.to_string())?;
+            transaction
+                .execute(
+                    "UPDATE processing_jobs SET completed_units = ?1 WHERE id = ?2",
+                    params![original.completed_units, id],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        let next = load_job(&transaction, &id)?.ok_or("再試行を読み込めません")?;
+        verify_latest_checkpoint(&transaction, &id)?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(next)
     }
 
     pub(crate) fn request_job_pause(
@@ -488,14 +558,57 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
         updated_at: row.get(11)?,
         output_analysis_id: row.get(12)?,
         pause_reason: row.get(13)?,
+        retry_of_job_id: row.get(14)?,
+        attempt: row.get(15)?,
     })
 }
 
 fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
     connection.query_row(
-        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason FROM processing_jobs WHERE id = ?1",
+        "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE id = ?1",
         params![id], job_from_row,
     ).optional().map_err(|error| error.to_string())
+}
+
+fn read_fixed_input(
+    connection: &Connection,
+    job_id: &str,
+) -> Result<(JobSpec, Option<Value>), String> {
+    let spec: JobSpec = connection.query_row("SELECT meeting_id, kind, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, total_units FROM processing_jobs WHERE id = ?1", params![job_id], |row| {
+        let kind: String = row.get(1)?;
+        let profile: String = row.get(5)?;
+        let parameters: String = row.get(6)?;
+        let decode = |index, error| rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error));
+        Ok(JobSpec { meeting_id: row.get(0)?, kind: serde_json::from_value(Value::String(kind)).map_err(|e| decode(1, e))?, operation_id: row.get(2)?, input_analysis_id: row.get(3)?, input_hash: row.get(4)?, profile_snapshot: serde_json::from_str(&profile).map_err(|e| decode(5, e))?, parameters: serde_json::from_str(&parameters).map_err(|e| decode(6, e))?, total_units: row.get(7)? })
+    }).map_err(|e| e.to_string())?;
+    let job = load_job(connection, job_id)?.ok_or("処理が見つかりません")?;
+    let hash = match job.retry_of_job_id.as_deref() {
+        None if job.attempt == 1 => hash_bytes(
+            b"mon-job-spec-v1",
+            &serde_json::to_vec(&spec).map_err(|e| e.to_string())?,
+        ),
+        Some(source) if job.attempt > 1 => retry_spec_hash(&spec, source, job.attempt)?,
+        _ => return Err("処理の再試行情報が不正です".into()),
+    };
+    if hash != job.spec_hash {
+        return Err("処理の固定設定または再試行情報が変更されています".into());
+    }
+    verify_latest_checkpoint(connection, job_id)?;
+    let checkpoint: Option<String> = connection.query_row("SELECT checkpoint_json FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1", params![job_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+    Ok((
+        spec,
+        checkpoint
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|e| e.to_string())?,
+    ))
+}
+
+fn retry_spec_hash(spec: &JobSpec, source: &str, attempt: i64) -> Result<String, String> {
+    Ok(hash_bytes(
+        b"mon-job-retry-spec-v1",
+        &serde_json::to_vec(&(spec, source, attempt)).map_err(|e| e.to_string())?,
+    ))
 }
 
 fn validate_job_input(
@@ -566,11 +679,15 @@ fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "job_retry_tests.rs"]
+mod retry_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    fn audio_job(meeting_id: &str, operation_id: &str) -> JobSpec {
+    pub(super) fn audio_job(meeting_id: &str, operation_id: &str) -> JobSpec {
         JobSpec {
             meeting_id: meeting_id.into(),
             kind: JobKind::Transcription,

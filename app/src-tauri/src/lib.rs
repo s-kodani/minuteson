@@ -163,6 +163,24 @@ fn get_analysis_jobs(
 }
 
 #[tauri::command]
+async fn retry_transcription(
+    window: WebviewWindow,
+    request: transcription::RetryRequest,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can retry analysis".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn pause_analysis_job(
     window: WebviewWindow,
     job_id: String,
@@ -541,6 +559,7 @@ pub fn run() {
             finish_main_close,
             start_transcription,
             get_analysis_jobs,
+            retry_transcription,
             pause_analysis_job,
             resume_analysis_job,
             cancel_analysis_job,

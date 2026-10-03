@@ -3,6 +3,7 @@ use crate::audio::tests::caf_fixture;
 use crate::transcription::{
     enqueue, process,
     whisper::{Fingerprint, WhisperConfig},
+    RetryRequest,
 };
 use std::os::unix::fs::PermissionsExt;
 
@@ -66,6 +67,177 @@ fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
         prompt: "点検日".into(),
     };
     (storage, meeting.id, config)
+}
+
+#[test]
+fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, mut config) = fixture(root.path(), 124);
+    let gate = root.path().join("fail-second-unit");
+    let calls = root.path().join("cli-calls");
+    let original_script = std::fs::read_to_string(&config.executable.path).unwrap();
+    let body = original_script.strip_prefix("#!/bin/sh\n").unwrap();
+    std::fs::write(&config.executable.path, format!("#!/bin/sh\nprintf x >> '{}'\ncase \"$PWD\" in */unit-1-*) if test -f '{}'; then exit 42; fi;; esac\n{body}", calls.display(), gate.display())).unwrap();
+    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    let baseline = enqueue(&storage, &meeting, "baseline", config.clone(), "standard").unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    let current = process(&storage, &baseline.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let lock = storage.get_meeting(&meeting).unwrap().unwrap().lock_version;
+    storage
+        .commit_analysis_candidate(&meeting, &current, lock, false)
+        .unwrap();
+    let view = storage.load_current_analysis(&meeting).unwrap().unwrap();
+    let draft = storage.create_transcript_draft(&meeting, &current).unwrap();
+    let mut payload = draft.payload.clone();
+    payload
+        .utterances
+        .push(super::super::drafts::UtteranceEdit {
+            utterance_id: view.utterances[0].id.clone(),
+            effective_text: "保持する手動編集".into(),
+            speaker_ids: vec![],
+        });
+    let edited = storage
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+
+    std::fs::write(&gate, b"fail").unwrap();
+    let failed = enqueue(&storage, &meeting, "first-attempt", config, "high_accuracy").unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &failed.id, &|| false, &|_| {}).is_err());
+    assert_eq!(storage.get_job(&failed.id).unwrap().completed_units, 1);
+    let failed = storage
+        .finish_job(&failed.id, 1, "failed", Some("engine_failed"))
+        .unwrap();
+    let saved = storage.fixed_job_input(&failed.id).unwrap();
+    let calls_before = std::fs::read(&calls).unwrap().len();
+    assert_eq!(calls_before, 4); // baseline 2 + first unit + failing second unit
+    std::fs::remove_file(&gate).unwrap();
+    let next = RetryRequest {
+        meeting_id: meeting.clone(),
+        job_id: failed.id.clone(),
+        operation_id: "retry-operation".into(),
+        expected_spec_hash: failed.spec_hash.clone(),
+    }
+    .enqueue(&storage)
+    .unwrap();
+    assert_eq!(next.completed_units, 1);
+    assert_eq!(next.attempt, 2);
+    assert_eq!(next.retry_of_job_id.as_deref(), Some(failed.id.as_str()));
+    assert_eq!(storage.fixed_job_input(&next.id).unwrap().1, saved.1);
+    drop(storage);
+
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, next.id);
+    let candidate = process(&storage, &next.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(std::fs::read(&calls).unwrap().len(), calls_before + 1);
+    assert_eq!(storage.get_job(&next.id).unwrap().state, "succeeded");
+    let inherited = storage.fixed_job_input(&next.id).unwrap().1.unwrap();
+    assert_eq!(
+        inherited["outputs"][0],
+        saved.1.as_ref().unwrap()["outputs"][0]
+    );
+    assert_eq!(storage.fixed_job_input(&failed.id).unwrap(), saved);
+    assert_eq!(storage.get_job(&failed.id).unwrap(), failed);
+    assert_eq!(
+        storage.load_current_analysis(&meeting).unwrap().unwrap(),
+        view
+    );
+    assert_eq!(
+        storage.load_transcript_draft(&meeting).unwrap().unwrap(),
+        edited
+    );
+    assert_eq!(
+        storage
+            .load_visible_analysis(&meeting, &candidate)
+            .unwrap()
+            .unwrap()
+            .utterances
+            .len(),
+        2
+    );
+    let versions = storage.analysis_versions(&meeting).unwrap();
+    let summary = versions
+        .versions
+        .iter()
+        .find(|item| item.id == candidate)
+        .unwrap();
+    assert_eq!(summary.config["retryOfJobId"], failed.id);
+    assert_eq!(summary.config["attempt"], 2);
+}
+
+#[test]
+fn retry_preflight_rejects_changed_files_and_checkpoint_without_new_job() {
+    for change in ["source", "model", "result", "checkpoint", "meeting", "hash"] {
+        let root = tempfile::tempdir().unwrap();
+        let (storage, meeting, config) = fixture(root.path(), 124);
+        let job = enqueue(&storage, &meeting, "source", config, "standard").unwrap();
+        storage.acquire_next_job().unwrap().unwrap();
+        process(&storage, &job.id, &|| false, &|snapshot| {
+            if snapshot.completed_units == 1 && snapshot.state == "running" {
+                storage.request_job_pause(&job.id, "user").unwrap();
+            }
+        })
+        .unwrap();
+        let source = storage
+            .finish_job(&job.id, 1, "failed", Some("engine_failed"))
+            .unwrap();
+        let mut request = RetryRequest {
+            meeting_id: meeting.clone(),
+            job_id: source.id.clone(),
+            operation_id: "retry".into(),
+            expected_spec_hash: source.spec_hash.clone(),
+        };
+        match change {
+            "source" => std::fs::write(
+                root.path()
+                    .join("meetings")
+                    .join(&meeting)
+                    .join("audio/mic.caf"),
+                b"changed",
+            )
+            .unwrap(),
+            "model" => std::fs::write(root.path().join("model.bin"), b"changed").unwrap(),
+            "result" => {
+                let cp = storage.fixed_job_input(&source.id).unwrap().1.unwrap();
+                let relative: String = storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT relative_path FROM file_assets WHERE id = ?1",
+                        params![cp["outputs"][0]["jsonAssetId"].as_str().unwrap()],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                std::fs::write(root.path().join(relative), b"changed").unwrap();
+            }
+            "checkpoint" => {
+                storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE job_checkpoints SET checkpoint_json = '{}' WHERE job_id = ?1",
+                        params![source.id],
+                    )
+                    .unwrap();
+            }
+            "meeting" => {
+                request.meeting_id = storage.create_meeting("別会議").unwrap().id;
+            }
+            "hash" => {
+                request.expected_spec_hash = "f".repeat(64);
+            }
+            _ => unreachable!(),
+        }
+        assert!(request.enqueue(&storage).is_err(), "{change}");
+        assert_eq!(storage.list_jobs(&meeting).unwrap(), vec![source]);
+        assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
+    }
 }
 
 #[test]
