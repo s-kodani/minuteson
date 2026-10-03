@@ -2,12 +2,14 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::error::Error;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
+const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +20,18 @@ pub struct Meeting {
     pub created_at: i64,
     pub updated_at: i64,
     pub lock_version: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAsset {
+    pub id: String,
+    pub meeting_id: String,
+    pub relative_path: String,
+    pub media_type: String,
+    pub size_bytes: i64,
+    pub content_hash: String,
+    pub state: String,
 }
 
 pub struct Storage {
@@ -178,6 +192,97 @@ impl Storage {
         }
         Ok(self.root.join(relative))
     }
+
+    // Called only after the recorder has finished and closed a managed file.
+    // The UI cannot provide an arbitrary source path to this method.
+    #[allow(dead_code)]
+    pub fn register_ready_meeting_asset(
+        &self,
+        meeting_id: &str,
+        relative: &Path,
+        media_type: &str,
+    ) -> Result<FileAsset, String> {
+        let mut parts = relative.components();
+        if !matches!(parts.next(), Some(Component::Normal(name)) if name == "meetings")
+            || !matches!(parts.next(), Some(Component::Normal(name)) if name == meeting_id)
+            || parts.next().is_none()
+        {
+            return Err("会議の管理パスが不正です".into());
+        }
+        if media_type.is_empty() || media_type.len() > 100 {
+            return Err("メディア形式が不正です".into());
+        }
+        let relative_text = relative
+            .to_str()
+            .ok_or("管理パスを文字列化できません")?
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        if relative_text.contains('\\') {
+            return Err("管理パスに使用できない文字があります".into());
+        }
+        let file = self.managed_path(relative)?;
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let actual = file.canonicalize().map_err(|error| error.to_string())?;
+        if !actual.starts_with(&root) || actual != root.join(relative) {
+            return Err("管理領域から外れるファイルです".into());
+        }
+        if !actual.is_file() {
+            return Err("管理対象は通常ファイルに限ります".into());
+        }
+        let (size_bytes, content_hash) = hash_file(&actual)?;
+        let now = now_ms()?;
+        let asset = FileAsset {
+            id: Uuid::new_v4().to_string(),
+            meeting_id: meeting_id.to_owned(),
+            relative_path: relative_text,
+            media_type: media_type.to_owned(),
+            size_bytes,
+            content_hash,
+            state: "ready".into(),
+        };
+        self.connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?
+            .execute(
+                "INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES (?1, ?2, 'meeting', ?3, ?4, ?5, 'sha256', ?6, 'ready', ?7, ?7)",
+                params![asset.id, asset.meeting_id, asset.relative_path, asset.media_type, asset.size_bytes, asset.content_hash, now],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(asset)
+    }
+
+    #[allow(dead_code)]
+    pub fn verify_asset(&self, asset_id: &str) -> Result<bool, String> {
+        let asset: Option<FileAsset> = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません".to_string())?
+            .query_row(
+                "SELECT id, meeting_id, relative_path, media_type, size_bytes, content_hash, state FROM file_assets WHERE id = ?1",
+                params![asset_id],
+                |row| Ok(FileAsset {
+                    id: row.get(0)?, meeting_id: row.get(1)?, relative_path: row.get(2)?, media_type: row.get(3)?,
+                    size_bytes: row.get(4)?, content_hash: row.get(5)?, state: row.get(6)?,
+                }),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let asset = asset.ok_or("管理ファイルが見つかりません")?;
+        let relative = Path::new(&asset.relative_path);
+        let file = self.managed_path(relative)?;
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let actual = file.canonicalize().map_err(|error| error.to_string())?;
+        if !actual.starts_with(&root) || actual != root.join(relative) {
+            return Err("管理領域から外れるファイルです".into());
+        }
+        let (size_bytes, content_hash) = hash_file(&actual)?;
+        Ok(size_bytes == asset.size_bytes && content_hash == asset.content_hash)
+    }
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
@@ -190,22 +295,45 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
-    let digest = format!("{:x}", Sha256::digest(MIGRATION_1.as_bytes()));
-    for (version, checksum) in &known {
-        if *version != 1 || checksum != &digest {
+    let migrations = [(1_i64, MIGRATION_1), (2_i64, MIGRATION_2)];
+    for (index, (version, checksum)) in known.iter().enumerate() {
+        let Some((expected_version, sql)) = migrations.get(index) else {
+            return Err(format!("unsupported migration {version}").into());
+        };
+        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
+        if version != expected_version || checksum != &digest {
             return Err(format!("unsupported or changed migration {version}").into());
         }
     }
-    if known.is_empty() {
+    for (version, sql) in migrations.into_iter().skip(known.len()) {
         let transaction = connection.transaction()?;
-        transaction.execute_batch(MIGRATION_1)?;
+        transaction.execute_batch(sql)?;
+        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
         transaction.execute(
-            "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (1, ?1, ?2)",
-            params![digest, now_ms()?],
+            "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
+            params![version, digest, now_ms()?],
         )?;
         transaction.commit()?;
     }
     Ok(())
+}
+
+fn hash_file(path: &Path) -> Result<(i64, String), String> {
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut size = 0_i64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        size = size
+            .checked_add(i64::try_from(count).map_err(|error| error.to_string())?)
+            .ok_or("ファイルが大きすぎます")?;
+        hasher.update(&buffer[..count]);
+    }
+    Ok((size, format!("{:x}", hasher.finalize())))
 }
 
 fn now_ms() -> Result<i64, String> {
@@ -289,5 +417,94 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         assert!(storage.rename_meeting("missing", "name", 0).is_err());
+    }
+
+    #[test]
+    fn older_database_is_migrated_without_losing_meetings() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut connection = Connection::open(temp.path().join("meetings.sqlite3")).unwrap();
+        connection.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(MIGRATION_1).unwrap();
+        let digest = format!("{:x}", Sha256::digest(MIGRATION_1.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations VALUES (1, ?1, 0)",
+                params![digest],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let created = storage.create_meeting("移行後の会議").unwrap();
+        let count: i64 = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
+    }
+
+    #[test]
+    fn managed_asset_is_hashed_and_tampering_is_detected() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("音声").unwrap();
+        let relative = PathBuf::from(format!("meetings/{}/audio/chunk.flac", meeting.id));
+        let file = storage.managed_path(&relative).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"audio bytes").unwrap();
+        let asset = storage
+            .register_ready_meeting_asset(&meeting.id, &relative, "audio/flac")
+            .unwrap();
+        assert_eq!(asset.size_bytes, 11);
+        assert!(storage.verify_asset(&asset.id).unwrap());
+        assert!(storage
+            .register_ready_meeting_asset(&meeting.id, &relative, "audio/flac")
+            .is_err());
+        std::fs::write(&file, b"audio bytes changed").unwrap();
+        assert!(!storage.verify_asset(&asset.id).unwrap());
+    }
+
+    #[test]
+    fn asset_cannot_cross_meeting_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let one = storage.create_meeting("one").unwrap();
+        let two = storage.create_meeting("two").unwrap();
+        let relative = PathBuf::from(format!("meetings/{}/audio/chunk.flac", one.id));
+        let file = storage.managed_path(&relative).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"audio").unwrap();
+        assert!(storage
+            .register_ready_meeting_asset(&two.id, &relative, "audio/flac")
+            .is_err());
+        assert!(storage
+            .register_ready_meeting_asset("missing", &relative, "audio/flac")
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_outside_is_not_registered() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("音声").unwrap();
+        let relative = PathBuf::from(format!("meetings/{}/audio/chunk.flac", meeting.id));
+        let file = storage.managed_path(&relative).unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let outside_file = outside.path().join("other.flac");
+        std::fs::write(&outside_file, b"private").unwrap();
+        symlink(&outside_file, &file).unwrap();
+        assert!(storage
+            .register_ready_meeting_asset(&meeting.id, &relative, "audio/flac")
+            .is_err());
     }
 }
