@@ -1,5 +1,7 @@
 mod analysis_worker;
 mod audio;
+mod generation;
+mod local_engine;
 mod minutes_document;
 mod playback;
 mod recorder;
