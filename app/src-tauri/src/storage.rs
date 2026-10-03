@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
+const MIGRATION_3: &str = include_str!("migrations/0003_revisions.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,7 +296,11 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
-    let migrations = [(1_i64, MIGRATION_1), (2_i64, MIGRATION_2)];
+    let migrations = [
+        (1_i64, MIGRATION_1),
+        (2_i64, MIGRATION_2),
+        (3_i64, MIGRATION_3),
+    ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
             return Err(format!("unsupported migration {version}").into());
@@ -446,7 +451,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 
@@ -505,6 +510,137 @@ mod tests {
         symlink(&outside_file, &file).unwrap();
         assert!(storage
             .register_ready_meeting_asset(&meeting.id, &relative, "audio/flac")
+            .is_err());
+    }
+
+    #[test]
+    fn revision_heads_require_committed_revisions_from_same_meeting() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let one = storage.create_meeting("one").unwrap();
+        let two = storage.create_meeting("two").unwrap();
+        let db = storage.connection.lock().unwrap();
+        let analysis_id = Uuid::new_v4().to_string();
+        db.execute(
+            "INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES (?1, ?2, 1, 'engine', 'candidate', ?3, '{}', '{}', ?4, 1, 0)",
+            params![analysis_id, one.id, "a".repeat(64), "b".repeat(64)],
+        ).unwrap();
+        assert!(db
+            .execute(
+                "UPDATE meetings SET current_analysis_id = ?1 WHERE id = ?2",
+                params![analysis_id, one.id]
+            )
+            .is_err());
+        db.execute(
+            "UPDATE analysis_revisions SET publication_state = 'committed' WHERE id = ?1",
+            params![analysis_id],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE meetings SET current_analysis_id = ?1 WHERE id = ?2",
+                params![analysis_id, two.id]
+            )
+            .is_err());
+        db.execute(
+            "UPDATE meetings SET current_analysis_id = ?1 WHERE id = ?2",
+            params![analysis_id, one.id],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE analysis_revisions SET content_hash = ?1 WHERE id = ?2",
+                params!["c".repeat(64), analysis_id]
+            )
+            .is_err());
+        assert!(db
+            .execute(
+                "DELETE FROM analysis_revisions WHERE id = ?1",
+                params![analysis_id]
+            )
+            .is_err());
+        let child_id = Uuid::new_v4().to_string();
+        assert!(db.execute(
+            "INSERT INTO analysis_revisions (id, meeting_id, parent_revision_id, revision_no, parent_content_hash, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES (?1, ?2, ?3, 2, ?4, 'engine', 'candidate', ?5, '{}', '{}', ?6, 1, 0)",
+            params![child_id, one.id, analysis_id, "wrong".to_owned(), "a".repeat(64), "d".repeat(64)],
+        ).is_err());
+    }
+
+    #[test]
+    fn minutes_input_hash_and_head_are_checked() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("minutes").unwrap();
+        let db = storage.connection.lock().unwrap();
+        let analysis_id = Uuid::new_v4().to_string();
+        let minutes_id = Uuid::new_v4().to_string();
+        let content_hash = "b".repeat(64);
+        db.execute(
+            "INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES (?1, ?2, 1, 'engine', 'candidate', ?3, '{}', '{}', ?4, 1, 0)",
+            params![analysis_id, meeting.id, "a".repeat(64), content_hash],
+        ).unwrap();
+        let insert_minutes = "INSERT INTO minutes_revisions (id, meeting_id, input_analysis_id, revision_no, publication_state, generated_document_json, effective_document_json, document_schema_version, input_content_hash, content_hash, model_snapshot_json, template_version, created_at) VALUES (?1, ?2, ?3, 1, 'candidate', '{}', '{}', 1, ?4, ?5, '{}', 'v1', 0)";
+        assert!(db
+            .execute(
+                insert_minutes,
+                params![
+                    minutes_id,
+                    meeting.id,
+                    analysis_id,
+                    content_hash,
+                    "d".repeat(64)
+                ]
+            )
+            .is_err());
+        db.execute(
+            "UPDATE analysis_revisions SET publication_state = 'committed' WHERE id = ?1",
+            params![analysis_id],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                insert_minutes,
+                params![
+                    minutes_id,
+                    meeting.id,
+                    analysis_id,
+                    "c".repeat(64),
+                    "d".repeat(64)
+                ]
+            )
+            .is_err());
+        db.execute(
+            insert_minutes,
+            params![
+                minutes_id,
+                meeting.id,
+                analysis_id,
+                content_hash,
+                "d".repeat(64)
+            ],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE meetings SET current_minutes_id = ?1 WHERE id = ?2",
+                params![minutes_id, meeting.id]
+            )
+            .is_err());
+        db.execute(
+            "UPDATE minutes_revisions SET publication_state = 'committed' WHERE id = ?1",
+            params![minutes_id],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE meetings SET current_minutes_id = ?1 WHERE id = ?2",
+            params![minutes_id, meeting.id],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "UPDATE minutes_revisions SET effective_document_json = '{}' WHERE id = ?1",
+                params![minutes_id]
+            )
             .is_err());
     }
 }
