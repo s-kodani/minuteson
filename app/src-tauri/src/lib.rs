@@ -1,6 +1,8 @@
+mod recorder;
 mod session;
 mod storage;
 
+use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
 use storage::{Meeting, Storage};
 use tauri::{Manager, State, WebviewWindow, WindowEvent};
@@ -8,6 +10,30 @@ use tauri::{Manager, State, WebviewWindow, WindowEvent};
 #[tauri::command]
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
     store.snapshot()
+}
+
+#[tauri::command]
+fn capture_available(window: WebviewWindow) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can inspect capture availability".into());
+    }
+    Ok(RecorderController::available(window.app_handle()))
+}
+
+#[tauri::command]
+fn start_recording(window: WebviewWindow, meeting_id: String) -> Result<RecordingSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can start recording".into());
+    }
+    RecorderController::start(window.app_handle(), &meeting_id)
+}
+
+#[tauri::command]
+fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, String> {
+    if !matches!(window.label(), "main" | "recorder") {
+        return Err("Only the recording windows can stop recording".into());
+    }
+    RecorderController::stop(window.app_handle())
 }
 
 #[tauri::command]
@@ -109,6 +135,7 @@ fn rename_meeting(
 pub fn run() {
     tauri::Builder::default()
         .manage(SessionStore::default())
+        .manage(RecorderController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
@@ -116,6 +143,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_recording_snapshot,
+            capture_available,
+            start_recording,
+            stop_recording,
             show_recorder_preview,
             hide_recorder_preview,
             open_main_window,

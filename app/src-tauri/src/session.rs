@@ -20,6 +20,9 @@ pub struct RecordingSnapshot {
     pub elapsed_ms: u64,
     pub microphone_connected: bool,
     pub system_audio_connected: bool,
+    pub meeting_id: Option<String>,
+    pub session_id: Option<String>,
+    pub error_message: Option<String>,
 }
 
 impl Default for RecordingSnapshot {
@@ -30,6 +33,9 @@ impl Default for RecordingSnapshot {
             elapsed_ms: 0,
             microphone_connected: false,
             system_audio_connected: false,
+            meeting_id: None,
+            session_id: None,
+            error_message: None,
         }
     }
 }
@@ -51,8 +57,6 @@ impl SessionStore {
             .clone()
     }
 
-    // Future recording adapters must update this store before emitting session-changed.
-    #[allow(dead_code)]
     pub fn update(&self, change: impl FnOnce(&mut RecordingSnapshot)) -> RecordingSnapshot {
         let mut snapshot = self
             .0

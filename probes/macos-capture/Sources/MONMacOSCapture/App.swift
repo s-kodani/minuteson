@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import Darwin
 import Foundation
 import ScreenCaptureKit
 
@@ -11,6 +12,7 @@ private struct Options {
   let backend: String
   let targetPIDs: [pid_t]
   let stopOnFile: Bool
+  let parentPID: pid_t?
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -20,6 +22,7 @@ private struct Options {
     var backend = "screencapturekit"
     var targetPIDs: [pid_t] = []
     var stopOnFile = false
+    var parentPID: pid_t?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -63,6 +66,12 @@ private struct Options {
         backend = arguments[index]
       case "--stop-on-file":
         stopOnFile = true
+      case "--parent-pid":
+        index += 1
+        guard index < arguments.count, let value = pid_t(arguments[index]), value > 0 else {
+          throw ProbeError.usage("--parent-pid must be a positive process ID")
+        }
+        parentPID = value
       case "--help", "-h":
         throw ProbeError.help
       default:
@@ -86,9 +95,13 @@ private struct Options {
     if Set(targetPIDs).count != targetPIDs.count {
       throw ProbeError.usage("duplicate --pid values are not allowed")
     }
+    if parentPID != nil && !stopOnFile {
+      throw ProbeError.usage("--parent-pid requires --stop-on-file")
+    }
     return Self(
       output: output.standardizedFileURL, duration: duration, scenario: scenario,
-      mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile)
+      mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
+      parentPID: parentPID)
   }
 }
 
@@ -449,6 +462,7 @@ private enum Main {
           let deadline = ContinuousClock.now.advanced(by: .seconds(options.duration))
           while ContinuousClock.now < deadline
             && !FileManager.default.fileExists(atPath: stopRequest.path)
+            && !parentHasExited(options.parentPID)
           {
             try await Task.sleep(for: .milliseconds(200))
           }
@@ -497,7 +511,7 @@ private enum Main {
            mon-macos-capture --list-audio-processes
            mon-macos-capture --output <directory> [--duration <seconds>]
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
-             [--backend screencapturekit|coreaudio] [--stop-on-file]
+             [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
 
@@ -509,6 +523,11 @@ private enum Main {
       throw ProbeError.capture(
         "recorded CAF cannot be read or contains no frames: \(url.lastPathComponent)")
     }
+  }
+
+  private static func parentHasExited(_ pid: pid_t?) -> Bool {
+    guard let pid else { return false }
+    return Darwin.kill(pid, 0) != 0 && errno == ESRCH
   }
 
   private struct ListedApplication: Encodable {

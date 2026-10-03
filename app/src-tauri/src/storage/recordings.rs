@@ -201,7 +201,7 @@ impl Storage {
             return Ok(existing);
         }
         let changed = connection.execute(
-            "UPDATE recording_sessions SET state = 'stopping', stop_operation_id = ?1, updated_at = ?2 WHERE id = ?3 AND state = 'recording' AND stop_operation_id IS NULL",
+            "UPDATE recording_sessions SET state = 'stopping', stop_operation_id = ?1, updated_at = ?2 WHERE id = ?3 AND state IN ('preparing', 'recording') AND stop_operation_id IS NULL",
             params![stop_operation_id, now_ms()?, session_id],
         ).map_err(|error| error.to_string())?;
         if changed != 1 {
@@ -451,9 +451,6 @@ mod tests {
         assert!(storage
             .prepare_recording(&second.id, &config(), "start-2")
             .is_err());
-        assert!(storage
-            .request_recording_stop(&session.id, "stop-1")
-            .is_err());
         assert_eq!(
             storage.mark_recording_started(&session.id).unwrap().state,
             "recording"
@@ -482,6 +479,21 @@ mod tests {
         assert!(storage
             .prepare_recording(&first.id, &config(), "start-3")
             .is_err());
+    }
+
+    #[test]
+    fn stop_during_preparation_is_recorded_without_claiming_audio_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("準備中").unwrap();
+        let session = storage
+            .prepare_recording(&meeting.id, &config(), "start")
+            .unwrap();
+        let stopped = storage.request_recording_stop(&session.id, "stop").unwrap();
+        assert_eq!(stopped.state, "stopping");
+        assert!(stopped.started_at_utc_ms.is_none());
+        assert!(storage.mark_recording_started(&session.id).is_err());
+        assert_eq!(storage.fail_recording(&session.id).unwrap().state, "failed");
     }
 
     #[test]

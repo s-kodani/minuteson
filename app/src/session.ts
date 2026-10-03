@@ -10,6 +10,9 @@ export interface RecordingSnapshot {
   elapsedMs: number;
   microphoneConnected: boolean;
   systemAudioConnected: boolean;
+  meetingId: string | null;
+  sessionId: string | null;
+  errorMessage: string | null;
 }
 
 export type BridgeState =

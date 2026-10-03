@@ -12,6 +12,7 @@ mod drafts;
 mod jobs;
 mod recordings;
 mod revisions;
+pub use recordings::RecordingConfig;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
@@ -56,7 +57,7 @@ impl Storage {
         let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA main.locking_mode = EXCLUSIVE; BEGIN IMMEDIATE; COMMIT;",
         )?;
         apply_migrations(&mut connection)?;
         connection.execute(
@@ -386,6 +387,50 @@ mod tests {
         drop(storage);
         let reopened = Storage::open(temp.path().to_owned()).unwrap();
         assert_eq!(reopened.list_meetings().unwrap(), vec![created]);
+    }
+
+    #[test]
+    fn second_instance_cannot_recover_live_recording_as_interrupted() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = first.create_meeting("録音中").unwrap();
+        let session = first
+            .prepare_recording(
+                &meeting.id,
+                &RecordingConfig {
+                    mode: "system".into(),
+                    backend: "screencapturekit".into(),
+                    target_pids: vec![],
+                },
+                "start",
+            )
+            .unwrap();
+        first.mark_recording_started(&session.id).unwrap();
+        assert!(Storage::open(temp.path().to_owned()).is_err());
+        let state: String = first
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recording_sessions WHERE id = ?1",
+                params![session.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "recording");
+        drop(first);
+        let reopened = Storage::open(temp.path().to_owned()).unwrap();
+        let recovered: String = reopened
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM recording_sessions WHERE id = ?1",
+                params![session.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recovered, "interrupted");
     }
 
     #[test]
