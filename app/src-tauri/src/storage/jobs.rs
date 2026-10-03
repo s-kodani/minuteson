@@ -84,72 +84,15 @@ impl Storage {
     }
     #[allow(dead_code)]
     pub fn enqueue_job(&self, spec: JobSpec) -> Result<JobSnapshot, String> {
-        if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
-            return Err("処理の操作IDが不正です".into());
-        }
-        if !valid_hash(&spec.input_hash) || spec.total_units.is_some_and(|total| total < 0) {
-            return Err("処理の入力ハッシュまたは総単位数が不正です".into());
-        }
-        if !spec.profile_snapshot.is_object() || !spec.parameters.is_object() {
-            return Err("処理設定はJSONオブジェクトが必要です".into());
-        }
-        if matches!(
-            spec.kind,
-            JobKind::MinutesGeneration | JobKind::TranscriptCleanup
-        ) != spec.input_analysis_id.is_some()
-        {
-            return Err("処理種別と入力解析版が一致しません".into());
-        }
-        let profile_json =
-            serde_json::to_string(&spec.profile_snapshot).map_err(|error| error.to_string())?;
-        let parameters_json =
-            serde_json::to_string(&spec.parameters).map_err(|error| error.to_string())?;
-        if profile_json.len() > 65_536 || parameters_json.len() > MAX_CHECKPOINT_BYTES {
-            return Err("処理設定が大きすぎます".into());
-        }
-        let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
-        let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
         let mut connection = self
             .connection
             .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?;
+            .map_err(|_| "DBロックを取得できません")?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| error.to_string())?;
-        if let Some(existing) = transaction.query_row(
-            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE operation_id = ?1",
-            params![spec.operation_id],
-            job_from_row,
-        ).optional().map_err(|error| error.to_string())? {
-            if existing.spec_hash != spec_hash {
-                return Err("同じ操作IDで異なる処理条件が指定されました".into());
-            }
-            return Ok(existing);
-        }
-        let meeting_exists: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)",
-                params![spec.meeting_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if !meeting_exists {
-            return Err("会議が見つかりません".into());
-        }
-        validate_job_input(
-            &transaction,
-            &spec.meeting_id,
-            spec.input_analysis_id.as_deref(),
-            &spec.input_hash,
-        )?;
-        let id = Uuid::new_v4().to_string();
-        let now = now_ms()?;
-        transaction.execute(
-            "INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![id, spec.meeting_id, spec.kind.as_str(), spec.operation_id, spec.input_analysis_id, spec.input_hash, profile_json, parameters_json, spec_hash, spec.total_units, now],
-        ).map_err(|error| error.to_string())?;
-        let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
-        transaction.commit().map_err(|error| error.to_string())?;
+            .map_err(|e| e.to_string())?;
+        let snapshot = enqueue_in_transaction(&transaction, &spec)?;
+        transaction.commit().map_err(|e| e.to_string())?;
         Ok(snapshot)
     }
 
@@ -563,14 +506,79 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
     })
 }
 
-fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
+pub(super) fn enqueue_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    spec: &JobSpec,
+) -> Result<JobSnapshot, String> {
+    if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
+        return Err("処理の操作IDが不正です".into());
+    }
+    if !valid_hash(&spec.input_hash) || spec.total_units.is_some_and(|total| total < 0) {
+        return Err("処理の入力ハッシュまたは総単位数が不正です".into());
+    }
+    if !spec.profile_snapshot.is_object() || !spec.parameters.is_object() {
+        return Err("処理設定はJSONオブジェクトが必要です".into());
+    }
+    if matches!(
+        spec.kind,
+        JobKind::MinutesGeneration | JobKind::TranscriptCleanup
+    ) != spec.input_analysis_id.is_some()
+    {
+        return Err("処理種別と入力解析版が一致しません".into());
+    }
+    let profile_json =
+        serde_json::to_string(&spec.profile_snapshot).map_err(|error| error.to_string())?;
+    let parameters_json =
+        serde_json::to_string(&spec.parameters).map_err(|error| error.to_string())?;
+    if profile_json.len() > 65_536 || parameters_json.len() > MAX_CHECKPOINT_BYTES {
+        return Err("処理設定が大きすぎます".into());
+    }
+    let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
+    let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
+    if let Some(existing) = transaction.query_row(
+            "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE operation_id = ?1",
+            params![spec.operation_id],
+            job_from_row,
+        ).optional().map_err(|error| error.to_string())? {
+            if existing.spec_hash != spec_hash {
+                return Err("同じ操作IDで異なる処理条件が指定されました".into());
+            }
+            return Ok(existing);
+        }
+    let meeting_exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)",
+            params![spec.meeting_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !meeting_exists {
+        return Err("会議が見つかりません".into());
+    }
+    validate_job_input(
+        &transaction,
+        &spec.meeting_id,
+        spec.input_analysis_id.as_deref(),
+        &spec.input_hash,
+    )?;
+    let id = Uuid::new_v4().to_string();
+    let now = now_ms()?;
+    transaction.execute(
+            "INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![id, spec.meeting_id, spec.kind.as_str(), spec.operation_id, spec.input_analysis_id, spec.input_hash, profile_json, parameters_json, spec_hash, spec.total_units, now],
+        ).map_err(|error| error.to_string())?;
+    let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
+    Ok(snapshot)
+}
+
+pub(super) fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
     connection.query_row(
         "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt FROM processing_jobs WHERE id = ?1",
         params![id], job_from_row,
     ).optional().map_err(|error| error.to_string())
 }
 
-fn read_fixed_input(
+pub(super) fn read_fixed_input(
     connection: &Connection,
     job_id: &str,
 ) -> Result<(JobSpec, Option<Value>), String> {
@@ -619,7 +627,7 @@ fn validate_job_input(
 ) -> Result<(), String> {
     if let Some(analysis_id) = analysis_id {
         let fixed: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed' AND content_hash = ?3)",
+            "SELECT EXISTS(SELECT 1 FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state IN ('committed', 'internal_snapshot') AND content_hash = ?3)",
             params![analysis_id, meeting_id, input_hash], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         if !fixed {

@@ -324,7 +324,7 @@ fn ensure_committed_analysis(
     Ok(())
 }
 
-fn validate_payload(
+pub(super) fn validate_payload(
     connection: &Connection,
     base_analysis_id: &str,
     mut payload: TranscriptDraftPayload,

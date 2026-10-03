@@ -138,7 +138,7 @@ impl Storage {
             .map_err(|error| error.to_string())?;
         let expected: Option<String> = transaction
             .query_row(
-                "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND publication_state = 'committed'",
+                "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND publication_state IN ('committed', 'internal_snapshot')",
                 params![revision_id],
                 |row| row.get(0),
             )
@@ -186,7 +186,7 @@ impl Storage {
             return Err("採用可能な議事録候補が見つかりません".into());
         }
         let committed_input_hash: Option<String> = transaction.query_row(
-            "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state = 'committed'",
+            "SELECT content_hash FROM analysis_revisions WHERE id = ?1 AND meeting_id = ?2 AND publication_state IN ('committed', 'internal_snapshot')",
             params![input_id, meeting_id],
             |row| row.get(0),
         ).optional().map_err(|error| error.to_string())?;

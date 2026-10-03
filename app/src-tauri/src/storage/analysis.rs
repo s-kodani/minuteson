@@ -75,6 +75,83 @@ pub struct AnalysisView {
     pub utterances: Vec<AnalysisUtterance>,
 }
 
+pub(super) fn read_analysis_content(
+    connection: &Connection,
+    meeting_id: &str,
+    id: &str,
+    content_hash: &str,
+) -> Result<AnalysisView, String> {
+    let speakers = {
+        let mut statement = connection.prepare(
+                "SELECT id, label, display_name FROM speakers WHERE analysis_revision_id = ?1 ORDER BY label, id",
+            ).map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![id], |row| {
+                Ok(AnalysisSpeaker {
+                    id: row.get(0)?,
+                    label: row.get(1)?,
+                    display_name: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    let mut utterances = {
+        let mut statement = connection.prepare(
+                "SELECT id, track_id, start_us, end_us, recognized_text, effective_text, attribution_state FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id",
+            ).map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![id], |row| {
+                Ok(AnalysisUtterance {
+                    id: row.get(0)?,
+                    track_id: row.get(1)?,
+                    start_us: row.get(2)?,
+                    end_us: row.get(3)?,
+                    recognized_text: row.get(4)?,
+                    effective_text: row.get(5)?,
+                    attribution_state: row.get(6)?,
+                    speaker_ids: Vec::new(),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    let assignment_map: HashMap<String, Vec<String>> = {
+        let mut statement = connection.prepare(
+                "SELECT utterance_id, speaker_id FROM utterance_speakers WHERE analysis_revision_id = ?1 ORDER BY utterance_id, CASE role WHEN 'primary' THEN 0 ELSE 1 END, speaker_id",
+            ).map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut assignments: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (utterance_id, speaker_id) = row.map_err(|e| e.to_string())?;
+            assignments
+                .entry(utterance_id)
+                .or_default()
+                .push(speaker_id);
+        }
+        assignments
+    };
+    for utterance in &mut utterances {
+        utterance.speaker_ids = assignment_map
+            .get(&utterance.id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(AnalysisView {
+        id: id.to_owned(),
+        meeting_id: meeting_id.to_owned(),
+        content_hash: content_hash.to_owned(),
+        speakers,
+        utterances,
+    })
+}
+
 impl Storage {
     pub fn load_current_analysis(&self, meeting_id: &str) -> Result<Option<AnalysisView>, String> {
         self.load_analysis_view(meeting_id, None)
@@ -110,75 +187,7 @@ impl Storage {
         if super::revisions::analysis_content_hash(&transaction, &id)? != content_hash {
             return Err("解析版の内容が変更されています".into());
         }
-        let speakers = {
-            let mut statement = transaction.prepare(
-                "SELECT id, label, display_name FROM speakers WHERE analysis_revision_id = ?1 ORDER BY label, id",
-            ).map_err(|e| e.to_string())?;
-            let rows = statement
-                .query_map(params![id], |row| {
-                    Ok(AnalysisSpeaker {
-                        id: row.get(0)?,
-                        label: row.get(1)?,
-                        display_name: row.get(2)?,
-                    })
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?
-        };
-        let mut utterances = {
-            let mut statement = transaction.prepare(
-                "SELECT id, track_id, start_us, end_us, recognized_text, effective_text, attribution_state FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id",
-            ).map_err(|e| e.to_string())?;
-            let rows = statement
-                .query_map(params![id], |row| {
-                    Ok(AnalysisUtterance {
-                        id: row.get(0)?,
-                        track_id: row.get(1)?,
-                        start_us: row.get(2)?,
-                        end_us: row.get(3)?,
-                        recognized_text: row.get(4)?,
-                        effective_text: row.get(5)?,
-                        attribution_state: row.get(6)?,
-                        speaker_ids: Vec::new(),
-                    })
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?
-        };
-        let assignment_map: HashMap<String, Vec<String>> = {
-            let mut statement = transaction.prepare(
-                "SELECT utterance_id, speaker_id FROM utterance_speakers WHERE analysis_revision_id = ?1 ORDER BY utterance_id, CASE role WHEN 'primary' THEN 0 ELSE 1 END, speaker_id",
-            ).map_err(|e| e.to_string())?;
-            let rows = statement
-                .query_map(params![id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| e.to_string())?;
-            let mut assignments: HashMap<String, Vec<String>> = HashMap::new();
-            for row in rows {
-                let (utterance_id, speaker_id) = row.map_err(|e| e.to_string())?;
-                assignments
-                    .entry(utterance_id)
-                    .or_default()
-                    .push(speaker_id);
-            }
-            assignments
-        };
-        for utterance in &mut utterances {
-            utterance.speaker_ids = assignment_map
-                .get(&utterance.id)
-                .cloned()
-                .unwrap_or_default();
-        }
-        Ok(Some(AnalysisView {
-            id,
-            meeting_id: meeting_id.to_owned(),
-            content_hash,
-            speakers,
-            utterances,
-        }))
+        read_analysis_content(&transaction, meeting_id, &id, &content_hash).map(Some)
     }
 
     // Called by a local analysis worker after its output has been parsed. A
