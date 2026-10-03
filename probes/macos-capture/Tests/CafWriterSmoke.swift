@@ -12,6 +12,12 @@ let result = directory.appendingPathComponent("result.caf")
 let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
 let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
 buffer.frameLength = 4_800
+for channel in 0..<2 {
+  for frame in 0..<4_800 {
+    buffer.floatChannelData![channel][frame] =
+      (Float(frame % 101) - 50) / 100 * Float(channel + 1) / 2
+  }
+}
 var sourceSettings = format.settings
 sourceSettings[AVLinearPCMIsNonInterleaved] = false
 try AVAudioFile(
@@ -62,5 +68,12 @@ guard writer.status == .completed else {
 let readback = try AVAudioFile(forReading: result)
 guard readback.length == 4_800 else {
   fatalError("CAF round-trip lost \(4_800 - readback.length) frames")
+}
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--preview-fixtures" {
+  let destination = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+  try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+  // copyItem refuses to overwrite an existing fixture.
+  try FileManager.default.copyItem(at: source, to: destination.appendingPathComponent("source.caf"))
+  try FileManager.default.copyItem(at: result, to: destination.appendingPathComponent("result.caf"))
 }
 print("CAF writer smoke test: 4800 of 4800 frames preserved")

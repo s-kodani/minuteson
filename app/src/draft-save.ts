@@ -67,7 +67,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
     if (this.error) return Promise.reject(new Error(this.error));
     this.saving = true;
     this.inFlight = this.drain().catch((cause: unknown) => {
-      this.error = String(cause);
+      this.error = cause instanceof Error ? cause.message : String(cause);
       throw cause;
     }).finally(() => {
       this.inFlight = null;

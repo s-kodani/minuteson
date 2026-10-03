@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod analysis;
 mod drafts;
 mod jobs;
+mod playback;
 mod recordings;
 mod revisions;
 pub use analysis::AnalysisView;

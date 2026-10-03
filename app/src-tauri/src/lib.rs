@@ -1,7 +1,10 @@
+mod audio;
+mod playback;
 mod recorder;
 mod session;
 mod storage;
 
+use playback::{PlaybackInfo, PlaybackStore};
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +13,59 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+async fn prepare_utterance_playback(
+    window: WebviewWindow,
+    meeting_id: String,
+    analysis_id: String,
+    utterance_id: String,
+) -> Result<PlaybackInfo, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can play audio".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app.state::<Storage>().prepare_utterance_audio(
+            &meeting_id,
+            &analysis_id,
+            &utterance_id,
+        )?;
+        app.state::<PlaybackStore>().insert(audio)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn read_playback_chunk(
+    window: WebviewWindow,
+    token: String,
+    offset_frames: u64,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can play audio".into());
+    }
+    let app = window.app_handle().clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PlaybackStore>().read(&token, offset_frames)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+fn close_playback(
+    window: WebviewWindow,
+    store: State<'_, PlaybackStore>,
+    token: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can close playback".into());
+    }
+    store.close(&token)
+}
 
 #[tauri::command]
 fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
@@ -221,6 +277,7 @@ pub fn run() {
         .manage(SessionStore::default())
         .manage(RecorderController::default())
         .manage(ExitGuard::default())
+        .manage(PlaybackStore::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
@@ -254,6 +311,9 @@ pub fn run() {
             begin_transcript_draft,
             save_transcript_draft,
             undo_transcript_edit,
+            prepare_utterance_playback,
+            read_playback_chunk,
+            close_playback,
             finish_main_close
         ])
         .on_window_event(|window, event| {
