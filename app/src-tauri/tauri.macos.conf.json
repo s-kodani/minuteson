@@ -1,0 +1,16 @@
+{
+  "build": {
+    "beforeBuildCommand": "sh build-macos.sh"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "resources": {
+      "../../probes/macos-capture/.build/MONCaptureProbe.app": "MONCaptureProbe.app"
+    },
+    "macOS": {
+      "minimumSystemVersion": "15.0",
+      "signingIdentity": "-"
+    }
+  }
+}
