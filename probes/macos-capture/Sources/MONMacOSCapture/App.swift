@@ -464,6 +464,8 @@ private enum Main {
         else {
           throw ProbeError.capture("audio track is empty or contains failed writes")
         }
+        try verifyCAF(options.output.appendingPathComponent("microphone.caf"))
+        try verifyCAF(options.output.appendingPathComponent("system.caf"))
         manifest.state = "saved"
       } catch {
         mic.stop()
@@ -498,6 +500,16 @@ private enum Main {
              [--backend screencapturekit|coreaudio] [--stop-on-file]
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
+
+  private static func verifyCAF(_ url: URL) throws {
+    let file = try AVAudioFile(forReading: url)
+    guard file.length > 0, file.processingFormat.sampleRate > 0,
+      file.processingFormat.channelCount > 0
+    else {
+      throw ProbeError.capture(
+        "recorded CAF cannot be read or contains no frames: \(url.lastPathComponent)")
+    }
+  }
 
   private struct ListedApplication: Encodable {
     let processID: pid_t

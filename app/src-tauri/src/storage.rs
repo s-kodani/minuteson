@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod drafts;
 mod jobs;
+mod recordings;
 mod revisions;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
@@ -19,6 +20,7 @@ const MIGRATION_4: &str = include_str!("migrations/0004_audio.sql");
 const MIGRATION_5: &str = include_str!("migrations/0005_content.sql");
 const MIGRATION_6: &str = include_str!("migrations/0006_drafts.sql");
 const MIGRATION_7: &str = include_str!("migrations/0007_jobs.sql");
+const MIGRATION_8: &str = include_str!("migrations/0008_recording_guards.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +61,10 @@ impl Storage {
         apply_migrations(&mut connection)?;
         connection.execute(
             "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
+            params![now_ms()?],
+        )?;
+        connection.execute(
+            "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
             params![now_ms()?],
         )?;
         Ok(Self {
@@ -318,6 +324,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (5_i64, MIGRATION_5),
         (6_i64, MIGRATION_6),
         (7_i64, MIGRATION_7),
+        (8_i64, MIGRATION_8),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -469,7 +476,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 
