@@ -20,6 +20,7 @@ async (page) => {
     data.drafts.a.payload.blocks.push({ type: "paragraph", itemId: null, content: [text("保存済みの手動追記を保持します。 <img src=x onerror=alert(1)>")] });
     data.history = { a: [] }; data.failMinutesSave = false; data.minutesSaveDelay = 0;
     data.exports=[];data.exportMode="cancel";data.exportDelay=0;data.exportActive=false;data.lostExportResponse=false;
+    data.evidenceDelay=0;data.failEvidence=false;data.corruptEvidence=false;data.playbacks={};
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
@@ -52,6 +53,28 @@ async (page) => {
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if (cmd === "get_minutes_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : data.current,previousId:args.meetingId === "m2" ? null : data.previous,draft:args.meetingId === "m2" ? null : stamp(),versions:args.meetingId === "m2" ? [] : copy(data.versions.filter(v=>v.publicationState==="candidate"||[data.current,data.previous].includes(v.id)))};
         if (cmd === "get_minutes_preview") return copy(data.views[args.minutesId] ?? null);
+        if (cmd === "get_minutes_evidence_source" || cmd === "prepare_minutes_evidence_playback") {
+          const r=args.request, v=data.views[r.minutesId];
+          if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash)throw Error("stale evidence base");
+          const e=(data.drafts[v.id]?.payload??v.content).evidence.find(e=>e.id===r.expectedEvidence.id);
+          if(!e||e.analysisRevisionId!==r.expectedEvidence.analysisRevisionId||e.utteranceId!==r.expectedEvidence.utteranceId||e.quoteText!==r.expectedEvidence.quoteText)throw Error("stale evidence");
+          if(data.evidenceDelay)await new Promise(resolve=>setTimeout(resolve,data.evidenceDelay));
+          if(data.failEvidence)throw Error("模擬固定入力・音声検証失敗");
+          if(cmd==="prepare_minutes_evidence_playback"){
+            const token=`audio-${++sequence}`;data.playbacks[token]=true;
+            return {token,sampleRate:8000,channels:1,totalFrames:16000,startUs:e.startUs,endUs:e.endUs,trackKind:"mic",alignment:"unverified"};
+          }
+          const result={evidence:copy(e),analysisId:e.analysisRevisionId,analysisContentHash:v.inputContentHash,speakers:[],utterances:[{id:e.utteranceId,trackId:"fixture-track",startUs:e.startUs,endUs:e.endUs,recognizedText:"点検日を確認する",effectiveText:e.quoteText,attributionState:"unknown",speakerIds:[]}],firstSequence:1,totalUtterances:1};
+          if(data.corruptEvidence)result.analysisId="wrong-current-analysis";
+          return result;
+        }
+        if(cmd==="read_playback_chunk"){
+          if(!data.playbacks[args.token])throw Error("closed playback");
+          const frames=Math.min(65536,16000-args.offsetFrames), buffer=new ArrayBuffer(12+frames*4), values=new DataView(buffer);
+          values.setUint32(0,8000,true);values.setUint32(4,1,true);values.setUint32(8,frames,true);
+          return Array.from(new Uint8Array(buffer));
+        }
+        if(cmd==="close_playback"){delete data.playbacks[args.token];return;}
         if (cmd === "get_minutes_exports") return copy(data.exports.filter(e=>e.meetingId===args.meetingId));
         if (cmd === "get_minutes_export_status") return {active:data.exportActive,record:copy(data.exports.find(e=>e.id===args.request.operationId)??null)};
         if (cmd === "export_minutes_markdown") {

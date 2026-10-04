@@ -15,13 +15,13 @@ struct Chunk {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::storage) mod tests {
     use super::super::analysis::{AnalysisInput, UtteranceInput};
     use super::*;
     use crate::audio::tests::caf_fixture;
     use crate::playback::PlaybackStore;
 
-    fn fixture(storage: &Storage) -> (String, String, String) {
+    pub(in crate::storage) fn fixture(storage: &Storage) -> (String, String, String) {
         let meeting = storage.create_meeting("再生テスト").unwrap();
         let relative = PathBuf::from("meetings").join(&meeting.id).join("audio");
         std::fs::create_dir_all(storage.managed_path(&relative).unwrap()).unwrap();

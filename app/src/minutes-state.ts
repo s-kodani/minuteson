@@ -22,6 +22,29 @@ export interface Evidence {
   quoteText: string; startUs: number; endUs: number; sourceType: "engine" | "manual"; verificationState: "unverified" | "user_verified";
 }
 export interface MinutesContent { schemaVersion: number; blocks: Block[]; items: MinutesItem[]; evidence: Evidence[] }
+export interface MinutesEvidenceRequest {
+  meetingId: string; minutesId: string; expectedContentHash: string; expectedInputContentHash: string; expectedEvidence: Evidence;
+}
+export interface MinutesEvidenceSource {
+  evidence: Evidence; analysisId: string; analysisContentHash: string;
+  speakers: { id: string; label: string; displayName: string | null }[];
+  utterances: { id: string; trackId: string; startUs: number; endUs: number; recognizedText: string; effectiveText: string; attributionState: string; speakerIds: string[] }[];
+  firstSequence: number; totalUtterances: number;
+}
+export function evidenceRequest(view: MinutesView, evidence: Evidence): MinutesEvidenceRequest {
+  if (evidence.analysisRevisionId !== view.inputAnalysisId) throw new Error("根拠の解析版が議事録の固定入力と一致しません。");
+  return { meetingId: view.meetingId, minutesId: view.id, expectedContentHash: view.contentHash, expectedInputContentHash: view.inputContentHash, expectedEvidence: structuredClone(evidence) };
+}
+export function assertEvidenceSource(request: MinutesEvidenceRequest, source: MinutesEvidenceSource) {
+  const a = request.expectedEvidence, b = source.evidence;
+  const utterance = source.utterances.find((u) => u.id === a.utteranceId);
+  if (source.analysisId !== a.analysisRevisionId || source.analysisContentHash !== request.expectedInputContentHash || b.id !== a.id || b.minutesItemId !== a.minutesItemId
+    || b.analysisRevisionId !== a.analysisRevisionId || b.utteranceId !== a.utteranceId || b.quoteText !== a.quoteText
+    || b.startUs !== a.startUs || b.endUs !== a.endUs || !utterance || !utterance.effectiveText.includes(a.quoteText)
+    || utterance.startUs > a.startUs || utterance.endUs < a.endUs || source.utterances.length > 5) {
+    throw new Error("根拠と固定発言の参照先・引用・時刻が一致しません。");
+  }
+}
 export interface MinutesView {
   id: string; meetingId: string; inputAnalysisId: string; inputContentHash: string; contentHash: string;
   content: MinutesContent; generatedContent: MinutesContent;

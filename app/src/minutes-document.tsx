@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { timeLabel } from "./transcript";
-import type { MinutesContent, Inline, Block } from "./minutes-state";
+import type { MinutesContent, Inline, Block, MinutesView } from "./minutes-state";
+import { MinutesEvidencePanel } from "./minutes-evidence";
 
 // Typed document nodes become React text elements, never model-supplied HTML.
-export function MinutesDocument({ content, title }: { content: MinutesContent; title: string }) {
+export function MinutesDocument({ content, title, view, locked = false }: { content: MinutesContent; title: string; view: MinutesView; locked?: boolean }) {
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const evidence = content.evidence.find((e) => e.id === selected);
@@ -11,7 +12,7 @@ export function MinutesDocument({ content, title }: { content: MinutesContent; t
   const inline = (nodes: Inline[]) => nodes.map((node, index) => {
     if (node.type === "evidence") {
       const e = content.evidence.find((e) => e.id === node.evidenceLinkId && e.minutesItemId === node.minutesItemId);
-      return e ? <button type="button" className="evidence-chip" key={index} onClick={() => setSelected(e.id)} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
+      return e ? <button type="button" className="evidence-chip" disabled={locked} key={index} onClick={() => setSelected(e.id)} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
     }
     let text = <span className="document-text">{node.text}</span>;
     if (node.bold) text = <strong>{text}</strong>;
@@ -37,10 +38,7 @@ export function MinutesDocument({ content, title }: { content: MinutesContent; t
   return <section className="minutes-document" aria-label={title}>
     <h3>{title}</h3>
     <div className="minutes-document-layout"><article>{content.blocks.slice(currentPage * 50, (currentPage + 1) * 50).map(block)}</article>
-      {evidence && <aside className="fixed-evidence" aria-label="固定された根拠発言"><div className="card-head"><h4>根拠の発言</h4><button type="button" className="small-secondary" onClick={() => setSelected(null)}>閉じる</button></div>
-        <p>{timeLabel(evidence.startUs)}–{timeLabel(evidence.endUs)} · {evidence.verificationState === "user_verified" ? "利用者確認済み" : "未確認"}</p><blockquote>{evidence.quoteText}</blockquote>
-        <small>固定解析版: {evidence.analysisRevisionId}<br />発言ID: {evidence.utteranceId}</small><p>生成時の引用です。音声再生と元発言への移動は接続作業中です。</p>
-      </aside>}
+      {evidence && <MinutesEvidencePanel key={`${view.id}:${evidence.id}`} view={view} evidence={evidence} locked={locked} close={() => setSelected(null)} />}
     </div>
     {total > 1 && <div className="transcript-pages"><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>前へ</button><span>{currentPage + 1} / {total}</span><button type="button" disabled={currentPage + 1 >= total} onClick={() => setPage(currentPage + 1)}>次へ</button></div>}
   </section>;

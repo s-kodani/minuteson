@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { ChunkPlayer, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
+import type { MinutesEvidenceRequest } from "./minutes-state";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -38,6 +39,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
   const [error, setError] = useState("");
   const request = useRef(0);
   const token = useRef<string | null>(null);
+  const [owner] = useState(() => crypto.randomUUID());
 
   const clear = () => {
     request.current++;
@@ -50,19 +52,23 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
   };
 
   useEffect(() => {
+    const otherStarted = (event: Event) => { if ((event as CustomEvent<string>).detail !== owner) clear(); };
+    window.addEventListener("mon-audio-start", otherStarted);
     const timer = window.setInterval(() => { if (player.snapshot().playing) refresh((value) => value + 1); }, 100);
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("mon-audio-start", otherStarted);
       request.current++;
       player.clear();
       if (token.current) void invoke("close_playback", { token: token.current }).catch(() => {});
       clock.dispose();
     };
-  }, [clock, player]);
+  }, [clock, player, owner]);
 
-  const start = async (analysisId: string, utteranceId: string) => {
+  const start = async (analysisId: string, utteranceId: string, evidenceRequest?: MinutesEvidenceRequest) => {
     if (locked) return;
     clear();
+    window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
     const generation = request.current;
     setSelected(utteranceId);
     setPreparing(true);
@@ -70,12 +76,19 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
       // Resume in the user's click, before hashing or IPC awaits lose activation.
       await clock.resume();
       if (generation !== request.current) return;
-      const info = await invoke<PlaybackInfo>("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
+      const info = evidenceRequest
+        ? await invoke<PlaybackInfo>("prepare_minutes_evidence_playback", { request: evidenceRequest })
+        : await invoke<PlaybackInfo>("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
       if (generation !== request.current) {
         void invoke("close_playback", { token: info.token }).catch(() => {});
         return;
       }
       token.current = info.token;
+      if (evidenceRequest && (info.startUs !== evidenceRequest.expectedEvidence.startUs || info.endUs !== evidenceRequest.expectedEvidence.endUs)) {
+        void invoke("close_playback", { token: info.token }).catch(() => {});
+        token.current = null;
+        throw new Error("根拠と再生する音声区間が一致しません");
+      }
       player.load(info);
       await player.play();
     } catch (cause) {

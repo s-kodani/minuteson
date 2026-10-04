@@ -25,6 +25,9 @@
 .document-table { overflow-x: auto; max-width: 100%; }
 .minutes-export-history { margin-top: 20px; overflow-wrap: anywhere; }
 .minutes-export-history li { padding: 12px 0; border-bottom: 1px solid #d4e1db; }
+.fixed-transcript { margin-top: 16px; overflow-wrap: anywhere; }
+.fixed-transcript article { padding: 10px; margin: 8px 0; border: 1px solid #d4e1db; border-radius: 8px; }
+.fixed-transcript .evidence-target { border-color: #4b49de; background: white; }
 .document-table table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
 .document-table th, .document-table td { border: 1px solid #d4e1db; padding: 8px; text-align: left; vertical-align: top; min-width: 90px; }
 .data-updated { padding: 10px 12px; border-left: 3px solid #a67b25; background: #fff7df; color: #684c19; }

@@ -488,6 +488,35 @@ async fn cancel_analysis_job(
 }
 
 #[tauri::command]
+async fn get_minutes_evidence_source(
+    window: WebviewWindow,
+    request: storage::MinutesEvidenceRequest,
+) -> Result<storage::MinutesEvidenceSource, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().minutes_evidence_source(&request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn prepare_minutes_evidence_playback(
+    window: WebviewWindow,
+    request: storage::MinutesEvidenceRequest,
+) -> Result<PlaybackInfo, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app
+            .state::<Storage>()
+            .prepare_minutes_evidence_audio(&request)?;
+        app.state::<PlaybackStore>().insert(audio)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_utterance_playback(
     window: WebviewWindow,
     meeting_id: String,
@@ -808,6 +837,8 @@ pub fn run() {
             save_transcript_draft,
             undo_transcript_edit,
             prepare_utterance_playback,
+            get_minutes_evidence_source,
+            prepare_minutes_evidence_playback,
             read_playback_chunk,
             close_playback,
             finish_main_close,
