@@ -184,6 +184,20 @@ fn load(connection: &Connection, id: &str) -> Result<(VocabularyBook, Vec<Stored
     ))
 }
 
+pub(super) fn verify_saved_books(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("SELECT id FROM vocabulary_scopes ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        load(
+            connection,
+            &row.get::<_, String>(0).map_err(|e| e.to_string())?,
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn compile(entries: &[FixedEntry], extra: &str) -> Result<String, String> {
     let mut prompt = extra.to_owned();
     if !entries.is_empty() {

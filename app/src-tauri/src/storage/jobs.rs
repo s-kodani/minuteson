@@ -733,7 +733,7 @@ fn hash_bytes(domain: &[u8], bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String {
+pub(super) fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"mon-job-checkpoint-v1");
     hasher.update(spec_hash.as_bytes());

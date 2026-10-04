@@ -11,6 +11,9 @@ use uuid::Uuid;
 mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
+// Internal staging foundation; archive/restore and controller integration follow.
+#[allow(dead_code)]
+pub(crate) mod backup;
 mod diarization;
 mod diarization_preferences;
 mod draft_splits;
@@ -111,6 +114,7 @@ pub struct FileAsset {
 pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
+    maintenance: std::sync::atomic::AtomicBool,
 }
 
 impl Storage {
@@ -138,6 +142,7 @@ impl Storage {
         Ok(Self {
             root,
             connection: Mutex::new(connection),
+            maintenance: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -382,44 +387,8 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
     )?;
-    let known: Vec<(i64, String)> = {
-        let mut query = connection
-            .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")?;
-        let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect::<Result<_, _>>()?
-    };
-    let migrations = [
-        (1_i64, MIGRATION_1),
-        (2_i64, MIGRATION_2),
-        (3_i64, MIGRATION_3),
-        (4_i64, MIGRATION_4),
-        (5_i64, MIGRATION_5),
-        (6_i64, MIGRATION_6),
-        (7_i64, MIGRATION_7),
-        (8_i64, MIGRATION_8),
-        (9_i64, MIGRATION_9),
-        (10_i64, MIGRATION_10),
-        (11_i64, MIGRATION_11),
-        (12_i64, MIGRATION_12),
-        (13_i64, MIGRATION_13),
-        (14_i64, MIGRATION_14),
-        (15_i64, MIGRATION_15),
-        (16_i64, MIGRATION_16),
-        (17_i64, MIGRATION_17),
-        (18_i64, MIGRATION_18),
-        (19_i64, MIGRATION_19),
-        (20_i64, MIGRATION_20),
-    ];
-    for (index, (version, checksum)) in known.iter().enumerate() {
-        let Some((expected_version, sql)) = migrations.get(index) else {
-            return Err(format!("unsupported migration {version}").into());
-        };
-        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
-        if version != expected_version || checksum != &digest {
-            return Err(format!("unsupported or changed migration {version}").into());
-        }
-    }
-    for (version, sql) in migrations.into_iter().skip(known.len()) {
+    let applied = verify_migration_history(connection)?;
+    for &(version, sql) in MIGRATIONS.iter().skip(applied) {
         let transaction = connection.transaction()?;
         transaction.execute_batch(sql)?;
         let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
@@ -430,6 +399,48 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         transaction.commit()?;
     }
     Ok(())
+}
+
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, MIGRATION_1),
+    (2, MIGRATION_2),
+    (3, MIGRATION_3),
+    (4, MIGRATION_4),
+    (5, MIGRATION_5),
+    (6, MIGRATION_6),
+    (7, MIGRATION_7),
+    (8, MIGRATION_8),
+    (9, MIGRATION_9),
+    (10, MIGRATION_10),
+    (11, MIGRATION_11),
+    (12, MIGRATION_12),
+    (13, MIGRATION_13),
+    (14, MIGRATION_14),
+    (15, MIGRATION_15),
+    (16, MIGRATION_16),
+    (17, MIGRATION_17),
+    (18, MIGRATION_18),
+    (19, MIGRATION_19),
+    (20, MIGRATION_20),
+];
+
+fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {
+    let known: Vec<(i64, String)> = {
+        let mut query = connection
+            .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")?;
+        let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (index, (version, checksum)) in known.iter().enumerate() {
+        let Some((expected_version, sql)) = MIGRATIONS.get(index) else {
+            return Err(format!("unsupported migration {version}").into());
+        };
+        let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
+        if version != expected_version || checksum != &digest {
+            return Err(format!("unsupported or changed migration {version}").into());
+        }
+    }
+    Ok(known.len())
 }
 
 fn hash_file(path: &Path) -> Result<(i64, String), String> {

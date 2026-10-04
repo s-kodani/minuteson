@@ -17,7 +17,7 @@ pub(crate) struct MinutesDraft {
     pub updated_at: i64,
 }
 
-fn hash(text: &str) -> String {
+pub(super) fn hash(text: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(b"mon-minutes-draft-v1");
     hash.update(text.as_bytes());
@@ -44,7 +44,7 @@ pub(super) fn context(
     Ok((view, input))
 }
 
-fn validate(
+pub(super) fn validate(
     payload: &MinutesContent,
     base: &MinutesContent,
     input: &MinutesInput,

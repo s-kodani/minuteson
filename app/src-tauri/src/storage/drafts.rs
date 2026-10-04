@@ -483,7 +483,7 @@ pub(super) fn merged_assignments(payload: &TranscriptDraftPayload, ids: &[String
     result
 }
 
-fn draft_hash(serialized: &str) -> String {
+pub(super) fn draft_hash(serialized: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"mon-transcript-draft-v1");
     hasher.update(serialized.as_bytes());
