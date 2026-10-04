@@ -7,6 +7,7 @@ use serde_json::Value;
 pub(crate) struct AnalysisFlow {
     pub id: String,
     pub meeting_id: String,
+    pub profile: String,
     pub stage: String,
     pub lock_version: i64,
     pub transcription_job: Option<JobSnapshot>,
@@ -53,6 +54,7 @@ fn read_flow(db: &Connection, meeting: &str) -> Result<Option<AnalysisFlow>, Str
     Ok(Some(AnalysisFlow {
         id,
         meeting_id: meeting.into(),
+        profile: super::imports::flow_profile(db, meeting)?,
         stage,
         lock_version,
         transcription_job: load(trans)?,

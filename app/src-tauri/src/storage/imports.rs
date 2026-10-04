@@ -1,6 +1,6 @@
 use super::*;
 use crate::audio::VerifiedAudio;
-use crate::audio_import::{AudioInfo, FileEvidence, ImportManifest};
+use crate::audio_import::{AudioInfo, FileEvidence, ImportManifest, ImportOptions};
 use crate::local_engine::Fingerprint;
 use rusqlite::TransactionBehavior;
 use std::fs::File;
@@ -34,6 +34,41 @@ fn read(db: &Connection, id: &str) -> Result<ImportSnapshot, String> {
         error_message: row.6,
     })
 }
+fn read_options(db: &Connection, id: &str) -> Result<ImportOptions, String> {
+    let (json, hash): (String, String) = db
+        .query_row(
+            "SELECT options_json,options_hash FROM audio_import_options WHERE import_id=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if json.len() > 1048576 || format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+        return Err("取り込み条件のハッシュが一致しません".into());
+    }
+    let options: ImportOptions = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    options.validate()?;
+    Ok(options)
+}
+pub(super) fn flow_profile(db: &Connection, meeting: &str) -> Result<String, String> {
+    let source: Option<String> = db
+        .query_row(
+            "SELECT source_type FROM meetings WHERE id=?1",
+            params![meeting],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if source.as_deref() != Some("audio_import") {
+        return Ok("standard".into());
+    }
+    let id: String = db
+        .query_row(
+            "SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'",
+            params![meeting],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(read_options(db, &id)?.profile)
+}
 
 impl Storage {
     pub(crate) fn import_scratch(&self) -> Result<&Path, String> {
@@ -42,6 +77,7 @@ impl Storage {
         }
         Ok(&self.root)
     }
+    #[cfg(test)]
     pub(crate) fn begin_audio_import(
         &self,
         title: &str,
@@ -50,7 +86,26 @@ impl Storage {
         source: &Fingerprint,
         info: &AudioInfo,
     ) -> Result<(ImportSnapshot, bool), String> {
+        self.begin_audio_import_configured(
+            title,
+            operation,
+            file_name,
+            source,
+            info,
+            &ImportOptions::default(),
+        )
+    }
+    pub(crate) fn begin_audio_import_configured(
+        &self,
+        title: &str,
+        operation: &str,
+        file_name: &str,
+        source: &Fingerprint,
+        info: &AudioInfo,
+        options: &ImportOptions,
+    ) -> Result<(ImportSnapshot, bool), String> {
         info.validate()?;
+        options.validate()?;
         let title = title.trim();
         if title.is_empty()
             || title.chars().count() > 200
@@ -83,6 +138,7 @@ impl Storage {
                 || stored != text
                 || name != file_name
                 || old_title != title
+                || read_options(&tx, &id)? != *options
             {
                 return Err("同じ操作IDの取り込み条件が一致しません".into());
             }
@@ -94,6 +150,15 @@ impl Storage {
         tx.execute("INSERT INTO meetings(id,title,source_type,lifecycle,created_at,updated_at) VALUES(?1,?2,'audio_import','draft',?3,?3)",params![meeting,title,now]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,created_at,updated_at) VALUES(?1,?2,'copying',?3,?4,?5,?6,?6)",params![id,meeting,file_name,info.detected_format,info.duration_us,now]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO audio_import_commits(import_id,meeting_id,operation_id,source_size,source_hash,info_json) VALUES(?1,?2,?3,?4,?5,?6)",params![id,meeting,operation,source.size as i64,source.sha256,text]).map_err(|e|e.to_string())?;
+        super::vocabulary::save_initial_import_vocabulary(
+            &tx,
+            &meeting,
+            &options.meeting_vocabulary,
+            options.expected_global_version,
+        )?;
+        let options_json = serde_json::to_string(options).map_err(|e| e.to_string())?;
+        let options_hash = format!("{:x}", Sha256::digest(options_json.as_bytes()));
+        tx.execute("INSERT INTO audio_import_options(import_id,options_json,options_hash) VALUES(?1,?2,?3)",params![id,options_json,options_hash]).map_err(|e|e.to_string())?;
         let result = read(&tx, &id)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok((result, true))
@@ -195,7 +260,18 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn finalize_audio_import(&self, id: &str) -> Result<ImportSnapshot, String> {
+        self.finalize_audio_import_cancellable(id, &|| false)
+    }
+    pub(crate) fn finalize_audio_import_cancellable(
+        &self,
+        id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<ImportSnapshot, String> {
+        if cancelled() {
+            return Err("取り込み保存の検証を停止しました".into());
+        }
         let before = self.audio_import(id)?;
         if before.state == "ready" {
             return Ok(before);
@@ -207,7 +283,7 @@ impl Storage {
         }
         let base = self.audio_import_directory(&before)?;
         let manifest_path = base.join("manifest.json");
-        let evidence = self.checked_import_file(&manifest_path, None)?;
+        let evidence = self.checked_import_file(&manifest_path, None, cancelled)?;
         if evidence.size > 16384 {
             return Err("取り込みmanifestが大きすぎます".into());
         }
@@ -243,14 +319,14 @@ impl Storage {
         }
         manifest.info.validate()?;
         let original_path = base.join(format!("original.{}", manifest.info.detected_format));
-        self.checked_import_file(&original_path, Some(&manifest.original))?;
+        self.checked_import_file(&original_path, Some(&manifest.original), cancelled)?;
         let flac_path = base.join("audio.flac");
-        self.checked_import_file(&flac_path, Some(&manifest.audio))?;
+        self.checked_import_file(&flac_path, Some(&manifest.audio), cancelled)?;
         let audio = VerifiedAudio::open_cancellable(
             File::open(&flac_path).map_err(|e| e.to_string())?,
             manifest.audio.size,
             &manifest.audio.sha256,
-            &|| false,
+            cancelled,
         )?;
         if audio.format.frames != manifest.info.frames
             || audio.format.sample_rate != manifest.info.sample_rate
@@ -260,7 +336,10 @@ impl Storage {
         }
         drop(audio);
         // Recheck immutable evidence immediately before opening the DB commit.
-        self.checked_import_file(&manifest_path, Some(&evidence))?;
+        self.checked_import_file(&manifest_path, Some(&evidence), cancelled)?;
+        if cancelled() {
+            return Err("取り込み保存の検証を停止しました".into());
+        }
         let mut db = self
             .connection
             .lock()
@@ -271,6 +350,7 @@ impl Storage {
         if read(&tx, id)? != before {
             return Err("保存検証中に取り込み状態が変更されました".into());
         }
+        read_options(&tx, id)?;
         let now = now_ms()?;
         let original = insert_asset(
             &tx,
@@ -319,6 +399,7 @@ impl Storage {
         &self,
         path: &Path,
         expected: Option<&FileEvidence>,
+        cancelled: &impl Fn() -> bool,
     ) -> Result<FileEvidence, String> {
         let metadata = path.symlink_metadata().map_err(|e| e.to_string())?;
         if !metadata.is_file()
@@ -327,7 +408,7 @@ impl Storage {
         {
             return Err("取り込み音声が管理領域外または通常ファイルではありません".into());
         }
-        let proof = Fingerprint::capture(path, &|| false)?;
+        let proof = Fingerprint::capture(path, cancelled)?;
         let result = FileEvidence {
             size: proof.size,
             sha256: proof.sha256,
@@ -389,7 +470,14 @@ impl Storage {
         std::fs::remove_dir(base).map_err(|e| e.to_string())?;
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn recover_audio_imports(&self) -> Result<Vec<ImportSnapshot>, String> {
+        self.recover_audio_imports_cancellable(&|| false)
+    }
+    pub(crate) fn recover_audio_imports_cancellable(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<ImportSnapshot>, String> {
         let ids = {
             let db = self
                 .connection
@@ -404,13 +492,19 @@ impl Storage {
         };
         let mut recovered = Vec::new();
         for id in ids {
+            if cancelled() {
+                return Err("取り込み回復の検証を停止しました".into());
+            }
             let snapshot = self.audio_import(&id)?;
             let base = self.audio_import_directory(&snapshot)?;
             if base.join("manifest.json").exists() {
                 // Complete but invalid evidence is retained for inspection.
-                match self.finalize_audio_import(&id) {
+                match self.finalize_audio_import_cancellable(&id, cancelled) {
                     Ok(saved) => recovered.push(saved),
                     Err(error) => {
+                        if cancelled() {
+                            return Err(error);
+                        }
                         self.fail_audio_import(&id, "interrupted", &error)?;
                     }
                 }
@@ -445,6 +539,7 @@ fn insert_asset(
 
 #[cfg(test)]
 pub(super) fn remove_import_schema_for_test(db: &Connection) {
+    db.execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
     db.execute_batch("DROP TRIGGER imported_track_kind_update;")
         .unwrap();
     db.execute_batch("DROP TRIGGER audio_import_identity_fixed; DROP TRIGGER audio_import_ready_fixed; DROP TRIGGER audio_import_ready_assets; DROP TRIGGER audio_import_recording_exclusive; DROP TRIGGER recording_audio_import_exclusive; DROP TRIGGER imported_track_kind; DROP INDEX audio_import_single_active; DROP TABLE audio_import_commits; DELETE FROM schema_migrations WHERE version=19;").unwrap();

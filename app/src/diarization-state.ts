@@ -13,7 +13,7 @@ export interface SpeakerReview {
   overlaps: { startUs: number; endUs: number; speakerIds: string[] }[];
 }
 export interface SpeakerReviews { analysisId: string; contentHash: string; reviews: SpeakerReview[] }
-export const trackLabel = (kind: string) => ({ mic: "マイク", system: "PC音声" } as Record<string,string>)[kind] ?? "保存音声";
+export const trackLabel = (kind: string) => ({ mic: "マイク", system: "PC音声",imported:"取り込み音声" } as Record<string,string>)[kind] ?? "保存音声";
 const bounded = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
 const pathOK = (s: string) => s.length <= 4096 && !/[\r\n\0]/.test(s) && (/^\//.test(s) || /^[a-z]:[\\/]/i.test(s) || /^\\\\/.test(s));
 export function diarizationConfigured(e: DiarizationEngine): boolean {

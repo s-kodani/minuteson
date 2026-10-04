@@ -13,6 +13,33 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ImportOptions {
+    pub profile: String,
+    pub meeting_vocabulary: Vec<crate::storage::VocabularyEntry>,
+    pub expected_global_version: Option<i64>,
+}
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            profile: "standard".into(),
+            meeting_vocabulary: vec![],
+            expected_global_version: None,
+        }
+    }
+}
+impl ImportOptions {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !matches!(self.profile.as_str(), "standard" | "high_accuracy")
+            || self.expected_global_version.is_some_and(|v| v < 0)
+        {
+            return Err("取り込みのプロファイル・用語版が不正です".into());
+        }
+        crate::storage::vocabulary::validate(&self.meeting_vocabulary)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct AudioInfo {
     pub schema_version: u32,
     pub detected_format: String,
@@ -57,7 +84,6 @@ pub(crate) struct SelectedAudio {
 }
 
 // Production callers obtain the helper from the signed bundled probe, not IPC.
-#[allow(dead_code)] // Native selection and frontend wiring follow the durable core.
 pub(crate) fn inspect(
     input: &Path,
     helper: &Fingerprint,
@@ -233,13 +259,34 @@ pub(crate) struct FileEvidence {
     pub sha256: String,
 }
 
-#[allow(dead_code)] // UI/controller use this same tested entry point next.
+#[cfg(test)]
 pub(crate) fn import(
+    storage: &Storage,
+    selected: SelectedAudio,
+    helper: &Fingerprint,
+    title: &str,
+    operation: &str,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(&str, u64),
+) -> Result<ImportSnapshot, String> {
+    import_configured(
+        storage,
+        selected,
+        helper,
+        title,
+        operation,
+        &ImportOptions::default(),
+        cancelled,
+        progress,
+    )
+}
+pub(crate) fn import_configured(
     storage: &Storage,
     mut selected: SelectedAudio,
     helper: &Fingerprint,
     title: &str,
     operation: &str,
+    options: &ImportOptions,
     cancelled: &impl Fn() -> bool,
     progress: &impl Fn(&str, u64),
 ) -> Result<ImportSnapshot, String> {
@@ -252,12 +299,13 @@ pub(crate) fn import(
             "保存先の空き容量が不足しています。原本と変換用音声の容量を確保してください".into(),
         );
     }
-    let (snapshot, created) = storage.begin_audio_import(
+    let (snapshot, created) = storage.begin_audio_import_configured(
         title,
         operation,
         &selected.file_name,
         &selected.proof,
         &selected.info,
+        options,
     )?;
     if snapshot.state == "ready" {
         return Ok(snapshot);
@@ -375,7 +423,7 @@ pub(crate) fn import(
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
         progress("saving", decoded.frames);
-        storage.finalize_audio_import(&snapshot.id)
+        storage.finalize_audio_import_cancellable(&snapshot.id, cancelled)
     })();
     match result {
         Ok(saved) => Ok(saved),

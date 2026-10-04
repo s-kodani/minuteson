@@ -75,6 +75,86 @@ fn diarize(s: &Storage) -> String {
 }
 
 #[test]
+fn imported_high_accuracy_selection_survives_ai_wait_restart_and_freezes_vocabulary_at_enqueue() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, old) = fixture(root.path());
+    let options = crate::audio_import::ImportOptions {
+        profile: "high_accuracy".into(),
+        meeting_vocabulary: vec![VocabularyEntry {
+            id: Uuid::new_v4().to_string(),
+            term: "点検日".into(),
+            reading: Some("てんけんび".into()),
+            note: None,
+            enabled: true,
+        }],
+        expected_global_version: Some(0),
+    };
+    let (import, _, _) =
+        super::super::imports::tests::pending_configured(&s, "high-import", &options);
+    s.finalize_audio_import(&import.id).unwrap();
+    let m = import.meeting_id;
+    advance(&s); // Only standard is configured; high-accuracy audio is still saved.
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    assert_eq!(flow.stage, "configuration");
+    assert_eq!(flow.profile, "high_accuracy");
+    assert!(s.list_jobs(&m).unwrap().is_empty());
+    assert_eq!(s.get_meeting(&m).unwrap().unwrap().lifecycle, "imported");
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    let mut w = s.analysis_preferences().unwrap().payload;
+    w.high_accuracy = w.standard.clone();
+    w.high_accuracy.threads = 2;
+    s.save_analysis_preferences(1, w).unwrap();
+    let mut d = s.diarization_preferences().unwrap().payload;
+    d.high_accuracy = d.standard.clone();
+    s.save_diarization_preferences(1, d).unwrap();
+    // A common term added after import confirmation is fixed at actual enqueue.
+    let common = VocabularyEntry {
+        id: Uuid::new_v4().to_string(),
+        term: "会議".into(),
+        reading: None,
+        note: None,
+        enabled: true,
+    };
+    s.save_vocabulary_book(None, 0, vec![common]).unwrap();
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    analysis_flow::continue_flow(&s, &m, flow.lock_version).unwrap();
+    advance(&s);
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    assert_eq!(flow.profile, "high_accuracy");
+    assert_eq!(flow.plan.as_ref().unwrap()["profile"], "high_accuracy");
+    assert_eq!(flow.plan.as_ref().unwrap()["whisper"]["threads"], 2);
+    let text = transcribe(&s);
+    let proof = |id: &str| -> (serde_json::Value, serde_json::Value) {
+        let (p,c):(String,String) = s.connection.lock().unwrap().query_row("SELECT profile_snapshot_json,config_json FROM analysis_revisions WHERE id=?1 AND meeting_id=?2",params![id,m],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        (
+            serde_json::from_str(&p).unwrap(),
+            serde_json::from_str(&c).unwrap(),
+        )
+    };
+    let (profile, config) = proof(&text);
+    assert_eq!(profile["profile"], "high_accuracy");
+    let fixed = config["vocabulary"].clone();
+    assert_eq!(fixed["stamp"]["globalVersion"], 1);
+    assert_eq!(fixed["stamp"]["meetingVersion"], 1);
+    assert_eq!(fixed["entries"].as_array().unwrap().len(), 2);
+    assert!(fixed["actualPrompt"].as_str().unwrap().contains("点検日"));
+    let book = s.vocabulary_book(Some(&m)).unwrap();
+    let mut changed = book.payload;
+    changed[0].term = "変更後".into();
+    s.save_vocabulary_book(Some(&m), book.lock_version, changed)
+        .unwrap();
+    advance(&s);
+    let final_id = diarize(&s);
+    advance(&s);
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "review");
+    assert_eq!(proof(&text).1["vocabulary"], fixed);
+    assert_eq!(proof(&final_id).0["profile"], "high_accuracy");
+    assert!(s.load_current_analysis(&m).unwrap().is_none());
+    assert!(s.list_jobs(&old).unwrap().is_empty());
+}
+
+#[test]
 fn imported_audio_hands_off_candidates_without_self_labels_and_freezes_explicit_minutes_input() {
     let root = tempfile::tempdir().unwrap();
     let (s, old_meeting) = fixture(root.path());
@@ -504,7 +584,7 @@ fn migration_from_v17_preserves_data_jobs_and_does_not_autostart_historical_reco
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        19
+        20
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

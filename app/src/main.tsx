@@ -8,6 +8,8 @@ import { AnalysisPanel } from "./analysis";
 import { MinutesPanel } from "./minutes";
 import { VocabularyEditor } from "./vocabulary";
 import { flushPendingEdits } from "./draft-save";
+import { AudioImportPanel } from "./audio-import";
+import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
 
@@ -17,6 +19,7 @@ interface Meeting {
   id: string;
   title: string;
   lifecycle: string;
+  sourceType?: "recording" | "audio_import" | null;
   createdAt: number;
   updatedAt: number;
   lockVersion: number;
@@ -129,6 +132,11 @@ function MainWindow() {
             }
             if (recording.phase === "error") throw new Error(recording.errorMessage ?? "録音の保存状況を確認してください。");
           }
+        }
+        const importing=await invoke<ImportSnapshot>("get_audio_import");
+        if(importing.busy||importing.phase==="ready"){
+          if(!window.confirm(importing.busy?"進行中の音声取り込みを取り消して終了しますか？ 未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。":"音声取り込みの確認内容を破棄して終了しますか？ 元ファイルは変更しません。"))return;
+          if(importing.token)await invoke("cancel_audio_import",{token:importing.token});
         }
         await invoke("finish_main_close", { quit: event.payload.quit });
       });
@@ -258,16 +266,22 @@ function MainWindow() {
       <div className="main-column">
         <header className="topbar"><span>{screen === "overview" ? "概要" : "設定"}</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
         <main className="content">
+          <AudioImportPanel visible={screen==="overview"} locked={navigationBusy} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={()=>{document.getElementById("meeting-title")?.focus();}} onSaved={async(id)=>{
+            await flushPendingEdits();
+            const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);
+            if(!meeting)throw Error("保存した会議が見つかりません。");
+            setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
+          }}/>
           {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語はすべての会議で使用します。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
-          <p className="lead">保存済み録音を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
+          <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
           <section className="status-card" aria-label="録音状態">
             <div className="card-head"><h2>録音セッション</h2><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
             <div className="card-actions">
-              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
+              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
               <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
               <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
             </div>
@@ -278,20 +292,20 @@ function MainWindow() {
           <section className="meetings-card" aria-label="保存済み会議">
             <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri() || navigationBusy}>再読込</button></div>
             {navigationBusy && <p role="status">編集内容を保存して操作を完了しています。</p>}
-            {recoveredCount > 0 && <p role="status">前回の録音 {recoveredCount} 件を検証して復旧しました。</p>}
+            {recoveredCount > 0 && <p role="status">前回の音声保存 {recoveredCount} 件を検証して復旧しました。</p>}
             <form className="meeting-form" onSubmit={createMeeting}>
               <label htmlFor="meeting-title">会議名</label>
               <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy || navigationBusy} /><button type="submit" disabled={!isTauri() || meetingBusy || navigationBusy || !meetingTitle.trim()}>会議を作成</button></div>
             </form>
             {meetingError && <p className="action-error" role="alert">{meetingError}</p>}
-            {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={navigationBusy}>開く</button></li>)}</ul>}
+            {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "imported" ? "取り込み済み" : meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={navigationBusy}>開く</button></li>)}</ul>}
             {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}>
               <h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label>
               <div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || navigationBusy} /><button type="submit" disabled={meetingBusy || navigationBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={navigationBusy}>閉じる</button></div>
-              <p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。文字起こしを確認・採用してから、議事録を生成できます。" : "録音状態を確認してください。"}</p>
+              <p>{selectedMeeting.sourceType === "audio_import" && selectedMeeting.lifecycle === "draft" ? "音声取り込みが未完了です。保存状況を確認してから取り込み直してください。" : selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : ["recorded","imported"].includes(selectedMeeting.lifecycle) ? "音声を保存済みです。文字起こしを確認・採用してから、議事録を生成できます。" : "録音状態を確認してください。"}</p>
             </form>}
           </section>
-          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} recorded={selectedMeeting.lifecycle === "recorded"} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
+          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);

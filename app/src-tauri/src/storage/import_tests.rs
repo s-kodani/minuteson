@@ -39,6 +39,13 @@ pub(in crate::storage) fn pending(
     s: &Storage,
     operation: &str,
 ) -> (ImportSnapshot, PathBuf, ImportManifest) {
+    pending_configured(s, operation, &audio_import::ImportOptions::default())
+}
+pub(in crate::storage) fn pending_configured(
+    s: &Storage,
+    operation: &str,
+    options: &audio_import::ImportOptions,
+) -> (ImportSnapshot, PathBuf, ImportManifest) {
     let bytes = wav();
     let source = Fingerprint {
         path: s.root.join("not-permanent.wav"),
@@ -46,7 +53,14 @@ pub(in crate::storage) fn pending(
         sha256: format!("{:x}", Sha256::digest(&bytes)),
     };
     let (import, created) = s
-        .begin_audio_import("取り込み会議", operation, "会議.wav", &source, &info())
+        .begin_audio_import_configured(
+            "取り込み会議",
+            operation,
+            "会議.wav",
+            &source,
+            &info(),
+            options,
+        )
         .unwrap();
     assert!(created);
     let base = s.audio_import_directory(&import).unwrap();
@@ -113,6 +127,205 @@ fn count(s: &Storage, table: &str, meeting: &str) -> i64 {
             |r| r.get(0),
         )
         .unwrap()
+}
+
+fn options() -> audio_import::ImportOptions {
+    audio_import::ImportOptions {
+        profile: "high_accuracy".into(),
+        meeting_vocabulary: vec![VocabularyEntry {
+            id: Uuid::new_v4().to_string(),
+            term: "点検日".into(),
+            reading: Some("てんけんび".into()),
+            note: None,
+            enabled: true,
+        }],
+        expected_global_version: Some(0),
+    }
+}
+
+#[test]
+fn import_options_and_initial_vocabulary_are_atomic_checked_and_idempotent() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let source = Fingerprint {
+        path: root.path().join("source.wav"),
+        size: 44,
+        sha256: "a".repeat(64),
+    };
+    let chosen = options();
+    let mut stale = chosen.clone();
+    stale.expected_global_version = Some(1);
+    assert!(s
+        .begin_audio_import_configured("会議", "stale", "source.wav", &source, &info(), &stale)
+        .is_err());
+    assert!(s.list_meetings().unwrap().is_empty());
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER injected_options_failure BEFORE INSERT ON audio_import_options BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(s
+        .begin_audio_import_configured("会議", "rollback", "source.wav", &source, &info(), &chosen)
+        .is_err());
+    assert!(s.list_meetings().unwrap().is_empty());
+    let db = s.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM vocabulary_entries", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM audio_import_commits", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    db.execute_batch("DROP TRIGGER injected_options_failure;")
+        .unwrap();
+    drop(db);
+    let (first, new) = s
+        .begin_audio_import_configured("会議", "op", "source.wav", &source, &info(), &chosen)
+        .unwrap();
+    assert!(new);
+    let (same, new) = s
+        .begin_audio_import_configured("会議", "op", "source.wav", &source, &info(), &chosen)
+        .unwrap();
+    assert!(!new);
+    assert_eq!(first, same);
+    assert_eq!(
+        s.get_meeting(&first.meeting_id)
+            .unwrap()
+            .unwrap()
+            .source_type,
+        Some("audio_import".into())
+    );
+    let book = s.vocabulary_book(Some(&first.meeting_id)).unwrap();
+    assert_eq!(book.payload, chosen.meeting_vocabulary);
+    assert_eq!(book.lock_version, 1);
+    let mut changed = chosen.clone();
+    changed.profile = "standard".into();
+    assert!(s
+        .begin_audio_import_configured("会議", "op", "source.wav", &source, &info(), &changed)
+        .is_err());
+    assert!(s
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE audio_import_options SET options_hash=?1 WHERE import_id=?2",
+            params!["b".repeat(64), first.id]
+        )
+        .is_err());
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        s.vocabulary_book(Some(&first.meeting_id)).unwrap().payload,
+        chosen.meeting_vocabulary
+    );
+}
+
+#[test]
+fn import_finalization_and_recovery_cancel_keep_complete_evidence_for_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (before, base, _) = pending(&s, "cancel-finalize");
+    let calls = Cell::new(0);
+    assert!(s
+        .finalize_audio_import_cancellable(&before.id, &|| {
+            calls.set(calls.get() + 1);
+            calls.get() > 5
+        })
+        .is_err());
+    assert_eq!(s.audio_import(&before.id).unwrap().state, "converting");
+    assert_eq!(count(&s, "file_assets", &before.meeting_id), 0);
+    assert!(base.join("audio.flac").is_file());
+    assert!(base.join("manifest.json").is_file());
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    let interrupted = s.audio_import(&before.id).unwrap();
+    assert!(s.recover_audio_imports_cancellable(&|| true).is_err());
+    assert_eq!(s.audio_import(&before.id).unwrap(), interrupted);
+    assert_eq!(s.recover_audio_imports().unwrap().len(), 1);
+    assert_eq!(s.audio_import(&before.id).unwrap().state, "ready");
+}
+
+#[test]
+fn migration_20_backfills_existing_import_profile_without_changing_audio_or_terms() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, manifest) = pending(&s, "v19");
+    s.finalize_audio_import(&import.id).unwrap();
+    let meeting = s.get_meeting(&import.meeting_id).unwrap().unwrap();
+    s.connection.lock().unwrap().execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    assert_eq!(s.get_meeting(&import.meeting_id).unwrap().unwrap(), meeting);
+    assert_eq!(
+        s.analysis_flow(&import.meeting_id)
+            .unwrap()
+            .unwrap()
+            .profile,
+        "standard"
+    );
+    assert!(s
+        .vocabulary_book(Some(&import.meeting_id))
+        .unwrap()
+        .payload
+        .is_empty());
+    assert_eq!(
+        format!(
+            "{:x}",
+            Sha256::digest(std::fs::read(base.join("audio.flac")).unwrap())
+        ),
+        manifest.audio.sha256
+    );
+    let db = s.connection.lock().unwrap();
+    let (json, hash): (String, String) = db
+        .query_row(
+            "SELECT options_json,options_hash FROM audio_import_options WHERE import_id=?1",
+            params![import.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(format!("{:x}", Sha256::digest(json.as_bytes())), hash);
+    assert_eq!(
+        serde_json::from_str::<audio_import::ImportOptions>(&json).unwrap(),
+        audio_import::ImportOptions::default()
+    );
+}
+
+#[test]
+fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff() {
+    for valid_hash in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let s = Storage::open(root.path().into()).unwrap();
+        let (import, base, _) = pending(&s, "bad-options");
+        let json =
+            "{\"profile\":\"unsupported\",\"meetingVocabulary\":[],\"expectedGlobalVersion\":null}";
+        let digest = if valid_hash {
+            format!("{:x}", Sha256::digest(json.as_bytes()))
+        } else {
+            "0".repeat(64)
+        };
+        let db = s.connection.lock().unwrap();
+        db.execute_batch("DROP TRIGGER audio_import_options_fixed;")
+            .unwrap();
+        db.execute(
+            "UPDATE audio_import_options SET options_json=?1,options_hash=?2 WHERE import_id=?3",
+            params![json, digest, import.id],
+        )
+        .unwrap();
+        drop(db);
+        assert!(s.finalize_audio_import(&import.id).is_err());
+        assert_eq!(count(&s, "file_assets", &import.meeting_id), 0);
+        assert_eq!(count(&s, "analysis_flows", &import.meeting_id), 0);
+        assert_eq!(
+            s.get_meeting(&import.meeting_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            "draft"
+        );
+        assert!(base.join("audio.flac").is_file());
+        assert!(base.join("original.wav").is_file());
+    }
 }
 
 #[test]
@@ -360,7 +573,8 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
 fn v18_import_rows_and_existing_meetings_survive_migration_without_false_verification() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
-    let meeting = s.create_meeting("保持").unwrap();
+    let mut meeting = s.create_meeting("保持").unwrap();
+    meeting.source_type = Some("audio_import".into());
     {
         let db = s.connection.lock().unwrap();
         remove_import_schema_for_test(&db);

@@ -393,7 +393,7 @@ fn v16_migration_preserves_heads_drafts_vocabulary_and_fixed_jobs() {
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        19
+        20
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

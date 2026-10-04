@@ -145,7 +145,7 @@ impl RecorderController {
     }
 }
 
-fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
     if !cfg!(target_os = "macos") {
         return Err("この録音プローブはmacOS専用です".into());
     }

@@ -12,8 +12,8 @@ test("partial success leaves text complete while diarization failure remains act
  assert.equal(flowStages(f)[1].state,"完了");assert.match(flowStages(f)[2].state,/失敗/);assert.equal(flowStages(f)[3].state,"待機中");assert.equal(flowContinueLabel(f),null);
 });
 test("recording pause distinguishes in-progress stop from actual pause; interrupted is not running",()=>{
- const f=flow();f.stage="transcription";f.transcriptionJob={...job("pausing"),pauseReason:"recording"};assert.equal(flowStages(f)[1].state,"録音のため停止処理中");
- f.transcriptionJob.state="paused";assert.equal(flowStages(f)[1].state,"録音のため一時停止");f.transcriptionJob.state="interrupted";assert.match(flowStages(f)[1].state,/再開確認/);
+ const f=flow();f.stage="transcription";f.transcriptionJob={...job("pausing"),pauseReason:"recording"};assert.equal(flowStages(f)[1].state,"録音・取り込み優先で停止処理中");
+ f.transcriptionJob.state="paused";assert.equal(flowStages(f)[1].state,"録音・取り込み優先で一時停止");f.transcriptionJob.state="interrupted";assert.match(flowStages(f)[1].state,/再開確認/);
 });
 test("review is a saved candidate, not an automatically adopted result",()=>{
  const f=flow();f.stage="review";f.transcriptionJob=job("succeeded");f.diarizationJob={...job("succeeded"),kind:"diarization"};assert.equal(flowStages(f)[3].state,"候補を保存済み");assert.equal(flowContinueLabel(f),null);

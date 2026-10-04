@@ -32,7 +32,7 @@ mod recordings;
 mod revisions;
 mod speaker_review;
 mod transcription;
-mod vocabulary;
+pub(crate) mod vocabulary;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
@@ -82,6 +82,7 @@ const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
 const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
 const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
 const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
+const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +90,7 @@ pub struct Meeting {
     pub id: String,
     pub title: String,
     pub lifecycle: String,
+    pub source_type: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub lock_version: i64,
@@ -149,6 +151,7 @@ impl Storage {
             id: Uuid::new_v4().to_string(),
             title: title.to_owned(),
             lifecycle: "draft".into(),
+            source_type: None,
             created_at: now,
             updated_at: now,
             lock_version: 0,
@@ -170,7 +173,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
         let mut statement = connection
-            .prepare("SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings ORDER BY updated_at DESC, id DESC")
+            .prepare("SELECT id, title, lifecycle, created_at, updated_at, lock_version, source_type FROM meetings ORDER BY updated_at DESC, id DESC")
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| {
@@ -181,6 +184,7 @@ impl Storage {
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
                     lock_version: row.get(5)?,
+                    source_type: row.get(6)?,
                 })
             })
             .map_err(|error| error.to_string())?;
@@ -193,7 +197,7 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?
             .query_row(
-                "SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings WHERE id = ?1",
+                "SELECT id, title, lifecycle, created_at, updated_at, lock_version, source_type FROM meetings WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok(Meeting {
@@ -203,6 +207,7 @@ impl Storage {
                         created_at: row.get(3)?,
                         updated_at: row.get(4)?,
                         lock_version: row.get(5)?,
+                        source_type: row.get(6)?,
                     })
                 },
             )
@@ -251,7 +256,7 @@ impl Storage {
         }
         connection
             .query_row(
-                "SELECT id, title, lifecycle, created_at, updated_at, lock_version FROM meetings WHERE id = ?1",
+                "SELECT id, title, lifecycle, created_at, updated_at, lock_version, source_type FROM meetings WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok(Meeting {
@@ -261,6 +266,7 @@ impl Storage {
                         created_at: row.get(3)?,
                         updated_at: row.get(4)?,
                         lock_version: row.get(5)?,
+                        source_type: row.get(6)?,
                     })
                 },
             )
@@ -402,6 +408,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (17_i64, MIGRATION_17),
         (18_i64, MIGRATION_18),
         (19_i64, MIGRATION_19),
+        (20_i64, MIGRATION_20),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -597,7 +604,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 19);
+        assert_eq!(count, 20);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

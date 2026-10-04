@@ -15,6 +15,7 @@ struct State {
     busy: bool,
     wake: bool,
     recording_intent: bool,
+    import_intent: bool,
 }
 
 #[derive(Default)]
@@ -26,12 +27,21 @@ pub struct AnalysisController {
 
 impl AnalysisController {
     pub fn kick(app: &AppHandle) -> Result<(), String> {
+        let importing = app
+            .state::<crate::import_controller::ImportController>()
+            .snapshot()?;
+        if importing.busy || importing.recording_blocked {
+            return Ok(());
+        }
         let controller = app.state::<Self>();
         let mut state = controller
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if controller.shutdown.load(Ordering::SeqCst) || state.recording_intent {
+        if controller.shutdown.load(Ordering::SeqCst)
+            || state.recording_intent
+            || state.import_intent
+        {
             return Ok(());
         }
         state.wake = true;
@@ -47,7 +57,10 @@ impl AnalysisController {
             let wake = if let Ok(mut state) = controller.state.lock() {
                 state.busy = false;
                 controller.idle.notify_all();
-                state.wake && !state.recording_intent && !controller.shutdown.load(Ordering::SeqCst)
+                state.wake
+                    && !state.recording_intent
+                    && !state.import_intent
+                    && !controller.shutdown.load(Ordering::SeqCst)
             } else {
                 false
             };
@@ -72,7 +85,7 @@ impl AnalysisController {
                     || controller
                         .state
                         .lock()
-                        .map_or(true, |state| state.recording_intent)
+                        .map_or(true, |state| state.recording_intent || state.import_intent)
             };
             if stopping() {
                 return;
@@ -88,7 +101,10 @@ impl AnalysisController {
                 let Ok(mut state) = controller.state.lock() else {
                     return;
                 };
-                if controller.shutdown.load(Ordering::SeqCst) || state.recording_intent {
+                if controller.shutdown.load(Ordering::SeqCst)
+                    || state.recording_intent
+                    || state.import_intent
+                {
                     return;
                 }
                 state.wake = false;
@@ -139,7 +155,9 @@ impl AnalysisController {
                         let _ = app.emit("analysis-worker-error", error);
                     }
                     let resume = controller.state.lock().is_ok_and(|state| {
-                        !state.recording_intent && !controller.shutdown.load(Ordering::SeqCst)
+                        !state.recording_intent
+                            && !state.import_intent
+                            && !controller.shutdown.load(Ordering::SeqCst)
                     });
                     if resume {
                         let _ = app.state::<Storage>().resume_recording_jobs();
@@ -171,7 +189,10 @@ impl AnalysisController {
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
-            if state.recording_intent || controller.shutdown.load(Ordering::SeqCst) {
+            if state.recording_intent
+                || state.import_intent
+                || controller.shutdown.load(Ordering::SeqCst)
+            {
                 return Err("録音開始または終了処理が進行中です".into());
             }
             app.state::<Storage>().request_pause_for_recording()?;
@@ -192,6 +213,48 @@ impl AnalysisController {
         if let Ok(mut state) = controller.state.lock() {
             state.recording_intent = false;
         }
+        crate::import_controller::ImportController::recording_finished(app);
+        let _ = Self::kick(app);
+    }
+
+    pub(crate) fn prepare_import(
+        app: &AppHandle,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let c = app.state::<Self>();
+        {
+            let mut state = c.state.lock().map_err(|_| "解析ロックを取得できません")?;
+            if state.recording_intent
+                || state.import_intent
+                || c.shutdown.load(Ordering::SeqCst)
+                || cancelled()
+            {
+                return Err("録音開始・取り込み・終了処理が進行中です".into());
+            }
+            if app
+                .state::<crate::session::SessionStore>()
+                .snapshot()
+                .is_active()
+            {
+                return Err("録音中は取り込めません".into());
+            }
+            app.state::<Storage>().request_pause_for_recording()?;
+            state.import_intent = true;
+        }
+        if let Err(error) = c.wait_idle_cancellable(Duration::from_secs(15), cancelled) {
+            Self::import_finished(app);
+            return Err(error);
+        }
+        Ok(())
+    }
+    pub(crate) fn import_finished(app: &AppHandle) {
+        let c = app.state::<Self>();
+        if let Ok(mut state) = c.state.lock() {
+            state.import_intent = false;
+        }
+        if let Err(error) = app.state::<Storage>().resume_recording_jobs() {
+            let _ = app.emit("analysis-worker-error", error);
+        }
         let _ = Self::kick(app);
     }
 
@@ -205,24 +268,43 @@ impl AnalysisController {
             app.state::<Storage>().pause_for_exit()?;
             controller.shutdown.store(true, Ordering::SeqCst);
         }
-        controller.wait_idle(Duration::from_secs(15))
+        let result = controller.wait_idle(Duration::from_secs(15));
+        if result.is_err() {
+            // The app remains open on timeout. Jobs stay explicitly paused;
+            // clear the exit gate so their eventual stop can be inspected/retried.
+            controller.shutdown.store(false, Ordering::SeqCst);
+        }
+        result
     }
 
     fn wait_idle(&self, timeout: Duration) -> Result<(), String> {
+        self.wait_idle_cancellable(timeout, &|| false)
+    }
+    fn wait_idle_cancellable(
+        &self,
+        timeout: Duration,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
         while state.busy {
+            if cancelled() {
+                return Err("解析停止の待機を取り消しました".into());
+            }
             let remaining = timeout
                 .checked_sub(started.elapsed())
                 .ok_or("解析の安全な停止を待っています。完了後に再試行してください")?;
             state = self
                 .idle
-                .wait_timeout(state, remaining)
+                .wait_timeout(state, remaining.min(Duration::from_millis(100)))
                 .map_err(|_| "解析の停止待ちに失敗しました")?
                 .0;
+        }
+        if cancelled() {
+            return Err("解析停止の待機を取り消しました".into());
         }
         Ok(())
     }

@@ -5,6 +5,7 @@ mod audio_import;
 mod diarization;
 mod exports;
 mod generation;
+mod import_controller;
 mod local_engine;
 mod minutes_document;
 mod playback;
@@ -14,6 +15,7 @@ mod storage;
 mod transcription;
 
 use analysis_worker::AnalysisController;
+use import_controller::ImportController;
 use playback::{PlaybackInfo, PlaybackStore};
 use recorder::RecorderController;
 use session::{RecordingSnapshot, SessionStore};
@@ -23,6 +25,44 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+fn get_audio_import(window: WebviewWindow) -> Result<import_controller::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read imports".into());
+    }
+    window.state::<ImportController>().snapshot()
+}
+#[tauri::command]
+async fn select_audio_import(
+    window: WebviewWindow,
+    path: Option<std::path::PathBuf>,
+) -> Result<import_controller::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can select audio".into());
+    }
+    ImportController::select(&window, path).await
+}
+#[tauri::command]
+fn start_audio_import(
+    window: WebviewWindow,
+    request: import_controller::StartRequest,
+) -> Result<import_controller::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can import audio".into());
+    }
+    ImportController::start(window.app_handle(), request)
+}
+#[tauri::command]
+fn cancel_audio_import(
+    window: WebviewWindow,
+    token: String,
+) -> Result<import_controller::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can cancel imports".into());
+    }
+    ImportController::cancel_from_app(window.app_handle(), &token)
+}
 
 #[tauri::command]
 fn get_vocabulary_book(
@@ -823,6 +863,14 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
     if window.state::<exports::ExportController>().active() {
         return Err("Markdownの保存・取消が完了してから終了してください".into());
     }
+    if window
+        .state::<ImportController>()
+        .snapshot()?
+        .recording_blocked
+        && !window.state::<SessionStore>().snapshot().is_active()
+    {
+        return Err("録音開始の停止待ちが進行中です。完了後に終了してください".into());
+    }
     if window.state::<SessionStore>().snapshot().is_active() {
         if quit {
             return Err("録音の停止と保存が完了していません".into());
@@ -830,9 +878,16 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
         return window.hide().map_err(|error| error.to_string());
     }
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || AnalysisController::shutdown(&app))
-        .await
-        .map_err(|e| e.to_string())??;
+    tauri::async_runtime::spawn_blocking(move || {
+        ImportController::shutdown(&app)?;
+        let result = AnalysisController::shutdown(&app);
+        if result.is_err() {
+            ImportController::abort_shutdown(&app);
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
     window.app_handle().exit(0);
     Ok(())
@@ -861,8 +916,9 @@ async fn start_recording(
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::prepare_recording(&app)?;
-        let result = RecorderController::start(&app, &meeting_id);
+        ImportController::prepare_recording(&app)?;
+        let result = AnalysisController::prepare_recording(&app)
+            .and_then(|_| RecorderController::start(&app, &meeting_id));
         if result.is_err() {
             AnalysisController::recording_finished(&app);
         }
@@ -1047,10 +1103,12 @@ pub fn run() {
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(AnalysisController::default())
+        .manage(ImportController::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
+            ImportController::recover(app.handle())?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 // Recovery can hash hours of audio, so never hold up window startup.
@@ -1062,20 +1120,15 @@ pub fn run() {
                     Ok(_) => {}
                     Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
                 }
-                match handle.state::<Storage>().recover_audio_imports() {
-                    Ok(imports) if !imports.is_empty() => {
-                        let ids: Vec<_> = imports.into_iter().map(|i| i.meeting_id).collect();
-                        let _ = handle.emit("recordings-recovered", ids);
-                        let _ = AnalysisController::kick(&handle);
-                    }
-                    Ok(_) => {}
-                    Err(error) => eprintln!("音声取り込み回復の確認に失敗しました: {error}"),
-                }
             });
             AnalysisController::kick(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_audio_import,
+            select_audio_import,
+            start_audio_import,
+            cancel_audio_import,
             get_recording_snapshot,
             capture_available,
             start_recording,

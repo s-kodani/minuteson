@@ -14,9 +14,18 @@ struct Plan {
     whisper: WhisperConfig,
     sherpa: SherpaConfig,
 }
-fn prepare(storage: &Storage, cancelled: &impl Fn() -> bool) -> Result<Plan, String> {
-    let w = storage.analysis_preferences()?.payload.standard;
-    let d = storage.diarization_preferences()?.payload.standard;
+fn prepare(
+    storage: &Storage,
+    profile: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Plan, String> {
+    let w = storage.analysis_preferences()?.payload;
+    let d = storage.diarization_preferences()?.payload;
+    let (w, d) = match profile {
+        "standard" => (w.standard, d.standard),
+        "high_accuracy" => (w.high_accuracy, d.high_accuracy),
+        _ => return Err("未対応の解析プロファイルです".into()),
+    };
     let capture = |path: &str| Fingerprint::capture(std::path::Path::new(path), cancelled);
     let whisper = WhisperConfig {
         executable: capture(&w.executable_path)?,
@@ -45,7 +54,7 @@ fn prepare(storage: &Storage, cancelled: &impl Fn() -> bool) -> Result<Plan, Str
     sherpa.verify(cancelled)?;
     Ok(Plan {
         schema_version: 1,
-        profile: "standard".into(),
+        profile: profile.into(),
         whisper,
         sherpa,
     })
@@ -103,7 +112,7 @@ fn step(
             .map(Some)
     };
     if flow.stage == "pending" {
-        let plan = prepare(storage, cancelled)?;
+        let plan = prepare(storage, &flow.profile, cancelled)?;
         return save(
             "transcription",
             Some(serde_json::to_value(plan).map_err(|e| e.to_string())?),
@@ -113,7 +122,10 @@ fn step(
     }
     let plan: Plan = serde_json::from_value(flow.plan.clone().ok_or("固定条件がありません")?)
         .map_err(|e| e.to_string())?;
-    if plan.schema_version != 1 || plan.profile != "standard" {
+    if plan.schema_version != 1
+        || plan.profile != flow.profile
+        || !matches!(plan.profile.as_str(), "standard" | "high_accuracy")
+    {
         return Err("未対応の工程条件です".into());
     }
     match flow.stage.as_str() {

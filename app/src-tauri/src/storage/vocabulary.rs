@@ -57,7 +57,7 @@ fn hash<T: Serialize>(value: &T) -> Result<String, String> {
         Sha256::digest(serde_json::to_vec(value).map_err(|e| e.to_string())?)
     ))
 }
-fn validate(entries: &[VocabularyEntry]) -> Result<(), String> {
+pub(crate) fn validate(entries: &[VocabularyEntry]) -> Result<(), String> {
     if entries.len() > 500 {
         return Err("用語は各リスト500件以内で登録してください".into());
     }
@@ -85,6 +85,33 @@ fn validate(entries: &[VocabularyEntry]) -> Result<(), String> {
                     .into(),
             );
         }
+    }
+    Ok(())
+}
+pub(super) fn save_initial_import_vocabulary(
+    db: &Connection,
+    meeting: &str,
+    entries: &[VocabularyEntry],
+    expected_global: Option<i64>,
+) -> Result<(), String> {
+    validate(entries)?;
+    let global = load(db, "global")?.0;
+    if expected_global.is_some_and(|v| v != global.lock_version) {
+        return Err("共通用語が確認後に変更されました。再確認して取り込んでください".into());
+    }
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let id = scope(db, Some(meeting))?;
+    let now = now_ms()?;
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|e| (e.clone(), 1_i64, now, now))
+        .collect();
+    let digest = hash(&(&rows, 1_i64))?;
+    db.execute("INSERT INTO vocabulary_scopes(id,meeting_id,content_hash,lock_version,updated_at) VALUES(?1,?2,?3,1,?4)",params![id,meeting,digest,now]).map_err(|e|e.to_string())?;
+    for (position, e) in entries.iter().enumerate() {
+        db.execute("INSERT INTO vocabulary_entries(id,scope_id,position,term,reading,note,enabled,lock_version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8,?8)",params![e.id,id,position as i64,e.term,e.reading,e.note,e.enabled,now]).map_err(|e|e.to_string())?;
     }
     Ok(())
 }
