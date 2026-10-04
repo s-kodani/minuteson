@@ -9,6 +9,9 @@ use std::fs::{File, Metadata, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::Ordering;
 
+pub(crate) mod archive;
+mod portable;
+
 const BUFFER_BYTES: usize = 64 * 1024;
 const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 

@@ -36,16 +36,18 @@ struct Fingerprint {
     #[cfg(unix)]
     inode: u64,
 }
-fn fingerprint(path: &Path) -> Result<Option<Fingerprint>, String> {
+fn fingerprint_with(
+    path: &Path,
+    maximum: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Fingerprint>, String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(
-            "保存先は通常のMarkdownファイルにしてください（リンクやフォルダーは不可）".into(),
-        );
+        return Err("保存先は通常ファイルにしてください（リンクやフォルダーは不可）".into());
     }
     #[cfg(unix)]
     {
@@ -54,7 +56,7 @@ fn fingerprint(path: &Path) -> Result<Option<Fingerprint>, String> {
             return Err("複数の場所を参照するファイルには書き出せません".into());
         }
     }
-    if metadata.len() > 64 * 1024 * 1024 {
+    if metadata.len() > maximum {
         return Err("置換対象のファイルが大きすぎます".into());
     }
     let mut file = File::open(path).map_err(|e| e.to_string())?;
@@ -65,12 +67,17 @@ fn fingerprint(path: &Path) -> Result<Option<Fingerprint>, String> {
     let mut bytes = 0_u64;
     let mut buffer = [0_u8; 65536];
     loop {
+        if cancelled() {
+            return Err("書き出しを中断しました".into());
+        }
         let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
         if count == 0 {
             break;
         }
-        bytes += count as u64;
-        if bytes > 64 * 1024 * 1024 {
+        bytes = bytes
+            .checked_add(count as u64)
+            .ok_or("保存先サイズが範囲外です")?;
+        if bytes > metadata.len() || bytes > maximum {
             return Err("保存先が変更されました".into());
         }
         hash.update(&buffer[..count]);
@@ -113,6 +120,7 @@ pub(crate) struct Destination {
     parent: PathBuf,
     parent_metadata: Metadata,
     before: Option<Fingerprint>,
+    maximum_existing_bytes: u64,
 }
 #[derive(Debug)]
 pub(crate) struct PublishError {
@@ -121,13 +129,34 @@ pub(crate) struct PublishError {
 }
 impl Destination {
     pub(crate) fn selected(root: &Path, path: &Path) -> Result<Self, String> {
+        Self::selected_with(root, path, "md", 64 * 1024 * 1024, &|| false)
+    }
+    pub(crate) fn selected_backup(
+        root: &Path,
+        path: &Path,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::selected_with(root, path, "monbackup", u64::MAX, cancelled)
+    }
+    fn selected_with(
+        root: &Path,
+        path: &Path,
+        extension: &str,
+        maximum: u64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         if !path.is_absolute()
             || path.components().any(|c| matches!(c, Component::ParentDir))
             || !path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("md"))
+                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension))
         {
-            return Err("絶対パスのMarkdown保存先を選択してください".into());
+            let label = if extension == "md" {
+                "Markdown"
+            } else {
+                "MONバックアップ"
+            };
+            return Err(format!("絶対パスの{label}保存先を選択してください"));
         }
         let name = path.file_name().ok_or("保存先ファイル名がありません")?;
         let parent = path
@@ -143,15 +172,26 @@ impl Destination {
             return Err("保存先フォルダーがありません".into());
         }
         let path = parent.join(name);
-        let before = fingerprint(&path)?;
+        let before = fingerprint_with(&path, maximum, cancelled)?;
         Ok(Self {
             path,
             parent,
             parent_metadata,
             before,
+            maximum_existing_bytes: maximum,
         })
     }
     pub(crate) fn publish(&self, bytes: &[u8]) -> Result<(), PublishError> {
+        self.publish_with(
+            |file| file.write_all(bytes).map_err(|e| e.to_string()),
+            &|| false,
+        )
+    }
+    pub(crate) fn publish_with(
+        &self,
+        write: impl FnOnce(&mut File) -> Result<(), String>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), PublishError> {
         let mut published = false;
         let result = (|| -> Result<(), String> {
             let mut temporary = tempfile::Builder::new()
@@ -159,7 +199,7 @@ impl Destination {
                 .suffix(".part")
                 .tempfile_in(&self.parent)
                 .map_err(|e| e.to_string())?;
-            temporary.write_all(bytes).map_err(|e| e.to_string())?;
+            write(temporary.as_file_mut())?;
             temporary.as_file().sync_all().map_err(|e| e.to_string())?;
             // Directory mtime/size changes when our temporary file is created;
             // compare its identity, not those mutable fields.
@@ -173,7 +213,13 @@ impl Destination {
                     return Err("保存先フォルダーが変更されました".into());
                 }
             }
-            if !current.is_dir() || fingerprint(&self.path)? != self.before {
+            if cancelled() {
+                return Err("書き出しを中断しました".into());
+            }
+            if !current.is_dir()
+                || fingerprint_with(&self.path, self.maximum_existing_bytes, cancelled)?
+                    != self.before
+            {
                 return Err("保存先のファイルが変更されました。確認し直してください".into());
             }
             if self.before.is_some() {

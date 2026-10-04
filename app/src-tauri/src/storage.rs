@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::io::Read;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
-// Internal staging foundation; archive/restore and controller integration follow.
+// Backup snapshot/archive core; additive restore and controller integration follow.
 #[allow(dead_code)]
 pub(crate) mod backup;
 mod diarization;
@@ -87,8 +87,8 @@ const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
 const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
 const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Meeting {
     pub id: String,
     pub title: String,
