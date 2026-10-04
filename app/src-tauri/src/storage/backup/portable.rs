@@ -57,14 +57,7 @@ pub(super) struct Table {
     pub row_count: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct FileReference {
-    pub name: String,
-    pub sha256: String,
-    pub size: u64,
-    pub role: String,
-}
+pub(super) use crate::storage::model_metadata::ModelFileMetadata as FileReference;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(
@@ -152,6 +145,34 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
                 &[]
             },
         )
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=23)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                crate::storage::model_metadata::TABLES
+            } else {
+                &[]
+            },
+        )
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=23)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                ["restore_omitted_assets"].as_slice()
+            } else {
+                &[]
+            },
+        )
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {
@@ -201,6 +222,7 @@ fn redact_json(
     value: &mut Value,
     role: &str,
     references: &mut BTreeSet<FileReference>,
+    known: &[FileReference],
     depth: usize,
 ) -> Result<(), String> {
     if depth > 64 {
@@ -224,12 +246,26 @@ fn redact_json(
                     .filter(|s| valid_hash(s))
                     .ok_or("固定ファイルのハッシュが不正です")?
                     .to_owned();
-                references.insert(FileReference {
-                    name: basename(path)?,
-                    sha256: hash.clone(),
-                    size,
-                    role: role.to_owned(),
-                });
+                let history: Vec<_> = known
+                    .iter()
+                    .filter(|r| {
+                        path == format!("mon-unavailable:{hash}")
+                            && r.sha256 == hash
+                            && r.size == size
+                            && r.role == role
+                    })
+                    .cloned()
+                    .collect();
+                if history.is_empty() {
+                    references.insert(FileReference {
+                        name: basename(path)?,
+                        sha256: hash.clone(),
+                        size,
+                        role: role.to_owned(),
+                    });
+                } else {
+                    references.extend(history);
+                }
                 object.insert(
                     "path".into(),
                     Value::String(format!("mon-unavailable:{hash}")),
@@ -288,6 +324,7 @@ fn redact_json(
                             role
                         },
                         references,
+                        known,
                         depth + 1,
                     )?;
                 }
@@ -295,7 +332,7 @@ fn redact_json(
         }
         Value::Array(items) => {
             for item in items {
-                redact_json(item, role, references, depth + 1)?;
+                redact_json(item, role, references, known, depth + 1)?;
             }
         }
         _ => {}
@@ -307,6 +344,15 @@ pub(super) fn portable_json(
     bytes: &[u8],
     capture: bool,
     references: &mut BTreeSet<FileReference>,
+) -> Result<Vec<u8>, String> {
+    portable_json_with_metadata(bytes, capture, references, &[])
+}
+
+pub(super) fn portable_json_with_metadata(
+    bytes: &[u8],
+    capture: bool,
+    references: &mut BTreeSet<FileReference>,
+    known: &[FileReference],
 ) -> Result<Vec<u8>, String> {
     if bytes.len() > MAX_ROW_BYTES {
         return Err("バックアップJSONが大きすぎます".into());
@@ -359,11 +405,26 @@ pub(super) fn portable_json(
                 if text.is_empty() {
                     continue;
                 }
-                params.insert(key.into(), Value::String(basename(text)?));
+                let name = if key == "model" {
+                    text.strip_prefix("mon-unavailable:")
+                        .filter(|sha| valid_hash(sha))
+                        .and_then(|sha| {
+                            known
+                                .iter()
+                                .filter(|r| r.role == "model" && r.sha256 == sha)
+                                .map(|r| r.name.as_str())
+                                .min()
+                        })
+                        .map(str::to_owned)
+                        .unwrap_or(basename(text)?)
+                } else {
+                    basename(text)?
+                };
+                params.insert(key.into(), Value::String(name));
             }
         }
     }
-    redact_json(&mut value, "artifact", references, 0)?;
+    redact_json(&mut value, "artifact", references, known, 0)?;
     serde_json::to_vec(&value).map_err(|e| e.to_string())
 }
 
@@ -383,10 +444,17 @@ pub(super) fn portable_completion(
 }
 
 pub(super) fn temporary_pcm(db: &Connection, asset: &FileAsset) -> Result<bool, String> {
+    if asset.media_type == "audio/wav" && super::exclusions::matches(db, asset, "recreatable_pcm")?
+    {
+        return Ok(true);
+    }
     private_job_artifact(db, asset, "audio/wav", &["input.wav"])
 }
 
 pub(super) fn native_log(db: &Connection, asset: &FileAsset) -> Result<bool, String> {
+    if asset.media_type == "text/plain" && super::exclusions::matches(db, asset, "native_log")? {
+        return Ok(true);
+    }
     private_job_artifact(db, asset, "text/plain", &["stdout.log", "stderr.log"])
 }
 
@@ -421,6 +489,7 @@ pub(super) fn dump(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<Table>, String> {
     let db = read_only(&snapshot.database)?;
+    let known = crate::storage::model_metadata::historical(&db)?;
     let trusted = schema(MIGRATIONS.len())?;
     let mut descriptions = tables(&db)?;
     if descriptions != tables(&trusted)? {
@@ -510,9 +579,13 @@ pub(super) fn dump(
                 );
                 if sanitize {
                     if let Cell::Text(text) = cell {
-                        *text =
-                            String::from_utf8(portable_json(text.as_bytes(), false, references)?)
-                                .map_err(|e| e.to_string())?;
+                        *text = String::from_utf8(portable_json_with_metadata(
+                            text.as_bytes(),
+                            false,
+                            references,
+                            &known,
+                        )?)
+                        .map_err(|e| e.to_string())?;
                     }
                 }
             }

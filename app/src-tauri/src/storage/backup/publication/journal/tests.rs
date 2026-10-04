@@ -39,13 +39,13 @@ fn restore_journal_migrates_v21_and_excludes_all_local_recovery_records_from_bac
     let target = Storage::open(root).unwrap();
     assert_eq!(
         verify_migration_history(&target.connection.lock().unwrap()).unwrap(),
-        22
+        MIGRATIONS.len()
     );
     assert_eq!(all_rows(&target.connection.lock().unwrap()), before);
     let path = f.output.path().join("v22.monbackup");
     target.create_backup_archive(&path, &|| false).unwrap();
     let source = archive::read(&mut File::open(path).unwrap(), f.output.path(), &|| false).unwrap();
-    assert_eq!(source.manifest.schema_version, 22);
+    assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
     assert_eq!(source.manifest.tables.len(), 31);
     assert!(source
         .manifest

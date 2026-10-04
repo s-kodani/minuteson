@@ -229,6 +229,13 @@ impl Storage {
                 return Err("復元バッチの同時公開を確定できません".into());
             }
             installed.completed(&tx)?;
+            super::exclusions::retain(&tx, ids, check)?;
+            crate::storage::model_metadata::retain(
+                &tx,
+                &ids.source().manifest.file_references,
+                check,
+                &|id| ids.unused_identity(id),
+            )?;
             Ok(vocabulary)
         })();
         let vocabulary = match operation {
@@ -281,3 +288,6 @@ impl Storage {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod model_tests;

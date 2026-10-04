@@ -10,6 +10,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
+mod exclusions;
 pub(in crate::storage) mod ledger;
 mod portable;
 pub(in crate::storage::backup) mod publication;
@@ -211,6 +212,9 @@ impl Storage {
         let meetings = read_meetings(&db)?;
         let assets = read_assets(&db)?;
         let required = assets.iter().try_fold(0_u64, |sum, a| {
+            if a.state == "missing" {
+                return Ok(sum);
+            }
             sum.checked_add(u64::try_from(a.size_bytes).map_err(|_| "ファイルサイズが不正です")?)
                 .ok_or("バックアップ容量が範囲外です")
         })?;
@@ -220,10 +224,12 @@ impl Storage {
         let mut staged = Vec::with_capacity(assets.len());
         for asset in assets {
             check_cancelled(cancelled)?;
-            let source = source_path(self, &asset)?;
             let key = Uuid::new_v4().to_string();
             let path = asset_directory.join(&key);
-            copy_asset(&source, &path, &asset, cancelled)?;
+            if asset.state == "ready" {
+                let source = source_path(self, &asset)?;
+                copy_asset(&source, &path, &asset, cancelled)?;
+            }
             staged.push(StagedAsset { asset, key, path });
         }
         drop(db);
@@ -250,6 +256,10 @@ impl Snapshot<'_> {
             return Err("一時DBスナップショットが変更されています".into());
         }
         for staged in &self.assets {
+            if staged.asset.state == "missing" {
+                // Only validated exclusion metadata is staged; no dummy body.
+                continue;
+            }
             let (size, hash) = digest_file(&staged.path, cancelled)?;
             if size != staged.asset.size_bytes as u64 || hash != staged.asset.content_hash {
                 return Err("一時バックアップの管理ファイルが変更されています".into());
@@ -477,11 +487,16 @@ fn read_assets(db: &Connection) -> Result<Vec<FileAsset>, String> {
         })
         .map_err(|e| e.to_string())?;
     let assets: Vec<FileAsset> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-    if assets.iter().any(|a| a.state != "ready") {
-        return Err(
-            "未準備・破損・削除待ちの管理ファイルがあります。修復後にバックアップしてください"
-                .into(),
-        );
+    for asset in &assets {
+        if asset.state != "ready"
+            && !(asset.state == "missing"
+                && (portable::temporary_pcm(db, asset)? || portable::native_log(db, asset)?))
+        {
+            return Err(
+                "未準備・破損・削除待ちの管理ファイルがあります。修復後にバックアップしてください"
+                    .into(),
+            );
+        }
     }
     Ok(assets)
 }

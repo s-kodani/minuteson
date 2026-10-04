@@ -1,0 +1,47 @@
+//! A missing original is not interchangeable with an intentionally omitted cache.
+use super::*;
+
+pub(super) fn matches(db: &Connection, asset: &FileAsset, reason: &str) -> Result<bool, String> {
+    let present: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='restore_omitted_assets')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if !present
+        || asset.state != "missing"
+        || asset.size_bytes < 0
+        || !portable::valid_hash(&asset.content_hash)
+        || asset.relative_path != format!("meetings/{}/restored/{}", asset.meeting_id, asset.id)
+    {
+        return Ok(false);
+    }
+    let matches: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM restore_omitted_assets WHERE asset_id=?1 AND meeting_id=?2 AND reason=?3 AND source_size=?4 AND source_hash=?5) AND NOT EXISTS(SELECT 1 FROM audio_chunks WHERE file_asset_id=?1) AND NOT EXISTS(SELECT 1 FROM audio_imports WHERE original_asset_id=?1 OR converted_asset_id=?1) AND NOT EXISTS(SELECT 1 FROM audio_import_commits WHERE manifest_asset_id=?1)",params![asset.id,asset.meeting_id,reason,asset.size_bytes,asset.content_hash],|r|r.get(0)).map_err(|e|e.to_string())?;
+    Ok(matches)
+}
+
+pub(super) fn retain(
+    db: &Connection,
+    ids: &restore_ids::RestoreIds<'_>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    if db.is_autocommit() {
+        return Err("復元の除外記録は公開と同時に確定してください".into());
+    }
+    for item in &ids.source().manifest.omitted_assets {
+        check_cancelled(cancelled)?;
+        let asset = ids.get("file_assets", &item.meeting_id, &item.asset_id)?;
+        let meeting = ids.get("meetings", "", &item.meeting_id)?;
+        let reason = match item.reason {
+            archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
+            archive::OmittedReason::NativeLog => "native_log",
+        };
+        db.execute(
+            "INSERT INTO restore_omitted_assets VALUES(?1,?2,?3,?4,?5)",
+            params![
+                asset,
+                meeting,
+                reason,
+                i64::try_from(item.source_size).map_err(|_| "除外ファイル容量が範囲外です")?,
+                item.source_sha256
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

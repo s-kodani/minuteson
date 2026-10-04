@@ -139,6 +139,7 @@ impl Snapshot<'_> {
         self.verify(cancelled)?;
         let stage = private_stage(self.stage.path())?;
         let db = read_only(&self.database)?;
+        let known = crate::storage::model_metadata::historical(&db)?;
         let mut references = BTreeSet::new();
         let mut lookup = BTreeMap::new();
         let mut sources = Vec::new();
@@ -193,7 +194,7 @@ impl Snapshot<'_> {
                 let bytes = if asset.media_type == "application/vnd.mon.llama-completion" {
                     portable::portable_completion(&bytes, &mut references)?
                 } else {
-                    portable::portable_json(&bytes, capture, &mut references)?
+                    portable::portable_json_with_metadata(&bytes, capture, &mut references, &known)?
                 };
                 let path = stage.path().join(&item.key);
                 let mut out = private_file(&path)?;
@@ -424,6 +425,7 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
     }
     let mut references = BTreeSet::new();
     for r in &m.file_references {
+        r.validate()?;
         if !portable::valid_hash(&r.sha256)
             || !identifier(&r.role)
             || r.name.is_empty()

@@ -29,6 +29,7 @@ mod minutes_evidence;
 mod minutes_input;
 mod minutes_preferences;
 mod minutes_ui;
+mod model_metadata;
 mod playback;
 mod preferences;
 mod recordings;
@@ -88,6 +89,7 @@ const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sq
 const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
 const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
 const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.sql");
+const MIGRATION_23: &str = include_str!("migrations/0023_model_metadata.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -427,6 +429,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (20, MIGRATION_20),
     (21, MIGRATION_21),
     (22, MIGRATION_22),
+    (23, MIGRATION_23),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

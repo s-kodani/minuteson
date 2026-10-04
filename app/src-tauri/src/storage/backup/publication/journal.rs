@@ -520,6 +520,7 @@ pub(in crate::storage::backup) fn recover_all(root: &Path, db: &Connection) -> R
 
 #[cfg(test)]
 pub(in crate::storage::backup) fn remove_schema_for_test(db: &Connection) {
+    crate::storage::model_metadata::remove_schema_for_test(db);
     let present: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=22)",

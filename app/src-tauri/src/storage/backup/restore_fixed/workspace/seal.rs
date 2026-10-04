@@ -221,6 +221,11 @@ impl FixedWorkspace {
             "app_settings",
             "restore_batches",
             "restore_identity_maps",
+            "model_packages",
+            "restore_omitted_assets",
+            "model_files",
+            "model_profiles",
+            "profile_components",
             "maintenance_operations",
             "maintenance_paths",
         ] {
