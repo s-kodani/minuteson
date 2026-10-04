@@ -106,6 +106,18 @@ impl Storage {
         &self,
         kind: Option<JobKind>,
     ) -> Result<Option<JobSnapshot>, String> {
+        self.acquire_filtered_job(kind, false)
+    }
+
+    pub(crate) fn acquire_local_inference_job(&self) -> Result<Option<JobSnapshot>, String> {
+        self.acquire_filtered_job(None, true)
+    }
+
+    fn acquire_filtered_job(
+        &self,
+        kind: Option<JobKind>,
+        local_only: bool,
+    ) -> Result<Option<JobSnapshot>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -125,8 +137,8 @@ impl Storage {
             return Ok(None);
         }
         let queued: Option<(String, String, Option<String>, String)> = transaction.query_row(
-            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) ORDER BY created_at, rowid LIMIT 1",
-            params![kind.map(JobKind::as_str)], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) AND (?2 = 0 OR kind IN ('transcription','minutes_generation')) ORDER BY created_at, rowid LIMIT 1",
+            params![kind.map(JobKind::as_str), local_only], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional().map_err(|error| error.to_string())?;
         let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
             return Ok(None);

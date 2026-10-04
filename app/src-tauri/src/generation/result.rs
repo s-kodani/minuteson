@@ -26,31 +26,59 @@ struct Output {
 }
 
 #[allow(dead_code)]
-pub(crate) fn schema(utterance_ids: &[String]) -> Result<Value, String> {
+pub(crate) fn schema(input: &MinutesInput, utterance_ids: &[String]) -> Result<Value, String> {
     let unique: HashSet<_> = utterance_ids.iter().collect();
-    if utterance_ids.is_empty() || utterance_ids.len() > 1000 || unique.len() != utterance_ids.len()
+    if utterance_ids.is_empty()
+        || utterance_ids.len() > 1000
+        || unique.len() != utterance_ids.len()
+        || unique
+            .iter()
+            .any(|id| !input.analysis.utterances.iter().any(|u| &u.id == *id))
     {
         return Err("生成単位の発言IDが空・重複・上限超過です".into());
     }
     let optional = json!({"type":["string","null"],"minLength":1,"maxLength":200});
+    // Do not let the grammar invent a speaker UUID. Only a confirmed display
+    // name literally present in this unit can possibly ground an assignment.
+    // The application still checks the name/ID pair and the item's own evidence.
+    let mut assignees = vec![Value::Null];
+    for speaker in &input.analysis.speakers {
+        if speaker.display_name.as_ref().is_some_and(|name| {
+            !name.trim().is_empty()
+                && input
+                    .analysis
+                    .utterances
+                    .iter()
+                    .any(|u| unique.contains(&u.id) && u.effective_text.contains(name))
+        }) {
+            assignees.push(json!(speaker.id));
+        }
+    }
+    let mut item = json!({"type":"object", "additionalProperties":false,
+        "required":FIELDS,
+        "properties":{
+            "kind":{"type":"string","enum":["summary","topic","decision","open_issue"]},
+            "body":{"type":"string","minLength":1,"maxLength":20000},
+            "assigneeName":{"type":"null"},
+            "assigneeSpeakerId":{"type":"null"},
+            "dueDate":{"type":"null"},
+            "dueText":{"type":"null"},
+            "evidenceUtteranceIds":{"type":"array","minItems":1,"maxItems":100,"uniqueItems":true,
+                "items":{"type":"string","enum":utterance_ids}}
+        }
+    });
+    let non_todo = item.clone();
+    item["properties"]["kind"] = json!({"type":"string","enum":["todo"]});
+    item["properties"]["assigneeName"] = optional.clone();
+    item["properties"]["assigneeSpeakerId"] = json!({"enum":assignees});
+    item["properties"]["dueDate"] =
+        json!({"type":["string","null"],"pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"});
+    item["properties"]["dueText"] = optional;
     Ok(json!({"type":"object", "additionalProperties":false,
         "required":["schemaVersion","items"],
         "properties":{
             "schemaVersion":{"type":"integer","enum":[RESULT_SCHEMA_VERSION]},
-            "items":{"type":"array","maxItems":1000,"items":{
-                "type":"object", "additionalProperties":false,
-                "required":FIELDS,
-                "properties":{
-                    "kind":{"type":"string","enum":["summary","topic","decision","open_issue","todo"]},
-                    "body":{"type":"string","minLength":1,"maxLength":20000},
-                    "assigneeName":optional,
-                    "assigneeSpeakerId":{"type":["string","null"],"minLength":1,"maxLength":128},
-                    "dueDate":{"type":["string","null"],"pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
-                    "dueText":optional,
-                    "evidenceUtteranceIds":{"type":"array","minItems":1,"maxItems":100,"uniqueItems":true,
-                        "items":{"type":"string","enum":utterance_ids}}
-                }
-            }}
+            "items":{"type":"array","maxItems":1000,"items":{"oneOf":[non_todo,item]}}
         }
     }))
 }
@@ -133,10 +161,10 @@ mod tests {
             .markdown(&input)
             .unwrap()
             .contains("点検日を確認する"));
-        let schema = schema(&ids).unwrap();
+        let schema = schema(&input, &ids).unwrap();
         assert_eq!(
-            schema["properties"]["items"]["items"]["properties"]["evidenceUtteranceIds"]["items"]
-                ["enum"],
+            schema["properties"]["items"]["items"]["oneOf"][0]["properties"]
+                ["evidenceUtteranceIds"]["items"]["enum"],
             json!(ids)
         );
         assert!(
@@ -173,7 +201,37 @@ mod tests {
         assert!(parse_items(bad, &input, &ids).is_err());
         assert!(parse_items(output(), &input, &[]).is_err());
         assert!(parse_items(output(), &input, &["missing".into()]).is_err());
-        assert!(schema(&[]).is_err());
-        assert!(schema(&["utterance".into(), "utterance".into()]).is_err());
+        assert!(schema(&input, &[]).is_err());
+        assert!(schema(&input, &["utterance".into(), "utterance".into()]).is_err());
+        assert!(schema(&input, &["missing".into()]).is_err());
+    }
+    #[test]
+    fn grammar_restricts_assignment_to_todo_and_groundable_confirmed_speakers() {
+        let mut input = input();
+        let ids = vec![input.analysis.utterances[0].id.clone()];
+        let speaker_id = input.analysis.speakers[0].id.clone();
+        input.analysis.speakers[0].display_name = Some("田中".into());
+        input.analysis.utterances[0].effective_text = "田中が点検日を確認する".into();
+        let branches =
+            schema(&input, &ids).unwrap()["properties"]["items"]["items"]["oneOf"].clone();
+        assert_eq!(
+            branches[0]["properties"]["kind"]["enum"],
+            json!(["summary", "topic", "decision", "open_issue"])
+        );
+        for field in ["assigneeName", "assigneeSpeakerId", "dueDate", "dueText"] {
+            assert_eq!(branches[0]["properties"][field], json!({"type":"null"}));
+        }
+        assert_eq!(branches[1]["properties"]["kind"]["enum"], json!(["todo"]));
+        assert_eq!(
+            branches[1]["properties"]["assigneeSpeakerId"]["enum"],
+            json!([null, speaker_id])
+        );
+        // A partial extraction must not use a name outside its visible text.
+        input.analysis.utterances[0].effective_text = "点検日を確認する".into();
+        assert_eq!(
+            schema(&input, &ids).unwrap()["properties"]["items"]["items"]["oneOf"][1]["properties"]
+                ["assigneeSpeakerId"]["enum"],
+            json!([null])
+        );
     }
 }

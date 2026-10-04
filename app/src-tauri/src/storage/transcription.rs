@@ -191,16 +191,36 @@ impl Storage {
         asset_id: &str,
         hash: &str,
     ) -> Result<Vec<u8>, String> {
-        let relative: String = self.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT relative_path FROM file_assets WHERE id = ?1 AND meeting_id = ?2 AND content_hash = ?3 AND state = 'ready' AND media_type = 'application/json' AND size_bytes <= 8388608", params![asset_id, meeting_id, hash], |row| row.get(0)).map_err(|e| e.to_string())?;
+        self.read_inference_artifact(
+            meeting_id,
+            asset_id,
+            hash,
+            "application/json",
+            8 * 1024 * 1024,
+        )
+    }
+
+    pub(crate) fn read_inference_artifact(
+        &self,
+        meeting_id: &str,
+        asset_id: &str,
+        hash: &str,
+        media_type: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>, String> {
+        if limit == 0 || limit > 8 * 1024 * 1024 {
+            return Err("解析結果の読出し上限が不正です".into());
+        }
+        let relative: String = self.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT relative_path FROM file_assets WHERE id = ?1 AND meeting_id = ?2 AND content_hash = ?3 AND state = 'ready' AND media_type = ?4 AND size_bytes <= ?5", params![asset_id, meeting_id, hash, media_type, limit as i64], |row| row.get(0)).map_err(|e| e.to_string())?;
         self.verify_meeting_asset(meeting_id, asset_id, hash)?;
         let path = self.managed_path(Path::new(&relative))?;
         let mut bytes = Vec::new();
         std::fs::File::open(path)
             .map_err(|e| e.to_string())?
-            .take(8 * 1024 * 1024 + 1)
+            .take(limit + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        if bytes.len() > 8 * 1024 * 1024 || format!("{:x}", Sha256::digest(&bytes)) != hash {
+        if bytes.len() as u64 > limit || format!("{:x}", Sha256::digest(&bytes)) != hash {
             return Err("解析結果が読込中に変更されています".into());
         }
         Ok(bytes)

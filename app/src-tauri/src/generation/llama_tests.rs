@@ -216,7 +216,7 @@ fn real_llama_completion_runs_local_schema_constrained_json() {
     let mut input = crate::minutes_document::tests::input();
     input.analysis.utterances[0].effective_text = "点検日を確認することに決まりました。".into();
     let ids = vec![input.analysis.utterances[0].id.clone()];
-    let mut schema = crate::generation::result::schema(&ids).unwrap();
+    let mut schema = crate::generation::result::schema(&input, &ids).unwrap();
     // A one-item synthetic protocol test, not a recall/quality evaluation.
     schema["properties"]["items"]["minItems"] = json!(1);
     schema["properties"]["items"]["maxItems"] = json!(1);

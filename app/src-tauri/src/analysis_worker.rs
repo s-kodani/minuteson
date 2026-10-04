@@ -1,4 +1,4 @@
-use crate::storage::{JobKind, JobSnapshot, Storage};
+use crate::storage::{JobSnapshot, Storage};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Condvar, Mutex,
@@ -75,26 +75,39 @@ impl AnalysisController {
                     return;
                 }
                 state.wake = false;
-                app.state::<Storage>()
-                    .acquire_job_kind(Some(JobKind::Transcription))
+                app.state::<Storage>().acquire_local_inference_job()
             };
             match claimed {
                 Ok(Some(job)) => {
                     emit(app, job.clone());
                     let stopping = || controller.shutdown.load(Ordering::SeqCst);
-                    if let Err(error) = crate::transcription::process(
-                        &app.state::<Storage>(),
-                        &job.id,
-                        &stopping,
-                        &|job| emit(app, job),
-                    ) {
+                    let result = match job.kind.as_str() {
+                        "transcription" => crate::transcription::process(
+                            &app.state::<Storage>(),
+                            &job.id,
+                            &stopping,
+                            &|job| emit(app, job),
+                        ),
+                        "minutes_generation" => crate::generation::process(
+                            &app.state::<Storage>(),
+                            &job.id,
+                            &stopping,
+                            &|job| emit(app, job),
+                        ),
+                        _ => Err("未対応の解析工程です".into()),
+                    };
+                    if let Err(error) = result {
                         let storage = app.state::<Storage>();
                         if let Ok(current) = storage.get_job(&job.id) {
                             if let Ok(failed) = storage.finish_job(
                                 &job.id,
                                 current.completed_units,
                                 "failed",
-                                Some("transcription_failed"),
+                                Some(if job.kind == "minutes_generation" {
+                                    "minutes_generation_failed"
+                                } else {
+                                    "transcription_failed"
+                                }),
                             ) {
                                 emit(app, failed);
                             }

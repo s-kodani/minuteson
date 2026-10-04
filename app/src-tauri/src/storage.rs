@@ -11,6 +11,8 @@ use uuid::Uuid;
 mod analysis;
 mod analysis_ui;
 mod drafts;
+#[cfg(all(test, unix))]
+mod generation_tests;
 mod jobs;
 mod minutes;
 mod minutes_input;
@@ -26,7 +28,7 @@ pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
 pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
-pub(crate) use minutes_input::MinutesInput;
+pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub use recordings::RecordingConfig;
 pub(crate) use revisions::CommittedAnalysis;

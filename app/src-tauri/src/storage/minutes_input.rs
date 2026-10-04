@@ -26,8 +26,8 @@ pub(crate) struct MinutesInput {
     pub working_content_hash: String,
 }
 
-// No RPC yet: the native generation worker will call this only after checking
-// the selected local engine and flushing the editor's pending saves.
+// The native generation entry point checks the selected local engine first.
+// The request carries editor stamps; pending saves must be flushed by its UI.
 impl Storage {
     #[allow(dead_code)]
     pub(crate) fn enqueue_minutes_job(
@@ -37,16 +37,27 @@ impl Storage {
         generation_parameters: Value,
         total_units: Option<i64>,
     ) -> Result<JobSnapshot, String> {
+        if !generation_parameters.is_object() {
+            return Err("議事録生成の設定が不正です".into());
+        }
+        self.enqueue_minutes_job_configured(request, profile, |_| {
+            Ok((generation_parameters, total_units))
+        })
+    }
+
+    pub(crate) fn enqueue_minutes_job_configured(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
+    ) -> Result<JobSnapshot, String> {
         if request.operation_id.trim().is_empty()
             || request.operation_id.len() > 128
             || request.expected_meeting_lock_version < 0
             || !profile.is_object()
-            || !generation_parameters.is_object()
         {
             return Err("議事録生成の操作・設定が不正です".into());
         }
-        let parameters =
-            json!({"schemaVersion":1, "request":request, "generation":generation_parameters});
         let mut connection = self
             .connection
             .lock()
@@ -64,6 +75,10 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         if let Some(id) = existing {
             let (spec, _) = super::jobs::read_fixed_input(&tx, &id)?;
+            let input = read_input(&tx, &spec)?;
+            let (generation_parameters, total_units) = make_generation(&input)?;
+            let parameters =
+                json!({"schemaVersion":1, "request":request, "generation":generation_parameters});
             if spec.kind != JobKind::MinutesGeneration
                 || spec.meeting_id != request.meeting_id
                 || spec.profile_snapshot != profile
@@ -72,7 +87,6 @@ impl Storage {
             {
                 return Err("同じ操作IDで異なる議事録生成が指定されました".into());
             }
-            read_input(&tx, &spec)?;
             return super::jobs::load_job(&tx, &id)?.ok_or("処理が見つかりません".into());
         }
         let (mut source, draft, title, created_at, started_at) =
@@ -121,6 +135,13 @@ impl Storage {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
+        let fixed = read_snapshot(&tx, &request.meeting_id, &id, &hash)?;
+        let (generation_parameters, total_units) = make_generation(&fixed)?;
+        if !generation_parameters.is_object() {
+            return Err("議事録生成の設定が不正です".into());
+        }
+        let parameters =
+            json!({"schemaVersion":1, "request":request, "generation":generation_parameters});
         let spec = JobSpec {
             meeting_id: request.meeting_id,
             kind: JobKind::MinutesGeneration,

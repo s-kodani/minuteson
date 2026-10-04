@@ -150,7 +150,7 @@ pub(crate) struct MinutesContent {
     pub evidence: Vec<Evidence>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct GeneratedItem {
     pub kind: ItemKind,

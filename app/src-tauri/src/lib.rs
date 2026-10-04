@@ -137,6 +137,24 @@ async fn restore_analysis_version(
 }
 
 #[tauri::command]
+async fn start_minutes_generation(
+    window: WebviewWindow,
+    request: generation::StartRequest,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can start minutes generation".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn start_transcription(
     window: WebviewWindow,
     request: transcription::StartRequest,
@@ -561,6 +579,7 @@ pub fn run() {
             close_playback,
             finish_main_close,
             start_transcription,
+            start_minutes_generation,
             get_analysis_jobs,
             retry_transcription,
             pause_analysis_job,
