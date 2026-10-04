@@ -584,7 +584,7 @@ fn migration_from_v17_preserves_data_jobs_and_does_not_autostart_historical_reco
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        20
+        MIGRATIONS.len() as i64
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

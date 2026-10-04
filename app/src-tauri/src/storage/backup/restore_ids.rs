@@ -28,6 +28,7 @@ enum Rule {
     Overlap,
     Operation,
     VocabularyScope,
+    ProvenanceEntity,
 }
 
 fn entity_table(table: &str, column: &str) -> Result<&'static str, String> {
@@ -58,6 +59,7 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
     for c in &table.columns {
         let rule = match (table.name.as_str(), c.name.as_str()) {
             ("vocabulary_scopes", "id") => Some(Rule::VocabularyScope),
+            ("restore_provenance", "entity_key") => Some(Rule::ProvenanceEntity),
             (_, "id") => Some(Rule::Entity(entity_table(&table.name, "id")?)),
             ("speakers", "lineage_id") => Some(Rule::SpeakerLineage),
             ("utterances", "lineage_id") => Some(Rule::UtteranceLineage),
@@ -103,7 +105,7 @@ fn rules(db: &Connection, table: &Table) -> Result<BTreeMap<String, Rule>, Strin
     Ok(result)
 }
 
-fn owners_sql(table: &str) -> Result<String, String> {
+pub(super) fn owners_sql(table: &str) -> Result<String, String> {
     let sql = match table {
         "meetings" => "SELECT rowid,id FROM meetings".into(),
         "speakers" | "utterance_speakers" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
@@ -214,9 +216,11 @@ impl<'a> RestoreIds<'a> {
         // Collect their definitions first; references are checked only afterward.
         plan.visit_documents(&archive.database, cancelled, 0)?;
         plan.visit_fixed_definitions(cancelled, 0)?;
+        plan.visit_provenance(cancelled, false)?;
         plan.seed_documents(&archive.database, cancelled)?;
         plan.visit_fixed_definitions(cancelled, 1)?;
         plan.seed_flow_operations(cancelled)?;
+        plan.visit_provenance(cancelled, true)?;
         for table in &tables {
             let bindings = rules(&archive.database, table)?;
             let mut owners = archive
@@ -420,6 +424,62 @@ impl<'a> RestoreIds<'a> {
         self.source
     }
 
+    pub(super) fn visit_mappings(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        mut visit: impl FnMut(super::ledger::IdentityMap) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut query = self
+            .database
+            .prepare("SELECT domain,scope,old_id,new_id FROM mappings ORDER BY domain,scope,old_id")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            check_cancelled(cancelled)?;
+            visit(super::ledger::IdentityMap {
+                domain: row.get(0).map_err(|e| e.to_string())?,
+                scope: row.get(1).map_err(|e| e.to_string())?,
+                source: row.get(2).map_err(|e| e.to_string())?,
+                target: row.get(3).map_err(|e| e.to_string())?,
+            })?;
+        }
+        check_cancelled(cancelled)
+    }
+
+    pub(super) fn unused_identity(&self, id: &str) -> Result<bool, String> {
+        self.database.query_row("SELECT NOT EXISTS(SELECT 1 FROM reserved_ids WHERE id=?1) AND NOT EXISTS(SELECT 1 FROM issued_ids WHERE id=?1)",params![id],|r|r.get(0)).map_err(|e|e.to_string())
+    }
+
+    fn visit_provenance(&self, cancelled: &impl Fn() -> bool, declare: bool) -> Result<(), String> {
+        if !self.tables.iter().any(|t| t.name == "restore_provenance") {
+            return Ok(());
+        }
+        super::ledger::validate_provenance(&self.source.database, cancelled)?;
+        let mut query=self.source.database.prepare("SELECT domain,meeting_id,entity_key,source_scope,source_key FROM restore_provenance ORDER BY id").map_err(|e|e.to_string())?;
+        let mut rows = query.query([]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            check_cancelled(cancelled)?;
+            let domain: String = row.get(0).map_err(|e| e.to_string())?;
+            let meeting: Option<String> = row.get(1).map_err(|e| e.to_string())?;
+            let key: String = row.get(2).map_err(|e| e.to_string())?;
+            if declare {
+                self.declare(
+                    &domain,
+                    scope(&domain, meeting.as_deref().unwrap_or("")),
+                    &key,
+                )?;
+            } else {
+                self.reserve(&key)?;
+                let old_scope: String = row.get(3).map_err(|e| e.to_string())?;
+                if !old_scope.is_empty() {
+                    self.reserve(&old_scope)?;
+                }
+                self.reserve(&row.get::<_, String>(4).map_err(|e| e.to_string())?)?;
+            }
+        }
+        Ok(())
+    }
+
     fn visit_fixed_definitions(
         &self,
         cancelled: &impl Fn() -> bool,
@@ -485,6 +545,16 @@ impl<'a> RestoreIds<'a> {
                     Value::Null => Ok(Value::Null),
                     Value::Text(old) => Ok(Value::Text(match rule {
                         Rule::VocabularyScope => self.map_scope(&old)?,
+                        Rule::ProvenanceEntity => {
+                            let domain: String = source
+                                .query_row(
+                                    "SELECT domain FROM restore_provenance WHERE rowid=?1",
+                                    params![rowid],
+                                    |r| r.get(0),
+                                )
+                                .map_err(|e| e.to_string())?;
+                            self.get(&domain, meeting, &old)?
+                        }
                         _ => self.get(
                             rule.domain().ok_or("復元ID領域がありません")?,
                             meeting,
@@ -582,7 +652,7 @@ impl Rule {
             Self::UtteranceLineage => Some("utterance_lineage"),
             Self::Overlap => Some("overlap_group"),
             Self::Operation => Some("operation"),
-            Self::VocabularyScope => None,
+            Self::VocabularyScope | Self::ProvenanceEntity => None,
         }
     }
 }

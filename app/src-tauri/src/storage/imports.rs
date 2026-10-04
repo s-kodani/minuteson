@@ -539,6 +539,7 @@ fn insert_asset(
 
 #[cfg(test)]
 pub(super) fn remove_import_schema_for_test(db: &Connection) {
+    super::backup::ledger::remove_restore_schema_for_test(db);
     db.execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
     db.execute_batch("DROP TRIGGER imported_track_kind_update;")
         .unwrap();

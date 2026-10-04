@@ -86,6 +86,7 @@ const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
 const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
 const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
 const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
+const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -422,6 +423,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (18, MIGRATION_18),
     (19, MIGRATION_19),
     (20, MIGRATION_20),
+    (21, MIGRATION_21),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {
@@ -615,7 +617,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 20);
+        assert_eq!(count, MIGRATIONS.len() as i64);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

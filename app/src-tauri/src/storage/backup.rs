@@ -10,6 +10,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
+pub(in crate::storage) mod ledger;
 mod portable;
 pub(crate) mod restore_fixed;
 pub(crate) mod restore_ids;
@@ -264,6 +265,7 @@ fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Resu
     if verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
         return Err("未対応のDBスナップショット形式です".into());
     }
+    ledger::validate_provenance(db, cancelled)?;
     let result: String = db
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;

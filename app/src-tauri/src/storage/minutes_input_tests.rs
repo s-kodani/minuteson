@@ -348,7 +348,7 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
         db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        20
+        MIGRATIONS.len() as i64
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

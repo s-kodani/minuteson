@@ -438,6 +438,46 @@ fn source_writer(source: &archive::VerifiedArchive, output: &Path) -> Connection
 }
 
 #[test]
+fn restore_provenance_native_completed_speech_generation_and_export_keep_normal_readers_valid() {
+    let (f, _outside, path) = exported_fixture();
+    let output = tempfile::tempdir().unwrap();
+    let source = read(&f, output.path());
+    let ids = ids(&source, output.path());
+    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let mut work = prepared(&fixed, output.path())
+        .with_processing_history(&fixed, &|| false)
+        .unwrap()
+        .with_provenance(&fixed, &|| false)
+        .unwrap();
+    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+    for domain in [
+        "processing_jobs",
+        "job_checkpoints",
+        "analysis_revisions",
+        "minutes_revisions",
+        "evidence_links",
+        "export_records",
+        "operation",
+    ] {
+        assert!(
+            work.database
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM restore_provenance WHERE domain=?1)",
+                    params![domain],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap(),
+            "{domain}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
+    assert_eq!(
+        f.storage.analysis_flow(&f.meeting).unwrap().unwrap().stage,
+        "review"
+    );
+}
+
+#[test]
 fn processing_history_rejects_altered_target_plan_job_state_and_export_evidence() {
     let (f, _outside, path) = exported_fixture();
     let output = tempfile::tempdir().unwrap();

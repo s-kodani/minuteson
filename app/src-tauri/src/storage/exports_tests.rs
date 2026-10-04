@@ -237,6 +237,6 @@ fn v14_database_migrates_without_changing_minutes_drafts_or_heads() {
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
                 .get::<_, i64>(0))
             .unwrap(),
-        20
+        MIGRATIONS.len() as i64
     );
 }

@@ -253,7 +253,11 @@ fn migration_20_backfills_existing_import_profile_without_changing_audio_or_term
     let (import, base, manifest) = pending(&s, "v19");
     s.finalize_audio_import(&import.id).unwrap();
     let meeting = s.get_meeting(&import.meeting_id).unwrap().unwrap();
-    s.connection.lock().unwrap().execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
+    {
+        let db = s.connection.lock().unwrap();
+        crate::storage::backup::ledger::remove_restore_schema_for_test(&db);
+        db.execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
+    }
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();
     assert_eq!(s.get_meeting(&import.meeting_id).unwrap().unwrap(), meeting);

@@ -86,6 +86,47 @@ fn payloads(archive: &VerifiedArchive) -> Vec<Vec<u8>> {
 }
 
 #[test]
+fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstruction() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = meeting(&storage, "legacy-20");
+    let (path, _) = write(&storage, output.path());
+    let source = verified(&path, output.path());
+    let mut manifest = source.manifest.clone();
+    assert_eq!(manifest.tables.last().unwrap().name, "restore_provenance");
+    assert_eq!(manifest.tables.last().unwrap().row_count, 0);
+    manifest.tables.pop();
+    manifest.schema_version = 20;
+    let legacy = output.path().join("legacy.monbackup");
+    pack(&legacy, &manifest, &payloads(&source));
+    let source = verified(&legacy, output.path());
+    assert_eq!(portable::tables(&source.database).unwrap().len(), 30);
+    let ids = super::super::restore_ids::RestoreIds::prepare(
+        &source,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &|| false,
+    )
+    .unwrap();
+    let fixed =
+        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let work = super::super::restore_fixed::workspace::FixedWorkspace::prepare(
+        &fixed,
+        output.path(),
+        &|| false,
+    )
+    .unwrap()
+    .with_processing_history(&fixed, &|| false)
+    .unwrap()
+    .with_provenance(&fixed, &|| false)
+    .unwrap();
+    assert_ne!(ids.get("meetings", "", &meeting).unwrap(), meeting);
+    drop(work);
+    assert!(storage.get_meeting(&meeting).unwrap().is_some());
+}
+
+#[test]
 fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

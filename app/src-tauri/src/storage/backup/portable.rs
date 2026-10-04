@@ -39,6 +39,7 @@ pub(super) const TABLES: &[&str] = &[
     "analysis_flows",
     "audio_import_commits",
     "audio_import_options",
+    "restore_provenance",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,9 +118,22 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
+    let has_ledger: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=21)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let expected: BTreeSet<String> = TABLES
         .iter()
+        .filter(|&&name| has_ledger || name != "restore_provenance")
         .chain(["app_settings", "schema_migrations"].iter())
+        .chain(if has_ledger {
+            ["restore_batches", "restore_identity_maps"].as_slice()
+        } else {
+            &[]
+        })
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {
@@ -127,6 +141,7 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     }
     TABLES
         .iter()
+        .filter(|&&name| has_ledger || name != "restore_provenance")
         .map(|&name| {
             let columns = db
                 .prepare(&format!("PRAGMA table_info(\"{name}\")"))
@@ -589,6 +604,7 @@ pub(super) fn load(
     tx.commit()
         .map_err(|e| format!("バックアップの参照整合が不正です: {e}"))?;
     validate_scopes(&db)?;
+    super::ledger::validate_provenance(&db, cancelled)?;
     Ok(db)
 }
 

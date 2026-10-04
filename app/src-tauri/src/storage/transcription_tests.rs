@@ -378,7 +378,7 @@ fn v15_legacy_transcription_migrates_and_retries_without_new_vocabulary() {
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        20
+        MIGRATIONS.len() as i64
     );
     assert_eq!(
         db.query_row("SELECT COUNT(*) FROM vocabulary_snapshots", [], |r| r

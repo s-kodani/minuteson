@@ -6,6 +6,7 @@ use std::io::Read;
 mod assets;
 mod generation;
 mod history;
+mod provenance;
 mod speech;
 
 pub(in crate::storage::backup) struct FixedWorkspace {
@@ -18,6 +19,14 @@ pub(in crate::storage::backup) struct FixedWorkspace {
 }
 
 impl FixedWorkspace {
+    pub(in crate::storage::backup) fn with_provenance(
+        mut self,
+        fixed: &FixedData<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        self.provenance(fixed, cancelled)?;
+        Ok(self)
+    }
     pub(in crate::storage::backup) fn with_processing_history(
         mut self,
         fixed: &FixedData<'_, '_>,
