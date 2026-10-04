@@ -3,6 +3,8 @@ import { timeLabel } from "./transcript";
 import type { MinutesContent, Inline, Block, MinutesView } from "./minutes-state";
 import { MinutesEvidenceGroup } from "./minutes-evidence";
 import { FixedTranscriptWorkspace } from "./fixed-transcript";
+import { documentPage, type DocumentFragment } from "./minutes-pagination";
+import { MinutesPages } from "./minutes-pages";
 
 // Typed document nodes become React text elements, never model-supplied HTML.
 export function MinutesDocument({ content, title, view, locked = false, verify }: { content: MinutesContent; title: string; view: MinutesView; locked?: boolean; verify?: (id: string, verified: boolean) => void }) {
@@ -12,6 +14,15 @@ export function MinutesDocument({ content, title, view, locked = false, verify }
   const [showFull, setShowFull] = useState(false);
   const fullEvidence = useRef<string | null>(null);
   const section = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const plan = documentPage(content.blocks, page);
+  const previousPage = useRef(plan.page);
+  useLayoutEffect(() => {
+    if (previousPage.current === plan.page) return;
+    previousPage.current = plan.page;
+    heading.current?.focus({ preventScroll: true });
+    heading.current?.scrollIntoView({ block: "start" });
+  }, [plan.page]);
   const bookmark = useRef<{ x: number; y: number; evidenceId: string; scroll: { element: HTMLElement; top: number; left: number }[] } | null>(null);
   const evidence = content.evidence.find((e) => e.id === selected);
   const fullSource = content.evidence.find((e) => e.id === fullEvidence.current);
@@ -48,7 +59,7 @@ export function MinutesDocument({ content, title, view, locked = false, verify }
     if (node.italic) text = <em>{text}</em>;
     return <span key={index}>{text}</span>;
   });
-  const block = (value: Block, index: number) => {
+  const block = (value: Block, { blockIndex: index, rowStart, rowEnd }: DocumentFragment) => {
     switch (value.type) {
       case "heading": {
         const Heading = (["h1", "h2", "h3", "h4", "h5", "h6"] as const)[Math.max(0, Math.min(5, value.level - 1))];
@@ -57,24 +68,22 @@ export function MinutesDocument({ content, title, view, locked = false, verify }
       case "paragraph": return <p key={index}>{source(value.itemId)}{inline(value.content)}</p>;
       case "list": {
         const List = value.ordered ? "ol" : "ul";
-        return <List key={index}>{value.items.map((item, i) => <li key={i}>{source(item.itemId)}{inline(item.content)}</li>)}</List>;
+        return <List key={index} start={value.ordered ? rowStart + 1 : undefined} aria-label={`リスト${index + 1}${value.items.length ? `の項目${rowStart + 1}〜${rowEnd}（全${value.items.length}件）` : "（0件）"}`}>{value.items.slice(rowStart, rowEnd).map((item, i) => <li key={rowStart + i} aria-posinset={rowStart + i + 1} aria-setsize={value.items.length}>{source(item.itemId)}{inline(item.content)}</li>)}</List>;
       }
-      case "table": return <div className="document-table" key={index}><table><thead><tr>{value.headers.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead><tbody>{value.rows.map((row, i) => <tr key={i}>{row.cells.map((cell, j) => <td key={j}>{j === 0 && source(row.itemId)}{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
+      case "table": return <div className="document-table" key={index}><table aria-rowcount={value.rows.length + 1}><caption>表{index + 1}: {value.rows.length ? `行${rowStart + 1}〜${rowEnd} / 全${value.rows.length}行` : "0行"}</caption><thead><tr aria-rowindex={1}>{value.headers.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead><tbody>{value.rows.slice(rowStart, rowEnd).map((row, i) => <tr key={rowStart + i} aria-rowindex={rowStart + i + 2}>{row.cells.map((cell, j) => <td key={j}>{j === 0 && source(row.itemId)}{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
     }
   };
-  const total = Math.max(1, Math.ceil(content.blocks.length / 50));
-  const currentPage = Math.min(page, total - 1);
   return <section className="minutes-document" aria-label={title} ref={section}>
     {full && fullSource && <FixedTranscriptWorkspace key={`${view.id}:${fullSource.id}`} view={view} evidence={fullSource} locked={locked} back={() => setShowFull(false)} />}
     {/* Keep the reader/group mounted but inaccessible while looking at the
         fixed transcript. This preserves loaded context and group pagination,
         so asynchronous reloading cannot change the bookmarked layout. */}
     <div hidden={full}>
-    <h3>{title}</h3>
-    <div className="minutes-document-layout"><article>{content.blocks.slice(currentPage * 50, (currentPage + 1) * 50).map(block)}</article>
+    <h3 ref={heading} tabIndex={-1}>{title}</h3>
+    <div className="minutes-document-layout"><article>{plan.fragments.map((fragment) => block(content.blocks[fragment.blockIndex], fragment))}</article>
       {evidence && <MinutesEvidenceGroup key={`${view.id}:${evidence.id}`} view={view} content={content} selectedId={evidence.id} page={evidencePage} changePage={setEvidencePage} suspended={full} locked={locked} close={() => setSelected(null)} showTranscript={showTranscript} verify={verify} />}
     </div>
-    {total > 1 && <div className="transcript-pages"><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>前へ</button><span>{currentPage + 1} / {total}</span><button type="button" disabled={currentPage + 1 >= total} onClick={() => setPage(currentPage + 1)}>次へ</button></div>}
+    <MinutesPages plan={plan} mode="閲覧" changePage={setPage} />
     </div>
   </section>;
 }

@@ -36,6 +36,21 @@ async (page) => {
       }
       data.transcripts={};
     };
+    // Full documents exceed one page inside a single block. Configure before
+    // opening the meeting; the draft's extra free paragraph is preserved.
+    data.addLongDocument=()=>{
+      for(const v of Object.values(data.views)){
+        const tail=data.drafts[v.id]?.payload.blocks.slice(v.content.blocks.length)??[];
+        v.content.blocks.push({type:"list",ordered:true,items:Array.from({length:121},(_,i)=>({itemId:null,content:[text(`長いリスト項目${i+1}`)]}))});
+        const owner={id:`long-todo-${v.id}`,kind:"todo",body:"長い表の末尾ToDo",assigneeName:null,assigneeSpeakerId:null,dueDate:null,dueText:null,sourceType:"manual"};
+        const e={...copy(v.content.evidence[0]),id:`long-e-${v.id}`,minutesItemId:owner.id,sourceType:"manual"};
+        v.content.items.push(owner);v.content.evidence.push(e);
+        v.content.blocks.push({type:"table",headers:[[text("内容")],[text("担当者")],[text("期限")],[text("根拠")]],rows:Array.from({length:125},(_,i)=>i===124?{itemId:owner.id,cells:[[text(owner.body)],[text("未確認")],[text("未確認")],[chip(owner.id,e.id)]]}:{itemId:null,cells:[[text(`長い表の行${i+1}`)],[text("未確認")],[text("未確認")],[]]})});
+        v.generatedContent=copy(v.content);
+        if(data.drafts[v.id]){data.drafts[v.id].payload=copy(v.content);data.drafts[v.id].payload.blocks.push(...tail);}
+      }
+      data.transcripts={};
+    };
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });

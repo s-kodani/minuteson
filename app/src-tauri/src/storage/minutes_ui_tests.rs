@@ -90,6 +90,83 @@ fn stamp(draft: &MinutesDraft) -> Option<DraftStamp> {
 }
 
 #[test]
+fn long_document_drafts_save_export_and_undo_every_row_without_a_display_page_limit() {
+    use crate::minutes_document::{TableRow, TextBlock};
+    let root = tempfile::tempdir().unwrap();
+    let mut s = Storage::open(root.path().into()).unwrap();
+    let m = meeting(&s);
+    let a = candidate(&s, &m);
+    s.adopt_minutes(request(&s, &m, &a)).unwrap();
+    let original = s.load_minutes_content(&m, &a).unwrap().unwrap();
+    let initial = s.create_minutes_draft(&m, &a).unwrap();
+    let mut payload = initial.payload.clone();
+    payload.blocks.push(Block::List {
+        ordered: true,
+        items: (1..=121)
+            .map(|i| TextBlock {
+                item_id: None,
+                content: vec![Inline::text(format!("長い項目{i}"))],
+            })
+            .collect(),
+    });
+    payload.blocks.push(Block::Table {
+        headers: vec![vec![Inline::text("列1")], vec![Inline::text("列2")]],
+        rows: (1..=125)
+            .map(|i| TableRow {
+                item_id: None,
+                cells: vec![
+                    vec![Inline::text(format!("長い行{i}"))],
+                    vec![Inline::text("メモ")],
+                ],
+            })
+            .collect(),
+    });
+    let long = s
+        .save_minutes_draft(&initial.id, 0, payload.clone())
+        .unwrap();
+    let list_index = payload.blocks.len() - 2;
+    let table_index = payload.blocks.len() - 1;
+    if let Block::List { items, .. } = &mut payload.blocks[list_index] {
+        items[120].content = vec![Inline::text("末尾項目を修正")];
+    }
+    if let Block::Table { rows, .. } = &mut payload.blocks[table_index] {
+        rows[124].cells[1] = vec![Inline::text("末尾セルを修正")];
+    }
+    let edited = s
+        .save_minutes_draft(&long.id, long.lock_version, payload.clone())
+        .unwrap();
+    drop(s);
+    s = Storage::open(root.path().into()).unwrap();
+    assert_eq!(s.load_minutes_draft(&m, None).unwrap().unwrap(), edited);
+    let state = s.minutes_versions(&m).unwrap();
+    let export = s
+        .prepare_export(super::super::exports::ExportRequest {
+            operation_id: Uuid::new_v4().to_string(),
+            meeting_id: m.clone(),
+            expected_minutes_id: a.clone(),
+            expected_content_hash: original.content_hash.clone(),
+            expected_meeting_lock_version: state.meeting_lock_version,
+            expected_draft: state.draft,
+        })
+        .unwrap();
+    for i in 1..=120 {
+        assert!(export.markdown.contains(&format!("{i}. 長い項目{i}\n")));
+    }
+    for i in 1..=125 {
+        assert!(export.markdown.contains(&format!("| 長い行{i} |")));
+    }
+    assert!(export.markdown.contains("121. 末尾項目を修正\n"));
+    assert!(export.markdown.contains("| 長い行125 | 末尾セルを修正 |"));
+    assert_eq!(
+        s.undo_minutes_edit(&edited.id, edited.lock_version)
+            .unwrap()
+            .payload,
+        long.payload
+    );
+    assert_eq!(s.load_minutes_content(&m, &a).unwrap().unwrap(), original);
+}
+
+#[test]
 fn explicit_evidence_verification_is_durable_undoable_and_keeps_the_generated_base_frozen() {
     use crate::minutes_document::VerificationState;
     let root = tempfile::tempdir().unwrap();

@@ -65,8 +65,8 @@ function terminalCaret(root: HTMLElement) {
     const sentinel = document.createElement("br"); sentinel.dataset.caretSentinel = "true"; root.append(sentinel);
   } else for (const node of sentinels) node.remove();
 }
-export function MinutesRichField({ value, label, blockIndex, disabled, evidenceOnly = false, chipLabel, onChange, onSelection, onFailure, onCompositionChange }: {
-  value: Inline[]; label: string; blockIndex: number; disabled: boolean; evidenceOnly?: boolean;
+export function MinutesRichField({ value, label, blockIndex, addressKey, disabled, evidenceOnly = false, chipLabel, onChange, onSelection, onFailure, onCompositionChange }: {
+  value: Inline[]; label: string; blockIndex: number; addressKey: string; disabled: boolean; evidenceOnly?: boolean;
   chipLabel: (id: string) => string;
   onChange: (value: Inline[]) => void; onSelection: (range: { start: number; end: number }) => void; onFailure: (cause: unknown) => void; onCompositionChange: (active: boolean) => void;
 }) {
@@ -130,7 +130,7 @@ export function MinutesRichField({ value, label, blockIndex, disabled, evidenceO
     terminalCaret(field);
     if (selection) restore(field, selection.start, selection.end);
   }, [value, chipLabel]);
-  return <div ref={root} className="minutes-rich-field" data-block={blockIndex} data-placeholder={evidenceOnly ? "根拠なし（手動追加）" : "入力してください"} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-label={label} aria-multiline="true" aria-readonly={disabled} tabIndex={0}
+  return <div ref={root} className="minutes-rich-field" data-block={blockIndex} data-inline-address={addressKey} data-placeholder={evidenceOnly ? "根拠なし（手動追加）" : "入力してください"} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-label={label} aria-multiline="true" aria-readonly={disabled} tabIndex={0}
     onFocus={capture} onKeyUp={capture} onMouseUp={capture} onSelect={capture}
     onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={changed}
     onPaste={(event) => {

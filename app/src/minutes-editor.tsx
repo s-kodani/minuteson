@@ -4,6 +4,8 @@ import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
 import { MinutesDocument } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
+import { documentAddress, documentPage, documentPageForAddress, firstDocumentAddress, inlineAddressKey } from "./minutes-pagination";
+import { MinutesPages } from "./minutes-pages";
 import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minutes-state";
 import { timeLabel } from "./transcript";
 
@@ -27,13 +29,16 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
   const compositions = useRef(new Set<string>());
   const mounted = useRef(true);
   const editorRoot = useRef<HTMLElement>(null);
-  const focusBlock = useRef<number | null>(null);
+  const focusAddress = useRef<InlineAddress | null>(null);
+  const doc = saved.payload ?? view.content;
+  const plan = documentPage(doc.blocks, page);
   useLayoutEffect(() => {
-    if (!editing || focusBlock.current === null) return;
-    const field = editorRoot.current?.querySelector<HTMLElement>(`.minutes-rich-field[data-block="${focusBlock.current}"]`) ?? editorRoot.current?.querySelector<HTMLElement>(".minutes-rich-field");
-    focusBlock.current = null;
+    if (!editing || focusAddress.current === null) return;
+    const key = inlineAddressKey(focusAddress.current);
+    const field = [...(editorRoot.current?.querySelectorAll<HTMLElement>(".minutes-rich-field") ?? [])].find((field) => field.dataset.inlineAddress === key) ?? editorRoot.current?.querySelector<HTMLElement>(".minutes-rich-field");
+    focusAddress.current = null;
     field?.focus();
-  }, [epoch, editing, page]);
+  }, [epoch, editing, plan.page]);
   useEffect(() => {
     mounted.current = true;
     const stop = queue.subscribe(() => setSaved(queue.snapshot()));
@@ -69,7 +74,7 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     const draft = await invoke<MinutesDraft>("create_minutes_draft", { meetingId: view.meetingId, minutesId: view.id });
     if (!mounted.current) return;
     if (draft.baseMinutesId !== view.id) throw new Error("議事録編集の基底版が変更されています");
-    queue.load(draft); focusBlock.current = 0; setEditing(true);
+    queue.load(draft); focusAddress.current = firstDocumentAddress(draft.payload.blocks, 0); setPage(0); setEditing(true);
   });
   const undo = () => run(async () => {
     if (failure.current || compositions.current.size) throw new Error("入力を確定するか再読込してから取り消してください");
@@ -88,21 +93,31 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     if (!editing || locked || busy) return false;
     try { queue.edit(action); if (fromDOM) failure.current = ""; setError(""); return true; } catch (cause) { if (fromDOM) failed(cause); else setError(String(cause)); return false; }
   };
-  const doc = saved.payload ?? view.content;
   const disabled = locked || busy || !editing || !saved.draft;
+  const changingPageDisabled = disabled || !!failure.current || compositions.current.size > 0;
   const chipLabel = (id: string) => { const e = doc.evidence.find((e) => e.id === id); return e ? `${timeLabel(e.startUs)}${e.verificationState === "user_verified" ? " ✓" : " · 未確認"}` : "根拠"; };
-  const field = (nodes: Inline[], address: InlineAddress, label: string, evidenceOnly = false) => <MinutesRichField key={`${epoch}:${JSON.stringify(address)}`} value={nodes} label={label} blockIndex={address.block} disabled={disabled} evidenceOnly={evidenceOnly} chipLabel={chipLabel}
+  const field = (nodes: Inline[], address: InlineAddress, label: string, evidenceOnly = false) => <MinutesRichField key={`${epoch}:${JSON.stringify(address)}`} value={nodes} label={label} blockIndex={address.block} addressKey={inlineAddressKey(address)} disabled={disabled} evidenceOnly={evidenceOnly} chipLabel={chipLabel}
     onChange={(nodes) => edit((d) => editInline(d, address, nodes), true)} onSelection={(range) => setSelection({ address, ...range })} onFailure={failed}
-    onCompositionChange={(active) => { const key = JSON.stringify(address); if (active) compositions.current.add(key); else { compositions.current.delete(key); setSaved(queue.snapshot()); } }} />;
+    onCompositionChange={(active) => { const key = JSON.stringify(address); if (active) compositions.current.add(key); else compositions.current.delete(key); setSaved(queue.snapshot()); }} />;
   const selectedBlock = selection ? doc.blocks[selection.address.block] : null;
-  const structural = (action: (doc: MinutesContent) => MinutesContent, nextBlock = selection?.address.block ?? 0) => {
+  const structural = (action: (doc: MinutesContent) => MinutesContent, next: InlineAddress | number = selection?.address ?? { block: 0 }) => {
+    if (compositions.current.size || failure.current) return;
     if (!edit(action)) return;
-    focusBlock.current = Math.max(0, Math.min(nextBlock, (queue.snapshot().payload?.blocks.length ?? 1) - 1));
-    setPage(Math.floor(focusBlock.current / 50)); setSelection(null); setEpoch((v) => v + 1);
+    const blocks = queue.snapshot().payload!.blocks;
+    const requested = typeof next === "number" ? { block: next } : next;
+    focusAddress.current = documentAddress(blocks, requested);
+    const nextPage = documentPageForAddress(blocks, focusAddress.current ?? requested);
+    if (!focusAddress.current) focusAddress.current = firstDocumentAddress(blocks, nextPage);
+    setPage(nextPage); setSelection(null); setEpoch((v) => v + 1);
   };
-  const toolbarButton = (label: string, action: () => void, unavailable = false) => <button type="button" className="small-secondary" disabled={disabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={action}>{label}</button>;
+  const changePage = (next: number) => {
+    if (changingPageDisabled || busyRef.current || compositions.current.size || failure.current) return;
+    focusAddress.current = firstDocumentAddress(doc.blocks, next);
+    setPage(next); setSelection(null); setEpoch((value) => value + 1);
+  };
+  const conversionAddress = selection ? { block: selection.address.block + (selectedBlock?.type === "list" && (selection.address.item ?? 0) > 0 ? 1 : 0) } : { block: 0 };
+  const toolbarButton = (label: string, action: () => void, unavailable = false) => <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={action}>{label}</button>;
   const manualLabel = (id: string | null | undefined) => id && doc.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
-  const total = Math.max(1, Math.ceil(doc.blocks.length / 50)); const currentPage = Math.min(page, total - 1);
   return <section ref={editorRoot} className="minutes-editor" aria-label="議事録文書と編集">
     <div className="transcript-actions">
       {!editing && <button type="button" className="small-secondary" disabled={locked || busy} onClick={() => void begin()}>議事録を編集</button>}
@@ -116,25 +131,25 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>
       <div className="minutes-toolbar" role="toolbar" aria-label="議事録の書式と構造">
         {(["bold", "italic"] as const).map((mark) => <span key={mark}>{toolbarButton(mark === "bold" ? "太字" : "斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, mark))); }, !selection || selection.end <= selection.start)}</span>)}
-        {toolbarButton("段落", () => { if (selection) structural((d) => convertBlock(d, selection.address, "paragraph")); }, !selection || selectedBlock?.type === "table")}
-        {([1, 2, 3] as const).map((level) => <span key={level}>{toolbarButton(`見出し${level}`, () => { if (selection) structural((d) => convertBlock(d, selection.address, "heading", level)); }, !selection || selectedBlock?.type === "table")}</span>)}
+        {toolbarButton("段落", () => { if (selection) structural((d) => convertBlock(d, selection.address, "paragraph"), conversionAddress); }, !selection || selectedBlock?.type === "table")}
+        {([1, 2, 3] as const).map((level) => <span key={level}>{toolbarButton(`見出し${level}`, () => { if (selection) structural((d) => convertBlock(d, selection.address, "heading", level), conversionAddress); }, !selection || selectedBlock?.type === "table")}</span>)}
         {toolbarButton("箇条書き", () => { if (selection) structural((d) => convertBlock(d, selection.address, "list")); }, !selection || selectedBlock?.type === "table")}
         {toolbarButton("番号付きリスト", () => { if (selection) structural((d) => convertBlock(d, selection.address, "list", 2, true)); }, !selection || selectedBlock?.type === "table")}
-        {toolbarButton("項目を追加", () => { if (selection) structural((d) => changeList(d, selection.address, false)); }, selectedBlock?.type !== "list")}
+        {toolbarButton("項目を追加", () => { if (selection) structural((d) => changeList(d, selection.address, false), { ...selection.address, item: (selection.address.item ?? 0) + 1 }); }, selectedBlock?.type !== "list")}
         {toolbarButton("項目を削除", () => { if (selection) structural((d) => changeList(d, selection.address, true)); }, selectedBlock?.type !== "list")}
         {(["paragraph", "heading", "list", "table"] as const).map((type) => <span key={type}>{toolbarButton(({ paragraph: "段落を挿入", heading: "見出しを挿入", list: "リストを挿入", table: "表を挿入" })[type], () => structural((d) => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, type), (selection?.address.block ?? doc.blocks.length - 1) + 1))}</span>)}
-        {(["addRow", "removeRow", "addColumn", "removeColumn"] as const).map((action) => <span key={action}>{toolbarButton(({ addRow: "表の行を追加", removeRow: "表の行を削除", addColumn: "表の列を追加", removeColumn: "表の列を削除" })[action], () => { if (selection) structural((d) => changeTable(d, selection.address, action)); }, selectedBlock?.type !== "table" || (action === "removeRow" && selection?.address.header))}</span>)}
+        {(["addRow", "removeRow", "addColumn", "removeColumn"] as const).map((action) => <span key={action}>{toolbarButton(({ addRow: "表の行を追加", removeRow: "表の行を削除", addColumn: "表の列を追加", removeColumn: "表の列を削除" })[action], () => { if (selection) structural((d) => changeTable(d, selection.address, action), action === "addRow" ? { block: selection.address.block, row: (selection.address.row ?? (selectedBlock?.type === "table" ? selectedBlock.rows.length - 1 : 0)) + 1, column: 0 } : selection.address); }, selectedBlock?.type !== "table" || (action === "removeRow" && selection?.address.header))}</span>)}
         {toolbarButton("ブロックを削除", () => { if (selection && window.confirm("選択した文書ブロックと、その項目・根拠を下書きから削除しますか？ 保存済みの生成原文は保持し、編集の取り消しで戻せます。")) structural((d) => removeBlock(d, selection.address.block)); }, !selection)}
       </div>
       <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト">
-        {doc.blocks.slice(currentPage * 50, (currentPage + 1) * 50).map((b, offset) => {
-          const index = currentPage * 50 + offset;
+        {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {
+          const b = doc.blocks[index];
           if (b.type === "heading" || b.type === "paragraph") return <section key={`${epoch}:${index}`} className={b.type === "heading" ? `rich-heading rich-heading-${b.level}` : "rich-paragraph"}>{manualLabel(b.itemId)}{field(b.content, { block: index }, `議事録ブロック${index + 1}`)}</section>;
-          if (b.type === "list") { const List = b.ordered ? "ol" : "ul"; return <List key={`${epoch}:${index}`}>{b.items.map((row, item) => <li key={item}>{manualLabel(row.itemId)}{field(row.content, { block: index, item }, `議事録リスト${index + 1}の項目${item + 1}`)}</li>)}</List>; }
-          return <div className="document-table" key={`${epoch}:${index}`}><table><thead><tr>{b.headers.map((cell, column) => <th key={column}>{field(cell, { block: index, header: true, column }, `議事録表${index + 1}の見出し${column + 1}`)}</th>)}</tr></thead><tbody>{b.rows.map((row, r) => <tr key={r}>{row.cells.map((cell, column) => <td key={column}>{column === 0 && manualLabel(row.itemId)}{field(cell, { block: index, row: r, column }, `議事録表${index + 1}の行${r + 1}列${column + 1}`, !!row.itemId && column === 3)}</td>)}</tr>)}</tbody></table></div>;
+          if (b.type === "list") { const List = b.ordered ? "ol" : "ul"; return <List key={`${epoch}:${index}`} start={b.ordered ? rowStart + 1 : undefined}>{b.items.slice(rowStart, rowEnd).map((row, offset) => { const item = rowStart + offset; return <li key={item} aria-posinset={item + 1} aria-setsize={b.items.length}>{manualLabel(row.itemId)}{field(row.content, { block: index, item }, `議事録リスト${index + 1}の項目${item + 1}`)}</li>; })}</List>; }
+          return <div className="document-table" key={`${epoch}:${index}`}><table aria-rowcount={b.rows.length + 1}><caption>表{index + 1}: {b.rows.length ? `行${rowStart + 1}〜${rowEnd} / 全${b.rows.length}行` : "0行"}</caption><thead><tr aria-rowindex={1}>{b.headers.map((cell, column) => <th key={column}>{field(cell, { block: index, header: true, column }, `議事録表${index + 1}の見出し${column + 1}`)}</th>)}</tr></thead><tbody>{b.rows.slice(rowStart, rowEnd).map((row, offset) => { const r = rowStart + offset; return <tr key={r} aria-rowindex={r + 2}>{row.cells.map((cell, column) => <td key={column}>{column === 0 && manualLabel(row.itemId)}{field(cell, { block: index, row: r, column }, `議事録表${index + 1}の行${r + 1}列${column + 1}`, !!row.itemId && column === 3)}</td>)}</tr>; })}</tbody></table></div>;
         })}
       </div>
-      {total > 1 && <div className="transcript-pages"><button type="button" disabled={currentPage === 0 || locked || compositions.current.size > 0} onClick={() => { setPage(currentPage - 1); setSelection(null); }}>前の編集ページ</button><span>{currentPage + 1} / {total}</span><button type="button" disabled={currentPage + 1 >= total || locked || compositions.current.size > 0} onClick={() => { setPage(currentPage + 1); setSelection(null); }}>次の編集ページ</button></div>}
+      <MinutesPages plan={plan} mode="編集" disabled={changingPageDisabled} changePage={changePage} />
     </>}
     {error && <p className="action-error" role="alert">{error}</p>}
     {saved.error && <p className="action-error" role="alert">議事録を保存できませんでした。入力はこの画面に保持しています。修正後に再試行してください: {saved.error}</p>}
