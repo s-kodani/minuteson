@@ -3,7 +3,7 @@ use crate::storage::draft_splits::{SplitPart, UtteranceSplit};
 use crate::storage::drafts::{ManualSpeaker, UtteranceEdit};
 use std::cell::Cell;
 
-fn fixture(storage: &Storage, operation: &str) -> String {
+pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) -> String {
     let meeting = archive::tests::meeting(storage, operation);
     let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     draft.payload.schema_version = 3;

@@ -213,7 +213,9 @@ impl<'a> RestoreIds<'a> {
         // Draft-only and generated-original IDs may have no relational row.
         // Collect their definitions first; references are checked only afterward.
         plan.visit_documents(&archive.database, cancelled, 0)?;
+        plan.visit_fixed_definitions(cancelled, 0)?;
         plan.seed_documents(&archive.database, cancelled)?;
+        plan.visit_fixed_definitions(cancelled, 1)?;
         for table in &tables {
             let bindings = rules(&archive.database, table)?;
             let mut owners = archive
@@ -368,6 +370,36 @@ impl<'a> RestoreIds<'a> {
     pub(super) fn get(&self, domain: &str, meeting: &str, old: &str) -> Result<String, String> {
         self.lookup(domain, meeting, old)?
             .ok_or_else(|| format!("復元参照が未定義か別会議です: {domain}"))
+    }
+
+    pub(super) fn source(&self) -> &VerifiedArchive {
+        self.source
+    }
+
+    fn visit_fixed_definitions(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        phase: u8,
+    ) -> Result<(), String> {
+        super::restore_fixed::visit_definitions(
+            &self.source.database,
+            cancelled,
+            &mut |definition| {
+                if phase == 0 {
+                    self.reserve(&definition.old)?;
+                } else if let Some(lineage) = definition.lineage {
+                    self.manual_identity(
+                        definition.domain,
+                        lineage,
+                        &definition.meeting,
+                        &definition.old,
+                    )?;
+                } else {
+                    self.declare(definition.domain, &definition.meeting, &definition.old)?;
+                }
+                Ok(())
+            },
+        )
     }
 
     fn map_scope(&self, old: &str) -> Result<String, String> {
@@ -840,4 +872,4 @@ fn draft_hash(kind: &str, text: &str) -> Result<String, String> {
 
 #[cfg(test)]
 #[path = "restore_ids_tests.rs"]
-mod tests;
+pub(super) mod tests;

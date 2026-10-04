@@ -263,10 +263,7 @@ pub(super) fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<Diariza
                 .ok_or("固定割り当ての発言がありません")
         })
         .collect::<Result<_, _>>()?;
-    let manual_assignment_hash = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&manual_lineages).map_err(|e| e.to_string())?)
-    );
+    let manual_assignment_hash = manual_assignment_hash(&manual_lineages)?;
     if spec.parameters.get("diarization").is_some()
         && spec.parameters["diarization"]["manualAssignmentHash"] != manual_assignment_hash
     {
@@ -282,6 +279,13 @@ pub(super) fn read_input(tx: &Transaction<'_>, spec: &JobSpec) -> Result<Diariza
         manual_utterances,
         manual_assignment_hash,
     })
+}
+
+pub(super) fn manual_assignment_hash(lineages: &BTreeSet<String>) -> Result<String, String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(lineages).map_err(|e| e.to_string())?)
+    ))
 }
 
 #[cfg(all(test, unix))]

@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
 mod portable;
+pub(crate) mod restore_fixed;
 pub(crate) mod restore_ids;
 
 const BUFFER_BYTES: usize = 64 * 1024;

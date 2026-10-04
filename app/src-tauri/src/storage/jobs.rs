@@ -589,8 +589,7 @@ pub(super) fn enqueue_in_transaction(
     if profile_json.len() > 65_536 || parameters_json.len() > MAX_CHECKPOINT_BYTES {
         return Err("処理設定が大きすぎます".into());
     }
-    let spec_json = serde_json::to_vec(&spec).map_err(|error| error.to_string())?;
-    let spec_hash = hash_bytes(b"mon-job-spec-v1", &spec_json);
+    let spec_hash = fixed_spec_hash(spec, None, 1)?;
     if let Some(existing) = transaction.query_row(
             "SELECT id, meeting_id, kind, state, operation_id, input_hash, spec_hash, completed_units, total_units, error_code, created_at, updated_at, output_analysis_id, pause_reason, retry_of_job_id, attempt, output_minutes_id FROM processing_jobs WHERE operation_id = ?1",
             params![spec.operation_id],
@@ -646,14 +645,7 @@ pub(super) fn read_fixed_input(
         Ok(JobSpec { meeting_id: row.get(0)?, kind: serde_json::from_value(Value::String(kind)).map_err(|e| decode(1, e))?, operation_id: row.get(2)?, input_analysis_id: row.get(3)?, input_hash: row.get(4)?, profile_snapshot: serde_json::from_str(&profile).map_err(|e| decode(5, e))?, parameters: serde_json::from_str(&parameters).map_err(|e| decode(6, e))?, total_units: row.get(7)? })
     }).map_err(|e| e.to_string())?;
     let job = load_job(connection, job_id)?.ok_or("処理が見つかりません")?;
-    let hash = match job.retry_of_job_id.as_deref() {
-        None if job.attempt == 1 => hash_bytes(
-            b"mon-job-spec-v1",
-            &serde_json::to_vec(&spec).map_err(|e| e.to_string())?,
-        ),
-        Some(source) if job.attempt > 1 => retry_spec_hash(&spec, source, job.attempt)?,
-        _ => return Err("処理の再試行情報が不正です".into()),
-    };
+    let hash = fixed_spec_hash(&spec, job.retry_of_job_id.as_deref(), job.attempt)?;
     if hash != job.spec_hash {
         return Err("処理の固定設定または再試行情報が変更されています".into());
     }
@@ -669,10 +661,25 @@ pub(super) fn read_fixed_input(
 }
 
 fn retry_spec_hash(spec: &JobSpec, source: &str, attempt: i64) -> Result<String, String> {
-    Ok(hash_bytes(
-        b"mon-job-retry-spec-v1",
-        &serde_json::to_vec(&(spec, source, attempt)).map_err(|e| e.to_string())?,
-    ))
+    fixed_spec_hash(spec, Some(source), attempt)
+}
+
+pub(super) fn fixed_spec_hash(
+    spec: &JobSpec,
+    source: Option<&str>,
+    attempt: i64,
+) -> Result<String, String> {
+    match source {
+        None if attempt == 1 => Ok(hash_bytes(
+            b"mon-job-spec-v1",
+            &serde_json::to_vec(spec).map_err(|e| e.to_string())?,
+        )),
+        Some(source) if attempt > 1 => Ok(hash_bytes(
+            b"mon-job-retry-spec-v1",
+            &serde_json::to_vec(&(spec, source, attempt)).map_err(|e| e.to_string())?,
+        )),
+        _ => Err("処理の再試行情報が不正です".into()),
+    }
 }
 
 fn validate_job_input(

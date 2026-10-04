@@ -133,7 +133,7 @@ fn scope(connection: &Connection, meeting: Option<&str>) -> Result<String, Strin
     }
 }
 type StoredEntry = (VocabularyEntry, i64, i64, i64);
-fn load(connection: &Connection, id: &str) -> Result<(VocabularyBook, Vec<StoredEntry>), String> {
+fn stored_entries(connection: &Connection, id: &str) -> Result<Vec<StoredEntry>, String> {
     let mut query = connection.prepare("SELECT id,term,reading,note,enabled,lock_version,created_at,updated_at FROM vocabulary_entries WHERE scope_id=?1 ORDER BY position").map_err(|e|e.to_string())?;
     let rows = query
         .query_map(params![id], |r| {
@@ -155,6 +155,25 @@ fn load(connection: &Connection, id: &str) -> Result<(VocabularyBook, Vec<Stored
         .map_err(|e| e.to_string())?;
     let payload: Vec<_> = rows.iter().map(|r| r.0.clone()).collect();
     validate(&payload)?;
+    Ok(rows)
+}
+
+/// Hash the actual stored rows, including entry versions and timestamps. Used
+/// when new restore identities change the hash basis in a private database.
+pub(super) fn stored_book_hash(connection: &Connection, id: &str) -> Result<String, String> {
+    let version: i64 = connection
+        .query_row(
+            "SELECT lock_version FROM vocabulary_scopes WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    hash(&(stored_entries(connection, id)?, version))
+}
+
+fn load(connection: &Connection, id: &str) -> Result<(VocabularyBook, Vec<StoredEntry>), String> {
+    let rows = stored_entries(connection, id)?;
+    let payload: Vec<_> = rows.iter().map(|r| r.0.clone()).collect();
     let stored: Option<(String, i64)> = connection
         .query_row(
             "SELECT content_hash,lock_version FROM vocabulary_scopes WHERE id=?1",
@@ -214,7 +233,7 @@ pub(crate) fn compile(entries: &[FixedEntry], extra: &str) -> Result<String, Str
     Ok(prompt)
 }
 impl VocabularySnapshot {
-    fn digest(&self) -> Result<String, String> {
+    pub(super) fn digest(&self) -> Result<String, String> {
         hash(&(
             self.schema_version,
             &self.id,

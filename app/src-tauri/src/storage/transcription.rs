@@ -48,74 +48,82 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
-        // Keep the serialized plan shape for old jobs; both source types use
-        // verified managed manifests, never an external original path.
-        let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
+        read_audio_plan(&transaction, meeting_id)
+    }
+}
+
+/// Read fixed audio metadata from one consistent DB view. File verification is
+/// separate, so the same metadata checks can be used in private restore staging.
+pub(super) fn read_audio_plan(
+    transaction: &Connection,
+    meeting_id: &str,
+) -> Result<RecordedAudioPlan, String> {
+    // Keep the serialized plan shape for old jobs; both source types use
+    // verified managed manifests, never an external original path.
+    let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
             "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND r.state = 'saved' AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",
             params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?)),
         ).optional().map_err(|e| e.to_string())?.ok_or("解析可能な保存済み音声manifestがありません")?;
-        let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = 'ready' AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
+    let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = 'ready' AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
+    let rows = query
+        .query_map(params![meeting_id, source_kind], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, u32>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let tracks = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut plans = Vec::new();
+    for (id, kind, sample_rate, channels) in tracks {
+        let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence").map_err(|e| e.to_string())?;
         let rows = query
-            .query_map(params![meeting_id, source_kind], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, u32>(2)?,
-                    row.get::<_, u32>(3)?,
-                ))
+            .query_map(params![id, meeting_id], |row| {
+                Ok(ChunkPlan {
+                    asset_id: row.get(0)?,
+                    hash: row.get(1)?,
+                    size: row.get(2)?,
+                    start_us: row.get(3)?,
+                    end_us: row.get(4)?,
+                    frames: row.get(5)?,
+                    sample_rate: row.get(6)?,
+                    channels: row.get(7)?,
+                })
             })
             .map_err(|e| e.to_string())?;
-        let tracks = rows
+        let chunks = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        let mut plans = Vec::new();
-        for (id, kind, sample_rate, channels) in tracks {
-            let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence").map_err(|e| e.to_string())?;
-            let rows = query
-                .query_map(params![id, meeting_id], |row| {
-                    Ok(ChunkPlan {
-                        asset_id: row.get(0)?,
-                        hash: row.get(1)?,
-                        size: row.get(2)?,
-                        start_us: row.get(3)?,
-                        end_us: row.get(4)?,
-                        frames: row.get(5)?,
-                        sample_rate: row.get(6)?,
-                        channels: row.get(7)?,
-                    })
-                })
-                .map_err(|e| e.to_string())?;
-            let chunks = rows
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            if chunks.is_empty() || chunks.len() > 1024 || sample_rate == 0 || channels == 0 {
-                return Err("解析入力トラックの区間または形式が不正です".into());
-            }
-            let start_us = chunks[0].start_us;
-            let end_us = chunks.last().unwrap().end_us;
-            plans.push(TrackPlan {
-                id,
-                kind,
-                start_us,
-                end_us,
-                sample_rate,
-                channels,
-                chunks,
-            });
+        if chunks.is_empty() || chunks.len() > 1024 || sample_rate == 0 || channels == 0 {
+            return Err("解析入力トラックの区間または形式が不正です".into());
         }
-        if plans.is_empty()
-            || plans.len() > 2
-            || (source_kind == "audio_import" && plans.len() != 1)
-        {
-            return Err("解析対象の保存済み音声トラックが不正です".into());
-        }
-        Ok(RecordedAudioPlan {
-            manifest_asset_id,
-            manifest_hash,
-            tracks: plans,
-        })
+        let start_us = chunks[0].start_us;
+        let end_us = chunks.last().unwrap().end_us;
+        plans.push(TrackPlan {
+            id,
+            kind,
+            start_us,
+            end_us,
+            sample_rate,
+            channels,
+            chunks,
+        });
     }
+    if plans.is_empty() || plans.len() > 2 || (source_kind == "audio_import" && plans.len() != 1) {
+        return Err("解析対象の保存済み音声トラックが不正です".into());
+    }
+    Ok(RecordedAudioPlan {
+        manifest_asset_id,
+        manifest_hash,
+        tracks: plans,
+    })
+}
 
+impl Storage {
     pub(crate) fn analysis_unit_directory(
         &self,
         meeting_id: &str,
