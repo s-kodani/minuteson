@@ -261,7 +261,7 @@ function MainWindow() {
           {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語はすべての会議で使用します。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
-          <p className="lead">保存済み録音を端末内で文字起こしし、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と話者分離は検証・接続作業中です。</p>
+          <p className="lead">保存済み録音を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
           <section className="status-card" aria-label="録音状態">
             <div className="card-head"><h2>録音セッション</h2><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
@@ -304,7 +304,7 @@ function MainWindow() {
           <div className="next-grid">
             <section><span className="step-number">01</span><h2>保存基盤</h2><p>会議・録音・候補版と、版ごとの編集を端末内に保持します。</p><span className="soon">一部実装</span></section>
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>
-            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし・議事録の編集、候補の生成・確認・採用、macOSのMarkdown出力に対応。話者分離は接続作業中です。</p><span className="soon">一部実装</span></section>
+            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし・話者分離・議事録の候補を確認・採用し、本文・話者を修正できます。macOSのMarkdown出力にも対応します。</p><span className="soon">一部実装</span></section>
           </div>
           </>}
         </main>

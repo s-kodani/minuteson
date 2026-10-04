@@ -15,6 +15,11 @@ export interface AudioPacket {
   frames: number;
 }
 
+export function playbackStartFrame(info: PlaybackInfo, absoluteUs: number): number {
+  if (!Number.isSafeInteger(absoluteUs) || absoluteUs < info.startUs || absoluteUs >= info.endUs || info.totalFrames < 1) throw Error("推定区間の再生位置が発言の範囲外です。");
+  return Math.min(info.totalFrames-1,Math.floor((absoluteUs-info.startUs)*info.sampleRate/1_000_000));
+}
+
 export function decodeAudioPacket(bytes: ArrayBuffer | number[]): AudioPacket {
   const buffer = bytes instanceof ArrayBuffer ? bytes : Uint8Array.from(bytes).buffer;
   if (buffer.byteLength < 12) throw new Error("音声パケットが短すぎます");

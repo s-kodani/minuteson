@@ -187,19 +187,22 @@ impl Storage {
         utterance_id: &str,
     ) -> Result<PreparedAudio, String> {
         let (track, start, end) = {
-            let connection = self
+            let mut connection = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let utterance: Option<(String, i64, i64)> = connection.query_row(
-                "SELECT u.track_id, u.start_us, u.end_us FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND a.publication_state = 'committed' AND t.state = 'ready'",
-                params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            let tx = connection.transaction().map_err(|e| e.to_string())?;
+            let utterance: Option<(String, i64, i64,String)> = tx.query_row(
+                "SELECT u.track_id, u.start_us, u.end_us,a.content_hash FROM utterances u JOIN analysis_revisions a ON a.id = u.analysis_revision_id AND a.meeting_id = u.meeting_id JOIN meetings m ON m.id=u.meeting_id JOIN audio_tracks t ON t.id = u.track_id AND t.meeting_id = u.meeting_id WHERE u.id = ?1 AND u.meeting_id = ?2 AND a.id = ?3 AND (a.publication_state='candidate' OR (a.publication_state='committed' AND a.id IN (m.current_analysis_id,m.previous_analysis_id))) AND t.state = 'ready'",
+                params![utterance_id, meeting_id, analysis_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,row.get(3)?)),
             ).optional().map_err(|e| e.to_string())?;
-            utterance.ok_or("この会議・解析版の再生可能な発言がありません")?
+            let (track, start, end, hash) =
+                utterance.ok_or("この会議・解析版の再生可能な発言がありません")?;
+            if super::revisions::analysis_content_hash(&tx, analysis_id)? != hash {
+                return Err("解析版の内容が変更されています".into());
+            }
+            (track, start, end)
         };
-        if !self.verify_analysis_content_hash(analysis_id)? {
-            return Err("解析版の内容が変更されています".into());
-        }
         self.prepare_track_audio(meeting_id, &track, start, end)
     }
 

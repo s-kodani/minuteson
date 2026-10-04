@@ -640,6 +640,221 @@ fn current_request(s: &Storage, m: &str, operation: &str) -> MinutesJobRequest {
         expected_draft: state.draft,
     }
 }
+
+#[test]
+fn speaker_review_distinguishes_raw_overlap_turns_and_manual_assignment_and_plays_candidate() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m, c, r) = fixture(root.path(), true);
+    let job = enqueue(&s, r, c);
+    s.acquire_local_inference_job().unwrap().unwrap();
+    let id = diarization::process(&s, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
+    let mut request = SpeakerReviewRequest {
+        meeting_id: m.clone(),
+        analysis_id: id.clone(),
+        expected_content_hash: view.content_hash.clone(),
+        utterance_ids: view.utterances.iter().map(|u| u.id.clone()).collect(),
+        include_intervals: false,
+        page: 0,
+    };
+    let batch = s.speaker_reviews(request.clone()).unwrap();
+    assert_eq!(batch.reviews.len(), view.utterances.len());
+    for (u, review) in view.utterances.iter().zip(&batch.reviews) {
+        assert!(review.segments.is_empty());
+        assert!(review.overlaps.is_empty());
+        if u.track_id == "track" {
+            match u.start_us {
+                0 => assert!(review.manual_assignment),
+                2_400_000 => {
+                    assert_eq!(review.estimated_state, "overlap");
+                    assert_eq!(review.overlap_count, 1);
+                }
+                3_500_000 => {
+                    assert_eq!(review.estimated_state, "needsSplit");
+                    assert_eq!(review.overlap_count, 0);
+                }
+                7_000_000 => {
+                    assert!(review.manual_assignment);
+                    assert_eq!(review.estimated_state, "assigned");
+                    assert!(u.speaker_ids.is_empty());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    let u = view
+        .utterances
+        .iter()
+        .find(|u| u.track_id == "track" && u.start_us == 2_400_000)
+        .unwrap();
+    request.utterance_ids = vec![u.id.clone()];
+    request.include_intervals = true;
+    let detail = s
+        .speaker_reviews(request.clone())
+        .unwrap()
+        .reviews
+        .remove(0);
+    assert_eq!(
+        (detail.overlaps[0].start_us, detail.overlaps[0].end_us),
+        (2_400_000, 3_000_000)
+    );
+    assert!(detail.segments.iter().all(|s| s.confidence.is_none()));
+    let audio = s.prepare_utterance_audio(&m, &id, &u.id).unwrap();
+    assert_eq!(audio.total_frames(), 12_800);
+    for change in [
+        "hash",
+        "meeting",
+        "analysis",
+        "utterance",
+        "duplicate",
+        "batch-details",
+        "page",
+    ] {
+        let mut bad = request.clone();
+        match change {
+            "hash" => bad.expected_content_hash = "f".repeat(64),
+            "meeting" => bad.meeting_id = "other".into(),
+            "analysis" => bad.analysis_id = "other".into(),
+            "utterance" => bad.utterance_ids = vec!["other".into()],
+            "duplicate" => bad.utterance_ids.push(u.id.clone()),
+            "batch-details" => {
+                bad.utterance_ids = view.utterances.iter().map(|u| u.id.clone()).collect()
+            }
+            "page" => bad.page = 1,
+            _ => unreachable!(),
+        }
+        assert!(s.speaker_reviews(bad).is_err(), "{change}");
+    }
+    let current = s.load_current_analysis(&m).unwrap().unwrap();
+    request.analysis_id = current.id;
+    request.expected_content_hash = current.content_hash;
+    assert!(s.speaker_reviews(request).is_err());
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER segments_frozen_update;")
+        .unwrap();
+    s.connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE speaker_segments SET end_us=end_us+1 WHERE analysis_revision_id=?1",
+            params![id],
+        )
+        .unwrap();
+    let bad = SpeakerReviewRequest {
+        meeting_id: m.clone(),
+        analysis_id: id.clone(),
+        expected_content_hash: view.content_hash,
+        utterance_ids: vec![u.id.clone()],
+        include_intervals: true,
+        page: 0,
+    };
+    assert!(s.speaker_reviews(bad).err().unwrap().contains("ハッシュ"));
+    assert!(s
+        .prepare_utterance_audio(&m, &id, &u.id)
+        .err()
+        .unwrap()
+        .contains("変更"));
+}
+
+#[test]
+fn speaker_review_pages_do_not_confuse_same_speaker_duplicates_with_more_people() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (m, _, _) = super::super::playback::tests::fixture(&s);
+    let id = s
+        .create_analysis_candidate(
+            &m,
+            AnalysisInput {
+                audio_manifest_hash: "a".repeat(64),
+                profile_snapshot: json!({}),
+                config: json!({}),
+                speakers: vec![SpeakerInput {
+                    key: "one".into(),
+                    label: "一人".into(),
+                }],
+                segments: (0..125)
+                    .map(|i| SpeakerSegmentInput {
+                        track_id: "track".into(),
+                        speaker_key: Some("one".into()),
+                        start_us: 250_000 + i * 1000,
+                        end_us: 255_000 + i * 1000,
+                        confidence: None,
+                        overlap_group: None,
+                    })
+                    .collect(),
+                utterances: vec![UtteranceInput {
+                    track_id: "track".into(),
+                    start_us: 250_000,
+                    end_us: 750_000,
+                    text: "一人の発言".into(),
+                    speaker_keys: vec![],
+                    confidence: None,
+                }],
+            },
+        )
+        .unwrap();
+    let view = s.load_visible_analysis(&m, &id).unwrap().unwrap();
+    let mut r = SpeakerReviewRequest {
+        meeting_id: m,
+        analysis_id: id,
+        expected_content_hash: view.content_hash,
+        utterance_ids: vec![view.utterances[0].id.clone()],
+        include_intervals: true,
+        page: 0,
+    };
+    for (page, count) in [(0, 50), (1, 50), (2, 25)] {
+        r.page = page;
+        let review = s.speaker_reviews(r.clone()).unwrap().reviews.remove(0);
+        assert_eq!(review.segment_count, 125);
+        assert_eq!(review.page_count, 3);
+        assert_eq!(review.segments.len(), count);
+        assert_eq!(review.overlap_count, 0);
+        assert_eq!(review.estimated_state, "assigned");
+    }
+    r.page = 3;
+    assert!(s.speaker_reviews(r).is_err());
+}
+
+#[test]
+fn speaker_review_and_playback_reject_internal_or_no_longer_visible_revisions() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m, c, r) = fixture(root.path(), false);
+    let old = s.load_current_analysis(&m).unwrap().unwrap();
+    let job = enqueue(&s, r, c.clone());
+    let fixed = s.load_diarization_input(&job.id).unwrap().analysis;
+    let request = |a: &AnalysisView| SpeakerReviewRequest {
+        meeting_id: m.clone(),
+        analysis_id: a.id.clone(),
+        expected_content_hash: a.content_hash.clone(),
+        utterance_ids: vec![a.utterances[0].id.clone()],
+        include_intervals: false,
+        page: 0,
+    };
+    assert!(s.speaker_reviews(request(&fixed)).is_err());
+    assert!(s
+        .prepare_utterance_audio(&m, &fixed.id, &fixed.utterances[0].id)
+        .is_err());
+    s.acquire_local_inference_job().unwrap().unwrap();
+    let first = diarization::process(&s, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    adopt(&s, &m, &first).unwrap();
+    assert!(s.speaker_reviews(request(&old)).is_ok());
+    let next = enqueue(&s, current_request(&s, &m, "next"), c);
+    s.acquire_local_inference_job().unwrap().unwrap();
+    let second = diarization::process(&s, &next.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    adopt(&s, &m, &second).unwrap();
+    assert!(s.speaker_reviews(request(&old)).is_err());
+    assert!(s
+        .prepare_utterance_audio(&m, &old.id, &old.utterances[0].id)
+        .is_err());
+}
 fn adopt(s: &Storage, m: &str, id: &str) -> Result<CommittedAnalysis, String> {
     let view = s.load_visible_analysis(m, id)?.unwrap();
     let state = s.analysis_versions(m)?;
@@ -804,7 +1019,7 @@ fn recording_and_exit_pause_kill_and_reap_unfinished_whole_track_without_a_check
         std::fs::write(
             &c.executable.path,
             format!(
-                "#!/bin/sh\nprintf '%s' $$ > {}\nexec /bin/sleep 30\n",
+                "#!/bin/sh\nprintf '%s\\n' $$ > {}\nexec /bin/sleep 30\n",
                 quote(root.path().join("child.pid").to_str().unwrap())
             ),
         )
@@ -813,13 +1028,21 @@ fn recording_and_exit_pause_kill_and_reap_unfinished_whole_track_without_a_check
         let job = enqueue(&s, r, c);
         s.acquire_local_inference_job().unwrap().unwrap();
         let started = std::time::Instant::now();
+        let requested_at = std::cell::Cell::new(None::<std::time::Instant>);
         let requested = std::cell::Cell::new(false);
         assert_eq!(
             diarization::process(
                 &s,
                 &job.id,
                 &|| {
-                    if started.elapsed() > std::time::Duration::from_millis(250) {
+                    // Wait for a complete PID: under the parallel full suite,
+                    // hashing/conversion can legitimately exceed 250 ms.
+                    let child_started = std::fs::read(root.path().join("child.pid"))
+                        .is_ok_and(|pid| pid.ends_with(b"\n") && pid.len() > 1);
+                    if child_started || started.elapsed() > std::time::Duration::from_secs(10) {
+                        if requested_at.get().is_none() {
+                            requested_at.set(Some(std::time::Instant::now()));
+                        }
                         if recording {
                             if !requested.replace(true) {
                                 s.request_pause_for_recording().unwrap();
@@ -842,7 +1065,9 @@ fn recording_and_exit_pause_kill_and_reap_unfinished_whole_track_without_a_check
             stopped.pause_reason.as_deref(),
             Some(if recording { "recording" } else { "exit" })
         );
-        let pid = std::fs::read_to_string(root.path().join("child.pid")).unwrap();
+        assert!(requested_at.get().unwrap().elapsed() < std::time::Duration::from_secs(3));
+        let pid = std::fs::read_to_string(root.path().join("child.pid"))
+            .expect("native test CLI must start before testing its cancellation");
         assert!(!std::process::Command::new("/bin/kill")
             .args(["-0", pid.trim()])
             .stdout(std::process::Stdio::null())

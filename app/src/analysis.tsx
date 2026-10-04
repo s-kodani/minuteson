@@ -6,24 +6,33 @@ import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type An
 import { timeLabel, type Analysis, type Draft } from "./transcript";
 import { VocabularyEditor } from "./vocabulary";
 import type { VocabularyStamp } from "./vocabulary-state";
+import { DiarizationPanel } from "./diarization-panel";
+import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
+import { useTranscriptAudio } from "./transcript-audio";
 
 type Preferences = VersionedDraft<AnalysisPreferences>;
 type Preview = { summary: VersionSummary; analysis: Analysis; draft: Draft | null; current: Analysis | null; currentDraft: Draft | null; restoring: boolean };
 
-function PreviewText({ analysis, draft, title }: { analysis: Analysis; draft: Draft | null; title: string }) {
+function PreviewText({ analysis, draft, title,locked }: { analysis: Analysis; draft: Draft | null; title: string;locked:boolean }) {
   const [page, setPage] = useState(0);
   const edits = new Map(draft?.payload.utterances.map((item) => [item.utterance_id, item]) ?? []);
   const names = new Map(draft?.payload.speaker_names.map((item) => [item.speaker_id, item.display_name]) ?? []);
+  const shown=analysis.utterances.slice(page*50,(page+1)*50);
+  const review=useSpeakerReviews(analysis,shown.map(u=>u.id));
+  const audio=useTranscriptAudio(analysis.meetingId,locked);
+  const labels=new Map(analysis.speakers.map(s=>[s.id,names.get(s.id)||s.displayName||s.label]));
   return <section className="preview-text" aria-label={title}>
     <h3>{title} {draft && <small>保存済み編集を含む</small>}</h3>
     {analysis.utterances.length === 0 && <p>発言はありません。</p>}
-    {analysis.utterances.slice(page * 50, (page + 1) * 50).map((item) => {
+    {audio.controls}
+    {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
+    {shown.map((item) => {
       const edit = edits.get(item.id);
       const speakers = (edit?.speaker_ids ?? item.speakerIds).map((id) => {
         const speaker = analysis.speakers.find((value) => value.id === id);
         return names.get(id) ?? speaker?.displayName ?? speaker?.label ?? "話者不明";
       });
-      return <article key={item.id}><small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small><p>{edit?.effective_text ?? item.effectiveText}</p></article>;
+      return <article key={item.id}><small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small><button type="button" className="small-secondary" disabled={locked||audio.preparing} onClick={()=>void audio.start(analysis.id,item.id)}>この発言を聞く</button><SpeakerReviewBadge review={review.reviews.get(item.id)}/><p>{edit?.effective_text ?? item.effectiveText}</p><SpeakerReviewDetails analysis={analysis} utteranceId={item.id} startUs={item.startUs} labels={labels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,item.id,undefined,at)}/></article>;
     })}
     {analysis.utterances.length > 50 && <div className="transcript-pages"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>前へ</button><span>{page + 1} / {Math.ceil(analysis.utterances.length / 50)}</span><button type="button" disabled={(page + 1) * 50 >= analysis.utterances.length} onClick={() => setPage(page + 1)}>次へ</button></div>}
   </section>;
@@ -182,7 +191,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
 
   return <section className="analysis-card" aria-label="解析操作">
     <div className="card-head"><h2>ローカル文字起こし</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>状態を再読込</button></div>
-    <p>結果は候補として保存します。内容を確認して採用するまで、現在版と編集内容は変更しません。話者分離と時刻補正は未接続です。</p>
+    <p>結果は候補として保存します。内容を確認して採用するまで、現在版と編集内容は変更しません。話者分離は採用済み文字起こしから下の操作で開始できます。トラック間の時刻補正は未検証です。</p>
     <details className="analysis-settings"><summary>エンジン設定（端末内に保存）</summary>
       <p>導入済みの whisper.cpp 実行ファイルと多言語モデルの絶対パスを指定してください。モデル品質・速度は未検証です。開始時にファイルのハッシュを固定します。</p>
       <label>プロファイル<select value={profile} disabled={disabled} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></label>
@@ -206,13 +215,14 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("解析ジョブを取り消しますか？ 録音と現在版は削除しません。")) void jobAction("cancel_analysis_job", job.id); }}>取消</button>}
       {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
     </div></li>)}</ul>}
-    <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
+    <DiarizationPanel meetingId={meetingId} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
+    <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     {error && <p className="action-error" role="alert">{error}</p>}
     {preview && <dialog ref={dialog} className="analysis-dialog" aria-labelledby="analysis-preview-title" onCancel={(event) => { if (disabled) event.preventDefault(); else setPreview(null); }}>
       <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => setPreview(null)}>閉じる</button></div>
       <p>左右の発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
       <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
-      <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} /></div>
+      <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
       {error && <p className="action-error" role="alert">{error}</p>}
       <div className="analysis-actions"><button type="button" disabled={disabled} onClick={() => void applyPreview()}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
     </dialog>}

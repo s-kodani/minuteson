@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
-import { ChunkPlayer, type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
+import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
 import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
 
 class BrowserAudioClock implements PlaybackClock {
@@ -65,7 +65,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     };
   }, [clock, player, owner]);
 
-  const start = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest) => {
+  const start = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest, absoluteStartUs?: number) => {
     if (locked) return;
     clear();
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
@@ -94,10 +94,17 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
         token.current = null;
         throw new Error("根拠と再生する音声区間が一致しません");
       }
+      const startFrame=absoluteStartUs===undefined?null:playbackStartFrame(info,absoluteStartUs);
       player.load(info);
+      if(startFrame!==null)player.seek(startFrame);
       await player.play();
     } catch (cause) {
-      if (generation === request.current) setError(String(cause));
+      if (generation === request.current) {
+        player.clear();
+        if(token.current)void invoke("close_playback",{token:token.current}).catch(()=>{});
+        token.current=null;
+        setError(String(cause));
+      }
     } finally {
       if (generation === request.current) setPreparing(false);
     }

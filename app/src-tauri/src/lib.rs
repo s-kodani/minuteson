@@ -70,6 +70,42 @@ fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::Preference
 }
 
 #[tauri::command]
+fn get_diarization_preferences(
+    window: WebviewWindow,
+) -> Result<storage::DiarizationPreferencesSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read diarization settings".into());
+    }
+    window.state::<Storage>().diarization_preferences()
+}
+#[tauri::command]
+fn save_diarization_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::DiarizationPreferences,
+) -> Result<storage::DiarizationPreferencesSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit diarization settings".into());
+    }
+    window
+        .state::<Storage>()
+        .save_diarization_preferences(expected_lock_version, payload)
+}
+#[tauri::command]
+async fn get_speaker_reviews(
+    window: WebviewWindow,
+    request: storage::SpeakerReviewRequest,
+) -> Result<storage::SpeakerReviewResponse, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read speaker intervals".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().speaker_reviews(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn save_analysis_preferences(
     window: WebviewWindow,
     expected_lock_version: i64,
@@ -1005,6 +1041,9 @@ pub fn run() {
             resume_analysis_job,
             cancel_analysis_job,
             get_analysis_preferences,
+            get_diarization_preferences,
+            save_diarization_preferences,
+            get_speaker_reviews,
             get_vocabulary_book,
             get_meeting_vocabulary,
             save_vocabulary_book,

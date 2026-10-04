@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
+import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 
 interface Speaker {
   id: string;
@@ -162,6 +163,8 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
   };
 
   const shown = analysis?.utterances.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
+  const review = useSpeakerReviews(analysis,shown.map(u=>u.id));
+  const speakerLabels = new Map(analysis?.speakers.map(s=>[s.id,payload?.speaker_names.find(e=>e.speaker_id===s.id)?.display_name||s.displayName||s.label])??[]);
   const matchingBase = Boolean(draft && draft.baseAnalysisId === analysis?.id);
   const editable = Boolean(matchingBase && payload && !locked && !loading && !busy);
 
@@ -189,14 +192,16 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
           })}
         </div>
         <div className="utterance-list">
+          {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {
             const edited = payload?.utterances.find((item) => item.utterance_id === utterance.id);
             const speakerIds = edited?.speaker_ids ?? utterance.speakerIds;
             return <article key={utterance.id} className="utterance-row">
-              <div className="utterance-meta"><time>{timeLabel(utterance.startUs)}–{timeLabel(utterance.endUs)}</time><span>{utterance.attributionState === "overlap" ? "重複発話" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span><button type="button" className="small-secondary" onClick={() => void audio.start(analysis.id, utterance.id)} disabled={locked || loading || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
+              <div className="utterance-meta"><time>{timeLabel(utterance.startUs)}–{timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span><SpeakerReviewBadge review={review.reviews.get(utterance.id)}/><button type="button" className="small-secondary" onClick={() => void audio.start(analysis.id, utterance.id)} disabled={locked || loading || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
               <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} value={edited?.effective_text ?? utterance.effectiveText} onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
               {(edited?.effective_text ?? utterance.effectiveText) !== utterance.recognizedText && <small>認識原文: {utterance.recognizedText}</small>}
               {analysis.speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{analysis.speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{payload?.speaker_names.find((item) => item.speaker_id === speaker.id)?.display_name || speaker.displayName || speaker.label}</label>)}</div>}
+              <SpeakerReviewDetails analysis={analysis} utteranceId={utterance.id} startUs={utterance.startUs} labels={speakerLabels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,utterance.id,undefined,at)}/>
             </article>;
           })}
         </div>

@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod analysis;
 mod analysis_ui;
 mod diarization;
+mod diarization_preferences;
 mod drafts;
 mod exports;
 #[cfg(all(test, unix))]
@@ -26,6 +27,7 @@ mod playback;
 mod preferences;
 mod recordings;
 mod revisions;
+mod speaker_review;
 mod transcription;
 mod vocabulary;
 pub use analysis::AnalysisView;
@@ -35,6 +37,7 @@ pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
 pub(crate) use analysis::{SpeakerInput, SpeakerSegmentInput};
 pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
 pub(crate) use diarization::DiarizationInput;
+pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPreferencesSnapshot};
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
@@ -50,6 +53,7 @@ pub(crate) use minutes_ui::{MinutesAdoptRequest, MinutesVersionState};
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub use recordings::RecordingConfig;
 pub(crate) use revisions::{CommittedAnalysis, CommittedMinutes};
+pub(crate) use speaker_review::{SpeakerReviewRequest, SpeakerReviewResponse};
 pub(crate) use transcription::RecordedAudioPlan;
 pub(crate) use vocabulary::{
     VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
