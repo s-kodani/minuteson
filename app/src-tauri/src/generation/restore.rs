@@ -228,7 +228,6 @@ impl<A: Assets> Replay<'_, A> {
     }
 }
 
-#[allow(dead_code)] // Wired into the private restore construction in a later stage.
 pub(crate) fn checkpoint(
     old: Context<'_>,
     new: Context<'_>,

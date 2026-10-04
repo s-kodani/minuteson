@@ -1,7 +1,9 @@
 //! File-backed reconstruction, never a publishable or validated restore image.
-//! Native artifacts/checkpoints and remaining provenance need a subsequent pass.
+//! Generation artifacts have a consuming construction pass. Transcription,
+//! diarization, remaining provenance and publication still need later passes.
 use super::*;
 use std::io::Read;
+mod generation;
 
 pub(in crate::storage::backup) struct FixedWorkspace {
     // Close SQLite before removing only this operation's private directory.
@@ -12,6 +14,17 @@ pub(in crate::storage::backup) struct FixedWorkspace {
 }
 
 impl FixedWorkspace {
+    // Consumes an unsealed workspace: an error also closes SQLite and removes
+    // this operation's partial files. No live DB or available model is exposed.
+    pub(in crate::storage::backup) fn with_generation_artifacts(
+        mut self,
+        fixed: &FixedData<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        self.generation_artifacts(fixed, cancelled)?;
+        Ok(self)
+    }
+
     pub(in crate::storage::backup) fn prepare(
         fixed: &FixedData<'_, '_>,
         parent: &Path,

@@ -413,34 +413,12 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
         let (fixed, _) = read_fixed_input(&tx, job_id)?;
-        let mut current = load_job(&tx, job_id)?.ok_or("処理がありません")?;
-        let mut seen = std::collections::HashSet::new();
-        loop {
-            if !seen.insert(current.id.clone()) || seen.len() > 1000 {
-                return Err("再試行の由来が循環しているか長すぎます".into());
-            }
-            let Some(parent_id) = current.retry_of_job_id.as_deref() else {
-                if current.attempt != 1 {
-                    return Err("元の試行番号が不正です".into());
-                }
-                return Ok(current.operation_id);
-            };
+        let current = load_job(&tx, job_id)?.ok_or("処理がありません")?;
+        initial_operation(current, &fixed, |parent_id| {
             let parent = load_job(&tx, parent_id)?.ok_or("再試行元がありません")?;
             let (spec, _) = read_fixed_input(&tx, parent_id)?;
-            if parent.attempt.checked_add(1) != Some(current.attempt)
-                || !matches!(parent.state.as_str(), "failed" | "cancelled")
-                || spec.meeting_id != fixed.meeting_id
-                || spec.kind != fixed.kind
-                || spec.input_analysis_id != fixed.input_analysis_id
-                || spec.input_hash != fixed.input_hash
-                || spec.profile_snapshot != fixed.profile_snapshot
-                || spec.parameters != fixed.parameters
-                || spec.total_units != fixed.total_units
-            {
-                return Err("再試行の固定条件または由来が一致しません".into());
-            }
-            current = parent;
-        }
+            Ok((parent, spec))
+        })
     }
 
     pub(crate) fn request_job_pause(
@@ -624,6 +602,43 @@ pub(super) fn enqueue_in_transaction(
         ).map_err(|error| error.to_string())?;
     let snapshot = load_job(&transaction, &id)?.ok_or("処理を読み込めません")?;
     Ok(snapshot)
+}
+
+// Shared lineage policy. The caller supplies its validated spec reader: live
+// jobs verify native hashes; portable sources retain original identity hashes.
+pub(super) fn initial_operation(
+    mut current: JobSnapshot,
+    fixed: &JobSpec,
+    mut read: impl FnMut(&str) -> Result<(JobSnapshot, JobSpec), String>,
+) -> Result<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.id.clone()) || seen.len() > 1000 {
+            return Err("再試行の由来が循環しているか長すぎます".into());
+        }
+        let Some(parent_id) = current.retry_of_job_id.as_deref() else {
+            if current.attempt != 1 {
+                return Err("元の試行番号が不正です".into());
+            }
+            return Ok(current.operation_id);
+        };
+        let (parent, spec) = read(parent_id)?;
+        if parent.id != parent_id
+            || parent.meeting_id != fixed.meeting_id
+            || parent.attempt.checked_add(1) != Some(current.attempt)
+            || !matches!(parent.state.as_str(), "failed" | "cancelled")
+            || spec.meeting_id != fixed.meeting_id
+            || spec.kind != fixed.kind
+            || spec.input_analysis_id != fixed.input_analysis_id
+            || spec.input_hash != fixed.input_hash
+            || spec.profile_snapshot != fixed.profile_snapshot
+            || spec.parameters != fixed.parameters
+            || spec.total_units != fixed.total_units
+        {
+            return Err("再試行の固定条件または由来が一致しません".into());
+        }
+        current = parent;
+    }
 }
 
 pub(super) fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {

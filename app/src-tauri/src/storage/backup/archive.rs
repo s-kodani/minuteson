@@ -84,6 +84,12 @@ pub(crate) struct VerifiedArchive {
 
 impl VerifiedArchive {
     pub(super) fn owned_asset_path(&self, id: &str) -> Result<PathBuf, String> {
+        if !std::fs::symlink_metadata(self.stage.path())
+            .map_err(|e| e.to_string())?
+            .is_dir()
+        {
+            return Err("検査専用領域が変更されています".into());
+        }
         let asset = self
             .assets
             .get(id)

@@ -21,7 +21,7 @@ fn engine(root: &Path, body: &str) -> LlamaConfig {
         seed: 1,
     }
 }
-fn normal_engine(root: &Path) -> LlamaConfig {
+pub(in crate::storage) fn normal_engine(root: &Path) -> LlamaConfig {
     engine(
         root,
         r#"p=json.loads(pathlib.Path(arg('--file')).read_text())
@@ -33,7 +33,7 @@ else:
 print(json.dumps({'schemaVersion':1,'items':items},ensure_ascii=False))"#,
     )
 }
-fn wide_engine(root: &Path) -> LlamaConfig {
+pub(in crate::storage) fn wide_engine(root: &Path) -> LlamaConfig {
     engine(
         root,
         r#"import hashlib
@@ -53,7 +53,10 @@ else:
 print(json.dumps({'schemaVersion':1,'items':items},ensure_ascii=False))"#,
     )
 }
-fn pause_in_merge(storage: &Storage, job: &JobSnapshot) -> serde_json::Value {
+pub(in crate::storage) fn pause_in_merge(
+    storage: &Storage,
+    job: &JobSnapshot,
+) -> serde_json::Value {
     storage.acquire_local_inference_job().unwrap();
     assert!(
         generation::process(storage, &job.id, &|| false, &|snapshot| {
