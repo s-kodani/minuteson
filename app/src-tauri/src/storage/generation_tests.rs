@@ -33,6 +33,434 @@ else:
 print(json.dumps({'schemaVersion':1,'items':items},ensure_ascii=False))"#,
     )
 }
+fn wide_engine(root: &Path) -> LlamaConfig {
+    engine(
+        root,
+        r#"import hashlib
+prompt=pathlib.Path(arg('--file')).read_bytes()
+unit=pathlib.Path(arg('--file')).parent.name.split('-')[1]
+with (base/'engine.tasks').open('a') as f: f.write(unit+':'+hashlib.sha256(prompt).hexdigest()+'\n')
+p=json.loads(prompt)
+if 'items' in p and (base/'hold-merge').exists():
+    (base/'merge.pid').write_text(str(os.getpid()))
+    while True: pass
+if 'utterances' in p:
+    refs=[u['utteranceId'] for u in p['utterances']]
+    offset=p['utterances'][0]['firstByte'] if refs else 0
+    items=[{'kind':'summary','body':f'確認事項{offset}-{i}: '+'内容の異なる作業を確認します。'*5,'assigneeName':None,'assigneeSpeakerId':None,'dueDate':None,'dueText':None,'evidenceUtteranceIds':refs} for i in range(12)] if refs else []
+else:
+    items=[{'body':i['item']['body'],'sourceItemIds':[i['sourceItemId']]} for i in p['items']]
+print(json.dumps({'schemaVersion':1,'items':items},ensure_ascii=False))"#,
+    )
+}
+fn pause_in_merge(storage: &Storage, job: &JobSnapshot) -> serde_json::Value {
+    storage.acquire_local_inference_job().unwrap();
+    assert!(
+        generation::process(storage, &job.id, &|| false, &|snapshot| {
+            let (_, checkpoint) = storage.fixed_job_input(&job.id).unwrap();
+            if snapshot.state == "running"
+                && checkpoint
+                    .as_ref()
+                    .and_then(|c| c["pending"]["batches"].as_array())
+                    .is_some_and(|b| b.len() == 2)
+            {
+                storage.request_job_pause(&job.id, "user").unwrap();
+            }
+        })
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "paused");
+    let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
+    assert_eq!(
+        checkpoint["pending"]["batches"].as_array().unwrap().len(),
+        2
+    );
+    checkpoint
+}
+#[test]
+fn adaptive_merge_resumes_durable_subunits_after_reopen_and_preserves_every_item_and_current_edit()
+{
+    let root = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(root.path().into()).unwrap();
+    let mut req = request(&storage, true);
+    let baseline = minutes_ui::tests::candidate(&storage, &req.meeting_id);
+    storage
+        .adopt_minutes(minutes_ui::tests::request(
+            &storage,
+            &req.meeting_id,
+            &baseline,
+        ))
+        .unwrap();
+    let draft = storage
+        .create_minutes_draft(&req.meeting_id, &baseline)
+        .unwrap();
+    let mut content = draft.payload;
+    content
+        .blocks
+        .push(crate::minutes_document::Block::Paragraph {
+            item_id: None,
+            content: vec![crate::minutes_document::Inline::text("保持する手動追記")],
+        });
+    let edit = storage
+        .save_minutes_draft(&draft.id, draft.lock_version, content)
+        .unwrap();
+    req.expected_meeting_lock_version = storage
+        .get_meeting(&req.meeting_id)
+        .unwrap()
+        .unwrap()
+        .lock_version;
+    let job = generation::enqueue(
+        &storage,
+        req.clone(),
+        wide_engine(root.path()),
+        "standard",
+        2400,
+    )
+    .unwrap();
+    let fixed = storage.load_minutes_input(&job.id).unwrap();
+    let spec = storage.fixed_job_input(&job.id).unwrap().0;
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 2);
+    let extracts = spec.parameters["generation"]["plan"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["type"] == "extract")
+        .count();
+    let checkpoint = pause_in_merge(&storage, &job);
+    assert_eq!(
+        storage.get_job(&job.id).unwrap().completed_units,
+        extracts as i64
+    );
+    let before = calls(root.path());
+    drop(storage);
+    storage = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        storage.fixed_job_input(&job.id).unwrap().1,
+        Some(checkpoint)
+    );
+    storage.resume_job(&job.id).unwrap();
+    storage.acquire_local_inference_job().unwrap();
+    let id = generation::process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert!(calls(root.path()) > before);
+    let trace = std::fs::read_to_string(root.path().join("engine.tasks")).unwrap();
+    assert_eq!(
+        trace.lines().count(),
+        trace
+            .lines()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        "durable tasks within the same logical unit must not rerun"
+    );
+    let result = storage
+        .load_minutes_content(&req.meeting_id, &id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.content.items.len(), extracts * 12);
+    assert_eq!(
+        result
+            .content
+            .items
+            .iter()
+            .map(|i| &i.body)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        extracts * 12
+    );
+    assert!(result
+        .content
+        .evidence
+        .iter()
+        .all(|e| e.analysis_revision_id == fixed.analysis.id
+            && e.quote_text == fixed.analysis.utterances[0].effective_text));
+    assert_eq!(
+        storage.load_minutes_draft(&req.meeting_id, None).unwrap(),
+        Some(edit)
+    );
+    assert_eq!(current_minutes(&storage, &req.meeting_id), Some(baseline));
+    assert!(storage
+        .fixed_job_input(&job.id)
+        .unwrap()
+        .1
+        .unwrap()
+        .get("pending")
+        .is_none());
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
+}
+#[test]
+fn adaptive_partial_merge_retry_inherits_verified_batches_without_rerunning_them() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let job = generation::enqueue(
+        &storage,
+        request(&storage, true),
+        wide_engine(root.path()),
+        "standard",
+        2400,
+    )
+    .unwrap();
+    let checkpoint = pause_in_merge(&storage, &job);
+    let units = storage.get_job(&job.id).unwrap().completed_units;
+    let source = storage
+        .finish_job(&job.id, units, "failed", Some("fixture_failure"))
+        .unwrap();
+    let before = calls(root.path());
+    let child = retry_request(&source, "adaptive-retry")
+        .enqueue(&storage)
+        .unwrap();
+    assert_eq!(
+        storage.fixed_job_input(&child.id).unwrap().1,
+        Some(checkpoint)
+    );
+    assert_eq!(calls(root.path()), before);
+    storage.acquire_local_inference_job().unwrap();
+    let id = generation::process(&storage, &child.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let trace = std::fs::read_to_string(root.path().join("engine.tasks")).unwrap();
+    assert_eq!(
+        trace.lines().count(),
+        trace
+            .lines()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    );
+    assert!(
+        storage
+            .load_minutes_content(&job.meeting_id, &id)
+            .unwrap()
+            .unwrap()
+            .content
+            .items
+            .len()
+            > 12
+    );
+    assert_eq!(storage.get_job(&source.id).unwrap(), source);
+}
+#[test]
+fn adaptive_pending_artifact_corruption_and_wrong_order_are_rejected_before_any_new_inference() {
+    for change in ["prompt", "result", "normalized", "index", "duplicate"] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let job = generation::enqueue(
+            &storage,
+            request(&storage, true),
+            wide_engine(root.path()),
+            "standard",
+            2400,
+        )
+        .unwrap();
+        let mut checkpoint = pause_in_merge(&storage, &job);
+        let before = calls(root.path());
+        let units = storage.get_job(&job.id).unwrap().completed_units;
+        if matches!(change, "index" | "duplicate") {
+            if change == "index" {
+                checkpoint["pending"]["index"] = serde_json::json!(0);
+            } else {
+                let first = checkpoint["pending"]["batches"][0].clone();
+                checkpoint["pending"]["batches"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(first);
+            }
+            storage.resume_job(&job.id).unwrap();
+            storage.acquire_local_inference_job().unwrap();
+            storage
+                .save_job_checkpoint(&job.id, units, units, checkpoint)
+                .unwrap();
+            assert!(
+                generation::process(&storage, &job.id, &|| false, &|_| {}).is_err(),
+                "{change}"
+            );
+        } else {
+            let batch = &checkpoint["pending"]["batches"][0];
+            let asset = if change == "normalized" {
+                &batch["normalized"]
+            } else {
+                &batch["artifacts"][if change == "prompt" { 1 } else { 3 }]
+            };
+            let path: String = storage
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT relative_path FROM file_assets WHERE id=?1",
+                    params![asset["id"].as_str().unwrap()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            std::fs::write(root.path().join(path), b"{}").unwrap();
+            let source = storage
+                .finish_job(&job.id, units, "failed", Some("fixture_failure"))
+                .unwrap();
+            assert!(
+                retry_request(&source, "reject-corrupt-batch")
+                    .enqueue(&storage)
+                    .is_err(),
+                "{change}"
+            );
+        }
+        assert_eq!(calls(root.path()), before);
+        assert!(current_minutes(&storage, &job.meeting_id).is_none());
+    }
+}
+#[test]
+fn adaptive_merge_checkpoint_failures_preserve_only_durable_batches_for_retry() {
+    for final_transition in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let job = generation::enqueue(
+            &storage,
+            request(&storage, true),
+            wide_engine(root.path()),
+            "standard",
+            2400,
+        )
+        .unwrap();
+        let original = pause_in_merge(&storage, &job);
+        let durable_trace = std::fs::read_to_string(root.path().join("engine.tasks")).unwrap();
+        let units = storage.get_job(&job.id).unwrap().completed_units;
+        let condition = if final_transition {
+            format!("NEW.completed_units > {units}")
+        } else {
+            "json_array_length(json_extract(NEW.checkpoint_json, '$.pending.batches')) > 2".into()
+        };
+        storage.connection.lock().unwrap().execute_batch(&format!(
+            "CREATE TRIGGER fixture_merge_abort BEFORE INSERT ON job_checkpoints WHEN {condition} BEGIN SELECT RAISE(ABORT,'fixture merge checkpoint failure'); END;"
+        )).unwrap();
+        storage.resume_job(&job.id).unwrap();
+        storage.acquire_local_inference_job().unwrap();
+        assert!(generation::process(&storage, &job.id, &|| false, &|_| {})
+            .unwrap_err()
+            .contains("fixture merge checkpoint failure"));
+        assert_eq!(storage.get_job(&job.id).unwrap().completed_units, units);
+        assert!(current_minutes(&storage, &job.meeting_id).is_none());
+        let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
+        let saved_trace = if final_transition {
+            assert!(checkpoint["pending"]["batches"].as_array().unwrap().len() > 2);
+            std::fs::read_to_string(root.path().join("engine.tasks")).unwrap()
+        } else {
+            assert_eq!(checkpoint, original);
+            durable_trace
+        };
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fixture_merge_abort;")
+            .unwrap();
+        let source = storage
+            .finish_job(&job.id, units, "failed", Some("fixture_storage_failure"))
+            .unwrap();
+        let retry = retry_request(&source, "retry-storage-failure")
+            .enqueue(&storage)
+            .unwrap();
+        assert_eq!(
+            storage.fixed_job_input(&retry.id).unwrap().1,
+            Some(checkpoint)
+        );
+        storage.acquire_local_inference_job().unwrap();
+        assert!(generation::process(&storage, &retry.id, &|| false, &|_| {})
+            .unwrap()
+            .is_some());
+        let after = std::fs::read_to_string(root.path().join("engine.tasks")).unwrap();
+        for saved in saved_trace.lines() {
+            assert_eq!(
+                after.lines().filter(|line| *line == saved).count(),
+                1,
+                "committed batches must be reused; only an uncommitted batch may rerun"
+            );
+        }
+    }
+}
+#[test]
+fn adaptive_recording_and_exit_interrupt_unfinished_merge_without_losing_saved_batches() {
+    for recording in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let job = generation::enqueue(
+            &storage,
+            request(&storage, true),
+            wide_engine(root.path()),
+            "standard",
+            2400,
+        )
+        .unwrap();
+        let checkpoint = pause_in_merge(&storage, &job);
+        let units = storage.get_job(&job.id).unwrap().completed_units;
+        std::fs::write(root.path().join("hold-merge"), b"hold").unwrap();
+        storage.resume_job(&job.id).unwrap();
+        storage.acquire_local_inference_job().unwrap();
+        let stopping = || {
+            if !root.path().join("merge.pid").exists() {
+                return false;
+            }
+            if recording {
+                storage.request_pause_for_recording().unwrap();
+                false
+            } else {
+                true
+            }
+        };
+        assert!(generation::process(&storage, &job.id, &stopping, &|_| {})
+            .unwrap()
+            .is_none());
+        let current = storage.get_job(&job.id).unwrap();
+        assert_eq!(current.state, "paused");
+        assert_eq!(current.completed_units, units);
+        assert_eq!(
+            current.pause_reason.as_deref(),
+            Some(if recording { "recording" } else { "exit" })
+        );
+        assert_eq!(
+            storage.fixed_job_input(&job.id).unwrap().1,
+            Some(checkpoint)
+        );
+        assert!(current_minutes(&storage, &job.meeting_id).is_none());
+        let pid = std::fs::read_to_string(root.path().join("merge.pid")).unwrap();
+        assert!(!std::process::Command::new("/bin/kill")
+            .args(["-0", &pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+#[test]
+fn legacy_generation_still_resumes_its_original_artifacts_and_rejects_oversized_merge_inputs() {
+    for wide in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let config = if wide {
+            wide_engine(root.path())
+        } else {
+            normal_engine(root.path())
+        };
+        let job =
+            generation::enqueue_legacy(&storage, request(&storage, true), config, "standard", 2400)
+                .unwrap();
+        assert_eq!(
+            storage.fixed_job_input(&job.id).unwrap().0.parameters["generation"]["schemaVersion"],
+            1
+        );
+        pause_at(&storage, &job, 1);
+        let before = calls(root.path());
+        storage.resume_job(&job.id).unwrap();
+        storage.acquire_local_inference_job().unwrap();
+        let result = generation::process(&storage, &job.id, &|| false, &|_| {});
+        if wide {
+            assert!(result.unwrap_err().contains("統合入力"));
+            assert!(current_minutes(&storage, &job.meeting_id).is_none());
+        } else {
+            assert!(result.unwrap().is_some());
+            assert_eq!(calls(root.path()) as i64, job.total_units.unwrap());
+        }
+        assert!(calls(root.path()) > before);
+    }
+}
 fn request(storage: &Storage, long: bool) -> MinutesJobRequest {
     let meeting = analysis::tests::saved_meeting(storage);
     std::fs::create_dir_all(storage.root.join("meetings").join(&meeting.id)).unwrap();

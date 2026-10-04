@@ -1,4 +1,5 @@
 //! Fixed-input llama.cpp extraction and merging with durable unit provenance.
+mod adaptive;
 pub(crate) mod llama;
 mod merge;
 mod plan;
@@ -103,6 +104,20 @@ struct Envelope {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Checkpoint {
     outputs: Vec<UnitOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending: Option<PendingMerge>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PendingMerge {
+    index: usize,
+    batches: Vec<SavedBatch>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SavedBatch {
+    artifacts: Vec<Artifact>,
+    normalized: Artifact,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -110,6 +125,8 @@ struct UnitOutput {
     index: usize,
     artifacts: Vec<Artifact>,
     normalized: Artifact,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    merge_batches: Vec<SavedBatch>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -138,6 +155,26 @@ pub(crate) fn enqueue(
     name: &str,
     prompt_budget: usize,
 ) -> Result<JobSnapshot, String> {
+    enqueue_version(storage, request, engine, name, prompt_budget, 2)
+}
+#[cfg(test)]
+pub(crate) fn enqueue_legacy(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: llama::LlamaConfig,
+    name: &str,
+    prompt_budget: usize,
+) -> Result<JobSnapshot, String> {
+    enqueue_version(storage, request, engine, name, prompt_budget, 1)
+}
+fn enqueue_version(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: llama::LlamaConfig,
+    name: &str,
+    prompt_budget: usize,
+    schema_version: u32,
+) -> Result<JobSnapshot, String> {
     if !matches!(name, "standard" | "high_accuracy") || prompt_budget > budget(&engine)? {
         return Err("議事録プロファイルまたは入力上限が不正です".into());
     }
@@ -146,7 +183,7 @@ pub(crate) fn enqueue(
         let plan = plan::build(input, prompt_budget)?;
         let total = plan.nodes.len() as i64;
         let parameters = Parameters {
-            schema_version: 1,
+            schema_version,
             template_version: TEMPLATE_VERSION.into(),
             engine,
             prompt_budget,
@@ -171,7 +208,7 @@ fn checked_parameters(
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || p.schema_version != 1
+        || !matches!(p.schema_version, 1 | 2)
         || p.template_version != TEMPLATE_VERSION
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
@@ -281,6 +318,107 @@ fn read_artifact(storage: &Storage, meeting: &str, artifact: &Artifact) -> Resul
         2 * 1024 * 1024,
     )
 }
+fn verify_task_artifacts(
+    storage: &Storage,
+    meeting: &str,
+    task: &Task,
+    artifacts: &[Artifact],
+) -> Result<Value, String> {
+    let expected = [
+        ("system.txt", task.system.as_bytes().to_vec()),
+        ("prompt.txt", task.prompt.as_bytes().to_vec()),
+        (
+            "schema.json",
+            serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
+        ),
+    ];
+    if artifacts.len() != 4 {
+        return Err("議事録の完了結果ファイルが不足しています".into());
+    }
+    for (artifact, (name, bytes)) in artifacts[..3].iter().zip(expected) {
+        if artifact.name != name || read_artifact(storage, meeting, artifact)? != bytes {
+            return Err("議事録の固定プロンプト・schemaが変更されています".into());
+        }
+    }
+    if artifacts[3].name != "result.json" {
+        return Err("議事録の完了結果形式が不正です".into());
+    }
+    let raw = llama::parse_output(&read_artifact(storage, meeting, &artifacts[3])?)?;
+    if task.local.as_ref().is_some_and(|local| local != &raw) {
+        return Err("議事録のローカル確定処理が変更されています".into());
+    }
+    Ok(raw)
+}
+fn verify_normalized(
+    storage: &Storage,
+    meeting: &str,
+    artifact: &Artifact,
+    items: &[GeneratedItem],
+) -> Result<(), String> {
+    if artifact.name != "items.json" {
+        return Err("議事録の保存項目形式が不正です".into());
+    }
+    let normalized: Vec<GeneratedItem> =
+        serde_json::from_slice(&read_artifact(storage, meeting, artifact)?)
+            .map_err(|e| e.to_string())?;
+    if normalized != items {
+        return Err("議事録の保存項目と生成原文が一致しません".into());
+    }
+    Ok(())
+}
+fn merge_cursor(
+    node: &plan::Node,
+    outputs: &[Vec<GeneratedItem>],
+    p: &Parameters,
+) -> Result<adaptive::Cursor, String> {
+    let plan::Node::Merge { left, right } = node else {
+        return Err("統合計画ではありません".into());
+    };
+    adaptive::Cursor::new(
+        merge::adaptive_sources(*left, *right, outputs)?,
+        p.prompt_budget,
+        p.engine.prediction_tokens as usize,
+    )
+}
+fn merge_task(cursor: &adaptive::Cursor) -> Result<Task, String> {
+    let sources = cursor.next().ok_or("統合単位が既に完了しています")?;
+    Ok(Task {
+        system: merge::SYSTEM.into(),
+        prompt: merge::prompt(sources)?,
+        schema: if sources.is_empty() {
+            json!({"type":"object"})
+        } else {
+            merge::schema(sources)
+        },
+        local: cursor.local().then(|| adaptive::identity(sources)),
+    })
+}
+fn replay_merge(
+    storage: &Storage,
+    spec: &JobSpec,
+    input: &MinutesInput,
+    p: &Parameters,
+    node: &plan::Node,
+    outputs: &[Vec<GeneratedItem>],
+    batches: &[SavedBatch],
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<adaptive::Cursor>, String> {
+    if batches.len() > 4096 {
+        return Err("統合の処理単位数が上限を超えています".into());
+    }
+    let mut cursor = merge_cursor(node, outputs, p)?;
+    for batch in batches {
+        if cancelled() {
+            return Ok(None);
+        }
+        let task = merge_task(&cursor)?;
+        let raw = verify_task_artifacts(storage, &spec.meeting_id, &task, &batch.artifacts)?;
+        let items = merge::parse(raw, input, cursor.next().unwrap())?;
+        verify_normalized(storage, &spec.meeting_id, &batch.normalized, &items)?;
+        cursor.accept(items)?;
+    }
+    Ok(Some(cursor))
+}
 fn checked_checkpoint(
     job: &JobSnapshot,
     p: &Parameters,
@@ -301,7 +439,22 @@ fn checked_checkpoint(
     {
         return Err("議事録の再開位置が固定計画と一致しません".into());
     }
+    if checkpoint.pending.as_ref().is_some_and(|pending| {
+        p.schema_version != 2
+            || pending.index != checkpoint.outputs.len()
+            || pending.batches.len() > 4096
+            || !matches!(
+                p.plan.nodes.get(pending.index),
+                Some(plan::Node::Merge { .. })
+            )
+    }) {
+        return Err("統合の途中保存位置が固定計画と一致しません".into());
+    }
     Ok(checkpoint)
+}
+struct VerifiedOutputs {
+    nodes: Vec<Vec<GeneratedItem>>,
+    pending: Option<adaptive::Cursor>,
 }
 fn verify_saved_outputs(
     storage: &Storage,
@@ -310,55 +463,233 @@ fn verify_saved_outputs(
     p: &Parameters,
     checkpoint: &Checkpoint,
     cancelled: &impl Fn() -> bool,
-) -> Result<Option<Vec<Vec<GeneratedItem>>>, String> {
+) -> Result<Option<VerifiedOutputs>, String> {
     let mut outputs = vec![];
     for saved in &checkpoint.outputs {
         if cancelled() {
             return Ok(None);
         }
-        let task = task(input, &p.plan.nodes[saved.index], &outputs, p)?;
-        let expected = [
+        let node = &p.plan.nodes[saved.index];
+        let items = if p.schema_version == 2 && matches!(node, plan::Node::Merge { .. }) {
+            if !saved.artifacts.is_empty() || saved.merge_batches.is_empty() {
+                return Err("分割統合の完了結果形式が不正です".into());
+            }
+            let Some(cursor) = replay_merge(
+                storage,
+                spec,
+                input,
+                p,
+                node,
+                &outputs,
+                &saved.merge_batches,
+                cancelled,
+            )?
+            else {
+                return Ok(None);
+            };
+            let items = cursor.finish()?;
+            from_generated(input, items.clone())?;
+            items
+        } else {
+            if !saved.merge_batches.is_empty() {
+                return Err("従来の生成単位に統合結果が混入しています".into());
+            }
+            let task = task(input, node, &outputs, p)?;
+            parse_node(
+                verify_task_artifacts(storage, &spec.meeting_id, &task, &saved.artifacts)?,
+                input,
+                node,
+                &outputs,
+            )?
+        };
+        verify_normalized(storage, &spec.meeting_id, &saved.normalized, &items)?;
+        outputs.push(items);
+    }
+    let pending = if let Some(pending) = &checkpoint.pending {
+        let Some(cursor) = replay_merge(
+            storage,
+            spec,
+            input,
+            p,
+            &p.plan.nodes[pending.index],
+            &outputs,
+            &pending.batches,
+            cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
+        Some(cursor)
+    } else {
+        None
+    };
+    Ok(Some(VerifiedOutputs {
+        nodes: outputs,
+        pending,
+    }))
+}
+fn run_task(
+    storage: &Storage,
+    spec: &JobSpec,
+    job_id: &str,
+    index: usize,
+    task: Task,
+    p: &Parameters,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<(Value, std::path::PathBuf)>, String> {
+    let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
+    let raw = if let Some(local) = task.local {
+        for (name, bytes) in [
             ("system.txt", task.system.as_bytes().to_vec()),
             ("prompt.txt", task.prompt.as_bytes().to_vec()),
             (
                 "schema.json",
                 serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
             ),
-        ];
-        if saved.artifacts.len() != 4 || saved.normalized.name != "items.json" {
-            return Err("議事録の完了結果ファイルが不足しています".into());
+            (
+                "result.json",
+                serde_json::to_vec(&local).map_err(|e| e.to_string())?,
+            ),
+        ] {
+            write_new(&directory.join(name), &bytes)?;
         }
-        for (artifact, (name, bytes)) in saved.artifacts[..3].iter().zip(expected) {
-            if artifact.name != name || read_artifact(storage, &spec.meeting_id, artifact)? != bytes
-            {
-                return Err("議事録の固定プロンプト・schemaが変更されています".into());
-            }
-        }
-        if saved.artifacts[3].name != "result.json" {
-            return Err("議事録の完了結果形式が不正です".into());
-        }
-        let raw = llama::parse_output(&read_artifact(
-            storage,
-            &spec.meeting_id,
-            &saved.artifacts[3],
-        )?)?;
-        if task.local.is_some_and(|local| local != raw) {
-            return Err("議事録のローカル確定処理が変更されています".into());
-        }
-        let items = parse_node(raw, input, &p.plan.nodes[saved.index], &outputs)?;
-        let normalized: Vec<GeneratedItem> = serde_json::from_slice(&read_artifact(
-            storage,
-            &spec.meeting_id,
-            &saved.normalized,
-        )?)
-        .map_err(|e| e.to_string())?;
-        if normalized != items {
-            return Err("議事録の保存項目と生成原文が一致しません".into());
-        }
-        outputs.push(items);
+        local
+    } else {
+        let Some(raw) = llama::run_unit(
+            &p.engine,
+            &directory,
+            &task.system,
+            &task.prompt,
+            &task.schema,
+            Duration::from_secs(1800),
+            cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
+        raw
+    };
+    if cancelled() {
+        return Ok(None);
     }
-
-    Ok(Some(outputs))
+    Ok(Some((raw, directory)))
+}
+fn save_items(
+    storage: &Storage,
+    meeting: &str,
+    directory: &std::path::Path,
+    items: &[GeneratedItem],
+) -> Result<Artifact, String> {
+    write_new(
+        &directory.join("items.json"),
+        &serde_json::to_vec(items).map_err(|e| e.to_string())?,
+    )?;
+    let asset = storage.register_analysis_artifact(
+        meeting,
+        &directory.join("items.json"),
+        artifact_type("items.json")?,
+    )?;
+    Ok(Artifact {
+        name: "items.json".into(),
+        id: asset.id,
+        hash: asset.content_hash,
+    })
+}
+fn save_task_output(
+    storage: &Storage,
+    meeting: &str,
+    directory: &std::path::Path,
+    items: &[GeneratedItem],
+) -> Result<SavedBatch, String> {
+    let normalized = save_items(storage, meeting, directory, items)?;
+    let mut artifacts = vec![];
+    for name in ["system.txt", "prompt.txt", "schema.json", "result.json"] {
+        let asset = storage.register_analysis_artifact(
+            meeting,
+            &directory.join(name),
+            artifact_type(name)?,
+        )?;
+        artifacts.push(Artifact {
+            name: name.into(),
+            id: asset.id,
+            hash: asset.content_hash,
+        });
+    }
+    Ok(SavedBatch {
+        artifacts,
+        normalized,
+    })
+}
+#[allow(clippy::too_many_arguments)]
+fn run_merge(
+    storage: &Storage,
+    spec: &JobSpec,
+    job_id: &str,
+    index: usize,
+    input: &MinutesInput,
+    p: &Parameters,
+    mut cursor: adaptive::Cursor,
+    checkpoint: &mut Checkpoint,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(JobSnapshot),
+) -> Result<Option<(Vec<GeneratedItem>, Artifact)>, String> {
+    if checkpoint.pending.is_none() {
+        checkpoint.pending = Some(PendingMerge {
+            index,
+            batches: vec![],
+        });
+    }
+    while cursor.next().is_some() {
+        if cancelled() {
+            return Ok(None);
+        }
+        if checkpoint.pending.as_ref().unwrap().batches.len() >= 4096 {
+            return Err("統合の処理単位数が上限を超えています".into());
+        }
+        let Some((raw, directory)) = run_task(
+            storage,
+            spec,
+            job_id,
+            index,
+            merge_task(&cursor)?,
+            p,
+            cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
+        let items = merge::parse(raw, input, cursor.next().unwrap())?;
+        let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
+        cursor.accept(items)?;
+        checkpoint.pending.as_mut().unwrap().batches.push(saved);
+        let job = match storage.save_job_checkpoint(
+            job_id,
+            index as i64,
+            index as i64,
+            serde_json::to_value(&*checkpoint).map_err(|e| e.to_string())?,
+        ) {
+            Ok(job) => job,
+            Err(error) => {
+                checkpoint.pending.as_mut().unwrap().batches.pop();
+                return Err(error);
+            }
+        };
+        let paused = job.state == "paused";
+        progress(job);
+        if paused {
+            return Ok(None);
+        }
+    }
+    if cancelled() {
+        return Ok(None);
+    }
+    let items = cursor.finish()?;
+    from_generated(input, items.clone())?;
+    let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
+    Ok(Some((
+        items.clone(),
+        save_items(storage, &spec.meeting_id, &directory, &items)?,
+    )))
 }
 pub(crate) fn process(
     storage: &Storage,
@@ -379,8 +710,10 @@ pub(crate) fn process(
     };
     let attempt = (|| {
         p.engine.verify(&cancelled)?;
-        let Some(mut outputs) =
-            verify_saved_outputs(storage, &spec, &input, &p, &checkpoint, &cancelled)?
+        let Some(VerifiedOutputs {
+            nodes: mut outputs,
+            pending: mut resumed_merge,
+        }) = verify_saved_outputs(storage, &spec, &input, &p, &checkpoint, &cancelled)?
         else {
             return Ok(None);
         };
@@ -388,72 +721,67 @@ pub(crate) fn process(
             if cancelled() {
                 return Ok(None);
             }
-            let task = task(&input, &p.plan.nodes[index], &outputs, &p)?;
-            let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-            let raw = if let Some(local) = task.local {
-                for (name, bytes) in [
-                    ("system.txt", task.system.as_bytes().to_vec()),
-                    ("prompt.txt", task.prompt.as_bytes().to_vec()),
+            let node = &p.plan.nodes[index];
+            let (items, output) =
+                if p.schema_version == 2 && matches!(node, plan::Node::Merge { .. }) {
+                    let cursor = match resumed_merge.take() {
+                        Some(cursor) => cursor,
+                        None => merge_cursor(node, &outputs, &p)?,
+                    };
+                    let Some((items, normalized)) = run_merge(
+                        storage,
+                        &spec,
+                        job_id,
+                        index,
+                        &input,
+                        &p,
+                        cursor,
+                        &mut checkpoint,
+                        &cancelled,
+                        progress,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let pending = checkpoint
+                        .pending
+                        .take()
+                        .ok_or("統合の保存位置がありません")?;
                     (
-                        "schema.json",
-                        serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
-                    ),
+                        items,
+                        UnitOutput {
+                            index,
+                            artifacts: vec![],
+                            normalized,
+                            merge_batches: pending.batches,
+                        },
+                    )
+                } else {
+                    let Some((raw, directory)) = run_task(
+                        storage,
+                        &spec,
+                        job_id,
+                        index,
+                        task(&input, node, &outputs, &p)?,
+                        &p,
+                        &cancelled,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let items = parse_node(raw, &input, node, &outputs)?;
+                    let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
                     (
-                        "result.json",
-                        serde_json::to_vec(&local).map_err(|e| e.to_string())?,
-                    ),
-                ] {
-                    write_new(&directory.join(name), &bytes)?;
-                }
-                local
-            } else {
-                let Some(raw) = llama::run_unit(
-                    &p.engine,
-                    &directory,
-                    &task.system,
-                    &task.prompt,
-                    &task.schema,
-                    Duration::from_secs(1800),
-                    &cancelled,
-                )?
-                else {
-                    return Ok(None);
+                        items,
+                        UnitOutput {
+                            index,
+                            artifacts: saved.artifacts,
+                            normalized: saved.normalized,
+                            merge_batches: vec![],
+                        },
+                    )
                 };
-                raw
-            };
-            if cancelled() {
-                return Ok(None);
-            }
-            let items = parse_node(raw, &input, &p.plan.nodes[index], &outputs)?;
-            write_new(
-                &directory.join("items.json"),
-                &serde_json::to_vec(&items).map_err(|e| e.to_string())?,
-            )?;
-            let mut artifacts = vec![];
-            for name in [
-                "system.txt",
-                "prompt.txt",
-                "schema.json",
-                "result.json",
-                "items.json",
-            ] {
-                let asset = storage.register_analysis_artifact(
-                    &spec.meeting_id,
-                    &directory.join(name),
-                    artifact_type(name)?,
-                )?;
-                artifacts.push(Artifact {
-                    name: name.into(),
-                    id: asset.id,
-                    hash: asset.content_hash,
-                });
-            }
-            let normalized = artifacts.pop().unwrap();
-            checkpoint.outputs.push(UnitOutput {
-                index,
-                artifacts,
-                normalized,
-            });
+            checkpoint.outputs.push(output);
             let saved = storage.save_job_checkpoint(
                 job_id,
                 index as i64,
@@ -463,7 +791,13 @@ pub(crate) fn process(
             let job = match saved {
                 Ok(job) => job,
                 Err(error) => {
-                    checkpoint.outputs.pop();
+                    let output = checkpoint.outputs.pop().unwrap();
+                    if !output.merge_batches.is_empty() {
+                        checkpoint.pending = Some(PendingMerge {
+                            index,
+                            batches: output.merge_batches,
+                        });
+                    }
                     return Err(error);
                 }
             };

@@ -27,6 +27,27 @@ pub(super) fn sources(
     }
     Ok(result)
 }
+pub(super) fn adaptive_sources(
+    left: usize,
+    right: usize,
+    outputs: &[Vec<GeneratedItem>],
+) -> Result<Vec<(String, GeneratedItem)>, String> {
+    let a = outputs.get(left).ok_or("統合元の完了結果がありません")?;
+    let b = outputs.get(right).ok_or("統合元の完了結果がありません")?;
+    if left == right || a.len() + b.len() > 10_000 {
+        return Err("統合元の範囲・文書上限が不正です".into());
+    }
+    let mut result = vec![];
+    // Interleave both sides so bounded first-pass windows include both parents.
+    for index in 0..a.len().max(b.len()) {
+        for (node, output) in [(left, a), (right, b)] {
+            if let Some(item) = output.get(index) {
+                result.push((format!("n{node}-i{index}"), item.clone()));
+            }
+        }
+    }
+    Ok(result)
+}
 pub(super) fn prompt(sources: &[(String, GeneratedItem)]) -> Result<String, String> {
     serde_json::to_string(&json!({"schemaVersion":1,"items":sources.iter().map(|(id,item)|json!({"sourceItemId":id,"item":item})).collect::<Vec<_>>()})).map_err(|e|e.to_string())
 }
