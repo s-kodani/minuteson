@@ -3,6 +3,7 @@ mod adaptive;
 pub(crate) mod llama;
 mod merge;
 mod plan;
+pub(crate) mod restore;
 pub(crate) mod result;
 use crate::minutes_document::{from_generated, GeneratedItem, TEMPLATE_VERSION};
 use crate::storage::{JobKind, JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
@@ -409,6 +410,17 @@ fn verify_task_artifacts(
     task: &Task,
     artifacts: &[Artifact],
 ) -> Result<Value, String> {
+    verify_task_bytes(task, artifacts, |artifact| {
+        read_artifact(storage, meeting, artifact)
+    })
+}
+// The restore codec must use the same prompt/schema/local-result checks as the
+// runtime without needing an available engine or a live Storage instance.
+fn verify_task_bytes(
+    task: &Task,
+    artifacts: &[Artifact],
+    mut read: impl FnMut(&Artifact) -> Result<Vec<u8>, String>,
+) -> Result<Value, String> {
     let expected = [
         ("system.txt", task.system.as_bytes().to_vec()),
         ("prompt.txt", task.prompt.as_bytes().to_vec()),
@@ -421,14 +433,14 @@ fn verify_task_artifacts(
         return Err("議事録の完了結果ファイルが不足しています".into());
     }
     for (artifact, (name, bytes)) in artifacts[..3].iter().zip(expected) {
-        if artifact.name != name || read_artifact(storage, meeting, artifact)? != bytes {
+        if artifact.name != name || read(artifact)? != bytes {
             return Err("議事録の固定プロンプト・schemaが変更されています".into());
         }
     }
     if artifacts[3].name != "result.json" {
         return Err("議事録の完了結果形式が不正です".into());
     }
-    let raw = llama::parse_output(&read_artifact(storage, meeting, &artifacts[3])?)?;
+    let raw = llama::parse_output(&read(&artifacts[3])?)?;
     if task.local.as_ref().is_some_and(|local| local != &raw) {
         return Err("議事録のローカル確定処理が変更されています".into());
     }
