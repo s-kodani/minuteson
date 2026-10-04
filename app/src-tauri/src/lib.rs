@@ -22,6 +22,45 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 struct ExitGuard(AtomicBool);
 
 #[tauri::command]
+fn get_vocabulary_book(
+    window: WebviewWindow,
+    meeting_id: Option<String>,
+) -> Result<storage::VocabularyBook, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read vocabulary".into());
+    }
+    window
+        .state::<Storage>()
+        .vocabulary_book(meeting_id.as_deref())
+}
+#[tauri::command]
+fn get_meeting_vocabulary(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::VocabularyView, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read vocabulary".into());
+    }
+    window.state::<Storage>().vocabulary_view(&meeting_id)
+}
+#[tauri::command]
+fn save_vocabulary_book(
+    window: WebviewWindow,
+    meeting_id: Option<String>,
+    expected_lock_version: i64,
+    payload: Vec<storage::VocabularyEntry>,
+) -> Result<storage::VocabularyBook, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit vocabulary".into());
+    }
+    window.state::<Storage>().save_vocabulary_book(
+        meeting_id.as_deref(),
+        expected_lock_version,
+        payload,
+    )
+}
+
+#[tauri::command]
 fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::PreferencesSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can read analysis settings".into());
@@ -910,6 +949,9 @@ pub fn run() {
             resume_analysis_job,
             cancel_analysis_job,
             get_analysis_preferences,
+            get_vocabulary_book,
+            get_meeting_vocabulary,
+            save_vocabulary_book,
             save_analysis_preferences,
             get_analysis_versions,
             get_analysis_preview,

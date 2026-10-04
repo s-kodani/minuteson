@@ -10,6 +10,7 @@ const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".r
 const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: "b".repeat(64), utterances: analysis.utterances.map((item) => ({ ...item, id: `${item.id}-new`, effectiveText: `${item.effectiveText}（候補）` })) };
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
+  vocabulary: { global: { id: "global", payload: [], lockVersion: 0 } }, failVocabulary: false,
   preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
   jobs: [{ id: "job-existing", kind: "transcription", state: "paused", completedUnits: 1, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: "user", specHash: "a".repeat(64), retryOfJobId: null, attempt: 1 },
     { id: "job-failed", kind: "transcription", state: "failed", completedUnits: 2, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "b".repeat(64), retryOfJobId: null, attempt: 1 }],
@@ -43,6 +44,18 @@ mockIPC(async (command, args) => {
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
       return structuredClone(fixture.draft);
     case "get_analysis_preferences": return structuredClone(fixture.preferences);
+    case "get_vocabulary_book": return structuredClone(fixture.vocabulary[args.meetingId ?? "global"] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 });
+    case "get_meeting_vocabulary": return { global: structuredClone(fixture.vocabulary.global), meeting: structuredClone(fixture.vocabulary[args.meetingId] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 }) };
+    case "save_vocabulary_book": {
+      await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
+      const key = args.meetingId ?? "global";
+      const book = fixture.vocabulary[key] ?? { id: `meeting:${key}`, payload: [], lockVersion: 0 };
+      if (fixture.failVocabulary || book.lockVersion !== args.expectedLockVersion) throw new Error("模擬用語保存競合");
+      const terms = new Set();
+      for (const entry of args.payload) { if (!entry.term.trim() || entry.term.trim() !== entry.term || terms.has(entry.term)) throw new Error("用語の空欄・重複を修正してください"); terms.add(entry.term); }
+      fixture.vocabulary[key] = { ...book, payload: structuredClone(args.payload), lockVersion: book.lockVersion + 1 };
+      return structuredClone(fixture.vocabulary[key]);
+    }
     case "save_analysis_preferences":
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
       if (fixture.failPreferences) throw new Error("模擬設定保存競合");
@@ -54,6 +67,8 @@ mockIPC(async (command, args) => {
     case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);
     case "get_analysis_version_draft": return structuredClone(fixture.draft?.baseAnalysisId === args.analysisId ? fixture.draft : fixture.archivedDrafts[args.analysisId] ?? null);
     case "start_transcription": {
+      const book = fixture.vocabulary[args.request.meetingId] ?? { lockVersion: 0 };
+      if (args.request.expectedVocabulary.globalVersion !== fixture.vocabulary.global.lockVersion || args.request.expectedVocabulary.meetingVersion !== book.lockVersion) throw new Error("確認した用語リストが変更されました。用語を再確認して開始してください");
       fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "c".repeat(64), retryOfJobId: null, attempt: 1 });
       return structuredClone(fixture.jobs[0]);
     }
@@ -110,6 +125,11 @@ mockIPC(async (command, args) => {
     }
     case "close_playback":
     case "finish_main_close": return null;
+    case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
+    case "get_minutes_versions": return { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };
+    case "get_current_minutes": return null;
+    case "get_minutes_draft": return null;
+    case "get_minutes_exports": return [];
     default: throw new Error(`Unexpected fixture command: ${command}`);
   }
 }, { shouldMockEvents: true });

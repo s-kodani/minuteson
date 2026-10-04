@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
 import { timeLabel, type Analysis, type Draft } from "./transcript";
+import { VocabularyEditor } from "./vocabulary";
+import type { VocabularyStamp } from "./vocabulary-state";
 
 type Preferences = VersionedDraft<AnalysisPreferences>;
 type Preview = { summary: VersionSummary; analysis: Analysis; draft: Draft | null; current: Analysis | null; currentDraft: Draft | null; restoring: boolean };
@@ -49,6 +51,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const retryOperations = useRef(new Map<string, string>());
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const mounted = useRef(true);
+  const vocabularyStamp = useRef<(() => VocabularyStamp) | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -120,7 +123,9 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const start = () => run(() => saved(async () => {
     const engine = queue.snapshot().payload?.[profile];
     if (!engine || !engineConfigured(engine)) throw new Error("実行ファイルとモデルを設定してください。");
-    await invoke("start_transcription", { request: { meetingId, operationId: crypto.randomUUID(), ...engine, profile: profile === "highAccuracy" ? "high_accuracy" : "standard", prompt } });
+    if (!vocabularyStamp.current) throw new Error("用語リストを読込・保存してから開始してください。");
+    const expectedVocabulary = vocabularyStamp.current();
+    await invoke("start_transcription", { request: { meetingId, operationId: crypto.randomUUID(), ...engine, profile: profile === "highAccuracy" ? "high_accuracy" : "standard", prompt, expectedVocabulary } });
     await refreshRef.current();
   }));
   const jobAction = (command: string, jobId: string) => run(async () => {
@@ -191,6 +196,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       <div className="analysis-actions"><span role="status">{settings.error ? "設定の保存に失敗" : settings.saving ? "設定を保存中" : settings.dirty ? "設定は未保存" : "設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "設定保存を再試行" : "設定を保存"}</button></div>
       {settings.error && <p className="action-error" role="alert">{settings.error} 入力は保持しています。修正後に保存を再試行してください。</p>}
     </details>
+    <VocabularyEditor meetingId={meetingId} locked={disabled} stampRef={vocabularyStamp} />
     <label className="prompt-label">今回の用語ヒント（認識効果は未検証）<textarea value={prompt} maxLength={8000} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="例：点検日。自動置換ではなくエンジンへのヒントです。" /></label>
     <div className="analysis-actions"><button type="button" disabled={disabled || !recorded || recordingActive || pending || !engine || !engineConfigured(engine)} onClick={() => void start()}>文字起こしを開始</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先して解析を停止します" : "端末内で処理"}</span></div>
     {!recorded && <p>保存済み録音が必要です。音声ファイルの取り込みは今後接続します。</p>}

@@ -6,6 +6,7 @@ import { formatElapsed, useRecordingSession, type BridgeState } from "./session"
 import { TranscriptEditor } from "./transcript";
 import { AnalysisPanel } from "./analysis";
 import { MinutesPanel } from "./minutes";
+import { VocabularyEditor } from "./vocabulary";
 import { flushPendingEdits } from "./draft-save";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
@@ -88,6 +89,7 @@ function MainWindow() {
   const [captureError, setCaptureError] = useState("");
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
+  const [screen, setScreen] = useState<"overview" | "settings">("overview");
   const [analysisEpoch, setAnalysisEpoch] = useState(0);
   const navigating = useRef(false);
   const priorPhase = useRef<string | null>(null);
@@ -247,15 +249,16 @@ function MainWindow() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">m</span><span>mon</span></div>
         <nav aria-label="メインナビゲーション">
-          <span className="nav-item selected">概要</span>
+          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={navigationBusy} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
           <span className="nav-item disabled">会議一覧 <small>準備中</small></span>
-          <span className="nav-item disabled">設定 <small>準備中</small></span>
+          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={navigationBusy} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
         </nav>
         <div className="sidebar-foot">端末内で会議を記録</div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><span>概要</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
+        <header className="topbar"><span>{screen === "overview" ? "概要" : "設定"}</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
         <main className="content">
+          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語はすべての会議で使用します。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
           <p className="lead">保存済み録音を端末内で文字起こしし、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と話者分離は検証・接続作業中です。</p>
@@ -303,6 +306,7 @@ function MainWindow() {
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>
             <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし・議事録の編集、候補の生成・確認・採用、macOSのMarkdown出力に対応。話者分離は接続作業中です。</p><span className="soon">一部実装</span></section>
           </div>
+          </>}
         </main>
       </div>
     </div>

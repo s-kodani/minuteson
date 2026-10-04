@@ -77,6 +77,7 @@ async (page) => {
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : copy(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return copy(data.td); }
         if (cmd === "get_analysis_preferences") return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
+        if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
         if (cmd === "get_minutes_preferences") return copy(data.pref);
         if (cmd === "save_minutes_preferences") { if (data.pref.lockVersion!==args.expectedLockVersion) throw Error("stale preferences"); data.pref.payload=copy(args.payload); data.pref.lockVersion++; return copy(data.pref); }
         if (cmd === "get_analysis_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",previousId:null,draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion},versions:args.meetingId === "m2" ? [] : [{id:"analysis",revisionNo:1,contentHash:"source-hash",publicationState:"committed",utteranceCount:1,createdAt:0,profile:{},config:{}}]};

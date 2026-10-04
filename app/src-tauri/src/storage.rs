@@ -26,6 +26,7 @@ mod preferences;
 mod recordings;
 mod revisions;
 mod transcription;
+mod vocabulary;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
@@ -47,6 +48,9 @@ pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub use recordings::RecordingConfig;
 pub(crate) use revisions::{CommittedAnalysis, CommittedMinutes};
 pub(crate) use transcription::RecordedAudioPlan;
+pub(crate) use vocabulary::{
+    VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
+};
 
 const MIGRATION_1: &str = include_str!("migrations/0001_meetings.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_file_assets.sql");
@@ -63,6 +67,7 @@ const MIGRATION_12: &str = include_str!("migrations/0012_job_retry.sql");
 const MIGRATION_13: &str = include_str!("migrations/0013_minutes_inputs.sql");
 const MIGRATION_14: &str = include_str!("migrations/0014_minutes_results.sql");
 const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
+const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -375,6 +380,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (13_i64, MIGRATION_13),
         (14_i64, MIGRATION_14),
         (15_i64, MIGRATION_15),
+        (16_i64, MIGRATION_16),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -570,7 +576,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 15);
+        assert_eq!(count, 16);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

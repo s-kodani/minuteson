@@ -22,6 +22,8 @@ pub(crate) struct StartRequest {
     pub use_gpu: bool,
     pub profile: String,
     pub prompt: String,
+    #[serde(default)]
+    pub expected_vocabulary: Option<crate::storage::VocabularyStamp>,
 }
 
 impl StartRequest {
@@ -37,12 +39,13 @@ impl StartRequest {
             use_gpu: self.use_gpu,
             prompt: self.prompt,
         };
-        enqueue(
+        enqueue_with_stamp(
             storage,
             &self.meeting_id,
             &self.operation_id,
             engine,
             &self.profile,
+            self.expected_vocabulary,
         )
     }
 }
@@ -67,8 +70,11 @@ impl RetryRequest {
         {
             return Err("失敗・取消済みの文字起こしだけ再試行できます".into());
         }
+        if original.attempt >= 1000 {
+            return Err("再試行は1000回以内です。新しい解析として開始してください".into());
+        }
         let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
-        let parameters = checked_parameters(&spec)?;
+        let parameters = checked_parameters(storage, &spec, &original.id)?;
         let decoded = checked_checkpoint(&original, checkpoint.clone())?;
         parameters.engine.verify(&|| false)?;
         if storage.recorded_audio_plan(&self.meeting_id)? != parameters.source {
@@ -129,6 +135,8 @@ struct Parameters {
     source: RecordedAudioPlan,
     engine: WhisperConfig,
     units: Vec<Unit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vocabulary: Option<crate::storage::VocabularySnapshot>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -157,16 +165,27 @@ struct UnitOutput {
     json_hash: String,
 }
 
-fn checked_parameters(spec: &JobSpec) -> Result<Parameters, String> {
+fn checked_parameters(
+    storage: &Storage,
+    spec: &JobSpec,
+    job_id: &str,
+) -> Result<Parameters, String> {
     let parameters: Parameters =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     if spec.kind != JobKind::Transcription
-        || parameters.schema_version != 1
+        || !matches!(parameters.schema_version, 1 | 2)
         || spec.input_hash != parameters.source.manifest_hash
         || spec.total_units != Some(parameters.units.len() as i64)
         || parameters.units != units(&parameters.source)?
     {
         return Err("解析ジョブの入力計画が不正です".into());
+    }
+    match (&parameters.vocabulary, parameters.schema_version) {
+        (None, 1) => {}
+        (Some(snapshot), 2) if parameters.engine.prompt == snapshot.actual_prompt => {
+            storage.verify_vocabulary_snapshot(&spec.meeting_id, job_id, snapshot)?;
+        }
+        _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
     }
     Ok(parameters)
 }
@@ -226,12 +245,23 @@ fn units(source: &RecordedAudioPlan) -> Result<Vec<Unit>, String> {
     Ok(units)
 }
 
+#[cfg(test)]
 pub(crate) fn enqueue(
     storage: &Storage,
     meeting_id: &str,
     operation_id: &str,
     engine: WhisperConfig,
     profile: &str,
+) -> Result<JobSnapshot, String> {
+    enqueue_with_stamp(storage, meeting_id, operation_id, engine, profile, None)
+}
+fn enqueue_with_stamp(
+    storage: &Storage,
+    meeting_id: &str,
+    operation_id: &str,
+    mut engine: WhisperConfig,
+    profile: &str,
+    expected: Option<crate::storage::VocabularyStamp>,
 ) -> Result<JobSnapshot, String> {
     if !matches!(profile, "standard" | "high_accuracy") {
         return Err("解析プロファイルが不正です".into());
@@ -241,13 +271,12 @@ pub(crate) fn enqueue(
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
     let units = units(&source)?;
     let total = units.len() as i64;
-    let parameters = Parameters {
-        schema_version: 1,
-        source,
-        engine,
-        units,
-    };
-    storage.enqueue_job(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
+    let extra = engine.prompt.clone();
+    storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
+        engine.prompt=snapshot.actual_prompt.clone();
+        let parameters=Parameters{schema_version:2,source,engine,units,vocabulary:Some(snapshot)};
+        Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
+    })
 }
 
 // Run a claimed job on a blocking thread. Only completed, durable results move
@@ -259,7 +288,7 @@ pub(crate) fn process(
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
     let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
-    let parameters = checked_parameters(&spec)?;
+    let parameters = checked_parameters(storage, &spec, job_id)?;
     let job = storage.get_job(job_id)?;
     let mut checkpoint = checked_checkpoint(&job, checkpoint)?;
     let cancelled = || {
@@ -424,7 +453,7 @@ pub(crate) fn process(
                 right.end_us,
             ))
         });
-        let candidate = storage.finish_transcription_candidate(&spec.meeting_id, job_id, checkpoint.outputs.len() as i64, AnalysisInput { audio_manifest_hash: spec.input_hash.clone(), profile_snapshot: spec.profile_snapshot.clone(), config: serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint"}), speakers: vec![], segments: vec![], utterances })?;
+        let candidate = storage.finish_transcription_candidate(&spec.meeting_id, job_id, checkpoint.outputs.len() as i64, AnalysisInput { audio_manifest_hash: spec.input_hash.clone(), profile_snapshot: spec.profile_snapshot.clone(), config: serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint","vocabulary":parameters.vocabulary}), speakers: vec![], segments: vec![], utterances })?;
         progress(storage.get_job(job_id)?);
         Ok(Some(candidate))
     })();

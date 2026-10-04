@@ -103,6 +103,9 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
         .unwrap();
 
     std::fs::write(&gate, b"fail").unwrap();
+    storage
+        .save_vocabulary_book(None, 0, vec![vocabulary_entry("点検日")])
+        .unwrap();
     let failed = enqueue(&storage, &meeting, "first-attempt", config, "high_accuracy").unwrap();
     storage.acquire_next_job().unwrap().unwrap();
     assert!(process(&storage, &failed.id, &|| false, &|_| {}).is_err());
@@ -111,6 +114,13 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
         .finish_job(&failed.id, 1, "failed", Some("engine_failed"))
         .unwrap();
     let saved = storage.fixed_job_input(&failed.id).unwrap();
+    assert_eq!(
+        saved.0.parameters["vocabulary"]["entries"][0]["entry"]["term"],
+        "点検日"
+    );
+    storage
+        .save_vocabulary_book(None, 1, vec![vocabulary_entry("変更後")])
+        .unwrap();
     let calls_before = std::fs::read(&calls).unwrap().len();
     assert_eq!(calls_before, 4); // baseline 2 + first unit + failing second unit
     std::fs::remove_file(&gate).unwrap();
@@ -167,6 +177,219 @@ fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
         .unwrap();
     assert_eq!(summary.config["retryOfJobId"], failed.id);
     assert_eq!(summary.config["attempt"], 2);
+    assert_eq!(
+        summary.config["vocabulary"],
+        saved.0.parameters["vocabulary"]
+    );
+}
+
+fn vocabulary_entry(term: &str) -> VocabularyEntry {
+    VocabularyEntry {
+        id: Uuid::new_v4().to_string(),
+        term: term.into(),
+        reading: None,
+        note: None,
+        enabled: true,
+    }
+}
+
+#[test]
+fn vocabulary_start_rpc_rejects_stale_stamp_and_broken_snapshot_blocks_worker_and_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, config) = fixture(root.path(), 4);
+    storage
+        .save_vocabulary_book(None, 0, vec![vocabulary_entry("点検日")])
+        .unwrap();
+    let request: crate::transcription::StartRequest = serde_json::from_value(serde_json::json!({
+        "meetingId":meeting, "operationId":"stale", "executablePath":config.executable.path,
+        "modelPath":config.model.path, "vadModelPath":null, "threads":1, "useGpu":false,
+        "profile":"standard", "prompt":"", "expectedVocabulary":{"globalVersion":0,"meetingVersion":0}
+    })).unwrap();
+    assert!(request.enqueue(&storage).is_err());
+    assert!(storage.list_jobs(&meeting).unwrap().is_empty());
+    let job = enqueue(&storage, &meeting, "valid", config, "standard").unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "DELETE FROM vocabulary_snapshots WHERE job_id=?1",
+            params![job.id],
+        )
+        .unwrap();
+    assert!(process(&storage, &job.id, &|| false, &|_| {}).is_err());
+    let failed = storage
+        .finish_job(&job.id, 0, "failed", Some("snapshot_missing"))
+        .unwrap();
+    assert!(RetryRequest {
+        meeting_id: meeting.clone(),
+        job_id: failed.id.clone(),
+        operation_id: "retry".into(),
+        expected_spec_hash: failed.spec_hash.clone()
+    }
+    .enqueue(&storage)
+    .is_err());
+    assert_eq!(storage.list_jobs(&meeting).unwrap(), vec![failed]);
+    assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
+}
+
+#[test]
+fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substitution() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, mut config) = fixture(root.path(), 124);
+    let calls = root.path().join("prompt-calls.jsonl");
+    let model = &config.model.path;
+    let json = serde_json::json!({"model":{"multilingual":true},"params":{"model":model,"language":"ja","translate":false},"transcription":[{"offsets":{"from":2500,"to":3000},"text":"天気ビーです"}]}).to_string();
+    // This fake engine deliberately misrecognizes the registered term.
+    let script = format!("#!/usr/bin/env python3\nimport json,sys\nwith open({:?},'a') as f: f.write(json.dumps(sys.argv[1:],ensure_ascii=False)+'\\n')\nwith open('result.json','w') as f: f.write({json:?})\n", calls.to_str().unwrap());
+    std::fs::write(&config.executable.path, script).unwrap();
+    config.executable = Fingerprint::capture(&config.executable.path, &|| false).unwrap();
+    let mut e = vocabulary_entry("点検日");
+    e.reading = Some("てんけんび".into());
+    e.note = Some("天気ビーではない; $(false)".into());
+    storage.save_vocabulary_book(None, 0, vec![e]).unwrap();
+    let job = enqueue(&storage, &meeting, "terms", config, "standard").unwrap();
+    let spec = storage.fixed_job_input(&job.id).unwrap().0;
+    let prompt = spec.parameters["engine"]["prompt"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(spec.parameters["schemaVersion"], 2);
+    assert_eq!(spec.parameters["vocabulary"]["actualPrompt"], prompt);
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &job.id, &|| false, &|snapshot| {
+        if snapshot.completed_units == 1 && snapshot.state == "running" {
+            storage.request_job_pause(&job.id, "user").unwrap();
+        }
+    })
+    .unwrap()
+    .is_none());
+    let checkpoint = storage.fixed_job_input(&job.id).unwrap().1;
+    storage.save_vocabulary_book(None, 1, vec![]).unwrap();
+    storage
+        .save_vocabulary_book(Some(&meeting), 0, vec![vocabulary_entry("別用語")])
+        .unwrap();
+    drop(storage);
+    let storage = Storage::open(root.path().into()).unwrap();
+    storage.resume_job(&job.id).unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    let candidate = process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let argv: Vec<Vec<String>> = std::fs::read_to_string(calls)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(argv.len(), 2);
+    for args in argv {
+        let at = args.iter().position(|a| a == "--prompt").unwrap();
+        assert_eq!(args[at + 1], prompt);
+    }
+    assert_eq!(
+        storage.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0],
+        checkpoint.unwrap()["outputs"][0]
+    );
+    let visible = storage
+        .load_visible_analysis(&meeting, &candidate)
+        .unwrap()
+        .unwrap();
+    assert!(visible
+        .utterances
+        .iter()
+        .all(|u| u.recognized_text == "天気ビーです" && u.effective_text == "天気ビーです"));
+    assert!(storage.load_current_analysis(&meeting).unwrap().is_none());
+    let versions = storage.analysis_versions(&meeting).unwrap();
+    assert_eq!(
+        versions
+            .versions
+            .iter()
+            .find(|v| v.id == candidate)
+            .unwrap()
+            .config["vocabulary"],
+        spec.parameters["vocabulary"]
+    );
+}
+
+#[test]
+fn v15_legacy_transcription_migrates_and_retries_without_new_vocabulary() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, config) = fixture(root.path(), 4);
+    let template = enqueue(&storage, &meeting, "template", config, "standard").unwrap();
+    let mut spec = storage.fixed_job_input(&template.id).unwrap().0;
+    // Encode the exact old parameters schema. No mutable registration dependency.
+    spec.operation_id = "legacy".into();
+    spec.parameters["schemaVersion"] = serde_json::json!(1);
+    spec.parameters["engine"]["prompt"] = serde_json::json!("点検日");
+    spec.parameters
+        .as_object_mut()
+        .unwrap()
+        .remove("vocabulary");
+    let legacy = storage.enqueue_job(spec.clone()).unwrap();
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "DELETE FROM vocabulary_snapshots WHERE job_id=?1",
+            params![template.id],
+        )
+        .unwrap();
+        db.execute(
+            "DELETE FROM processing_jobs WHERE id=?1",
+            params![template.id],
+        )
+        .unwrap();
+    }
+    storage.connection.lock().unwrap().execute_batch("DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DELETE FROM schema_migrations WHERE version=16;").unwrap();
+    drop(storage);
+    let storage = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        storage.get_job(&legacy.id).unwrap().spec_hash,
+        legacy.spec_hash
+    );
+    assert_eq!(storage.fixed_job_input(&legacy.id).unwrap().0, spec);
+    assert_eq!(storage.vocabulary_book(None).unwrap().lock_version, 0);
+    storage
+        .save_vocabulary_book(None, 0, vec![vocabulary_entry("新用語")])
+        .unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    let failed = storage
+        .finish_job(&legacy.id, 0, "failed", Some("fixture_failed"))
+        .unwrap();
+    let retry = RetryRequest {
+        meeting_id: meeting.clone(),
+        job_id: failed.id,
+        operation_id: "legacy-retry".into(),
+        expected_spec_hash: failed.spec_hash,
+    }
+    .enqueue(&storage)
+    .unwrap();
+    assert_eq!(
+        storage.fixed_job_input(&retry.id).unwrap().0.parameters,
+        spec.parameters
+    );
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &retry.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    let db = storage.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        16
+    );
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM vocabulary_snapshots", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(db
+        .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
+        .optional()
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -247,7 +470,7 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
     let job = enqueue(&storage, &meeting, "operation", config.clone(), "standard").unwrap();
     assert_eq!(job.total_units, Some(2));
     assert_eq!(
-        enqueue(&storage, &meeting, "operation", config, "standard")
+        enqueue(&storage, &meeting, "operation", config.clone(), "standard")
             .unwrap()
             .id,
         job.id
@@ -304,10 +527,7 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
     let draft = storage
         .create_transcript_draft(&meeting, &candidate)
         .unwrap();
-    let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
-    let mut retry = spec;
-    retry.operation_id = "second-analysis".into();
-    let second = storage.enqueue_job(retry).unwrap();
+    let second = enqueue(&storage, &meeting, "second-analysis", config, "standard").unwrap();
     storage
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
