@@ -78,3 +78,6 @@
 .import-term { border-top:1px solid #d8dde2; margin-top:12px; padding-top:12px; }
 .import-term label { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
 .import-term label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; }
+.model-inspection pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+.model-inspection code { overflow-wrap:anywhere; }
+.model-inspection .prompt-label input { font:inherit; width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:#fff; }

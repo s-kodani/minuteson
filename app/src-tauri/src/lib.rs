@@ -8,6 +8,7 @@ mod generation;
 mod import_controller;
 mod local_engine;
 mod minutes_document;
+mod model_inspection;
 mod playback;
 mod recorder;
 mod saved_artifact;
@@ -26,6 +27,33 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
+
+#[tauri::command]
+async fn inspect_model_package(
+    window: WebviewWindow,
+    token: String,
+    directory: std::path::PathBuf,
+) -> Result<model_inspection::Report, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can inspect models".into());
+    }
+    let guard = window
+        .state::<model_inspection::Inspector>()
+        .begin(&token)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        model_inspection::inspect(&directory, &|| guard.cancelled())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn cancel_model_inspection(window: WebviewWindow, token: String) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can cancel model inspection".into());
+    }
+    window.state::<model_inspection::Inspector>().cancel(&token)
+}
 
 #[tauri::command]
 fn get_audio_import(window: WebviewWindow) -> Result<import_controller::Snapshot, String> {
@@ -1105,6 +1133,7 @@ pub fn run() {
         .manage(PlaybackStore::default())
         .manage(AnalysisController::default())
         .manage(ImportController::default())
+        .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
@@ -1126,6 +1155,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            inspect_model_package,
+            cancel_model_inspection,
             get_audio_import,
             select_audio_import,
             start_audio_import,

@@ -9,6 +9,7 @@ import { MinutesPanel } from "./minutes";
 import { VocabularyEditor } from "./vocabulary";
 import { flushPendingEdits } from "./draft-save";
 import { AudioImportPanel } from "./audio-import";
+import { ModelInspectionPanel } from "./model-inspection";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
@@ -272,7 +273,7 @@ function MainWindow() {
             if(!meeting)throw Error("保存した会議が見つかりません。");
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
-          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語はすべての会議で使用します。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
+          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語とAIモデルの事前検査を利用できます。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} /><ModelInspectionPanel locked={navigationBusy} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
