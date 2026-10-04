@@ -162,6 +162,26 @@ fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
 }
 
 #[tauri::command]
+fn get_minutes_preferences(
+    window: WebviewWindow,
+) -> Result<storage::MinutesPreferencesSnapshot, String> {
+    minutes_app(&window)?
+        .state::<Storage>()
+        .minutes_preferences()
+}
+
+#[tauri::command]
+fn save_minutes_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::MinutesPreferences,
+) -> Result<storage::MinutesPreferencesSnapshot, String> {
+    minutes_app(&window)?
+        .state::<Storage>()
+        .save_minutes_preferences(expected_lock_version, payload)
+}
+
+#[tauri::command]
 async fn get_minutes_versions(
     window: WebviewWindow,
     meeting_id: String,
@@ -721,6 +741,8 @@ pub fn run() {
             start_transcription,
             start_minutes_generation,
             get_minutes_versions,
+            get_minutes_preferences,
+            save_minutes_preferences,
             get_minutes_preview,
             get_minutes_draft,
             create_minutes_draft,

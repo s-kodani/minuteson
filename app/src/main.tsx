@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
 import { TranscriptEditor } from "./transcript";
 import { AnalysisPanel } from "./analysis";
+import { MinutesPanel } from "./minutes";
 import { flushPendingEdits } from "./draft-save";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
@@ -257,7 +258,7 @@ function MainWindow() {
         <main className="content">
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
-          <p className="lead">保存済み録音を端末内で文字起こしし、候補を確認して編集できます。macOSの実録音・話者分離・議事録生成は検証・接続作業中です。</p>
+          <p className="lead">保存済み録音を端末内で文字起こしし、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と話者分離は検証・接続作業中です。</p>
           <section className="status-card" aria-label="録音状態">
             <div className="card-head"><h2>録音セッション</h2><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
@@ -284,7 +285,7 @@ function MainWindow() {
             {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}>
               <h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label>
               <div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || navigationBusy} /><button type="submit" disabled={meetingBusy || navigationBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={navigationBusy}>閉じる</button></div>
-              <p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。下の解析操作から文字起こしできます。議事録生成は準備中です。" : "録音状態を確認してください。"}</p>
+              <p>{selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : selectedMeeting.lifecycle === "recorded" ? "録音を保存済みです。文字起こしを確認・採用してから、議事録を生成できます。" : "録音状態を確認してください。"}</p>
             </form>}
           </section>
           {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} recorded={selectedMeeting.lifecycle === "recorded"} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
@@ -293,10 +294,14 @@ function MainWindow() {
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}
           {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} locked={navigationBusy} />}
+          {selectedMeeting && <MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
+            const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
+            setSelectedMeeting(meeting); setMeetings(items);
+          }} />}
           <div className="next-grid">
             <section><span className="step-number">01</span><h2>保存基盤</h2><p>会議・録音・候補版と、版ごとの編集を端末内に保持します。</p><span className="soon">一部実装</span></section>
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>
-            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし候補の確認・採用・編集に対応。話者分離と議事録は接続予定です。</p><span className="soon">一部実装</span></section>
+            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こしの編集と議事録候補の生成・確認・採用に対応。話者分離・議事録編集・出力は接続作業中です。</p><span className="soon">一部実装</span></section>
           </div>
         </main>
       </div>
