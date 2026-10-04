@@ -374,8 +374,25 @@ fn pause_and_timeout_reap_native_process_and_emit_no_result() {
     let mut config = config(directory.path());
     executable(
         &mut config,
-        "printf '%s' $$ > child.pid\nexec /bin/sleep 30",
+        "printf '%s' $$ > child.pid\n: > child.ready\nexec /bin/sleep 30",
     );
+    let preflight = directory.path().join("preflight");
+    std::fs::create_dir(&preflight).unwrap();
+    wav(&preflight);
+    assert_eq!(
+        run_track(
+            &config,
+            None,
+            &preflight,
+            1_000_000,
+            Duration::from_millis(400),
+            &|| true
+        )
+        .unwrap(),
+        None
+    );
+    assert!(!preflight.join("child.pid").exists());
+    assert!(!preflight.join("stdout.log").exists());
     for pause in [true, false] {
         let unit = directory
             .path()
@@ -388,8 +405,15 @@ fn pause_and_timeout_reap_native_process_and_emit_no_result() {
             None,
             &unit,
             1_000_000,
-            Duration::from_millis(400),
-            &|| pause && started.elapsed() > Duration::from_millis(250),
+            if pause {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_millis(400)
+            },
+            // Cancel only after the child's completed PID write. A wall-clock
+            // delay starting before preflight can cancel before spawn under load,
+            // which is correct but cannot prove that a running child was reaped.
+            &|| pause && unit.join("child.ready").is_file(),
         );
         if pause {
             assert_eq!(result.unwrap(), None);
