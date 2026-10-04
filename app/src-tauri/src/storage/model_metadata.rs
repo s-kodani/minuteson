@@ -118,6 +118,7 @@ pub(in crate::storage) fn retain(
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
+    super::model_profiles::remove_schema_for_test(db);
     if db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=24)",

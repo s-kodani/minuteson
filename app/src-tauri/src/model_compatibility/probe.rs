@@ -223,6 +223,53 @@ fn run(
     }
     check_cancelled(cancelled)
 }
+pub(super) fn verify_success(
+    storage: &Storage,
+    models_root: &Path,
+    operation: &str,
+    package: &str,
+    expected_review: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PlacementRecord, PathBuf), String> {
+    if !canonical_id(operation) {
+        return Err("互換性確認の操作IDが不正です".into());
+    }
+    check_cancelled(cancelled)?;
+    let record = storage.model_package_for_check(package, expected_review)?;
+    let (summary, report) = storage
+        .model_check_record(operation)?
+        .ok_or("互換性の成功記録がありません")?;
+    if summary.package_id != record.package_id
+        || summary.review_hash != record.review_hash
+        || summary.state != CheckState::Succeeded
+    {
+        return Err("最新の成功した互換性確認と対象が一致しません".into());
+    }
+    let report = report.ok_or("互換性の成功証拠がありません")?;
+    report.validate(&record)?;
+    let package_path = verify_package(models_root, &record, cancelled)?;
+    let check_root = models_root
+        .parent()
+        .ok_or("モデル管理領域の親がありません")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .join("model-checks");
+    if !check_root
+        .symlink_metadata()
+        .map_err(|e| e.to_string())?
+        .is_dir()
+    {
+        return Err("互換性の記録領域が通常フォルダーではありません".into());
+    }
+    let directory = check_root.join(operation);
+    if directory.canonicalize().map_err(|e| e.to_string())? != directory
+        || artifacts(&directory, record.manifest.engine, cancelled)? != report.artifacts
+    {
+        return Err("保存済みの互換性試行の証拠が欠損・変更されています".into());
+    }
+    check_cancelled(cancelled)?;
+    Ok((record, package_path))
+}
 pub(super) fn check(
     storage: &Storage,
     models_root: &Path,
@@ -237,7 +284,7 @@ pub(super) fn check(
     }
     check_cancelled(cancelled)?;
     let record = storage.model_package_for_check(package, expected_review)?;
-    if let Some((summary, report)) = storage.model_check_record(operation)? {
+    if let Some((summary, _)) = storage.model_check_record(operation)? {
         if summary.package_id != record.package_id
             || summary.review_hash != record.review_hash
             || summary.state != CheckState::Succeeded
@@ -246,28 +293,14 @@ pub(super) fn check(
                 "この操作は再利用できません。新しい操作として互換性を確認してください".into(),
             );
         }
-        let report = report.ok_or("互換性の成功記録がありません")?;
-        report.validate(&record)?;
-        verify_package(models_root, &record, cancelled)?;
-        let check_root = models_root
-            .parent()
-            .ok_or("モデル管理領域の親がありません")?
-            .canonicalize()
-            .map_err(|e| e.to_string())?
-            .join("model-checks");
-        if !check_root
-            .symlink_metadata()
-            .map_err(|e| e.to_string())?
-            .is_dir()
-        {
-            return Err("互換性の記録領域が通常フォルダーではありません".into());
-        }
-        let directory = check_root.join(operation);
-        if directory.canonicalize().map_err(|e| e.to_string())? != directory
-            || artifacts(&directory, record.manifest.engine, cancelled)? != report.artifacts
-        {
-            return Err("保存済みの互換性試行の証拠が欠損・変更されています".into());
-        }
+        verify_success(
+            storage,
+            models_root,
+            operation,
+            package,
+            expected_review,
+            cancelled,
+        )?;
         return Ok(summary);
     }
     storage.begin_model_check(operation, &record)?;

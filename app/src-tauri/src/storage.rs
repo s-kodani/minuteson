@@ -32,6 +32,7 @@ mod minutes_ui;
 mod model_checks;
 mod model_metadata;
 mod model_placements;
+pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
 mod recordings;
@@ -93,6 +94,7 @@ const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
 const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.sql");
 const MIGRATION_23: &str = include_str!("migrations/0023_model_metadata.sql");
 const MIGRATION_24: &str = include_str!("migrations/0024_model_compatibility.sql");
+const MIGRATION_25: &str = include_str!("migrations/0025_model_profile_applications.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -439,6 +441,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (22, MIGRATION_22),
     (23, MIGRATION_23),
     (24, MIGRATION_24),
+    (25, MIGRATION_25),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

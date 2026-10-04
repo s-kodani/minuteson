@@ -8,6 +8,7 @@ mod generation;
 mod import_controller;
 mod local_engine;
 mod minutes_document;
+mod model_application;
 mod model_compatibility;
 mod model_inspection;
 mod model_placement;
@@ -68,6 +69,81 @@ fn get_model_placements(
         return Err("Only the main window can read model placements".into());
     }
     window.state::<Storage>().list_model_placements()
+}
+
+#[tauri::command]
+fn get_model_profiles(
+    window: WebviewWindow,
+) -> Result<Vec<storage::model_profiles::ProfileView>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read model profiles".into());
+    }
+    window.state::<Storage>().model_profiles()
+}
+#[tauri::command]
+async fn preview_model_profile_application(
+    window: WebviewWindow,
+    token: String,
+    profile: storage::model_profiles::ProfileName,
+    package_id: String,
+    expected_review_hash: String,
+    check_operation_id: String,
+) -> Result<storage::model_profiles::ApplyPreview, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can review model application".into());
+    }
+    let app = window.app_handle().clone();
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_application::preview(
+                &app.state::<Storage>(),
+                &models_root,
+                profile,
+                &package_id,
+                &expected_review_hash,
+                &check_operation_id,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn apply_model_profile_application(
+    window: WebviewWindow,
+    token: String,
+    preview: storage::model_profiles::ApplyPreview,
+) -> Result<storage::model_profiles::ProfileView, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can apply model profiles".into());
+    }
+    let app = window.app_handle().clone();
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_application::apply(
+                &app.state::<Storage>(),
+                &models_root,
+                &token,
+                &preview,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1243,6 +1319,9 @@ pub fn run() {
             inspect_model_package,
             cancel_model_inspection,
             get_model_placements,
+            get_model_profiles,
+            preview_model_profile_application,
+            apply_model_profile_application,
             check_model_compatibility,
             place_model_package,
             get_audio_import,

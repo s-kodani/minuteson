@@ -40,7 +40,7 @@ pub(crate) struct MinutesPreferencesSnapshot {
     pub payload: MinutesPreferences,
     pub lock_version: i64,
 }
-fn validate(payload: &MinutesPreferences) -> Result<(), String> {
+pub(super) fn validate(payload: &MinutesPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
         let budget = engine
             .context_tokens
@@ -69,7 +69,7 @@ fn validate(payload: &MinutesPreferences) -> Result<(), String> {
     }
     Ok(())
 }
-fn load(db: &Connection) -> Result<MinutesPreferencesSnapshot, String> {
+pub(super) fn load(db: &Connection) -> Result<MinutesPreferencesSnapshot, String> {
     let row:Option<(String,String,i64)>=db.query_row("SELECT value_json,content_hash,lock_version FROM app_settings WHERE key='llama_profiles'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?;
     let (payload, lock_version) = if let Some((text, hash, version)) = row {
         if text.len() > 32 * 1024 || format!("{:x}", Sha256::digest(text.as_bytes())) != hash {

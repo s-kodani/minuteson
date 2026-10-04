@@ -42,7 +42,7 @@ pub(crate) struct DiarizationPreferencesSnapshot {
     pub payload: DiarizationPreferences,
     pub lock_version: i64,
 }
-fn validate(payload: &DiarizationPreferences) -> Result<(), String> {
+pub(super) fn validate(payload: &DiarizationPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
         if !(1..=64).contains(&engine.threads)
             || engine.runtime_library_paths.len() > 16
@@ -74,7 +74,7 @@ fn validate(payload: &DiarizationPreferences) -> Result<(), String> {
     }
     Ok(())
 }
-fn load(db: &Connection) -> Result<DiarizationPreferencesSnapshot, String> {
+pub(super) fn load(db: &Connection) -> Result<DiarizationPreferencesSnapshot, String> {
     let row: Option<(String,String,i64)> = db.query_row("SELECT value_json,content_hash,lock_version FROM app_settings WHERE key='diarization_profiles'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?;
     let (payload, lock_version) = if let Some((text, hash, version)) = row {
         if text.len() > 192 * 1024 || format!("{:x}", Sha256::digest(text.as_bytes())) != hash {

@@ -52,26 +52,7 @@ impl Storage {
         expected_version: i64,
         payload: AnalysisPreferences,
     ) -> Result<PreferencesSnapshot, String> {
-        for engine in [&payload.standard, &payload.high_accuracy] {
-            if !(1..=64).contains(&engine.threads) {
-                return Err("スレッド数は1～64で設定してください".into());
-            }
-            for path in [
-                Some(&engine.executable_path),
-                Some(&engine.model_path),
-                engine.vad_model_path.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if path.len() > 4096
-                    || (!path.is_empty() && !Path::new(path).is_absolute())
-                    || path.contains('\0')
-                {
-                    return Err("モデル・実行ファイルには絶対パスを入力してください".into());
-                }
-            }
-        }
+        validate(&payload)?;
         let mut connection = self
             .connection
             .lock()
@@ -99,7 +80,30 @@ impl Storage {
     }
 }
 
-fn load(connection: &Connection) -> Result<PreferencesSnapshot, String> {
+pub(super) fn validate(payload: &AnalysisPreferences) -> Result<(), String> {
+    for engine in [&payload.standard, &payload.high_accuracy] {
+        if !(1..=64).contains(&engine.threads) {
+            return Err("スレッド数は1～64で設定してください".into());
+        }
+        for path in [
+            Some(&engine.executable_path),
+            Some(&engine.model_path),
+            engine.vad_model_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if path.len() > 4096
+                || (!path.is_empty() && !Path::new(path).is_absolute())
+                || path.contains('\0')
+            {
+                return Err("モデル・実行ファイルには絶対パスを入力してください".into());
+            }
+        }
+    }
+    Ok(())
+}
+pub(super) fn load(connection: &Connection) -> Result<PreferencesSnapshot, String> {
     let row: Option<(String, String, i64)> = connection.query_row("SELECT value_json, content_hash, lock_version FROM app_settings WHERE key = 'whisper_profiles'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
     let (payload, lock_version) = if let Some((json, hash, version)) = row {
         if format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
@@ -112,6 +116,10 @@ fn load(connection: &Connection) -> Result<PreferencesSnapshot, String> {
     } else {
         (AnalysisPreferences::default(), 0)
     };
+    validate(&payload)?;
+    if lock_version < 0 {
+        return Err("解析設定の版番号が不正です".into());
+    }
     Ok(PreferencesSnapshot {
         id: "whisper_profiles".into(),
         payload,

@@ -486,6 +486,7 @@ fn compatibility_v23_upgrade_keeps_placement_and_backup_omits_host_runtime_trial
     let meeting = f.storage.list_meetings().unwrap();
     drop(f.storage);
     let db = rusqlite::Connection::open(f.meetings.path().join("meetings.sqlite3")).unwrap();
+    crate::storage::model_profiles::remove_schema_for_test(&db);
     db.execute_batch(
         "DROP TABLE model_compatibility_checks; DELETE FROM schema_migrations WHERE version=24;",
     )

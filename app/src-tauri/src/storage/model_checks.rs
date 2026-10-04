@@ -8,7 +8,7 @@ pub(super) struct SavedCheck {
     pub summary: CheckSummary,
     pub report: Option<ProbeReport>,
 }
-fn read(db: &Connection, id: &str) -> Result<Option<SavedCheck>, String> {
+pub(super) fn read(db: &Connection, id: &str) -> Result<Option<SavedCheck>, String> {
     let row: Option<(String,String,String,i64,String,Option<String>,Option<String>,Option<String>,i64,Option<i64>)> = db.query_row("SELECT id,package_id,review_hash,adapter_revision,state,report_json,report_hash,error_message,created_at,finished_at FROM model_compatibility_checks WHERE id=?1", params![id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?))).optional().map_err(|e|e.to_string())?;
     let Some((id, package, review, revision, state, json, hash, error, created, finished)) = row
     else {

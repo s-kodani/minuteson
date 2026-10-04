@@ -166,5 +166,40 @@ pub(crate) fn check(
     }
 }
 
+/// Read-only evidence verification. Unlike `check`, a missing operation can
+/// never fall through to starting an executable or creating trial intent.
+pub(crate) fn verify_success(
+    storage: &Storage,
+    models_root: &Path,
+    operation: &str,
+    package: &str,
+    expected_review: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PlacementRecord, std::path::PathBuf), String> {
+    #[cfg(unix)]
+    {
+        probe::verify_success(
+            storage,
+            models_root,
+            operation,
+            package,
+            expected_review,
+            cancelled,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            storage,
+            models_root,
+            operation,
+            package,
+            expected_review,
+            cancelled,
+        );
+        Err("Windowsのモデル適用は保留中です".into())
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests;
