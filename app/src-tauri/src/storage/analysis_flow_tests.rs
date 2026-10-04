@@ -2,7 +2,7 @@ use super::*;
 use crate::{analysis_flow, diarization, transcription};
 use std::os::unix::fs::PermissionsExt;
 
-fn fixture(root: &Path) -> (Storage, String) {
+pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     let (s, m, w) = super::super::transcription::tests::fixture(root, 4);
     let mut p = AnalysisPreferences::default();
     p.standard.executable_path = w.executable.path.to_str().unwrap().into();

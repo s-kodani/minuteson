@@ -33,7 +33,7 @@ pub(super) fn ensure_flow(db: &Connection, meeting: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn read_flow(db: &Connection, meeting: &str) -> Result<Option<AnalysisFlow>, String> {
+pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<AnalysisFlow>, String> {
     let row:Option<(String,String,i64,Option<String>,Option<String>,Option<String>,Option<String>,Option<String>)>=db.query_row("SELECT id,stage,lock_version,transcription_job_id,diarization_job_id,error_message,plan_json,plan_hash FROM analysis_flows WHERE meeting_id=?1",params![meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional().map_err(|e|e.to_string())?;
     let Some((id, stage, lock_version, trans, diar, error_message, text, hash)) = row else {
         return Ok(None);
@@ -211,4 +211,4 @@ pub(super) fn adoption_parent_matches(
 
 #[cfg(all(test, unix))]
 #[path = "analysis_flow_tests.rs"]
-mod tests;
+pub(super) mod tests;

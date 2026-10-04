@@ -22,10 +22,14 @@ pub struct WhisperConfig {
 }
 
 impl WhisperConfig {
-    pub fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+    pub(crate) fn validate_settings(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.threads) || self.prompt.chars().count() > 8000 {
             return Err("文字起こしのスレッド数または用語ヒントが不正です".into());
         }
+        Ok(())
+    }
+    pub fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+        self.validate_settings()?;
         self.executable.verify(cancelled)?;
         self.model.verify(cancelled)?;
         if let Some(vad) = &self.vad_model {

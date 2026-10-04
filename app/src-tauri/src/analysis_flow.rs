@@ -8,11 +8,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Plan {
+pub(crate) struct Plan {
     schema_version: u32,
-    profile: String,
-    whisper: WhisperConfig,
-    sherpa: SherpaConfig,
+    pub(crate) profile: String,
+    pub(crate) whisper: WhisperConfig,
+    pub(crate) sherpa: SherpaConfig,
+}
+
+// Pure saved-plan decoding: never checks model availability or starts a CLI.
+pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan, String> {
+    let plan: Plan = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if plan.schema_version != 1
+        || plan.profile != profile
+        || !matches!(profile, "standard" | "high_accuracy")
+        || !plan.whisper.prompt.is_empty()
+    {
+        return Err("未対応の工程条件です".into());
+    }
+    plan.whisper.validate_settings()?;
+    plan.sherpa.validate_settings(None)?;
+    Ok(plan)
 }
 fn prepare(
     storage: &Storage,
@@ -120,14 +135,10 @@ fn step(
             None,
         );
     }
-    let plan: Plan = serde_json::from_value(flow.plan.clone().ok_or("固定条件がありません")?)
-        .map_err(|e| e.to_string())?;
-    if plan.schema_version != 1
-        || plan.profile != flow.profile
-        || !matches!(plan.profile.as_str(), "standard" | "high_accuracy")
-    {
-        return Err("未対応の工程条件です".into());
-    }
+    let plan = saved_plan(
+        flow.plan.clone().ok_or("固定条件がありません")?,
+        &flow.profile,
+    )?;
     match flow.stage.as_str() {
         "transcription" => {
             if let Some(job) = &flow.transcription_job {

@@ -45,7 +45,7 @@ impl SherpaConfig {
         Ok(())
     }
 
-    pub(super) fn validate_settings(&self, num_speakers: Option<u32>) -> Result<(), String> {
+    pub(crate) fn validate_settings(&self, num_speakers: Option<u32>) -> Result<(), String> {
         if self.runtime_libraries.len() > 16
             || !(1..=64).contains(&self.threads)
             || self.cluster_threshold_milli > 2000

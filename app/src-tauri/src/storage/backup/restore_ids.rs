@@ -216,6 +216,7 @@ impl<'a> RestoreIds<'a> {
         plan.visit_fixed_definitions(cancelled, 0)?;
         plan.seed_documents(&archive.database, cancelled)?;
         plan.visit_fixed_definitions(cancelled, 1)?;
+        plan.seed_flow_operations(cancelled)?;
         for table in &tables {
             let bindings = rules(&archive.database, table)?;
             let mut owners = archive
@@ -312,6 +313,49 @@ impl<'a> RestoreIds<'a> {
                 params![old],
             )
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // Flow operations are derived identities, not independent random IDs. Mint
+    // their owning flow first so fixed requests and normal handoff readers agree.
+    fn seed_flow_operations(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+        let mut query = self
+            .source
+            .database
+            .prepare("SELECT id,meeting_id FROM analysis_flows ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            check_cancelled(cancelled)?;
+            let flow: String = row.get(0).map_err(|e| e.to_string())?;
+            let meeting: String = row.get(1).map_err(|e| e.to_string())?;
+            let new_flow = self.declare("analysis_flows", &meeting, &flow)?;
+            for kind in ["transcription", "diarization"] {
+                let old = format!("flow:{flow}:{kind}");
+                let root: Option<(String,String,Option<String>,i64)> = self.source.database.query_row("SELECT meeting_id,kind,retry_of_job_id,attempt FROM processing_jobs WHERE operation_id=?1",params![old],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|e|e.to_string())?;
+                let Some((owner, actual_kind, parent, attempt)) = root else {
+                    continue;
+                };
+                if owner != meeting || actual_kind != kind || parent.is_some() || attempt != 1 {
+                    return Err("解析工程の初回操作が別会議・別工程または再試行です".into());
+                }
+                let new = format!("flow:{new_flow}:{kind}");
+                self.reserve(&old)?;
+                let conflict: bool = self.database.query_row("SELECT EXISTS(SELECT 1 FROM reserved_ids WHERE id=?1) OR EXISTS(SELECT 1 FROM issued_ids WHERE id=?1)",params![new],|r|r.get(0)).map_err(|e|e.to_string())?;
+                if conflict || self.lookup("operation", &meeting, &old)?.is_some() {
+                    return Err("解析工程の復元操作IDが競合しています".into());
+                }
+                self.database
+                    .execute("INSERT INTO issued_ids VALUES(?1)", params![new])
+                    .map_err(|e| e.to_string())?;
+                self.database
+                    .execute(
+                        "INSERT INTO mappings VALUES('operation',?1,?2,?3)",
+                        params![meeting, old, new],
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         Ok(())
     }
 

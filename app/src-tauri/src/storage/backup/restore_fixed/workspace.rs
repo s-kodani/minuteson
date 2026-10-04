@@ -1,10 +1,11 @@
 //! File-backed reconstruction, never a publishable or validated restore image.
-//! Saved speech and generation artifacts have consuming construction passes.
-//! Remaining provenance, validation, sealing and publication need later passes.
+//! Saved artifacts and processing history have consuming construction passes.
+//! Durable provenance, final validation, sealing and publication need later passes.
 use super::*;
 use std::io::Read;
 mod assets;
 mod generation;
+mod history;
 mod speech;
 
 pub(in crate::storage::backup) struct FixedWorkspace {
@@ -17,6 +18,14 @@ pub(in crate::storage::backup) struct FixedWorkspace {
 }
 
 impl FixedWorkspace {
+    pub(in crate::storage::backup) fn with_processing_history(
+        mut self,
+        fixed: &FixedData<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        self.processing_history(fixed, cancelled)?;
+        Ok(self)
+    }
     pub(in crate::storage::backup) fn with_speech_artifacts(
         mut self,
         fixed: &FixedData<'_, '_>,
