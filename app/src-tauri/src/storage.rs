@@ -30,6 +30,7 @@ mod minutes_input;
 mod minutes_preferences;
 mod minutes_ui;
 mod model_metadata;
+mod model_placements;
 mod playback;
 mod preferences;
 mod recordings;
@@ -144,6 +145,10 @@ impl Storage {
         connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
         connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
         backup::recover_restore_operations(&root, &connection)?;
+        // A copy or compatibility check is never resumed or executed on startup.
+        // Retain intent/fingerprints and partial files for explicit inspection.
+        connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
+        connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type='manual_import' AND state='preparing'", [])?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),

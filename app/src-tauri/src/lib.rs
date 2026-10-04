@@ -9,6 +9,7 @@ mod import_controller;
 mod local_engine;
 mod minutes_document;
 mod model_inspection;
+mod model_placement;
 mod playback;
 mod recorder;
 mod saved_artifact;
@@ -53,6 +54,51 @@ fn cancel_model_inspection(window: WebviewWindow, token: String) -> Result<(), S
         return Err("Only the main window can cancel model inspection".into());
     }
     window.state::<model_inspection::Inspector>().cancel(&token)
+}
+
+#[tauri::command]
+fn get_model_placements(
+    window: WebviewWindow,
+) -> Result<Vec<model_placement::CatalogEntry>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read model placements".into());
+    }
+    window.state::<Storage>().list_model_placements()
+}
+
+#[tauri::command]
+async fn place_model_package(
+    window: WebviewWindow,
+    token: String,
+    directory: std::path::PathBuf,
+    expected_review_hash: String,
+) -> Result<model_placement::PlacementReceipt, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can place models".into());
+    }
+    let app = window.app_handle().clone();
+    if app.state::<SessionStore>().snapshot().is_active() {
+        return Err("録音が停止してからモデルを配置してください".into());
+    }
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    // Model bodies stay in OS app-data even when the meeting root moves later.
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        model_placement::place(
+            &app.state::<Storage>(),
+            &models_root,
+            &directory,
+            &token,
+            &expected_review_hash,
+            &|| guard.cancelled() || app.state::<SessionStore>().snapshot().is_active(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1157,6 +1203,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inspect_model_package,
             cancel_model_inspection,
+            get_model_placements,
+            place_model_package,
             get_audio_import,
             select_audio_import,
             start_audio_import,

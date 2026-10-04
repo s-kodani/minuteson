@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-const MANIFEST: &str = "mon-model.json";
+pub(crate) const MANIFEST: &str = "mon-model.json";
 const MAX_MANIFEST: usize = 65_536;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub(crate) enum Target {
     WindowsX86_64,
 }
 impl Target {
-    fn current() -> Result<Self, String> {
+    pub(crate) fn current() -> Result<Self, String> {
         match (std::env::consts::OS, std::env::consts::ARCH) {
             ("macos", "aarch64") => Ok(Self::MacosAarch64),
             ("windows", "x86_64") => Ok(Self::WindowsX86_64),
@@ -68,7 +68,8 @@ pub(crate) struct PackageFile {
     pub expected_size: Option<u64>,
     pub expected_hash: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FileReport {
     pub relative_path: String,
@@ -85,6 +86,7 @@ pub(crate) struct Report {
     pub manifest_hash: String,
     pub files: Vec<FileReport>,
     pub total_bytes: u64,
+    pub review_hash: String,
     // Hash consistency and a declared target do not prove binary/model loading,
     // publisher authenticity, redistribution rights, performance, or quality.
     pub engine_compatibility: &'static str,
@@ -124,7 +126,7 @@ fn relative(value: &str) -> bool {
         })
 }
 impl PackageManifest {
-    fn validate(&self, target: Target) -> Result<(), String> {
+    pub(crate) fn validate(&self, target: Target) -> Result<(), String> {
         if self.schema_version != 1
             || self.target != target
             || !text(&self.engine_version, 128)
@@ -216,14 +218,14 @@ fn unchanged(before: &Metadata, after: &Metadata) -> Result<(), String> {
         Err("検査中にモデルパッケージが変更されました".into())
     }
 }
-struct Source {
-    file: File,
+pub(crate) struct Source {
+    pub(crate) file: File,
     parents: Vec<(PathBuf, Metadata)>,
     path: PathBuf,
     before: Metadata,
 }
 impl Source {
-    fn open(root: &Path, relative: &str) -> Result<Self, String> {
+    pub(crate) fn open(root: &Path, relative: &str) -> Result<Self, String> {
         let mut path = root.to_path_buf();
         let mut parents = Vec::new();
         let parts = relative.split('/').collect::<Vec<_>>();
@@ -257,7 +259,7 @@ impl Source {
         source.verify()?;
         Ok(source)
     }
-    fn verify(&self) -> Result<(), String> {
+    pub(crate) fn verify(&self) -> Result<(), String> {
         unchanged(
             &self.before,
             &self.file.metadata().map_err(|e| e.to_string())?,
@@ -374,11 +376,13 @@ fn inspect_for_target(
     for source in &sources {
         source.verify()?;
     }
+    let review_hash = review_hash(&manifest, &format!("{:x}", Sha256::digest(&bytes)), &files)?;
     Ok(Report {
         manifest,
         manifest_hash: format!("{:x}", Sha256::digest(&bytes)),
         files,
         total_bytes: total,
+        review_hash,
         engine_compatibility: "not_verified",
         publisher_authenticity: "not_verified",
         installed: false,
@@ -386,11 +390,28 @@ fn inspect_for_target(
     })
 }
 
+// Binds consent to every observed byte, even without publisher hashes. It does
+// not authenticate a publisher or authorize executing any imported binary.
+pub(crate) fn review_hash(
+    manifest: &PackageManifest,
+    manifest_hash: &str,
+    files: &[FileReport],
+) -> Result<String, String> {
+    let bytes =
+        serde_json::to_vec(&(1_u32, manifest, manifest_hash, files)).map_err(|e| e.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 type Active = Option<(String, Arc<AtomicBool>)>;
 #[derive(Default)]
-pub(crate) struct Inspector(Arc<Mutex<Active>>);
+struct OperationState {
+    active: Active,
+    cancelled_tokens: std::collections::VecDeque<String>,
+}
+#[derive(Default)]
+pub(crate) struct Inspector(Arc<Mutex<OperationState>>);
 pub(crate) struct InspectionGuard {
-    owner: Arc<Mutex<Active>>,
+    owner: Arc<Mutex<OperationState>>,
     token: String,
     cancel: Arc<AtomicBool>,
 }
@@ -403,11 +424,14 @@ impl Inspector {
             .0
             .lock()
             .map_err(|_| "モデル検査ロックを取得できません")?;
-        if active.is_some() {
+        if active.cancelled_tokens.iter().any(|id| id == token) {
+            return Err("取消済みのモデル操作です。新しい操作で再試行してください".into());
+        }
+        if active.active.is_some() {
             return Err("別のモデル検査が進行中です。完了または取消を待ってください".into());
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        *active = Some((token.into(), cancel.clone()));
+        active.active = Some((token.into(), cancel.clone()));
         Ok(InspectionGuard {
             owner: self.0.clone(),
             token: token.into(),
@@ -415,14 +439,25 @@ impl Inspector {
         })
     }
     pub(crate) fn cancel(&self, token: &str) -> Result<(), String> {
-        let active = self
+        if !uuid::Uuid::parse_str(token).is_ok_and(|id| id.to_string() == token) {
+            return Err("モデル操作のIDが不正です".into());
+        }
+        let mut active = self
             .0
             .lock()
             .map_err(|_| "モデル検査ロックを取得できません")?;
-        if let Some((id, flag)) = &*active {
+        if let Some((id, flag)) = &active.active {
             if id == token {
                 flag.store(true, Ordering::Release);
             }
+        }
+        // A navigation/cancel IPC can arrive before the start IPC is handled.
+        // Keep a bounded tombstone so that late start cannot begin a large copy.
+        if !active.cancelled_tokens.iter().any(|id| id == token) {
+            if active.cancelled_tokens.len() >= 128 {
+                active.cancelled_tokens.pop_front();
+            }
+            active.cancelled_tokens.push_back(token.into());
         }
         Ok(())
     }
@@ -435,8 +470,12 @@ impl InspectionGuard {
 impl Drop for InspectionGuard {
     fn drop(&mut self) {
         let mut active = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        if active.as_ref().is_some_and(|(id, _)| id == &self.token) {
-            *active = None;
+        if active
+            .active
+            .as_ref()
+            .is_some_and(|(id, _)| id == &self.token)
+        {
+            active.active = None;
         }
     }
 }

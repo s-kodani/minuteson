@@ -295,9 +295,12 @@ fn cancelled_read_has_no_success_report_and_single_operation_lifetime_is_guarded
     assert!(guard.cancelled());
     assert!(inspector.begin(&other).is_err());
     drop(guard);
-    let next = inspector.begin(&other).unwrap();
+    assert!(inspector.begin(&other).is_err()); // cancellation arrived before begin
+    let third = uuid::Uuid::new_v4().to_string();
+    let next = inspector.begin(&third).unwrap();
     inspector.cancel(&token).unwrap();
     assert!(!next.cancelled());
     drop(next);
-    assert!(inspector.begin(&token).is_ok());
+    assert!(inspector.begin(&token).is_err());
+    assert!(inspector.begin(&uuid::Uuid::new_v4().to_string()).is_ok());
 }
