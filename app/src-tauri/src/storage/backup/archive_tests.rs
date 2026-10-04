@@ -235,6 +235,127 @@ fn registered_recreatable_pcm_is_omitted_but_durable_source_wav_is_kept() {
 }
 
 #[test]
+fn native_logs_are_omitted_without_dropping_prompts_or_reusing_the_pcm_reason() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let id = meeting(&storage, "logs");
+    let job = storage
+        .enqueue_job(JobSpec {
+            meeting_id: id.clone(),
+            kind: JobKind::Transcription,
+            operation_id: "logs-job".into(),
+            input_analysis_id: None,
+            input_hash: "a".repeat(64),
+            profile_snapshot: json!({}),
+            parameters: json!({}),
+            total_units: Some(1),
+        })
+        .unwrap();
+    let directory = storage.analysis_unit_directory(&id, &job.id, 0).unwrap();
+    let secret = b"private-native-log /Users/source-machine/private-model.bin";
+    let mut logs = vec![];
+    for name in ["stdout.log", "stderr.log"] {
+        let path = directory.join(name);
+        std::fs::write(&path, secret).unwrap();
+        logs.push(
+            storage
+                .register_analysis_artifact(&id, &path, "text/plain")
+                .unwrap()
+                .id,
+        );
+    }
+    let prompt = directory.join("prompt.txt");
+    std::fs::write(&prompt, b"natural content /Users/fictional must remain").unwrap();
+    let prompt = storage
+        .register_analysis_artifact(&id, &prompt, "text/plain")
+        .unwrap();
+    let (path, receipt) = write(&storage, output.path());
+    assert_eq!(receipt.omitted_log_count, 2);
+    assert_eq!(receipt.omitted_pcm_count, 0);
+    let mut archive = verified(&path, output.path());
+    for id in &logs {
+        assert!(!archive.assets.contains_key(id));
+        let entry = archive
+            .manifest
+            .omitted_assets
+            .iter()
+            .find(|e| &e.asset_id == id)
+            .unwrap();
+        assert_eq!(entry.reason, OmittedReason::NativeLog);
+    }
+    assert_eq!(
+        std::fs::read(&archive.assets[&prompt.id]).unwrap(),
+        b"natural content /Users/fictional must remain"
+    );
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(secret.len()).any(|s| s == secret));
+    // Rehashed omission metadata cannot disguise a log as regeneratable audio.
+    archive.manifest.omitted_assets[0].reason = OmittedReason::RecreatablePcm;
+    let forged = output.path().join("wrong-log-kind.monbackup");
+    pack(&forged, &archive.manifest, &payloads(&archive));
+    assert!(
+        read(&mut File::open(forged).unwrap(), output.path(), &|| false)
+            .err()
+            .unwrap()
+            .contains("除外ファイル")
+    );
+    assert!(storage.verify_asset(&prompt.id).is_ok());
+}
+
+#[test]
+fn native_completion_marker_is_canonicalized_without_repairing_invalid_output_or_text() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let id = meeting(&storage, "completion");
+    let job = storage
+        .enqueue_job(JobSpec {
+            meeting_id: id.clone(),
+            kind: JobKind::Transcription,
+            operation_id: "completion-job".into(),
+            input_analysis_id: None,
+            input_hash: "a".repeat(64),
+            profile_snapshot: json!({}),
+            parameters: json!({}),
+            total_units: Some(1),
+        })
+        .unwrap();
+    let directory = storage.analysis_unit_directory(&id, &job.id, 0).unwrap();
+    let value = json!({"schemaVersion":1,"items":[{"body":"本文中の [end of text] と /Users/fictional は保持"}]});
+    let bytes = format!("{}\n[end of text]\n", value).into_bytes();
+    let path = directory.join("result.json");
+    std::fs::write(&path, &bytes).unwrap();
+    let asset = storage
+        .register_analysis_artifact(&id, &path, "application/vnd.mon.llama-completion")
+        .unwrap();
+    let (backup, _) = write(&storage, output.path());
+    let archive = verified(&backup, output.path());
+    let saved = std::fs::read(&archive.assets[&asset.id]).unwrap();
+    assert_eq!(
+        crate::generation::llama::parse_output(&saved).unwrap(),
+        value
+    );
+    let entry = archive
+        .manifest
+        .entries
+        .iter()
+        .find(|e| e.asset_id.as_ref() == Some(&asset.id))
+        .unwrap();
+    assert_eq!(entry.source_sha256.as_ref(), Some(&asset.content_hash));
+    assert_ne!(entry.sha256, asset.content_hash);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    for bad in [
+        b"{\"x\":1,\"x\":2}".as_slice(),
+        b"{} trailing log",
+        b"{} {}",
+        b"{\"items\":[",
+    ] {
+        assert!(portable::portable_completion(bad, &mut BTreeSet::new()).is_err());
+    }
+}
+
+#[test]
 fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_changing_audio() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

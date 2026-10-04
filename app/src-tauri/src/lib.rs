@@ -10,6 +10,7 @@ mod local_engine;
 mod minutes_document;
 mod playback;
 mod recorder;
+mod saved_artifact;
 mod session;
 mod storage;
 mod transcription;

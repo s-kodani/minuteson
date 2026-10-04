@@ -1,7 +1,7 @@
 use super::super::archive::VerifiedArchive;
 use super::*;
 
-fn fixture(storage: &Storage, operation: &str) -> String {
+pub(super) fn fixture(storage: &Storage, operation: &str) -> String {
     let meeting = super::super::restore_ids::tests::fixture(storage, operation);
     let global = storage.vocabulary_book(None).unwrap();
     storage
@@ -57,7 +57,7 @@ fn fixture(storage: &Storage, operation: &str) -> String {
     meeting
 }
 
-fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
+pub(super) fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
     let path = output.join("fixed.monbackup");
     storage.create_backup_archive(&path, &|| false).unwrap();
     archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
@@ -74,7 +74,7 @@ fn strings(db: &Connection, sql: &str) -> Vec<String> {
 
 // A test-only projection into a trusted, isolated schema. No triggers are ever
 // removed from the app DB. The actual additive publication path remains gated.
-fn project(fixed: &FixedData<'_, '_>) -> Connection {
+pub(super) fn project(fixed: &FixedData<'_, '_>) -> Connection {
     let db = portable::schema(MIGRATIONS.len()).unwrap();
     for trigger in strings(&db, "SELECT name FROM sqlite_schema WHERE type='trigger'") {
         db.execute_batch(&format!("DROP TRIGGER \"{trigger}\";"))
@@ -116,9 +116,20 @@ fn project(fixed: &FixedData<'_, '_>) -> Connection {
     db
 }
 
-fn register_assets(fixed: &FixedData<'_, '_>, target: &Connection) {
+pub(super) fn register_assets(fixed: &FixedData<'_, '_>, target: &Connection) {
+    register_assets_except(fixed, target, &std::collections::BTreeSet::new());
+}
+
+pub(super) fn register_assets_except(
+    fixed: &FixedData<'_, '_>,
+    target: &Connection,
+    skipped: &std::collections::BTreeSet<String>,
+) {
     let source = fixed.ids.source();
     for (id, path) in &source.assets {
+        if skipped.contains(id) {
+            continue;
+        }
         let meeting: String = source
             .database
             .query_row(
@@ -172,7 +183,7 @@ fn register_assets(fixed: &FixedData<'_, '_>, target: &Connection) {
     }
 }
 
-fn rebuild_analyses(fixed: &FixedData<'_, '_>, target: &mut Connection) {
+pub(super) fn rebuild_analyses(fixed: &FixedData<'_, '_>, target: &mut Connection) {
     for id in strings(
         &fixed.ids.source().database,
         "SELECT id FROM analysis_revisions ORDER BY meeting_id,revision_no",

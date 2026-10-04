@@ -28,8 +28,9 @@ enum Transform {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum OmittedReason {
+pub(super) enum OmittedReason {
     RecreatablePcm,
+    NativeLog,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,7 +54,7 @@ pub(super) struct OmittedAsset {
     pub path: String,
     pub source_size: u64,
     pub source_sha256: String,
-    reason: OmittedReason,
+    pub(super) reason: OmittedReason,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +89,7 @@ pub(crate) struct BackupReceipt {
     pub meeting_count: usize,
     pub asset_count: usize,
     pub omitted_pcm_count: usize,
+    pub omitted_log_count: usize,
     pub size: u64,
     pub sha256: String,
 }
@@ -121,21 +123,28 @@ impl Snapshot<'_> {
         for item in &self.assets {
             check_cancelled(cancelled)?;
             let asset = &item.asset;
-            let temporary = portable::temporary_pcm(&db, asset)?;
+            let reason = if portable::temporary_pcm(&db, asset)? {
+                Some(OmittedReason::RecreatablePcm)
+            } else if portable::native_log(&db, asset)? {
+                Some(OmittedReason::NativeLog)
+            } else {
+                None
+            };
+            let temporary = reason.is_some();
             let key = format!(
                 "{}/{}",
                 if temporary { "omitted" } else { "assets" },
                 item.key
             );
             lookup.insert(asset.id.clone(), (key.clone(), temporary));
-            if temporary {
+            if let Some(reason) = reason {
                 omitted.push(OmittedAsset {
                     asset_id: asset.id.clone(),
                     meeting_id: asset.meeting_id.clone(),
                     path: key,
                     source_size: asset.size_bytes as u64,
                     source_sha256: asset.content_hash.clone(),
-                    reason: OmittedReason::RecreatablePcm,
+                    reason,
                 });
                 continue;
             }
@@ -157,7 +166,11 @@ impl Snapshot<'_> {
                 {
                     return Err("管理JSONが変更されています".into());
                 }
-                let bytes = portable::portable_json(&bytes, capture, &mut references)?;
+                let bytes = if asset.media_type == "application/vnd.mon.llama-completion" {
+                    portable::portable_completion(&bytes, &mut references)?
+                } else {
+                    portable::portable_json(&bytes, capture, &mut references)?
+                };
                 let path = stage.path().join(&item.key);
                 let mut out = private_file(&path)?;
                 out.write_all(&bytes)
@@ -254,7 +267,18 @@ impl Snapshot<'_> {
             archive_id: verified.manifest.archive_id.clone(),
             meeting_count: verified.manifest.meetings.len(),
             asset_count: verified.assets.len(),
-            omitted_pcm_count: verified.manifest.omitted_assets.len(),
+            omitted_pcm_count: verified
+                .manifest
+                .omitted_assets
+                .iter()
+                .filter(|a| a.reason == OmittedReason::RecreatablePcm)
+                .count(),
+            omitted_log_count: verified
+                .manifest
+                .omitted_assets
+                .iter()
+                .filter(|a| a.reason == OmittedReason::NativeLog)
+                .count(),
             size,
             sha256,
         })
@@ -371,7 +395,7 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             || !paths.insert(&e.path)
             || !portable::valid_hash(&e.source_sha256)
         {
-            return Err("除外PCMの由来が不正です".into());
+            return Err("除外ファイルの由来が不正です".into());
         }
     }
     let mut references = BTreeSet::new();
@@ -503,7 +527,7 @@ fn validate_inventory(db: &Connection, m: &Manifest) -> Result<(), String> {
     }
     let mut statement = db
         .prepare(
-            "SELECT id,meeting_id,relative_path,size_bytes,content_hash,state FROM file_assets",
+            "SELECT id,meeting_id,relative_path,size_bytes,content_hash,state,media_type FROM file_assets",
         )
         .map_err(|e| e.to_string())?;
     let mut rows = statement.query([]).map_err(|e| e.to_string())?;
@@ -521,6 +545,7 @@ fn validate_inventory(db: &Connection, m: &Manifest) -> Result<(), String> {
         let size: i64 = row.get(3).map_err(|e| e.to_string())?;
         let hash: String = row.get(4).map_err(|e| e.to_string())?;
         let state: String = row.get(5).map_err(|e| e.to_string())?;
+        let media: String = row.get(6).map_err(|e| e.to_string())?;
         if let Some(e) = entries.get(&id) {
             if e.meeting_id.as_deref() != Some(&meeting)
                 || e.path != path
@@ -544,8 +569,12 @@ fn validate_inventory(db: &Connection, m: &Manifest) -> Result<(), String> {
                 || e.source_sha256 != hash
                 || state != "missing"
                 || referenced
+                || match e.reason {
+                    OmittedReason::RecreatablePcm => media != "audio/wav",
+                    OmittedReason::NativeLog => media != "text/plain",
+                }
             {
-                return Err("除外PCMの参照が不正です".into());
+                return Err("除外ファイルの参照が不正です".into());
             }
         } else {
             return Err("manifestにない管理ファイルがあります".into());
@@ -564,6 +593,10 @@ fn validate_portability(
     assets: &BTreeMap<String, PathBuf>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    let kept_log:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id, json_each(c.checkpoint_json,'$.outputs') o JOIN file_assets f ON f.id=json_extract(o.value,'$.stdoutAssetId') AND f.meeting_id=j.meeting_id WHERE j.kind='diarization' AND f.state!='missing')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if kept_log {
+        return Err("バックアップに話者分離ログ本体が残っています".into());
+    }
     let invalid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM audio_tracks WHERE device_label IS NOT NULL) OR EXISTS(SELECT 1 FROM export_records WHERE error_message IS NOT NULL) OR EXISTS(SELECT 1 FROM audio_import_commits WHERE error_message IS NOT NULL) OR EXISTS(SELECT 1 FROM analysis_flows WHERE error_message IS NOT NULL)",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     if invalid {
         return Err("バックアップに端末固有の診断情報が残っています".into());

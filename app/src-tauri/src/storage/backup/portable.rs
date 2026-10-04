@@ -334,14 +334,42 @@ pub(super) fn portable_json(
     serde_json::to_vec(&value).map_err(|e| e.to_string())
 }
 
+pub(super) fn portable_completion(
+    bytes: &[u8],
+    references: &mut BTreeSet<FileReference>,
+) -> Result<Vec<u8>, String> {
+    // Native completions permit one exact trailing adapter marker. Use that
+    // protocol (including duplicate-key rejection), not a permissive substring
+    // search. The original byte hash remains in archive provenance.
+    let value = crate::generation::llama::parse_output(bytes)?;
+    portable_json(
+        &serde_json::to_vec(&value).map_err(|e| e.to_string())?,
+        false,
+        references,
+    )
+}
+
 pub(super) fn temporary_pcm(db: &Connection, asset: &FileAsset) -> Result<bool, String> {
+    private_job_artifact(db, asset, "audio/wav", &["input.wav"])
+}
+
+pub(super) fn native_log(db: &Connection, asset: &FileAsset) -> Result<bool, String> {
+    private_job_artifact(db, asset, "text/plain", &["stdout.log", "stderr.log"])
+}
+
+fn private_job_artifact(
+    db: &Connection,
+    asset: &FileAsset,
+    media: &str,
+    names: &[&str],
+) -> Result<bool, String> {
     let parts: Vec<_> = asset.relative_path.split('/').collect();
-    if asset.media_type != "audio/wav"
+    if asset.media_type != media
         || parts.len() != 6
         || parts[0] != "meetings"
         || parts[1] != asset.meeting_id
         || parts[2] != "analysis"
-        || parts[5] != "input.wav"
+        || !names.contains(&parts[5])
     {
         return Ok(false);
     }

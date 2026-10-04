@@ -136,6 +136,91 @@ struct Artifact {
     hash: String,
 }
 
+pub(crate) fn restore_checkpoint_references(
+    job: &JobSnapshot,
+    parameters: Value,
+    value: Value,
+    mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
+) -> Result<Value, String> {
+    use crate::saved_artifact::Role;
+    let parameters: Parameters = serde_json::from_value(parameters).map_err(|e| e.to_string())?;
+    if !matches!(parameters.schema_version, 1 | 2)
+        || parameters.template_version != TEMPLATE_VERSION
+    {
+        return Err("未対応の生成条件です".into());
+    }
+    let mut checkpoint = checked_checkpoint(job, &parameters, Some(value))?;
+    if job
+        .total_units
+        .is_some_and(|total| checkpoint.outputs.len() as i64 > total)
+    {
+        return Err("生成結果が固定した総単位数を超えています".into());
+    }
+    let artifact_set = |artifacts: &[Artifact]| -> Result<(), String> {
+        if artifacts.len() != 4
+            || artifacts.iter().map(|a| a.name.as_str()).ne([
+                "system.txt",
+                "prompt.txt",
+                "schema.json",
+                "result.json",
+            ])
+        {
+            return Err("生成チェックポイントの成果物が不足・重複・順序不正です".into());
+        }
+        Ok(())
+    };
+    let mut reference = |artifact: &mut Artifact, normalized: bool| -> Result<(), String> {
+        let role = match (artifact.name.as_str(), normalized) {
+            ("system.txt", false) => Role::GenerationSystem,
+            ("prompt.txt", false) => Role::GenerationPrompt,
+            ("schema.json", false) => Role::GenerationSchema,
+            ("result.json", false) => Role::GenerationRaw,
+            ("items.json", true) => Role::GenerationItems,
+            _ => return Err("生成チェックポイントの成果物種別が不正です".into()),
+        };
+        (artifact.id, artifact.hash) = map(role, &artifact.id, &artifact.hash)?;
+        Ok(())
+    };
+    for output in &mut checkpoint.outputs {
+        let adaptive = parameters.schema_version == 2
+            && matches!(
+                parameters.plan.nodes.get(output.index),
+                Some(plan::Node::Merge { .. })
+            );
+        if adaptive {
+            if !output.artifacts.is_empty() || output.merge_batches.is_empty() {
+                return Err("分割統合の保存形式が不正です".into());
+            }
+        } else {
+            if !output.merge_batches.is_empty() {
+                return Err("抽出結果に統合単位が混入しています".into());
+            }
+            artifact_set(&output.artifacts)?;
+        }
+        for artifact in &mut output.artifacts {
+            reference(artifact, false)?;
+        }
+        reference(&mut output.normalized, true)?;
+        for batch in &mut output.merge_batches {
+            artifact_set(&batch.artifacts)?;
+            for artifact in &mut batch.artifacts {
+                reference(artifact, false)?;
+            }
+            reference(&mut batch.normalized, true)?;
+        }
+    }
+    if let Some(pending) = &mut checkpoint.pending {
+        for batch in &mut pending.batches {
+            artifact_set(&batch.artifacts)?;
+            for artifact in &mut batch.artifacts {
+                reference(artifact, false)?;
+            }
+            reference(&mut batch.normalized, true)?;
+        }
+    }
+    serde_json::to_value(checkpoint).map_err(|e| e.to_string())
+}
+
 fn profile(engine: &llama::LlamaConfig, name: &str) -> Value {
     json!({"profile":name,"engine":"llama.cpp","modelSha256":engine.model.sha256,"qualityStatus":"unverified"})
 }

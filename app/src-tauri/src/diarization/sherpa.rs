@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const MAX_SPEAKERS: u32 = 100;
-const MAX_SEGMENTS: usize = 100_000;
+pub(super) const MAX_SEGMENTS: usize = 100_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

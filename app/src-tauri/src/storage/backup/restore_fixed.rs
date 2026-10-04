@@ -12,6 +12,7 @@ use rusqlite::Transaction;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod checkpoints;
 mod config;
 mod order;
 

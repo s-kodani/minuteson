@@ -96,7 +96,9 @@ impl FixedData<'_, '_> {
         meeting: &str,
         id: &str,
     ) -> Result<JobSpec, String> {
-        let (kind,operation,input,hash,profile,parameters,total):(String,String,Option<String>,String,String,String,Option<i64>)=self.ids.source().database.query_row("SELECT kind,operation_id,input_analysis_id,input_hash,profile_snapshot_json,parameters_json,total_units FROM processing_jobs WHERE id=?1 AND meeting_id=?2",params![id,meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?;
+        let original = self.source_job_spec(meeting, id)?;
+        let input = original.input_analysis_id;
+        let hash = original.input_hash;
         let input_hash = if let Some(input) = &input {
             self.resolve("analysis_revisions", meeting, input, &hash)?
         } else {
@@ -104,19 +106,34 @@ impl FixedData<'_, '_> {
         };
         Ok(JobSpec {
             meeting_id: self.ids.get("meetings", "", meeting)?,
-            kind: serde_json::from_value(json!(kind)).map_err(|e| e.to_string())?,
-            operation_id: self.ids.get("operation", meeting, &operation)?,
+            kind: original.kind,
+            operation_id: self.ids.get("operation", meeting, &original.operation_id)?,
             input_analysis_id: input
                 .as_deref()
                 .map(|id| self.ids.get("analysis_revisions", meeting, id))
                 .transpose()?,
             input_hash,
+            profile_snapshot: original.profile_snapshot,
+            parameters: self.parameters(meeting, input.as_deref(), &original.parameters)?,
+            total_units: original.total_units,
+        })
+    }
+
+    pub(in crate::storage::backup) fn source_job_spec(
+        &self,
+        meeting: &str,
+        id: &str,
+    ) -> Result<JobSpec, String> {
+        self.ids.get("processing_jobs", meeting, id)?;
+        let (kind,operation,input,hash,profile,parameters,total):(String,String,Option<String>,String,String,String,Option<i64>)=self.ids.source().database.query_row("SELECT kind,operation_id,input_analysis_id,input_hash,profile_snapshot_json,parameters_json,total_units FROM processing_jobs WHERE id=?1 AND meeting_id=?2",params![id,meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?;
+        Ok(JobSpec {
+            meeting_id: meeting.into(),
+            kind: serde_json::from_value(json!(kind)).map_err(|e| e.to_string())?,
+            operation_id: operation,
+            input_analysis_id: input,
+            input_hash: hash,
             profile_snapshot: serde_json::from_str(&profile).map_err(|e| e.to_string())?,
-            parameters: self.parameters(
-                meeting,
-                input.as_deref(),
-                &serde_json::from_str(&parameters).map_err(|e| e.to_string())?,
-            )?,
+            parameters: serde_json::from_str(&parameters).map_err(|e| e.to_string())?,
             total_units: total,
         })
     }

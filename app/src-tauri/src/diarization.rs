@@ -144,6 +144,128 @@ struct ResultFile {
     segments: Vec<Segment>,
 }
 
+pub(crate) fn restore_checkpoint_references(
+    job: &JobSnapshot,
+    value: serde_json::Value,
+    mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
+) -> Result<serde_json::Value, String> {
+    use crate::saved_artifact::Role;
+    let mut checkpoint = checked_checkpoint(job, Some(value))?;
+    if job
+        .total_units
+        .is_some_and(|total| checkpoint.outputs.len() as i64 > total)
+    {
+        return Err("再開情報が固定した総トラック数を超えています".into());
+    }
+    for output in &mut checkpoint.outputs {
+        (output.wav_asset_id, output.wav_hash) =
+            map(Role::TemporaryPcm, &output.wav_asset_id, &output.wav_hash)?;
+        (output.stdout_asset_id, output.stdout_hash) = map(
+            Role::DiarizationLog,
+            &output.stdout_asset_id,
+            &output.stdout_hash,
+        )?;
+        (output.result_asset_id, output.result_hash) = map(
+            Role::DiarizationResult,
+            &output.result_asset_id,
+            &output.result_hash,
+        )?;
+    }
+    serde_json::to_value(checkpoint).map_err(|e| e.to_string())
+}
+
+/// Rebase structured results, not native stdout logs or model availability.
+pub(crate) fn restore_result(
+    bytes: &[u8],
+    old: &JobSpec,
+    new: &JobSpec,
+) -> Result<Vec<u8>, String> {
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("話者分離結果が容量上限を超えています".into());
+    }
+    let mut result: ResultFile = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let old_envelope: Envelope =
+        serde_json::from_value(old.parameters.clone()).map_err(|e| e.to_string())?;
+    let new_envelope: Envelope =
+        serde_json::from_value(new.parameters.clone()).map_err(|e| e.to_string())?;
+    let index = old_envelope
+        .diarization
+        .source
+        .tracks
+        .iter()
+        .position(|t| t.id == result.track_id)
+        .ok_or("保存結果のトラックがありません")?;
+    let old_track = &old_envelope.diarization.source.tracks[index];
+    let new_track = new_envelope
+        .diarization
+        .source
+        .tracks
+        .get(index)
+        .ok_or("再構成後のトラックがありません")?;
+    let native_duration = duration(&old_envelope.diarization.source, index)?;
+    if old.kind != JobKind::Diarization
+        || new.kind != JobKind::Diarization
+        || old_envelope.schema_version != 1
+        || new_envelope.schema_version != 1
+        || result.schema_version != 1
+        || result.origin_operation_id != old_envelope.request.operation_id
+        || Some(result.input_analysis_id.as_str()) != old.input_analysis_id.as_deref()
+        || result.input_hash != old.input_hash
+        || result.source_manifest_hash != old_envelope.diarization.source.manifest_hash
+        || result.track_start_us != old_track.start_us
+        || result.duration_us != native_duration
+        || result.engine != old_envelope.diarization.engine
+        || result.num_speakers
+            != old_envelope
+                .diarization
+                .tracks
+                .get(index)
+                .ok_or("話者設定がありません")?
+                .num_speakers
+        || result.engine != new_envelope.diarization.engine
+        || old_track.start_us != new_track.start_us
+        || native_duration != duration(&new_envelope.diarization.source, index)?
+        || result.num_speakers
+            != new_envelope
+                .diarization
+                .tracks
+                .get(index)
+                .ok_or("再構成後の話者設定がありません")?
+                .num_speakers
+    {
+        return Err("保存済みの話者分離結果の由来・固定設定が一致しません".into());
+    }
+    if result.segments.len() > sherpa::MAX_SEGMENTS {
+        return Err("保存済み話者区間数が上限を超えています".into());
+    }
+    let mut previous = 0;
+    for segment in &result.segments {
+        if segment.start_us < previous
+            || segment.start_us < 0
+            || segment.end_us <= segment.start_us
+            || segment.end_us > native_duration
+            || segment.speaker >= MAX_SPEAKERS
+            || result.num_speakers.is_some_and(|n| segment.speaker >= n)
+        {
+            return Err("保存済み話者区間の時刻が不正です".into());
+        }
+        previous = segment.start_us;
+    }
+    result.origin_operation_id = new_envelope.request.operation_id;
+    result.input_analysis_id = new
+        .input_analysis_id
+        .clone()
+        .ok_or("再構成後の固定入力がありません")?;
+    result.input_hash = new.input_hash.clone();
+    result.source_manifest_hash = new_envelope.diarization.source.manifest_hash;
+    result.track_id = new_track.id.clone();
+    let bytes = serde_json::to_vec(&result).map_err(|e| e.to_string())?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("再構成した話者分離結果が容量上限を超えています".into());
+    }
+    Ok(bytes)
+}
+
 fn track_frames(source: &RecordedAudioPlan, index: usize) -> Result<u64, String> {
     let track = &source.tracks[index];
     let frames = track
