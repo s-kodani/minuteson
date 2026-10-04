@@ -12,8 +12,13 @@ let package = Package(
         .linkedFramework("AVFoundation"),
         .linkedFramework("CoreAudio"),
         .linkedFramework("CoreMedia"),
+        .linkedFramework("IOKit"),
         .linkedFramework("ScreenCaptureKit"),
       ]
-    )
+    ),
+    .testTarget(
+      name: "MONMacOSCaptureTests", dependencies: ["MONMacOSCapture"],
+      path: "Tests/MONMacOSCaptureTests"
+    ),
   ]
 )

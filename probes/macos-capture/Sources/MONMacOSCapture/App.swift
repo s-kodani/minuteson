@@ -129,7 +129,7 @@ struct TrackStats: Codable {
   var channels: UInt32?
 }
 
-private struct Manifest: Codable {
+private struct Manifest: Encodable {
   var schemaVersion = 1
   let scenario: String
   let captureMode: String
@@ -146,6 +146,7 @@ private struct Manifest: Codable {
   var state: String
   var microphone: TrackStats
   var system: TrackStats
+  var power = RecordingPowerStatus()
   var errors: [String]
 }
 
@@ -446,7 +447,13 @@ private enum Main {
         errors: []
       )
       try write(manifest, to: manifestURL)
+      let power = RecordingPowerAssertion()
+      // Also covers a throw while writing the final manifest. Do not depend on
+      // a WebView, the main window, or normal application termination to release.
+      defer { try? power.release() }
       do {
+        try power.acquire()
+        manifest.power.acquired = true
         try await mic.start()
         if options.backend == "coreaudio" {
           try tap.start(targetPIDs: options.targetPIDs)
@@ -486,6 +493,13 @@ private enum Main {
         do {
           if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
         } catch { manifest.errors.append(String(describing: error)) }
+        manifest.state = "failed"
+        manifest.errors.append(String(describing: error))
+      }
+      do {
+        try power.release()
+        manifest.power.released = manifest.power.acquired
+      } catch {
         manifest.state = "failed"
         manifest.errors.append(String(describing: error))
       }
