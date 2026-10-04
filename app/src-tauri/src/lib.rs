@@ -516,6 +516,35 @@ async fn get_minutes_evidence_source(
 }
 
 #[tauri::command]
+async fn get_minutes_transcript_page(
+    window: WebviewWindow,
+    request: storage::MinutesTranscriptRequest,
+) -> Result<storage::MinutesTranscriptPage, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().minutes_transcript_page(&request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn prepare_minutes_transcript_playback(
+    window: WebviewWindow,
+    request: storage::MinutesTranscriptAudioRequest,
+) -> Result<PlaybackInfo, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app
+            .state::<Storage>()
+            .prepare_minutes_transcript_audio(&request)?;
+        app.state::<PlaybackStore>().insert(audio)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_minutes_evidence_playback(
     window: WebviewWindow,
     request: storage::MinutesEvidenceRequest,
@@ -853,6 +882,8 @@ pub fn run() {
             undo_transcript_edit,
             prepare_utterance_playback,
             get_minutes_evidence_source,
+            get_minutes_transcript_page,
+            prepare_minutes_transcript_playback,
             prepare_minutes_evidence_playback,
             read_playback_chunk,
             close_playback,

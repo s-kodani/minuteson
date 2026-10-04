@@ -60,6 +60,259 @@ fn fixture(s: &Storage) -> (String, String, String) {
     (m, id, utterance)
 }
 
+fn long_fixture(s: &Storage) -> (String, String) {
+    let (m, _, _) = super::super::playback::tests::fixture(s);
+    let input = AnalysisInput {
+        audio_manifest_hash: "a".repeat(64),
+        profile_snapshot: json!({}),
+        config: json!({}),
+        speakers: vec![],
+        segments: vec![],
+        utterances: (0..135)
+            .map(|i| UtteranceInput {
+                track_id: "track".into(),
+                start_us: i * 7000,
+                end_us: (i + 1) * 7000,
+                text: format!("固定発言{i}"),
+                speaker_keys: vec![],
+                confidence: None,
+            })
+            .collect(),
+    };
+    let a = s.create_analysis_candidate(&m, input).unwrap();
+    s.commit_analysis_candidate(
+        &m,
+        &a,
+        s.get_meeting(&m).unwrap().unwrap().lock_version,
+        false,
+    )
+    .unwrap();
+    s.create_transcript_draft(&m, &a).unwrap();
+    let id = candidate(s, &m);
+    (m, id)
+}
+
+#[test]
+fn full_transcript_pages_cover_all_fixed_utterances_without_gaps_or_current_draft_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (m, id) = long_fixture(&s);
+    let r = request(&s, &m, &id);
+    let first = s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: None,
+        })
+        .unwrap();
+    assert_eq!(
+        (first.page, first.page_size, first.target_sequence),
+        (1, 50, 68)
+    );
+    assert_eq!(
+        (
+            first.source.first_sequence,
+            first.source.utterances.len(),
+            first.source.total_utterances
+        ),
+        (51, 50, 135)
+    );
+    assert_eq!(
+        first.source.utterances[17].id,
+        r.expected_evidence.utterance_id
+    );
+    let draft = s.load_transcript_draft(&m).unwrap().unwrap();
+    let mut payload = draft.payload;
+    payload
+        .utterances
+        .push(super::super::drafts::UtteranceEdit {
+            utterance_id: s.load_current_analysis(&m).unwrap().unwrap().utterances[67]
+                .id
+                .clone(),
+            effective_text: "現在だけの変更".into(),
+            speaker_ids: vec![],
+        });
+    let edited = s
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+    let mut all = vec![];
+    for (page, count) in [(0, 50), (1, 50), (2, 35)] {
+        let result = s
+            .minutes_transcript_page(&MinutesTranscriptRequest {
+                reference: r.clone(),
+                page: Some(page),
+            })
+            .unwrap();
+        assert_eq!(result.source.first_sequence, page as usize * 50 + 1);
+        assert_eq!(result.source.utterances.len(), count);
+        assert_eq!(result.source.analysis_id, first.source.analysis_id);
+        assert_eq!(
+            result.source.analysis_content_hash,
+            first.source.analysis_content_hash
+        );
+        assert_eq!(result.target_sequence, 68);
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert_eq!(encoded["pageSize"], 50);
+        assert!(encoded.get("source").is_none());
+        all.extend(result.source.utterances);
+    }
+    assert_eq!(all.len(), 135);
+    assert_eq!(
+        all.iter()
+            .map(|u| &u.id)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        135
+    );
+    for (i, u) in all.iter().enumerate() {
+        assert_eq!(u.effective_text, format!("固定発言{i}"));
+    }
+    for page in [3, u32::MAX] {
+        assert!(s
+            .minutes_transcript_page(&MinutesTranscriptRequest {
+                reference: r.clone(),
+                page: Some(page)
+            })
+            .is_err());
+    }
+    assert_eq!(s.load_transcript_draft(&m).unwrap().unwrap(), edited);
+    assert!(s.minutes_versions(&m).unwrap().current_id.is_none());
+}
+
+#[test]
+fn full_workspace_audio_is_version_scoped_and_checks_each_utterance_range() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (m, id) = long_fixture(&s);
+    let r = request(&s, &m, &id);
+    let page = s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: Some(0),
+        })
+        .unwrap();
+    let u = &page.source.utterances[0];
+    assert_ne!(u.id, r.expected_evidence.utterance_id);
+    let audio_request = MinutesTranscriptAudioRequest {
+        reference: r.clone(),
+        utterance_id: u.id.clone(),
+        expected_start_us: u.start_us,
+        expected_end_us: u.end_us,
+    };
+    assert!(s
+        .prepare_utterance_audio(&m, &page.source.analysis_id, &u.id)
+        .is_err());
+    let audio = s.prepare_minutes_transcript_audio(&audio_request).unwrap();
+    assert_eq!((audio.start_us, audio.end_us), (0, 7000));
+    let store = crate::playback::PlaybackStore::default();
+    let info = store.insert(audio).unwrap();
+    assert_eq!(info.total_frames, 336);
+    assert!(!store.read(&info.token, 0).unwrap().is_empty());
+    store.close(&info.token).unwrap();
+    for change in ["current_id", "time", "meeting", "input_hash", "quote"] {
+        let mut x = audio_request.clone();
+        match change {
+            "current_id" => {
+                x.utterance_id = s.load_current_analysis(&m).unwrap().unwrap().utterances[0]
+                    .id
+                    .clone()
+            }
+            "time" => x.expected_end_us += 1,
+            "meeting" => x.reference.meeting_id = "other".into(),
+            "input_hash" => x.reference.expected_input_content_hash = "0".repeat(64),
+            _ => x.reference.expected_evidence.quote_text = "changed".into(),
+        }
+        assert!(s.prepare_minutes_transcript_audio(&x).is_err(), "{change}");
+    }
+    s.connection.lock().unwrap().execute("INSERT INTO audio_gaps (id,track_id,start_us,end_us,reason_code,recovered) VALUES ('gap','track',1000,2000,'test',0)",[]).unwrap();
+    assert!(s
+        .prepare_minutes_transcript_audio(&audio_request)
+        .err()
+        .unwrap()
+        .contains("欠損"));
+    assert!(s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: Some(0)
+        })
+        .is_ok());
+    s.connection
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM audio_gaps", [])
+        .unwrap();
+    std::fs::write(
+        root.path().join("meetings").join(&m).join("audio/0.caf"),
+        b"changed",
+    )
+    .unwrap();
+    assert!(s.prepare_minutes_transcript_audio(&audio_request).is_err());
+}
+
+#[test]
+fn full_transcript_rejects_changed_references_and_corruption_without_redirecting() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (m, id, _) = fixture(&s);
+    let r = request(&s, &m, &id);
+    for change in [
+        "meeting",
+        "minutes",
+        "hash",
+        "input_hash",
+        "analysis",
+        "utterance",
+        "quote",
+        "time",
+    ] {
+        let mut x = r.clone();
+        match change {
+            "meeting" => x.meeting_id = "other".into(),
+            "minutes" => x.minutes_id = "other".into(),
+            "hash" => x.expected_content_hash = "0".repeat(64),
+            "input_hash" => x.expected_input_content_hash = "0".repeat(64),
+            "analysis" => x.expected_evidence.analysis_revision_id = "current".into(),
+            "utterance" => x.expected_evidence.utterance_id = "other".into(),
+            "quote" => x.expected_evidence.quote_text = "changed".into(),
+            _ => x.expected_evidence.start_us += 1,
+        }
+        assert!(
+            s.minutes_transcript_page(&MinutesTranscriptRequest {
+                reference: x,
+                page: None
+            })
+            .is_err(),
+            "{change}"
+        );
+    }
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER utterances_internal_update;")
+        .unwrap();
+    s.connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE utterances SET effective_text='changed' WHERE id=?1",
+            params![r.expected_evidence.utterance_id],
+        )
+        .unwrap();
+    assert!(s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: None
+        })
+        .is_err());
+    assert!(s
+        .prepare_minutes_transcript_audio(&MinutesTranscriptAudioRequest {
+            reference: r.clone(),
+            utterance_id: r.expected_evidence.utterance_id.clone(),
+            expected_start_us: r.expected_evidence.start_us,
+            expected_end_us: r.expected_evidence.end_us
+        })
+        .is_err());
+}
+
 #[test]
 fn fixed_reference_survives_source_edits_and_minutes_adoption_and_restore() {
     let root = tempfile::tempdir().unwrap();
@@ -68,6 +321,12 @@ fn fixed_reference_survives_source_edits_and_minutes_adoption_and_restore() {
     let r = request(&s, &m, &a);
     // Candidate references work before adoption, but arbitrary snapshot playback does not.
     let fixed = s.minutes_evidence_source(&r).unwrap();
+    let full = s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: None,
+        })
+        .unwrap();
     assert_eq!(fixed.evidence.quote_text, "発言");
     assert!(s
         .prepare_utterance_audio(&m, &fixed.analysis_id, &fixed.evidence.utterance_id)
@@ -122,6 +381,14 @@ fn fixed_reference_survives_source_edits_and_minutes_adoption_and_restore() {
         fixed.utterances
     );
     assert!(s.prepare_minutes_evidence_audio(&r).is_ok());
+    let restored_full = s
+        .minutes_transcript_page(&MinutesTranscriptRequest {
+            reference: r.clone(),
+            page: None,
+        })
+        .unwrap();
+    assert_eq!(restored_full.source.utterances, full.source.utterances);
+    assert_eq!(restored_full.source.analysis_id, full.source.analysis_id);
 }
 
 #[test]

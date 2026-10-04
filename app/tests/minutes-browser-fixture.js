@@ -22,6 +22,7 @@ async (page) => {
     data.exports=[];data.exportMode="cancel";data.exportDelay=0;data.exportActive=false;data.lostExportResponse=false;
     data.evidenceDelay=0;data.failEvidence=false;data.corruptEvidence=false;data.playbacks={};
     data.failMinutesRetry=false;data.lostMinutesRetryResponse=false;
+    data.transcripts={};data.transcriptDelay=0;data.failTranscript=false;data.corruptTranscript=false;
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
@@ -54,6 +55,29 @@ async (page) => {
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if (cmd === "get_minutes_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : data.current,previousId:args.meetingId === "m2" ? null : data.previous,draft:args.meetingId === "m2" ? null : stamp(),versions:args.meetingId === "m2" ? [] : copy(data.versions.filter(v=>v.publicationState==="candidate"||[data.current,data.previous].includes(v.id)))};
         if (cmd === "get_minutes_preview") return copy(data.views[args.minutesId] ?? null);
+        if (cmd === "get_minutes_transcript_page" || cmd === "prepare_minutes_transcript_playback") {
+          const r=args.request.reference, v=data.views[r.minutesId];
+          if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash||r.expectedInputContentHash!==v.inputContentHash)throw Error("stale fixed transcript base");
+          const e=(data.drafts[v.id]?.payload??v.content).evidence.find(e=>e.id===r.expectedEvidence.id);
+          if(!e||["minutesItemId","analysisRevisionId","utteranceId","quoteText","startUs","endUs"].some(k=>e[k]!==r.expectedEvidence[k]))throw Error("stale fixed transcript evidence");
+          const utterances=data.transcripts[v.inputAnalysisId]??=(Array.from({length:135},(_,i)=>({id:i===67?e.utteranceId:`fixed-${v.inputAnalysisId}-${i}`,trackId:"fixture-track",startUs:i===67?e.startUs:e.startUs+(i-67)*10000,endUs:i===67?e.endUs:e.startUs+(i-66)*10000,recognizedText:`固定認識原文${i+1}`,effectiveText:i===67?e.quoteText:`固定本文${i+1}（${v.inputAnalysisId}）`,attributionState:"unknown",speakerIds:[]})));
+          const target=utterances.findIndex(u=>u.id===e.utteranceId);
+          if(target<0)throw Error("missing fixed target");
+          if(data.transcriptDelay)await new Promise(resolve=>setTimeout(resolve,data.transcriptDelay));
+          if(data.failTranscript)throw Error("模擬固定全文検証失敗");
+          if(cmd==="prepare_minutes_transcript_playback") {
+            const u=utterances.find(u=>u.id===args.request.utteranceId);
+            if(!u||u.startUs!==args.request.expectedStartUs||u.endUs!==args.request.expectedEndUs)throw Error("stale fixed utterance interval");
+            const token=`fixed-audio-${++sequence}`,totalFrames=Math.round((u.endUs-u.startUs)*8000/1000000);
+            data.playbacks[token]={totalFrames};
+            return {token,sampleRate:8000,channels:1,totalFrames,startUs:u.startUs,endUs:u.endUs,trackKind:"mic",alignment:"unverified"};
+          }
+          const page=args.request.page??Math.floor(target/50),first=page*50;
+          if(!Number.isInteger(page)||page<0||first>=utterances.length)throw Error("out of range page");
+          const result={evidence:copy(e),analysisId:v.inputAnalysisId,analysisContentHash:v.inputContentHash,speakers:[],utterances:copy(utterances.slice(first,first+50)),firstSequence:first+1,totalUtterances:utterances.length,page,pageSize:50,targetSequence:target+1};
+          if(data.corruptTranscript)result.analysisId="wrong-current-analysis";
+          return result;
+        }
         if (cmd === "get_minutes_evidence_source" || cmd === "prepare_minutes_evidence_playback") {
           const r=args.request, v=data.views[r.minutesId];
           if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash)throw Error("stale evidence base");
@@ -71,7 +95,7 @@ async (page) => {
         }
         if(cmd==="read_playback_chunk"){
           if(!data.playbacks[args.token])throw Error("closed playback");
-          const frames=Math.min(65536,16000-args.offsetFrames), buffer=new ArrayBuffer(12+frames*4), values=new DataView(buffer);
+          const frames=Math.min(65536,(data.playbacks[args.token].totalFrames??16000)-args.offsetFrames), buffer=new ArrayBuffer(12+frames*4), values=new DataView(buffer);
           values.setUint32(0,8000,true);values.setUint32(4,1,true);values.setUint32(8,frames,true);
           return Array.from(new Uint8Array(buffer));
         }

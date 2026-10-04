@@ -36,7 +36,10 @@ pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
-pub(crate) use minutes_evidence::{MinutesEvidenceRequest, MinutesEvidenceSource};
+pub(crate) use minutes_evidence::{
+    MinutesEvidenceRequest, MinutesEvidenceSource, MinutesTranscriptAudioRequest,
+    MinutesTranscriptPage, MinutesTranscriptRequest,
+};
 pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
 pub(crate) use minutes_ui::{MinutesAdoptRequest, MinutesVersionState};

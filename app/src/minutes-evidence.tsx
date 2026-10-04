@@ -4,8 +4,8 @@ import { evidenceRequest, assertEvidenceSource, type Evidence, type MinutesEvide
 import { useTranscriptAudio } from "./transcript-audio";
 import { timeLabel } from "./transcript";
 
-export function MinutesEvidencePanel({ view, evidence, locked, close }: {
-  view: MinutesView; evidence: Evidence; locked: boolean; close: () => void;
+export function MinutesEvidencePanel({ view, evidence, locked, close, showTranscript }: {
+  view: MinutesView; evidence: Evidence; locked: boolean; close: () => void; showTranscript: () => void;
 }) {
   const audio = useTranscriptAudio(view.meetingId, locked);
   const [source, setSource] = useState<MinutesEvidenceSource | null>(null);
@@ -39,6 +39,7 @@ export function MinutesEvidencePanel({ view, evidence, locked, close }: {
     <div className="audio-controls">
       <button type="button" className="small-secondary" disabled={locked || loading} onClick={() => void showSource()}>{loading ? "固定発言を確認中" : "固定した元発言を表示"}</button>
       <button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => void play()}>根拠の音声を再生</button>
+      <button type="button" className="small-secondary" data-fixed-transcript-opener={evidence.id} disabled={locked} onClick={showTranscript}>固定文字起こし全文へ移動</button>
     </div>
     {error && <p className="action-error" role="alert">固定発言を表示できません: {error}</p>}
     {audio.controls}

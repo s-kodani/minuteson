@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, evidenceRequest, assertEvidenceSource, type Evidence, type MinutesEvidenceSource, type MinutesView, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
+import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, evidenceRequest, assertEvidenceSource, assertMinutesTranscriptPage, minutesTranscriptAudioRequest, type MinutesTranscriptPage, type Evidence, type MinutesEvidenceSource, type MinutesView, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
 
 const engine: MinutesEngine = { executablePath: "/engine/llama-completion", modelPath: "/model.gguf", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 };
 const state: MinutesVersions = { meetingLockVersion: 1, currentId: "current", previousId: "previous", draft: { id: "draft", lockVersion: 3 }, versions: [
@@ -40,4 +40,32 @@ test("evidence requests stay bound to the minutes input and reject redirected so
   assert.doesNotThrow(()=>assertEvidenceSource(r,source));
   assert.throws(()=>assertEvidenceSource(r,{...source,analysisContentHash:"changed"}));
   for (const patch of [{analysisId:"current"},{evidence:{...e,quoteText:"差替え"}},{evidence:{...e,endUs:21}},{utterances:[]},{utterances:[{...source.utterances[0],effectiveText:"別の発言"}]},{utterances:[{...source.utterances[0],startUs:11}]},{utterances:Array(6).fill(source.utterances[0])}]) assert.throws(()=>assertEvidenceSource(r,{...source,...patch}));
+});
+
+test("fixed transcript pages bind the referenced location and reject wrong, incomplete, duplicated or redirected pages", () => {
+  const e: Evidence = {id:"ref",minutesItemId:"item",analysisRevisionId:"fixed",utteranceId:"u65",quoteText:"引用",startUs:650,endUs:660,sourceType:"engine",verificationState:"unverified"};
+  const r = {meetingId:"m",minutesId:"minutes",expectedContentHash:"root",expectedInputContentHash:"input",expectedEvidence:e};
+  const page = (n:number): MinutesTranscriptPage => ({ evidence:e,analysisId:"fixed",analysisContentHash:"input",speakers:[],firstSequence:n*50+1,totalUtterances:125,page:n,pageSize:50,targetSequence:66,utterances:Array.from({length:Math.min(50,125-n*50)},(_,i)=>({id:`u${n*50+i}`,trackId:"track",startUs:(n*50+i)*10,endUs:(n*50+i+1)*10,recognizedText:"原文",effectiveText:`発言${n*50+i}引用`,attributionState:"unknown",speakerIds:[]})) });
+  assert.doesNotThrow(()=>assertMinutesTranscriptPage({reference:r,page:null},page(1)));
+  for (const n of [0,1,2]) assert.doesNotThrow(()=>assertMinutesTranscriptPage({reference:r,page:n},page(n),page(1)));
+  assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:null},page(0)));
+  assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:2},page(1)));
+  assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:-1},page(1)));
+  const p=page(1);
+  for(const patch of [{analysisId:"current"},{analysisContentHash:"changed"},{pageSize:51},{targetSequence:126},{firstSequence:50},{totalUtterances:NaN},{utterances:p.utterances.slice(1)},{utterances:[p.utterances[1],...p.utterances.slice(1)]},{utterances:p.utterances.map((u,i)=>i===15?{...u,effectiveText:"changed"}:u)}])assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:1},{...p,...patch}));
+  for(const patch of [{startUs:-1},{endUs:0},{startUs:NaN},{endUs:Number.MAX_SAFE_INTEGER+1},{trackId:""}]) assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:1},{...p,utterances:[{...p.utterances[0],...patch},...p.utterances.slice(1)]}));
+  assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:1},p,{targetSequence:66,totalUtterances:126}));
+  assert.throws(()=>assertMinutesTranscriptPage({reference:r,page:1},p,{targetSequence:67,totalUtterances:125}));
+});
+
+test("fixed workspace audio requires a checked page and its own frozen utterance interval", () => {
+  const e: Evidence = {id:"ref",minutesItemId:"item",analysisRevisionId:"fixed",utteranceId:"u",quoteText:"引用",startUs:10,endUs:20,sourceType:"engine",verificationState:"unverified"};
+  const content={schemaVersion:1,blocks:[],items:[],evidence:[e]};
+  const view: MinutesView={id:"minutes",meetingId:"m",inputAnalysisId:"fixed",inputContentHash:"input",contentHash:"root",content,generatedContent:content};
+  const page: MinutesTranscriptPage={evidence:e,analysisId:"fixed",analysisContentHash:"input",speakers:[],firstSequence:1,totalUtterances:2,page:0,pageSize:50,targetSequence:1,utterances:[{id:"u",trackId:"track",startUs:0,endUs:30,recognizedText:"原文",effectiveText:"固定引用",attributionState:"unknown",speakerIds:[]},{id:"other-fixed-u",trackId:"track",startUs:30,endUs:60,recognizedText:"原文",effectiveText:"前後",attributionState:"unknown",speakerIds:[]}]};
+  const r=minutesTranscriptAudioRequest(view,e,page,"other-fixed-u");
+  assert.equal(r.reference.minutesId,"minutes");assert.equal(r.reference.expectedInputContentHash,"input");assert.equal(r.utteranceId,"other-fixed-u");assert.equal(r.expectedStartUs,30);assert.equal(r.expectedEndUs,60);
+  assert.throws(()=>minutesTranscriptAudioRequest(view,e,page,"current-id"));
+  assert.throws(()=>minutesTranscriptAudioRequest(view,e,{...page,analysisId:"current"},"u"));
+  assert.notEqual(r.reference.expectedEvidence,e);
 });
