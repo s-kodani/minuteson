@@ -1,8 +1,8 @@
 name: Windows capture build
 
 'on':
-  push:
-  pull_request:
+  # Windows-specific validation is deferred. Do not run on pushes or PRs
+  # until Windows work resumes; keep an explicit manual entry point.
   workflow_dispatch:
 
 permissions:
