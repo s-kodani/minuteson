@@ -16,3 +16,292 @@ fn idle_wait_observes_completion_and_timeout_without_holding_worker_lock() {
     controller.wait_idle(Duration::from_secs(1)).unwrap();
     handle.join().unwrap();
 }
+
+#[test]
+fn model_preparation_owns_admission_until_work_really_finishes_not_until_cancel() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    assert!(controller.state.lock().unwrap().blocks_worker());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_err());
+    controller.state.lock().unwrap().cancel_model_preparation();
+    assert!(lease.cancelled());
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_err());
+    drop(lease);
+    controller.wait_idle(Duration::from_millis(10)).unwrap();
+    assert!(!controller.state.lock().unwrap().blocks_worker());
+    assert!(!controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap()
+        .cancelled());
+}
+
+#[test]
+fn model_preparation_rejects_every_admission_gate_without_changing_worker_state() {
+    for gate in 0..8 {
+        let controller = AnalysisController::default();
+        {
+            let mut state = controller.state.lock().unwrap();
+            state.wake = true;
+            state.busy = gate == 0;
+            state.recording_intent = gate == 1;
+            state.import_intent = gate == 2;
+        }
+        controller.shutdown.store(gate == 3, Ordering::SeqCst);
+        let previous = {
+            let state = controller.state.lock().unwrap();
+            (
+                state.busy,
+                state.wake,
+                state.recording_intent,
+                state.import_intent,
+            )
+        };
+        let held = (gate == 7).then(|| {
+            controller
+                .begin_model_preparation(false, false, &|| false)
+                .unwrap()
+        });
+        assert!(
+            controller
+                .begin_model_preparation(gate == 4, gate == 5, &|| gate == 6)
+                .is_err(),
+            "gate {gate}"
+        );
+        let state = controller.state.lock().unwrap();
+        assert_eq!(
+            (
+                state.busy,
+                state.wake,
+                state.recording_intent,
+                state.import_intent
+            ),
+            previous
+        );
+        assert_eq!(state.model_preparation.is_some(), gate == 7);
+        drop(state);
+        drop(held);
+    }
+}
+
+#[test]
+fn simultaneous_model_preparations_cannot_both_take_the_worker_lane() {
+    let controller = Arc::new(AnalysisController::default());
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let finish = Arc::new(std::sync::Barrier::new(3));
+    let (sent, received) = std::sync::mpsc::channel();
+    let workers = (0..2)
+        .map(|_| {
+            let controller = controller.clone();
+            let start = start.clone();
+            let finish = finish.clone();
+            let sent = sent.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                let lease = controller.begin_model_preparation(false, false, &|| false);
+                sent.send(lease.is_ok()).unwrap();
+                finish.wait();
+                drop(lease);
+            })
+        })
+        .collect::<Vec<_>>();
+    start.wait();
+    let successes = (0..2)
+        .filter(|_| received.recv_timeout(Duration::from_secs(2)).unwrap())
+        .count();
+    assert_eq!(successes, 1);
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+    finish.wait();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    controller.wait_idle(Duration::from_secs(1)).unwrap();
+}
+
+#[test]
+fn model_preparation_unwinding_releases_lease_and_preserves_pending_wake() {
+    let controller = AnalysisController::default();
+    controller.state.lock().unwrap().wake = true;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _lease = controller
+            .begin_model_preparation(false, false, &|| false)
+            .unwrap();
+        panic!("synthetic model preparation failure");
+    }));
+    assert!(result.is_err());
+    controller.wait_idle(Duration::from_millis(10)).unwrap();
+    assert!(controller.state.lock().unwrap().wake);
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_ok());
+}
+
+#[test]
+fn recording_and_exit_intents_wait_for_model_release_and_keep_their_own_gate() {
+    for closing in [false, true] {
+        let controller = Arc::new(AnalysisController::default());
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, stop) = std::sync::mpsc::channel();
+        let worker = controller.clone();
+        let thread = std::thread::spawn(move || {
+            let lease = worker
+                .begin_model_preparation(false, false, &|| false)
+                .unwrap();
+            started.send(()).unwrap();
+            stop.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(lease.cancelled());
+            // The lease still holds while finalization is pending.
+            assert!(worker.state.lock().unwrap().model_preparation.is_some());
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        {
+            let mut state = controller.state.lock().unwrap();
+            state.recording_intent = !closing;
+            controller.shutdown.store(closing, Ordering::SeqCst);
+            state.cancel_model_preparation();
+        }
+        assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+        release.send(()).unwrap();
+        controller.wait_idle(Duration::from_secs(2)).unwrap();
+        thread.join().unwrap();
+        assert!(controller
+            .begin_model_preparation(false, false, &|| false)
+            .is_err());
+        assert_eq!(controller.state.lock().unwrap().recording_intent, !closing);
+        assert_eq!(controller.shutdown.load(Ordering::SeqCst), closing);
+    }
+}
+
+#[test]
+fn cancelled_wait_does_not_release_or_clear_model_preparation() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    assert!(controller
+        .wait_idle_cancellable(Duration::from_secs(1), &|| true)
+        .is_err());
+    assert!(!lease.cancelled());
+    assert!(controller.state.lock().unwrap().model_preparation.is_some());
+    drop(lease);
+    assert!(controller
+        .wait_idle_cancellable(Duration::from_secs(1), &|| true)
+        .is_err());
+    controller.wait_idle(Duration::from_millis(10)).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn recording_cancellation_keeps_lease_through_real_partial_copy_and_db_finalization() {
+    use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role, Target};
+    let source = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let meetings = tempfile::tempdir().unwrap();
+    std::fs::write(
+        source.path().join("engine"),
+        b"not an executable; never run",
+    )
+    .unwrap();
+    std::fs::write(source.path().join("model.bin"), vec![b'm'; 200_000]).unwrap();
+    let manifest = PackageManifest {
+        schema_version: 1,
+        engine: Engine::Whisper,
+        engine_version: "fixture".into(),
+        model_name: "fixture".into(),
+        model_version: "1".into(),
+        quantization: None,
+        license_ref: "fixture only".into(),
+        target: Target::current().unwrap(),
+        files: vec![
+            PackageFile {
+                relative_path: "engine".into(),
+                role: Role::Executable,
+                expected_size: None,
+                expected_hash: None,
+            },
+            PackageFile {
+                relative_path: "model.bin".into(),
+                role: Role::Asr,
+                expected_size: None,
+                expected_hash: None,
+            },
+        ],
+    };
+    std::fs::write(
+        source.path().join("mon-model.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let report = crate::model_inspection::inspect(source.path(), &|| false).unwrap();
+    let storage = Arc::new(Storage::open(meetings.path().into()).unwrap());
+    let controller = Arc::new(AnalysisController::default());
+    let models = data.path().join("models");
+    let token = uuid::Uuid::new_v4().to_string();
+    let partial = models.join(&token).join("model.bin");
+    let (reached, ready) = std::sync::mpsc::channel();
+    let (release, stop) = std::sync::mpsc::channel();
+    let worker = controller.clone();
+    let db = storage.clone();
+    let thread = std::thread::spawn(move || {
+        let lease = worker
+            .begin_model_preparation(false, false, &|| false)
+            .unwrap();
+        let reached = std::cell::RefCell::new(Some(reached));
+        let result = crate::model_placement::place(
+            &db,
+            &models,
+            source.path(),
+            &token,
+            &report.review_hash,
+            &|| {
+                if partial.metadata().is_ok_and(|m| m.len() > 0) {
+                    if let Some(sent) = reached.borrow_mut().take() {
+                        sent.send(()).unwrap();
+                        stop.recv_timeout(Duration::from_secs(3)).unwrap();
+                    }
+                }
+                lease.cancelled()
+            },
+        );
+        assert!(result.unwrap_err().contains("中断"));
+        assert!(partial.metadata().unwrap().len() > 0);
+        assert!(partial.metadata().unwrap().len() < 200_000);
+        assert_eq!(
+            std::fs::read(source.path().join("model.bin")).unwrap(),
+            vec![b'm'; 200_000]
+        );
+        // Completion (not the cancel request) releases the lane after DB state.
+        let record = db.list_model_placements().unwrap().remove(0);
+        assert!(!record.placement_recorded && !record.ready);
+        assert!(worker.state.lock().unwrap().model_preparation.is_some());
+        drop(lease);
+    });
+    ready.recv_timeout(Duration::from_secs(3)).unwrap();
+    {
+        let state = controller.state.lock().unwrap();
+        state.cancel_model_preparation();
+    }
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+    release.send(()).unwrap();
+    controller.wait_idle(Duration::from_secs(3)).unwrap();
+    thread.join().unwrap();
+    // Storage deliberately uses an exclusive SQLite connection. Inspect the
+    // durable state only after that owner has closed, not through a second
+    // live writer that production would reject too.
+    drop(storage);
+    let db = rusqlite::Connection::open(meetings.path().join("meetings.sqlite3")).unwrap();
+    let state: String = db
+        .query_row(
+            "SELECT state FROM model_packages WHERE source_type='manual_import'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "unavailable");
+}

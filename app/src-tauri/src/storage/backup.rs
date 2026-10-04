@@ -97,6 +97,7 @@ impl Storage {
             "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing'))
              OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping'))
              OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting'))
+             OR EXISTS(SELECT 1 FROM model_packages WHERE source_type!='historical_snapshot' AND state='preparing')
              OR EXISTS(SELECT 1 FROM export_records WHERE state='writing')
              OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing')
              OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building')
@@ -105,7 +106,7 @@ impl Storage {
         ).map_err(|e| e.to_string())?;
         if active {
             return Err(
-                "録音・AI処理・取り込み・書き出しが停止してからバックアップしてください".into(),
+                "録音・AI処理・モデル準備・取り込み・書き出しが停止してから保存領域を操作してください".into(),
             );
         }
         // All Storage statements are scoped to this mutex. Replacing the SQLite

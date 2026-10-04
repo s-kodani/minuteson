@@ -41,8 +41,11 @@ async fn inspect_model_package(
     let guard = window
         .state::<model_inspection::Inspector>()
         .begin(&token)?;
+    let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        model_inspection::inspect(&directory, &|| guard.cancelled())
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_inspection::inspect(&directory, &|| guard.cancelled() || lease.cancelled())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -88,14 +91,16 @@ async fn place_model_package(
         .map_err(|e| e.to_string())?
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
-        model_placement::place(
-            &app.state::<Storage>(),
-            &models_root,
-            &directory,
-            &token,
-            &expected_review_hash,
-            &|| guard.cancelled() || app.state::<SessionStore>().snapshot().is_active(),
-        )
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_placement::place(
+                &app.state::<Storage>(),
+                &models_root,
+                &directory,
+                &token,
+                &expected_review_hash,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
     })
     .await
     .map_err(|e| e.to_string())?

@@ -6,6 +6,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+mod model_preparation;
+
 #[cfg(test)]
 #[path = "analysis_worker_tests.rs"]
 mod tests;
@@ -16,6 +18,19 @@ struct State {
     wake: bool,
     recording_intent: bool,
     import_intent: bool,
+    model_preparation: Option<std::sync::Arc<AtomicBool>>,
+}
+
+impl State {
+    fn blocks_worker(&self) -> bool {
+        self.recording_intent || self.import_intent || self.model_preparation.is_some()
+    }
+
+    fn cancel_model_preparation(&self) {
+        if let Some(cancel) = &self.model_preparation {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -38,10 +53,7 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if controller.shutdown.load(Ordering::SeqCst)
-            || state.recording_intent
-            || state.import_intent
-        {
+        if controller.shutdown.load(Ordering::SeqCst) || state.blocks_worker() {
             return Ok(());
         }
         state.wake = true;
@@ -57,10 +69,7 @@ impl AnalysisController {
             let wake = if let Ok(mut state) = controller.state.lock() {
                 state.busy = false;
                 controller.idle.notify_all();
-                state.wake
-                    && !state.recording_intent
-                    && !state.import_intent
-                    && !controller.shutdown.load(Ordering::SeqCst)
+                state.wake && !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)
             } else {
                 false
             };
@@ -85,7 +94,7 @@ impl AnalysisController {
                     || controller
                         .state
                         .lock()
-                        .map_or(true, |state| state.recording_intent || state.import_intent)
+                        .map_or(true, |state| state.blocks_worker())
             };
             if stopping() {
                 return;
@@ -101,10 +110,7 @@ impl AnalysisController {
                 let Ok(mut state) = controller.state.lock() else {
                     return;
                 };
-                if controller.shutdown.load(Ordering::SeqCst)
-                    || state.recording_intent
-                    || state.import_intent
-                {
+                if controller.shutdown.load(Ordering::SeqCst) || state.blocks_worker() {
                     return;
                 }
                 state.wake = false;
@@ -155,9 +161,7 @@ impl AnalysisController {
                         let _ = app.emit("analysis-worker-error", error);
                     }
                     let resume = controller.state.lock().is_ok_and(|state| {
-                        !state.recording_intent
-                            && !state.import_intent
-                            && !controller.shutdown.load(Ordering::SeqCst)
+                        !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)
                     });
                     if resume {
                         let _ = app.state::<Storage>().resume_recording_jobs();
@@ -197,6 +201,7 @@ impl AnalysisController {
             }
             app.state::<Storage>().request_pause_for_recording()?;
             state.recording_intent = true;
+            state.cancel_model_preparation();
         }
         if let Err(error) = controller.wait_idle(Duration::from_secs(15)) {
             Self::recording_finished(app);
@@ -226,10 +231,11 @@ impl AnalysisController {
             let mut state = c.state.lock().map_err(|_| "解析ロックを取得できません")?;
             if state.recording_intent
                 || state.import_intent
+                || state.model_preparation.is_some()
                 || c.shutdown.load(Ordering::SeqCst)
                 || cancelled()
             {
-                return Err("録音開始・取り込み・終了処理が進行中です".into());
+                return Err("録音開始・モデル準備・取り込み・終了処理が進行中です".into());
             }
             if app
                 .state::<crate::session::SessionStore>()
@@ -261,12 +267,13 @@ impl AnalysisController {
     pub fn shutdown(app: &AppHandle) -> Result<(), String> {
         let controller = app.state::<Self>();
         {
-            let _state = controller
+            let state = controller
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
             app.state::<Storage>().pause_for_exit()?;
             controller.shutdown.store(true, Ordering::SeqCst);
+            state.cancel_model_preparation();
         }
         let result = controller.wait_idle(Duration::from_secs(15));
         if result.is_err() {
@@ -290,13 +297,13 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        while state.busy {
+        while state.busy || state.model_preparation.is_some() {
             if cancelled() {
                 return Err("解析停止の待機を取り消しました".into());
             }
             let remaining = timeout
                 .checked_sub(started.elapsed())
-                .ok_or("解析の安全な停止を待っています。完了後に再試行してください")?;
+                .ok_or("解析・モデル準備の安全な停止を待っています。完了後に再試行してください")?;
             state = self
                 .idle
                 .wait_timeout(state, remaining.min(Duration::from_millis(100)))

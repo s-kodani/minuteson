@@ -149,6 +149,32 @@ fn reviewed_bytes_bind_unknown_publisher_hashes_and_manifest_changes() {
         assert!(f.storage.list_model_placements().unwrap().is_empty());
     }
 }
+
+#[test]
+fn model_placement_and_backup_maintenance_exclude_each_others_writes() {
+    let f = fixture();
+    let token = uuid::Uuid::new_v4().to_string();
+    let record = PlacementRecord::from_report(&token, &f.report);
+    f.storage.begin_model_placement(&record).unwrap();
+    // Backup and additive publication share this maintenance gate. No snapshot
+    // can observe a half-written model placement as a completed preparation.
+    assert!(f
+        .storage
+        .prepare_backup_snapshot(&|| false)
+        .err()
+        .unwrap()
+        .contains("モデル準備"));
+    f.storage.interrupt_model_placement(&record).unwrap();
+    let snapshot = f.storage.prepare_backup_snapshot(&|| false).unwrap();
+    let next = uuid::Uuid::new_v4().to_string();
+    assert!(placement(&f, &next, &|| false).is_err());
+    assert!(!f.app_data.path().join("models").join(&next).exists());
+    assert_eq!(f.storage.list_model_placements().unwrap().len(), 1);
+    drop(snapshot);
+    let placed = placement(&f, &next, &|| false).unwrap();
+    assert!(placed.placement_recorded && !placed.ready);
+    assert!(f.storage.prepare_backup_snapshot(&|| false).is_ok());
+}
 #[test]
 fn cancellation_after_intent_keeps_partial_bytes_unavailable_across_restart() {
     let f = fixture();
