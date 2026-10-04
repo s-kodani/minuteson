@@ -2,6 +2,123 @@ use super::super::analysis::tests::{input, saved_meeting};
 use super::super::drafts::{SpeakerNameEdit, UtteranceEdit};
 
 #[test]
+fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_references() {
+    use super::super::drafts::{ManualSpeaker, SpeakerMerge};
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    let (mut request, original, draft) = fixture(&storage);
+    let before = enqueue(&storage, request.clone());
+    let old_fixed = storage.load_minutes_input(&before.id).unwrap();
+    let mut payload = draft.payload.clone();
+    payload.schema_version = 2;
+    let manual = format!("manual:{}", Uuid::new_v4());
+    payload.manual_speakers.push(ManualSpeaker {
+        id: manual.clone(),
+        label: "手動話者 1".into(),
+    });
+    payload.speaker_names.push(SpeakerNameEdit {
+        speaker_id: manual.clone(),
+        display_name: Some("確定氏名".into()),
+    });
+    payload.speaker_merges.push(SpeakerMerge {
+        source_id: original.speakers[0].id.clone(),
+        target_id: manual.clone(),
+    });
+    let saved = storage
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+    assert!(storage.minutes_input_updated(&before.id).unwrap());
+    request.operation_id = "after-speaker-edit".into();
+    request.expected_draft = Some(DraftStamp {
+        id: saved.id.clone(),
+        lock_version: saved.lock_version,
+    });
+    let after = enqueue(&storage, request.clone());
+    let fixed = storage.load_minutes_input(&after.id).unwrap();
+    let new = fixed
+        .analysis
+        .speakers
+        .iter()
+        .find(|s| s.display_name.as_deref() == Some("確定氏名"))
+        .unwrap();
+    assert_ne!(new.id, manual);
+    assert_eq!(
+        fixed.analysis.utterances[0].speaker_ids,
+        vec![new.id.clone()]
+    );
+    assert_eq!(
+        fixed.analysis.utterances[0].effective_text,
+        "点検日を確定しました"
+    );
+    assert_eq!(
+        fixed.analysis.utterances[0].recognized_text,
+        original.utterances[0].recognized_text
+    );
+    assert!(fixed.analysis.utterances[1].speaker_ids.is_empty());
+    assert!(!storage.minutes_input_updated(&after.id).unwrap());
+    assert_eq!(
+        storage
+            .load_current_analysis(&request.meeting_id)
+            .unwrap()
+            .unwrap(),
+        original
+    );
+    assert_eq!(storage.load_minutes_input(&before.id).unwrap(), old_fixed);
+    {
+        let db = storage.connection.lock().unwrap();
+        let lineage: String = db
+            .query_row(
+                "SELECT lineage_id FROM speakers WHERE id=?1",
+                params![new.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(lineage, manual);
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM speaker_segments WHERE analysis_revision_id=?1",
+                params![fixed.analysis.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let old_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM speaker_segments WHERE analysis_revision_id=?1",
+                params![original.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, old_count);
+        let config: String = db
+            .query_row(
+                "SELECT config_json FROM analysis_revisions WHERE id=?1",
+                params![fixed.analysis.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let config: Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(
+            config["manualSpeakerOperations"]["merges"][0]["target_id"],
+            manual
+        );
+        assert!(db
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
+            .optional()
+            .unwrap()
+            .is_none());
+    }
+    storage
+        .undo_last_transcript_edit(&saved.id, saved.lock_version)
+        .unwrap();
+    assert!(!storage.minutes_input_updated(&before.id).unwrap());
+    assert!(storage.minutes_input_updated(&after.id).unwrap());
+    drop(storage);
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    assert_eq!(storage.load_minutes_input(&before.id).unwrap(), old_fixed);
+    assert_eq!(storage.load_minutes_input(&after.id).unwrap(), fixed);
+}
+
+#[test]
 fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
     let root = tempfile::tempdir().unwrap();
     let connection = Connection::open(root.path().join("meetings.sqlite3")).unwrap();

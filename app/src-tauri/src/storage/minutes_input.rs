@@ -1,5 +1,5 @@
-use super::analysis::{read_analysis_content, AnalysisView};
-use super::drafts::{load_draft, validate_payload, TranscriptDraftPayload};
+use super::analysis::{read_analysis_content, AnalysisSpeaker, AnalysisView};
+use super::drafts::{load_draft, merged_assignments, validate_payload, TranscriptDraftPayload};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -114,7 +114,8 @@ impl Storage {
             .map(|d| d.payload.clone())
             .unwrap_or_default();
         apply_edits(&mut source, &payload);
-        let working_hash = working_hash(&tx, &source, &title, created_at, started_at)?;
+        let working_hash =
+            working_hash(&tx, &source, &title, created_at, started_at, Some(&payload))?;
         let provenance = draft
             .as_ref()
             .map(|d| json!({"id":d.id,"lockVersion":d.lock_version,"contentHash":d.content_hash}));
@@ -196,10 +197,17 @@ pub(super) fn input_updated(
         return Ok(true);
     }
     let (mut view, draft, title, created_at, started_at) = current_working(tx, meeting_id)?;
-    if let Some(draft) = draft {
+    if let Some(draft) = &draft {
         apply_edits(&mut view, &draft.payload);
     }
-    Ok(working_hash(&tx, &view, &title, created_at, started_at)? != fixed.working_content_hash)
+    Ok(working_hash(
+        &tx,
+        &view,
+        &title,
+        created_at,
+        started_at,
+        draft.as_ref().map(|d| &d.payload),
+    )? != fixed.working_content_hash)
 }
 
 pub(super) fn current_working(
@@ -237,6 +245,12 @@ pub(super) fn current_working(
 }
 
 pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayload) {
+    view.speakers
+        .extend(payload.manual_speakers.iter().map(|s| AnalysisSpeaker {
+            id: s.id.clone(),
+            label: s.label.clone(),
+            display_name: None,
+        }));
     for edit in &payload.speaker_names {
         if let Some(speaker) = view.speakers.iter_mut().find(|s| s.id == edit.speaker_id) {
             speaker.display_name = edit.display_name.clone();
@@ -251,7 +265,10 @@ pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayl
         if let Some(edit) = edits.get(utterance.id.as_str()) {
             utterance.effective_text = edit.effective_text.clone();
             utterance.speaker_ids = edit.speaker_ids.clone();
-            utterance.attribution_state = match edit.speaker_ids.len() {
+        }
+        if edits.contains_key(utterance.id.as_str()) || !payload.speaker_merges.is_empty() {
+            utterance.speaker_ids = merged_assignments(payload, &utterance.speaker_ids);
+            utterance.attribution_state = match utterance.speaker_ids.len() {
                 0 => "unknown",
                 1 => "assigned",
                 _ => "overlap",
@@ -269,8 +286,14 @@ pub(super) fn working_hash(
     title: &str,
     created_at: i64,
     started_at: Option<i64>,
+    payload: Option<&TranscriptDraftPayload>,
 ) -> Result<String, String> {
-    let speaker_lineages = lineage_map(connection, "speakers", &view.id)?;
+    let mut speaker_lineages = lineage_map(connection, "speakers", &view.id)?;
+    if let Some(payload) = payload {
+        for speaker in &payload.manual_speakers {
+            speaker_lineages.insert(speaker.id.clone(), speaker.id.clone());
+        }
+    }
     let utterance_lineages = lineage_map(connection, "utterances", &view.id)?;
     let mut speakers = vec![];
     for speaker in &view.speakers {
@@ -349,6 +372,11 @@ pub(super) fn copy_snapshot(
         return Err("解析設定が不正です".into());
     }
     config["inputSnapshot"] = json!({"schemaVersion":1,"sourceAnalysisId":source.id,"sourceContentHash":source.content_hash,"sourceDraft":draft,"workingContentHash":working_hash,"meetingTitle":title,"meetingCreatedAt":created_at,"meetingStartedAtUtcMs":started_at});
+    if !payload.manual_speakers.is_empty() || !payload.speaker_merges.is_empty() {
+        // Source labels and inferred segments remain intact; only effective
+        // assignments change. Explicit provenance avoids false 1:1 lineage.
+        config["manualSpeakerOperations"] = json!({"schemaVersion":1,"added":payload.manual_speakers,"merges":payload.speaker_merges});
+    }
     let sequence: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(revision_no),0) + 1 FROM analysis_revisions WHERE meeting_id = ?1",
@@ -360,11 +388,31 @@ pub(super) fn copy_snapshot(
     let mut speaker_ids = HashMap::new();
     for speaker in &source.speakers {
         let new_id = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO speakers (id,analysis_revision_id,lineage_id,label,display_name,input_scope,identification_state,created_at) SELECT ?1,?2,lineage_id,label,?3,input_scope,identification_state,?4 FROM speakers WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,speaker.display_name,now,speaker.id,source.id]).map_err(|e| e.to_string())?;
+        let changed = if payload.manual_speakers.iter().any(|s| s.id == speaker.id) {
+            tx.execute("INSERT INTO speakers (id,analysis_revision_id,lineage_id,label,display_name,input_scope,identification_state,created_at) VALUES (?1,?2,?3,?4,?5,'all','manual',?6)", params![new_id,id,speaker.id,speaker.label,speaker.display_name,now])
+        } else {
+            tx.execute("INSERT INTO speakers (id,analysis_revision_id,lineage_id,label,display_name,input_scope,identification_state,created_at) SELECT ?1,?2,lineage_id,label,?3,input_scope,identification_state,?4 FROM speakers WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,speaker.display_name,now,speaker.id,source.id])
+        }.map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("話者の固定入力保存に失敗しました".into());
+        }
         speaker_ids.insert(&speaker.id, new_id);
     }
-    let manual: std::collections::HashSet<_> =
-        payload.utterances.iter().map(|e| &e.utterance_id).collect();
+    let mut manual: std::collections::HashSet<_> = payload
+        .utterances
+        .iter()
+        .map(|e| e.utterance_id.clone())
+        .collect();
+    if !payload.speaker_merges.is_empty() {
+        let merges = serde_json::to_string(&payload.speaker_merges).map_err(|e| e.to_string())?;
+        let mut query = tx.prepare("SELECT DISTINCT utterance_id FROM utterance_speakers WHERE analysis_revision_id=?1 AND speaker_id IN (SELECT json_extract(value,'$.source_id') FROM json_each(?2))").map_err(|e|e.to_string())?;
+        for row in query
+            .query_map(params![source.id, merges], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+        {
+            manual.insert(row.map_err(|e| e.to_string())?);
+        }
+    }
     for utterance in &source.utterances {
         let new_id = Uuid::new_v4().to_string();
         tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,sequence,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,utterance.effective_text,utterance.attribution_state,utterance.id,source.id]).map_err(|e| e.to_string())?;
@@ -439,7 +487,7 @@ pub(super) fn read_snapshot(
         return Err("生成入力の由来情報が変更されています".into());
     }
     let view = read_analysis_content(tx, meeting_id, id, &hash)?;
-    if working_hash(tx, &view, &title, created_at, started_at)? != working {
+    if working_hash(tx, &view, &title, created_at, started_at, None)? != working {
         return Err("生成入力の作業内容ハッシュが一致しません".into());
     }
     Ok(MinutesInput {

@@ -103,13 +103,18 @@ impl Storage {
             // does, and remains explicit through subsequent reanalyses.
             let changed = edits
                 .get(&utterance.id)
-                .is_some_and(|e| e.speaker_ids != utterance.speaker_ids);
+                .is_some_and(|e| e.speaker_ids != utterance.speaker_ids)
+                || super::drafts::merged_assignments(&payload, &utterance.speaker_ids) != {
+                    let mut ids = utterance.speaker_ids.clone();
+                    ids.sort();
+                    ids
+                };
             if manual || changed {
                 manual_lineages.insert(lineages[&utterance.id].clone());
             }
         }
         apply_edits(&mut source, &payload);
-        let working = working_hash(&tx, &source, &title, created, started)?;
+        let working = working_hash(&tx, &source, &title, created, started, Some(&payload))?;
         let provenance = draft
             .as_ref()
             .map(|d| json!({"id":d.id,"lockVersion":d.lock_version,"contentHash":d.content_hash}));

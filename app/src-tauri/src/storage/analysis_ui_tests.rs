@@ -42,6 +42,7 @@ fn adoption_and_restore_preserve_each_base_draft_and_undo_chain() {
             effective_text: "手動修正を保持".into(),
             speaker_ids: vec![],
         }],
+        ..Default::default()
     };
     let edited = storage
         .save_transcript_draft(&draft.id, 0, payload)

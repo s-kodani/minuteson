@@ -22,10 +22,29 @@ pub struct UtteranceEdit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ManualSpeaker {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakerMerge {
+    pub source_id: String,
+    pub target_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TranscriptDraftPayload {
     pub schema_version: u32,
     pub speaker_names: Vec<SpeakerNameEdit>,
     pub utterances: Vec<UtteranceEdit>,
+    // Omission preserves byte-for-byte canonical v1 drafts and their undo hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual_speakers: Vec<ManualSpeaker>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speaker_merges: Vec<SpeakerMerge>,
 }
 
 impl Default for TranscriptDraftPayload {
@@ -34,6 +53,8 @@ impl Default for TranscriptDraftPayload {
             schema_version: 1,
             speaker_names: vec![],
             utterances: vec![],
+            manual_speakers: vec![],
+            speaker_merges: vec![],
         }
     }
 }
@@ -183,8 +204,8 @@ impl Storage {
             params![Uuid::new_v4().to_string(), draft_id, sequence, serialized, old_json, old_hash, new_hash, now],
         ).map_err(|error| error.to_string())?;
         let changed = transaction.execute(
-            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
-            params![serialized, new_hash, now, draft_id, lock_version],
+            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3, schema_version = ?6 WHERE id = ?4 AND lock_version = ?5",
+            params![serialized, new_hash, now, draft_id, lock_version, payload.schema_version],
         ).map_err(|error| error.to_string())?;
         if changed != 1 {
             return Err("下書きの更新競合が発生しました".into());
@@ -253,8 +274,8 @@ impl Storage {
             params![Uuid::new_v4().to_string(), draft_id, sequence + 1, inverse_json, current_json, current_hash, prior_hash, now],
         ).map_err(|error| error.to_string())?;
         let changed = transaction.execute(
-            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
-            params![inverse_json, prior_hash, now, draft_id, lock_version],
+            "UPDATE working_drafts SET payload_json = ?1, content_hash = ?2, lock_version = lock_version + 1, updated_at = ?3, schema_version = ?6 WHERE id = ?4 AND lock_version = ?5",
+            params![inverse_json, prior_hash, now, draft_id, lock_version, payload.schema_version],
         ).map_err(|error| error.to_string())?;
         if changed != 1 {
             return Err("下書きの更新競合が発生しました".into());
@@ -329,10 +350,13 @@ pub(super) fn validate_payload(
     base_analysis_id: &str,
     mut payload: TranscriptDraftPayload,
 ) -> Result<TranscriptDraftPayload, String> {
-    if payload.schema_version != 1 {
+    if !matches!(payload.schema_version, 1 | 2)
+        || (payload.schema_version == 1
+            && (!payload.manual_speakers.is_empty() || !payload.speaker_merges.is_empty()))
+    {
         return Err("未対応の下書き形式です".into());
     }
-    let speakers: HashSet<String> = {
+    let mut speakers: HashSet<String> = {
         let mut statement = connection
             .prepare("SELECT id FROM speakers WHERE analysis_revision_id = ?1")
             .map_err(|error| error.to_string())?;
@@ -342,6 +366,46 @@ pub(super) fn validate_payload(
         rows.collect::<Result<_, _>>()
             .map_err(|error| error.to_string())?
     };
+    if speakers.len() + payload.manual_speakers.len() > 100 {
+        return Err("話者は推定元を含め100件までです".into());
+    }
+    for speaker in &payload.manual_speakers {
+        let valid_id = speaker
+            .id
+            .strip_prefix("manual:")
+            .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id));
+        if !valid_id
+            || !speakers.insert(speaker.id.clone())
+            || speaker.label.trim().is_empty()
+            || speaker.label.chars().count() > 200
+        {
+            return Err("追加話者のIDまたはラベルが不正です".into());
+        }
+        let collision: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM speakers WHERE analysis_revision_id = ?1 AND lineage_id = ?2)",
+            params![base_analysis_id, speaker.id], |r| r.get(0),
+        ).map_err(|e| e.to_string())?;
+        if collision {
+            return Err("追加話者の由来が既存話者と重複しています".into());
+        }
+    }
+    let mut merged = HashSet::new();
+    for merge in &payload.speaker_merges {
+        if merge.source_id == merge.target_id
+            || !speakers.contains(&merge.source_id)
+            || !speakers.contains(&merge.target_id)
+            || !merged.insert(&merge.source_id)
+        {
+            return Err("話者統合の参照が不正です".into());
+        }
+    }
+    if payload
+        .speaker_merges
+        .iter()
+        .any(|m| merged.contains(&m.target_id))
+    {
+        return Err("話者統合は循環や多段参照を含めず、最終話者を指定してください".into());
+    }
     let utterances: HashSet<String> = {
         let mut statement = connection
             .prepare("SELECT id FROM utterances WHERE analysis_revision_id = ?1")
@@ -386,7 +450,26 @@ pub(super) fn validate_payload(
     payload
         .utterances
         .sort_by(|left, right| left.utterance_id.cmp(&right.utterance_id));
+    payload.manual_speakers.sort_by(|a, b| a.id.cmp(&b.id));
+    payload
+        .speaker_merges
+        .sort_by(|a, b| a.source_id.cmp(&b.source_id));
     Ok(payload)
+}
+
+pub(super) fn merged_assignments(payload: &TranscriptDraftPayload, ids: &[String]) -> Vec<String> {
+    let mapping: std::collections::HashMap<_, _> = payload
+        .speaker_merges
+        .iter()
+        .map(|m| (m.source_id.as_str(), m.target_id.as_str()))
+        .collect();
+    let mut result: Vec<_> = ids
+        .iter()
+        .map(|id| mapping.get(id.as_str()).unwrap_or(&id.as_str()).to_string())
+        .collect();
+    result.sort();
+    result.dedup();
+    result
 }
 
 fn draft_hash(serialized: &str) -> String {
@@ -399,6 +482,152 @@ fn draft_hash(serialized: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_speakers_and_merges_round_trip_undo_without_changing_v1_hashes() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("話者編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&draft.payload).unwrap(),
+            r#"{"schema_version":1,"speaker_names":[],"utterances":[]}"#
+        );
+        let id = format!("manual:{}", Uuid::new_v4());
+        let mut payload = draft.payload.clone();
+        payload.schema_version = 2;
+        payload.manual_speakers.push(ManualSpeaker {
+            id: id.clone(),
+            label: "手動話者 1".into(),
+        });
+        payload.speaker_names.push(SpeakerNameEdit {
+            speaker_id: id.clone(),
+            display_name: Some("田中".into()),
+        });
+        payload.speaker_merges.push(SpeakerMerge {
+            source_id: "speaker-1".into(),
+            target_id: id.clone(),
+        });
+        let saved = storage
+            .save_transcript_draft(&draft.id, 0, payload)
+            .unwrap();
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(saved.clone())
+        );
+        assert!(storage
+            .save_transcript_draft(&draft.id, 0, saved.payload.clone())
+            .is_err());
+        drop(storage);
+        let storage = Storage::open(root.path().to_owned()).unwrap();
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(saved.clone())
+        );
+        let undone = storage
+            .undo_last_transcript_edit(&draft.id, saved.lock_version)
+            .unwrap();
+        assert_eq!(undone.payload, draft.payload);
+        assert_eq!(undone.content_hash, draft.content_hash);
+        let db = storage.connection.lock().unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT schema_version FROM working_drafts WHERE id=?1",
+                params![draft.id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM speakers WHERE analysis_revision_id='analysis'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn structural_drafts_reject_invalid_ids_chains_cycles_duplicates_and_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("話者編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        let mut valid = draft.payload.clone();
+        valid.schema_version = 2;
+        valid.manual_speakers.push(ManualSpeaker {
+            id: format!("manual:{}", Uuid::new_v4()),
+            label: "追加".into(),
+        });
+        let custom = valid.manual_speakers[0].id.clone();
+        let mut cases = vec![];
+        let mut p = valid.clone();
+        p.schema_version = 1;
+        cases.push(p);
+        let mut p = valid.clone();
+        p.manual_speakers[0].id = "foreign-id".into();
+        cases.push(p);
+        let mut p = valid.clone();
+        p.manual_speakers.push(p.manual_speakers[0].clone());
+        cases.push(p);
+        let mut p = valid.clone();
+        p.speaker_merges = vec![SpeakerMerge {
+            source_id: "speaker-1".into(),
+            target_id: "foreign".into(),
+        }];
+        cases.push(p);
+        let mut p = valid.clone();
+        p.speaker_merges = vec![
+            SpeakerMerge {
+                source_id: "speaker-1".into(),
+                target_id: "speaker-2".into(),
+            },
+            SpeakerMerge {
+                source_id: "speaker-2".into(),
+                target_id: custom.clone(),
+            },
+        ];
+        cases.push(p);
+        let mut p = valid.clone();
+        p.speaker_merges = vec![
+            SpeakerMerge {
+                source_id: "speaker-1".into(),
+                target_id: "speaker-2".into(),
+            },
+            SpeakerMerge {
+                source_id: "speaker-2".into(),
+                target_id: "speaker-1".into(),
+            },
+        ];
+        cases.push(p);
+        let mut p = valid.clone();
+        p.manual_speakers[0].label = "名".repeat(201);
+        cases.push(p);
+        let mut p = valid.clone();
+        p.manual_speakers = (0..99)
+            .map(|_| ManualSpeaker {
+                id: format!("manual:{}", Uuid::new_v4()),
+                label: "追加".into(),
+            })
+            .collect();
+        cases.push(p);
+        for p in cases {
+            assert!(storage.save_transcript_draft(&draft.id, 0, p).is_err());
+        }
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(draft)
+        );
+    }
 
     fn committed_analysis_with_utterance(storage: &Storage, meeting_id: &str) -> String {
         let db = storage.connection.lock().unwrap();
@@ -448,6 +677,7 @@ mod tests {
                 effective_text: "修正した発言".into(),
                 speaker_ids: vec!["speaker-1".into()],
             }],
+            ..Default::default()
         };
         let saved = storage
             .save_transcript_draft(&draft.id, 0, payload.clone())
@@ -500,6 +730,7 @@ mod tests {
                 effective_text: "本文".into(),
                 speaker_ids: vec!["other-speaker".into()],
             }],
+            ..Default::default()
         };
         assert!(storage
             .save_transcript_draft(&draft.id, 0, invalid)
@@ -533,6 +764,7 @@ mod tests {
                 effective_text: "本文".into(),
                 speaker_ids: vec![],
             }],
+            ..Default::default()
         };
         assert!(storage
             .save_transcript_draft(&draft.id, 0, invalid)
@@ -565,6 +797,7 @@ mod tests {
                         effective_text: "修正文".into(),
                         speaker_ids: vec!["speaker-1".into()],
                     }],
+                    ..Default::default()
                 },
             )
             .unwrap();

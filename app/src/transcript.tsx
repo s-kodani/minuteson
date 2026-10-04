@@ -1,38 +1,11 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 
-interface Speaker {
-  id: string;
-  label: string;
-  displayName: string | null;
-}
-
-interface Utterance {
-  id: string;
-  startUs: number;
-  endUs: number;
-  recognizedText: string;
-  effectiveText: string;
-  attributionState: string;
-  speakerIds: string[];
-}
-
-export interface Analysis {
-  id: string;
-  meetingId: string;
-  contentHash: string;
-  speakers: Speaker[];
-  utterances: Utterance[];
-}
-
-export interface DraftPayload {
-  schema_version: number;
-  speaker_names: { speaker_id: string; display_name: string | null }[];
-  utterances: { utterance_id: string; effective_text: string; speaker_ids: string[] }[];
-}
+import { activeSpeakers, addSpeaker, assignSpeakers, canonicalPayload, mergeSpeaker, projectTranscript, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
+export type { Analysis, DraftPayload } from "./transcript-state";
 
 export interface Draft {
   id: string;
@@ -44,15 +17,6 @@ export interface Draft {
 }
 
 const PAGE_SIZE = 50;
-const compareId = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-
-function canonicalPayload(payload: DraftPayload): DraftPayload {
-  return {
-    ...payload,
-    speaker_names: [...payload.speaker_names].sort((a, b) => compareId(a.speaker_id, b.speaker_id)),
-    utterances: payload.utterances.map((item) => ({ ...item, speaker_ids: [...item.speaker_ids].sort(compareId) })).sort((a, b) => compareId(a.utterance_id, b.utterance_id)),
-  };
-}
 
 export function timeLabel(microseconds: number): string {
   const seconds = Math.floor(microseconds / 1_000_000);
@@ -71,6 +35,14 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(0);
+  const [selection,setSelection] = useState<string[]>([]);
+  const [bulkSpeaker,setBulkSpeaker] = useState("");
+  const [mergeSource,setMergeSource] = useState("");
+  const [mergeTarget,setMergeTarget] = useState("");
+  const [adding,setAdding] = useState<{utteranceId?:string}|null>(null);
+  const [newName,setNewName] = useState("");
+  const [notice,setNotice] = useState("");
+  const addDialog = useRef<HTMLDialogElement>(null);
   const audio = useTranscriptAudio(meetingId, locked);
 
   useEffect(() => {
@@ -91,6 +63,7 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
       setAnalysis(current);
       saveQueue.load(working);
       setPage(0);
+      setSelection([]); setMergeSource(""); setMergeTarget(""); setNotice("");
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -132,11 +105,23 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
     try {
       const previous = await invoke<Draft>("undo_transcript_edit", { draftId: draft.id, expectedLockVersion: draft.lockVersion });
       saveQueue.load(previous);
+      setNotice("直前の編集を取り消しました。"); setMergeSource(""); setMergeTarget("");
     } catch (cause) {
       setError(String(cause));
     } finally {
       setBusy(false);
     }
+  };
+
+  useEffect(()=>{ if(adding) addDialog.current?.showModal(); else addDialog.current?.close(); },[adding]);
+  // Structural operations get their own durable undo entry, after preceding
+  // text/name edits have been acknowledged. Failure retains the queued change.
+  const structuralEdit = async (edit:(current:DraftPayload)=>DraftPayload,message:string) => {
+    if (!analysis || locked || busy) return false;
+    setBusy(true); setError(""); setNotice("");
+    try { await saveQueue.flush(); saveQueue.edit(edit); await saveQueue.flush(); setNotice(message); return true; }
+    catch(cause) { setError(String(cause)); return false; }
+    finally { setBusy(false); }
   };
 
   const changeName = (speakerId: string, value: string) => {
@@ -162,10 +147,12 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
     });
   };
 
-  const shown = analysis?.utterances.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
-  const review = useSpeakerReviews(analysis,shown.map(u=>u.id));
-  const speakerLabels = new Map(analysis?.speakers.map(s=>[s.id,payload?.speaker_names.find(e=>e.speaker_id===s.id)?.display_name||s.displayName||s.label])??[]);
   const matchingBase = Boolean(draft && draft.baseAnalysisId === analysis?.id);
+  const view = analysis ? projectTranscript(analysis,matchingBase?payload:null) : null;
+  const speakers = view ? activeSpeakers(view,matchingBase?payload:null) : [];
+  const shown = view?.utterances.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
+  const review = useSpeakerReviews(analysis,shown.map(u=>u.id));
+  const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
   const editable = Boolean(matchingBase && payload && !locked && !loading && !busy);
 
   return (
@@ -182,25 +169,42 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
           {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty ? "未保存" : "保存済み"}</span>}
           {saveError && <button type="button" className="small-secondary" onClick={() => { void saveQueue.retry().catch(() => {}); }} disabled={saving || locked}>保存を再試行</button>}
           {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || locked || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
+          <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setNewName("");setAdding({});}}>話者を追加</button>
         </div>
+        {notice&&<p role="status">{notice}</p>}
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {audio.controls}
         <div className="speaker-grid">
-          {analysis.speakers.map((speaker) => {
-            const edited = payload?.speaker_names.find((item) => item.speaker_id === speaker.id);
-            return <label key={speaker.id}>{speaker.label}<input value={edited ? edited.display_name ?? "" : speaker.displayName ?? ""} onChange={(event) => changeName(speaker.id, event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名" /></label>;
+          {speakers.map((speaker) => {
+            return <label key={speaker.id}>{speaker.label}<input value={speaker.displayName ?? ""} onChange={(event) => changeName(speaker.id, event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名" /></label>;
           })}
         </div>
+        <div className="transcript-actions" aria-label="話者統合">
+          <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
+          <label>統合先 <select value={mergeTarget} disabled={!editable} onChange={e=>setMergeTarget(e.target.value)}><option value="">選択</option>{speakers.filter(s=>s.id!==mergeSource).map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
+          <button type="button" disabled={!editable||!mergeSource||!mergeTarget||mergeSource===mergeTarget} onClick={()=>{
+            if(!view||!payload)return;
+            const count=view.utterances.filter(u=>u.speakerIds.includes(mergeSource)).length;
+            const message=`${speakerLabels.get(mergeSource)}の${count}発言を${speakerLabels.get(mergeTarget)}にまとめます。本文・時刻・推定元の区間は変更しません。続けますか？`;
+            if(window.confirm(message))void structuralEdit(p=>mergeSpeaker(analysis,p,mergeSource,mergeTarget),"話者を統合しました。直前の編集を取り消すことができます。").then(ok=>{if(ok){setMergeSource("");setMergeTarget("");setBulkSpeaker("");}});
+          }}>話者を統合</button>
+        </div>
+        {!!payload?.speaker_merges?.length&&<p className="hint">統合済みラベルは割り当て候補から除外しています。推定区間には統合前のラベルを残します。</p>}
+        <div className="transcript-actions" aria-label="複数発言の話者変更"><span>選択 {selection.length} 発言（全ページ）</span><label>割り当て先 <select value={bulkSpeaker} disabled={!editable} onChange={e=>setBulkSpeaker(e.target.value)}><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><button type="button" disabled={!editable||!selection.length} onClick={()=>{
+          if(!payload||!window.confirm(`選択した${selection.length}発言の割り当てを${speakerLabels.get(bulkSpeaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。`))return;
+          void structuralEdit(p=>assignSpeakers(analysis,p,selection,bulkSpeaker?[bulkSpeaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。");
+        }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
         <div className="utterance-list">
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {
-            const edited = payload?.utterances.find((item) => item.utterance_id === utterance.id);
-            const speakerIds = edited?.speaker_ids ?? utterance.speakerIds;
+            const speakerIds = utterance.speakerIds;
             return <article key={utterance.id} className="utterance-row">
               <div className="utterance-meta"><time>{timeLabel(utterance.startUs)}–{timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span><SpeakerReviewBadge review={review.reviews.get(utterance.id)}/><button type="button" className="small-secondary" onClick={() => void audio.start(analysis.id, utterance.id)} disabled={locked || loading || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
-              <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} value={edited?.effective_text ?? utterance.effectiveText} onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
-              {(edited?.effective_text ?? utterance.effectiveText) !== utterance.recognizedText && <small>認識原文: {utterance.recognizedText}</small>}
-              {analysis.speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{analysis.speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{payload?.speaker_names.find((item) => item.speaker_id === speaker.id)?.display_name || speaker.displayName || speaker.label}</label>)}</div>}
+              <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
+              <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} value={utterance.effectiveText} onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
+              {utterance.effectiveText !== utterance.recognizedText && <small>認識原文: {utterance.recognizedText}</small>}
+              {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{speaker.displayName || speaker.label}</label>)}</div>}
+              <button type="button" className="small-secondary" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setNewName("");setAdding({utteranceId:utterance.id});}}>新しい話者を作成してこの発言に割り当て</button>
               <SpeakerReviewDetails analysis={analysis} utteranceId={utterance.id} startUs={utterance.startUs} labels={speakerLabels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,utterance.id,undefined,at)}/>
             </article>;
           })}
@@ -209,6 +213,14 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
       </>}
       {error && <p className="action-error" role="alert">{error}</p>}
       {saveError && <p className="action-error" role="alert">自動保存できませんでした。編集は画面に保持しています。内容を確認して保存を再試行してください: {saveError}</p>}
+      <dialog ref={addDialog} className="analysis-dialog speaker-add-dialog" aria-label="新しい話者" onCancel={e=>{if(busy)e.preventDefault();else setAdding(null);}}><h3>新しい話者</h3><p>{adding?.utteranceId?"この発言の割り当てを新しい話者1名に置き換えます。本文は保持します。":"話者を作成します。作成後に発言へ割り当ててください。"}</p><label>表示名 <input value={newName} maxLength={200} disabled={busy} onChange={e=>setNewName(e.target.value)} autoFocus/></label><div className="transcript-actions"><button type="button" disabled={busy||!editable} onClick={()=>{
+        if(!analysis||!adding)return;
+        const id=`manual:${crypto.randomUUID()}`;
+        void structuralEdit(p=>addSpeaker(analysis,p,id,newName,adding.utteranceId),"新しい話者を保存しました。直前の編集を取り消すことができます。").then(ok=>{if(ok)setAdding(null);});
+      }}>作成して保存</button><button type="button" disabled={busy} onClick={()=>setAdding(null)}>キャンセル</button></div>{error&&<p role="alert" className="action-error">{error}</p>}{saveError&&<button type="button" disabled={busy||locked} onClick={()=>{
+        setBusy(true);setError("");
+        void saveQueue.retry().then(()=>{setAdding(null);setNotice("新しい話者を保存しました。取り消しが可能です。");}).catch(cause=>setError(String(cause))).finally(()=>setBusy(false));
+      }}>追加話者の保存を再試行</button>}</dialog>
     </section>
   );
 }

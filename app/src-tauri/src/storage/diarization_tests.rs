@@ -6,6 +6,73 @@ use std::os::unix::fs::PermissionsExt;
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
+
+#[test]
+fn merging_into_added_speaker_survives_fixed_diarization_and_manual_preservation() {
+    use super::super::drafts::{ManualSpeaker, SpeakerMerge};
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, config, mut request) = fixture(root.path(), false);
+    let original = storage.load_current_analysis(&meeting).unwrap().unwrap();
+    let draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
+    let mut payload = draft.payload.clone();
+    payload.schema_version = 2;
+    let id = format!("manual:{}", Uuid::new_v4());
+    payload.manual_speakers.push(ManualSpeaker {
+        id: id.clone(),
+        label: "手動話者".into(),
+    });
+    payload.speaker_merges.push(SpeakerMerge {
+        source_id: original.speakers[0].id.clone(),
+        target_id: id.clone(),
+    });
+    let saved = storage
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+    request.expected_draft = Some(DraftStamp {
+        id: saved.id.clone(),
+        lock_version: saved.lock_version,
+    });
+    let job = enqueue(&storage, request, config);
+    let input = storage.load_diarization_input(&job.id).unwrap();
+    let added = input
+        .analysis
+        .speakers
+        .iter()
+        .find(|s| input.speaker_lineages[&s.id] == id)
+        .unwrap();
+    let utterance = input
+        .analysis
+        .utterances
+        .iter()
+        .find(|u| u.start_us == 0)
+        .unwrap();
+    assert_eq!(utterance.speaker_ids, vec![added.id.clone()]);
+    assert!(input.manual_utterances.contains(&utterance.id));
+    storage.acquire_local_inference_job().unwrap().unwrap();
+    let candidate = diarization::process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let result = storage
+        .load_visible_analysis(&meeting, &candidate)
+        .unwrap()
+        .unwrap();
+    let speaker = result
+        .speakers
+        .iter()
+        .find(|s| s.label == "手動話者")
+        .unwrap();
+    let utterance = result.utterances.iter().find(|u| u.start_us == 0).unwrap();
+    assert_eq!(utterance.speaker_ids, vec![speaker.id.clone()]);
+    assert_eq!(utterance.effective_text, "保存した修正0");
+    assert_eq!(
+        storage.load_transcript_draft(&meeting).unwrap(),
+        Some(saved)
+    );
+    assert_eq!(
+        storage.load_current_analysis(&meeting).unwrap().unwrap(),
+        original
+    );
+}
 fn fixture(root: &Path, two: bool) -> (Storage, String, SherpaConfig, MinutesJobRequest) {
     let (storage, meeting, _) = super::super::transcription::tests::fixture(root, 10);
     if two {
