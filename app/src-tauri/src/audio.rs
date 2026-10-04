@@ -3,6 +3,8 @@ use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::time::SystemTime;
 
+pub(crate) mod flac;
+
 pub const PREVIEW_FRAMES: u64 = 65_536;
 
 // CAF's flags are NOT AudioStreamBasicDescription's flags. See Apple's CAF
@@ -24,6 +26,7 @@ pub struct VerifiedAudio {
     size: u64,
     modified: SystemTime,
     pub format: PcmFormat,
+    flac: Option<flac::FlacAudio>,
 }
 
 impl VerifiedAudio {
@@ -59,12 +62,21 @@ impl VerifiedAudio {
         if format!("{:x}", hasher.finalize()) != expected_hash {
             return Err("音声ファイルのハッシュが保存時と一致しません".into());
         }
-        let format = read_caf_format(&mut file, expected_size)?;
+        file.rewind().map_err(|e| e.to_string())?;
+        let mut magic = [0; 4];
+        file.read_exact(&mut magic).map_err(|e| e.to_string())?;
+        let (format, flac) = if &magic == b"fLaC" {
+            let (format, audio) = flac::FlacAudio::open(&mut file, expected_size, cancelled)?;
+            (format, Some(audio))
+        } else {
+            (read_caf_format(&mut file, expected_size)?, None)
+        };
         let audio = Self {
             file,
             size: expected_size,
             modified,
             format,
+            flac,
         };
         audio.check_unchanged()?;
         Ok(audio)
@@ -90,6 +102,11 @@ impl VerifiedAudio {
             return Err("音声の読出し範囲が不正です".into());
         }
         self.check_unchanged()?;
+        if let Some(flac) = &mut self.flac {
+            let output = flac.read_frames(offset, frames)?;
+            self.check_unchanged()?;
+            return Ok(output);
+        }
         let format = &self.format;
         let position = format.data_offset + offset * u64::from(format.bytes_per_frame);
         self.file

@@ -119,6 +119,82 @@ pub(in crate::storage) mod tests {
     }
 
     #[test]
+    fn managed_flac_assets_play_across_chunks_without_rewriting_analysis() {
+        use crate::audio::flac::write_segment;
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path().to_owned()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        let before = storage.load_current_analysis(&meeting).unwrap();
+        for sequence in 0..2 {
+            let relative = PathBuf::from("meetings").join(&meeting).join("audio");
+            let caf = storage
+                .managed_path(&relative.join(format!("{sequence}.caf")))
+                .unwrap();
+            let bytes = std::fs::read(&caf).unwrap();
+            let mut input = VerifiedAudio::open(
+                File::open(&caf).unwrap(),
+                bytes.len() as u64,
+                &format!("{:x}", Sha256::digest(&bytes)),
+            )
+            .unwrap();
+            let flac_relative = relative.join(format!("{sequence}.flac"));
+            let flac = storage.managed_path(&flac_relative).unwrap();
+            write_segment(&mut input, 0, 24000, &flac, &|| false, &|_| {}).unwrap();
+            let asset = storage
+                .register_ready_meeting_asset(&meeting, &flac_relative, "audio/flac")
+                .unwrap();
+            storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE audio_chunks SET file_asset_id=?1 WHERE id=?2",
+                    params![asset.id, format!("chunk-{sequence}")],
+                )
+                .unwrap();
+            assert_eq!(std::fs::read(caf).unwrap(), bytes);
+        }
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE audio_tracks SET format='flac' WHERE id='track'", [])
+            .unwrap();
+        let store = PlaybackStore::default();
+        let audio = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .unwrap();
+        let info = store.insert(audio).unwrap();
+        assert_eq!(info.total_frames, 24000);
+        let packet = store.read(&info.token, 0).unwrap();
+        for (index, sample) in packet[12..].chunks_exact(4).enumerate() {
+            assert_eq!(
+                f32::from_le_bytes(sample.try_into().unwrap()),
+                if index < 12000 { 0.25 } else { -0.5 }
+            );
+        }
+        store.close(&info.token).unwrap();
+        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), before);
+        // Stored metadata remains authoritative: a valid FLAC with an
+        // incompatible DB frame count must still be rejected.
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audio_chunks SET frame_count=24001 WHERE id='chunk-0'",
+                [],
+            )
+            .unwrap();
+        assert!(storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .err()
+            .unwrap()
+            .contains("保存記録"));
+    }
+
+    #[test]
     fn missing_corrupt_and_mapped_audio_are_not_played_as_normal() {
         let directory = tempfile::tempdir().unwrap();
         let storage = Storage::open(directory.path().to_owned()).unwrap();
