@@ -1,0 +1,124 @@
+import AVFoundation
+import Foundation
+import XCTest
+
+@testable import MONMacOSCapture
+
+final class AudioImportTests: XCTestCase {
+  private func directory() throws -> URL {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    return root
+  }
+
+  private func wav(_ root: URL, nonFinite: Bool = false) throws -> URL {
+    let url = root.appendingPathComponent("source.wav")
+    let format = try XCTUnwrap(
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 2, interleaved: true))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 5000))
+    buffer.frameLength = 5000
+    let samples = try XCTUnwrap(buffer.floatChannelData)
+    for frame in 0..<5000 {
+      samples[0][frame * 2] = 0.25
+      samples[0][frame * 2 + 1] = -0.5
+    }
+    if nonFinite { samples[0][4097 * 2] = .nan }
+    let file = try AVAudioFile(
+      forWriting: url, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: true
+    )
+    try file.write(from: buffer)
+    return url
+  }
+
+  func testWAVContentDetectionAndAllStereoFramesSurviveCAFConversion() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = try wav(root)
+    let moved = root.appendingPathComponent("misleading.mp3")
+    try FileManager.default.moveItem(at: source, to: moved)
+    let original = try Data(contentsOf: moved)
+    let inspected = try await AudioImporter.decode(input: moved, output: nil)
+    XCTAssertEqual(inspected.detectedFormat, "wav")
+    XCTAssertEqual(inspected.frames, 5000)
+    XCTAssertEqual(inspected.durationUs, 312500)
+    let output = root.appendingPathComponent("decoded.caf")
+    let converted = try await AudioImporter.decode(input: moved, output: output)
+    XCTAssertEqual(converted, inspected)
+    XCTAssertEqual(try Data(contentsOf: moved), original)
+    let file = try AVAudioFile(
+      forReading: output, commonFormat: .pcmFormatFloat32, interleaved: true)
+    let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 5000))
+    try file.read(into: buffer)
+    XCTAssertEqual(buffer.frameLength, 5000)
+    let samples = try XCTUnwrap(buffer.floatChannelData)
+    for frame in 0..<5000 {
+      XCTAssertEqual(samples[0][frame * 2], 0.25)
+      XCTAssertEqual(samples[0][frame * 2 + 1], -0.5)
+    }
+  }
+
+  func testCancellationAndDestinationOverwriteLeaveOriginalFilesUntouched() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = try wav(root)
+    let original = try Data(contentsOf: source)
+    let output = root.appendingPathComponent("existing.caf")
+    let existing = Data("retain existing destination".utf8)
+    try existing.write(to: output)
+    do {
+      _ = try await AudioImporter.decode(input: source, output: output)
+      XCTFail("must refuse overwrite")
+    } catch {}
+    XCTAssertEqual(try Data(contentsOf: output), existing)
+    do {
+      _ = try await AudioImporter.decode(input: source, output: nil, cancelled: { true })
+      XCTFail("must honor cancellation")
+    } catch {}
+    XCTAssertEqual(try Data(contentsOf: source), original)
+  }
+
+  func testBrokenAndNonFiniteAudioAreRejectedWithoutChangingSource() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let nonFinite = try wav(root, nonFinite: true)
+    let original = try Data(contentsOf: nonFinite)
+    do {
+      _ = try await AudioImporter.decode(input: nonFinite, output: nil)
+      XCTFail("must reject non-finite PCM")
+    } catch {}
+    XCTAssertEqual(try Data(contentsOf: nonFinite), original)
+    let broken = root.appendingPathComponent("broken.m4a")
+    try Data("not audio".utf8).write(to: broken)
+    do {
+      _ = try await AudioImporter.decode(input: broken, output: nil)
+      XCTFail("must reject invalid input")
+    } catch {}
+  }
+
+  func testM4ATrackInspectionRejectsVideoMultipleAudioAndInvalidBoxSizes() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    func box(_ type: String, _ content: Data) -> Data {
+      var size = UInt32(content.count + 8).bigEndian
+      return withUnsafeBytes(of: &size) { Data($0) } + Data(type.utf8) + content
+    }
+    func track(_ type: String) -> Data {
+      box("trak", box("mdia", box("hdlr", Data(repeating: 0, count: 8) + Data(type.utf8))))
+    }
+    func inspect(_ data: Data) throws {
+      let url = root.appendingPathComponent("boxes")
+      try data.write(to: url)
+      let file = try FileHandle(forReadingFrom: url)
+      defer { try? file.close() }
+      try AudioImporter.checkM4ATracks(file)
+    }
+    XCTAssertNoThrow(try inspect(box("moov", track("soun"))))
+    XCTAssertThrowsError(try inspect(box("moov", track("soun") + track("vide"))))
+    XCTAssertThrowsError(try inspect(box("moov", track("soun") + track("soun"))))
+    XCTAssertThrowsError(try inspect(Data([0, 0, 0, 1]) + Data("moov".utf8)))
+    XCTAssertThrowsError(try inspect(box("moov", track("soun")) + Data([0])))
+    XCTAssertThrowsError(try inspect(Data(repeating: 0, count: 8 * 4097)))
+  }
+}

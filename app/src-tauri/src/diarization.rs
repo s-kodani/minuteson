@@ -599,6 +599,7 @@ fn build_candidate(
                     match track.kind.as_str() {
                         "mic" => "マイク",
                         "system" => "PC音声",
+                        "imported" => "取り込み音声",
                         _ => "音声",
                     },
                     speaker + 1

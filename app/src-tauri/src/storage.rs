@@ -18,6 +18,7 @@ mod drafts;
 mod exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
+pub(crate) mod imports;
 mod jobs;
 mod minutes;
 mod minutes_drafts;
@@ -80,6 +81,7 @@ const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
 const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
 const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
 const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
+const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +114,9 @@ pub struct Storage {
 impl Storage {
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
+        // Resolve system aliases (e.g. macOS /var -> /private/var) once.
+        // Managed children still must match this canonical root exactly.
+        let root = root.canonicalize()?;
         let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
@@ -127,6 +132,7 @@ impl Storage {
             params![now_ms()?],
         )?;
         connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
+        connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),
@@ -395,6 +401,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (16_i64, MIGRATION_16),
         (17_i64, MIGRATION_17),
         (18_i64, MIGRATION_18),
+        (19_i64, MIGRATION_19),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -590,7 +597,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 18);
+        assert_eq!(count, 19);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

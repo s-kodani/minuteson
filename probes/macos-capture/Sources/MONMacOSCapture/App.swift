@@ -406,6 +406,10 @@ private enum Main {
   static func main() async {
     do {
       let arguments = Array(CommandLine.arguments.dropFirst())
+      if arguments.first == "--import-audio" {
+        try await AudioImporter.command(arguments)
+        return
+      }
       if arguments == ["--list-apps"] {
         try await listApps()
         return

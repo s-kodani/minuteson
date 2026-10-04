@@ -1,6 +1,7 @@
 mod analysis_flow;
 mod analysis_worker;
 mod audio;
+mod audio_import;
 mod diarization;
 mod exports;
 mod generation;
@@ -1060,6 +1061,15 @@ pub fn run() {
                     }
                     Ok(_) => {}
                     Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
+                }
+                match handle.state::<Storage>().recover_audio_imports() {
+                    Ok(imports) if !imports.is_empty() => {
+                        let ids: Vec<_> = imports.into_iter().map(|i| i.meeting_id).collect();
+                        let _ = handle.emit("recordings-recovered", ids);
+                        let _ = AnalysisController::kick(&handle);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("音声取り込み回復の確認に失敗しました: {error}"),
                 }
             });
             AnalysisController::kick(app.handle())?;

@@ -48,13 +48,15 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
-        let (manifest_asset_id, manifest_hash): (String, String) = transaction.query_row(
-            "SELECT f.id, r.audio_manifest_hash FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND r.state = 'saved' AND m.lifecycle = 'recorded' ORDER BY f.id LIMIT 1",
-            params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().map_err(|e| e.to_string())?.ok_or("解析可能な保存済み録音manifestがありません")?;
-        let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = 'ready' AND kind IN ('mic', 'system') ORDER BY kind, id").map_err(|e| e.to_string())?;
+        // Keep the serialized plan shape for old jobs; both source types use
+        // verified managed manifests, never an external original path.
+        let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
+            "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND r.state = 'saved' AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",
+            params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?)),
+        ).optional().map_err(|e| e.to_string())?.ok_or("解析可能な保存済み音声manifestがありません")?;
+        let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = 'ready' AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
         let rows = query
-            .query_map(params![meeting_id], |row| {
+            .query_map(params![meeting_id, source_kind], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -101,8 +103,11 @@ impl Storage {
                 chunks,
             });
         }
-        if plans.is_empty() || plans.len() > 2 {
-            return Err("解析対象の録音トラックがありません".into());
+        if plans.is_empty()
+            || plans.len() > 2
+            || (source_kind == "audio_import" && plans.len() != 1)
+        {
+            return Err("解析対象の保存済み音声トラックが不正です".into());
         }
         Ok(RecordedAudioPlan {
             manifest_asset_id,

@@ -75,6 +75,68 @@ fn diarize(s: &Storage) -> String {
 }
 
 #[test]
+fn imported_audio_hands_off_candidates_without_self_labels_and_freezes_explicit_minutes_input() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, old_meeting) = fixture(root.path());
+    let before = s.get_meeting(&old_meeting).unwrap().unwrap();
+    let (import, _, _) = super::super::imports::tests::pending(&s, "imported-flow");
+    s.finalize_audio_import(&import.id).unwrap();
+    let m = import.meeting_id;
+    assert_eq!(s.get_meeting(&m).unwrap().unwrap().lifecycle, "imported");
+    advance(&s);
+    let text = transcribe(&s);
+    assert!(s.load_current_analysis(&m).unwrap().is_none());
+    advance(&s);
+    let final_id = diarize(&s);
+    advance(&s);
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    assert_eq!(flow.stage, "review");
+    assert_eq!(
+        flow.transcription_job.unwrap().output_analysis_id,
+        Some(text)
+    );
+    let candidate = s.load_visible_analysis(&m, &final_id).unwrap().unwrap();
+    assert_eq!(candidate.utterances[0].effective_text, "点検日です");
+    assert_eq!(candidate.speakers.len(), 1);
+    assert_eq!(candidate.speakers[0].label, "取り込み音声 話者1");
+    assert!(s.load_current_analysis(&m).unwrap().is_none());
+    assert_eq!(s.list_jobs(&m).unwrap().len(), 2); // No automatic minutes job.
+    let state = s.analysis_versions(&m).unwrap();
+    s.adopt_analysis(AdoptRequest {
+        meeting_id: m.clone(),
+        revision_id: final_id.clone(),
+        expected_content_hash: candidate.content_hash.clone(),
+        expected_meeting_lock_version: state.meeting_lock_version,
+        expected_draft: None,
+        confirm_replacing_previous: false,
+    })
+    .unwrap();
+    let current = s.get_meeting(&m).unwrap().unwrap();
+    let job = s
+        .enqueue_minutes_job(
+            super::super::minutes_input::MinutesJobRequest {
+                meeting_id: m.clone(),
+                operation_id: "imported-minutes".into(),
+                expected_analysis_id: final_id.clone(),
+                expected_content_hash: candidate.content_hash,
+                expected_meeting_lock_version: current.lock_version,
+                expected_draft: None,
+            },
+            serde_json::json!({"engine":"protocol-fixture"}),
+            serde_json::json!({}),
+            Some(1),
+        )
+        .unwrap();
+    let fixed = s.load_minutes_input(&job.id).unwrap();
+    assert_ne!(fixed.analysis.id, final_id); // A private immutable input revision.
+    assert_eq!(s.load_current_analysis(&m).unwrap().unwrap().id, final_id);
+    assert_eq!(fixed.analysis.utterances[0].effective_text, "点検日です");
+    assert_eq!(fixed.analysis.speakers[0].label, "取り込み音声 話者1");
+    assert_eq!(s.get_meeting(&old_meeting).unwrap().unwrap(), before);
+    assert!(s.list_jobs(&old_meeting).unwrap().is_empty());
+}
+
+#[test]
 fn automatic_flow_hands_off_unadopted_candidate_freezes_conditions_and_requires_explicit_adoption()
 {
     let root = tempfile::tempdir().unwrap();
@@ -406,6 +468,7 @@ fn migration_from_v17_preserves_data_jobs_and_does_not_autostart_historical_reco
     let preferences = s.analysis_preferences().unwrap();
     {
         let db = s.connection.lock().unwrap();
+        super::imports::remove_import_schema_for_test(&db);
         db.execute_batch("DROP TABLE analysis_flows; DROP TRIGGER input_snapshot_valid; DROP TRIGGER analysis_parent_committed; DELETE FROM schema_migrations WHERE version=18;").unwrap();
         let old = MIGRATION_13
             .split_once("CREATE TRIGGER input_snapshot_valid")
@@ -441,7 +504,7 @@ fn migration_from_v17_preserves_data_jobs_and_does_not_autostart_historical_reco
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        18
+        19
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

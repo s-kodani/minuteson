@@ -19,7 +19,7 @@ pub(crate) struct AnalysisFlow {
 pub(super) fn ensure_flow(db: &Connection, meeting: &str) -> Result<(), String> {
     let recorded: bool = db
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND lifecycle='recorded')",
+            "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND lifecycle IN ('recorded','imported'))",
             params![meeting],
             |r| r.get(0),
         )
