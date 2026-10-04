@@ -98,36 +98,45 @@ impl Storage {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
-        let row:Option<(String,String,String,String,String,i64,String)>=tx.query_row("SELECT r.input_analysis_id,r.input_content_hash,r.content_hash,r.effective_document_json,r.generated_document_json,r.document_schema_version,r.template_version FROM minutes_revisions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND (r.publication_state='candidate' OR (r.publication_state='committed' AND r.id IN (m.current_minutes_id,m.previous_minutes_id)))",params![revision_id,meeting_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(|e|e.to_string())?;
-        let Some((analysis, analysis_hash, hash, document, generated, schema, template)) = row
-        else {
-            return Ok(None);
-        };
-        if schema != 1 || template != TEMPLATE_VERSION {
-            return Err("未対応の議事録形式・テンプレートです".into());
-        }
-        if super::revisions::minutes_content_hash(&tx, revision_id)? != hash {
-            return Err("議事録の内容が変更されています".into());
-        }
-        let input =
-            super::minutes_input::read_snapshot(&tx, meeting_id, &analysis, &analysis_hash)?;
-        let content: MinutesContent =
-            serde_json::from_str(&document).map_err(|e| format!("議事録JSONが不正です: {e}"))?;
-        let generated_content: MinutesContent =
-            serde_json::from_str(&generated).map_err(|e| format!("生成原文JSONが不正です: {e}"))?;
-        content.validate(&input)?;
-        generated_content.validate(&input)?;
-        check_projections(&tx, revision_id, &analysis, &content)?;
-        Ok(Some(MinutesView {
-            id: revision_id.into(),
-            meeting_id: meeting_id.into(),
-            input_analysis_id: analysis,
-            input_content_hash: analysis_hash,
-            content_hash: hash,
-            content,
-            generated_content,
-        }))
+        read_content(&tx, meeting_id, revision_id)
     }
+}
+
+pub(super) fn read_content(
+    tx: &Transaction<'_>,
+    meeting_id: &str,
+    revision_id: &str,
+) -> Result<Option<MinutesView>, String> {
+    let row:Option<(String,String,String,String,String,i64,String)>=tx.query_row("SELECT r.input_analysis_id,r.input_content_hash,r.content_hash,r.effective_document_json,r.generated_document_json,r.document_schema_version,r.template_version FROM minutes_revisions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND (r.publication_state='candidate' OR (r.publication_state='committed' AND r.id IN (m.current_minutes_id,m.previous_minutes_id)))",params![revision_id,meeting_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(|e|e.to_string())?;
+    let Some((analysis, analysis_hash, hash, document, generated, schema, template)) = row else {
+        return Ok(None);
+    };
+    if schema != 1 || template != TEMPLATE_VERSION {
+        return Err("未対応の議事録形式・テンプレートです".into());
+    }
+    if document.len() > 2 * 1024 * 1024 || generated.len() > 2 * 1024 * 1024 {
+        return Err("議事録文書が大きすぎます".into());
+    }
+    if super::revisions::minutes_content_hash(&tx, revision_id)? != hash {
+        return Err("議事録の内容が変更されています".into());
+    }
+    let input = super::minutes_input::read_snapshot(&tx, meeting_id, &analysis, &analysis_hash)?;
+    let content: MinutesContent =
+        serde_json::from_str(&document).map_err(|e| format!("議事録JSONが不正です: {e}"))?;
+    let generated_content: MinutesContent =
+        serde_json::from_str(&generated).map_err(|e| format!("生成原文JSONが不正です: {e}"))?;
+    content.validate(&input)?;
+    generated_content.validate(&input)?;
+    check_projections(&tx, revision_id, &analysis, &content)?;
+    Ok(Some(MinutesView {
+        id: revision_id.into(),
+        meeting_id: meeting_id.into(),
+        input_analysis_id: analysis,
+        input_content_hash: analysis_hash,
+        content_hash: hash,
+        content,
+        generated_content,
+    }))
 }
 
 fn insert_projections(

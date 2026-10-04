@@ -182,17 +182,24 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let (spec, _) = super::jobs::read_fixed_input(&tx, job_id)?;
         let fixed = read_input(&tx, &spec)?;
-        let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1 AND current_analysis_id IS NOT NULL)", params![spec.meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if !current {
-            return Ok(true);
-        }
-        let (mut view, draft, title, created_at, started_at) =
-            current_working(&tx, &spec.meeting_id)?;
-        if let Some(draft) = draft {
-            apply_edits(&mut view, &draft.payload);
-        }
-        Ok(working_hash(&tx, &view, &title, created_at, started_at)? != fixed.working_content_hash)
+        input_updated(&tx, &spec.meeting_id, &fixed)
     }
+}
+
+pub(super) fn input_updated(
+    tx: &Transaction<'_>,
+    meeting_id: &str,
+    fixed: &MinutesInput,
+) -> Result<bool, String> {
+    let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1 AND current_analysis_id IS NOT NULL)", params![meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if !current {
+        return Ok(true);
+    }
+    let (mut view, draft, title, created_at, started_at) = current_working(tx, meeting_id)?;
+    if let Some(draft) = draft {
+        apply_edits(&mut view, &draft.payload);
+    }
+    Ok(working_hash(&tx, &view, &title, created_at, started_at)? != fixed.working_content_hash)
 }
 
 fn current_working(

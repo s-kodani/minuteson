@@ -154,6 +154,146 @@ async fn start_minutes_generation(
     .map_err(|e| e.to_string())?
 }
 
+fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read or edit minutes".into());
+    }
+    Ok(window.app_handle().clone())
+}
+
+#[tauri::command]
+async fn get_minutes_versions(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::MinutesVersionState, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().minutes_versions(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_minutes_preview(
+    window: WebviewWindow,
+    meeting_id: String,
+    minutes_id: String,
+) -> Result<Option<storage::MinutesView>, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .load_minutes_content(&meeting_id, &minutes_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_minutes_draft(
+    window: WebviewWindow,
+    meeting_id: String,
+    minutes_id: Option<String>,
+) -> Result<Option<storage::MinutesDraft>, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .load_minutes_draft(&meeting_id, minutes_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn create_minutes_draft(
+    window: WebviewWindow,
+    meeting_id: String,
+    minutes_id: String,
+) -> Result<storage::MinutesDraft, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .create_minutes_draft(&meeting_id, &minutes_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_minutes_draft(
+    window: WebviewWindow,
+    draft_id: String,
+    expected_lock_version: i64,
+    payload: minutes_document::MinutesContent,
+) -> Result<storage::MinutesDraft, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .save_minutes_draft(&draft_id, expected_lock_version, payload)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn undo_minutes_edit(
+    window: WebviewWindow,
+    draft_id: String,
+    expected_lock_version: i64,
+) -> Result<storage::MinutesDraft, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .undo_minutes_edit(&draft_id, expected_lock_version)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn adopt_minutes_candidate(
+    window: WebviewWindow,
+    request: storage::MinutesAdoptRequest,
+) -> Result<storage::CommittedMinutes, String> {
+    let app = minutes_app(&window)?;
+    let meeting = request.meeting_id.clone();
+    let worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().adopt_minutes(request)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("minutes-version-changed", meeting);
+    Ok(result)
+}
+
+#[tauri::command]
+async fn restore_minutes_version(
+    window: WebviewWindow,
+    meeting_id: String,
+    expected_meeting_lock_version: i64,
+    expected_previous_id: String,
+    expected_content_hash: String,
+    expected_draft: Option<storage::DraftStamp>,
+) -> Result<storage::CommittedMinutes, String> {
+    let app = minutes_app(&window)?;
+    let meeting = meeting_id.clone();
+    let worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().restore_minutes_checked(
+            &meeting_id,
+            expected_meeting_lock_version,
+            &expected_previous_id,
+            &expected_content_hash,
+            expected_draft,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("minutes-version-changed", meeting);
+    Ok(result)
+}
+
 #[tauri::command]
 async fn start_transcription(
     window: WebviewWindow,
@@ -580,6 +720,14 @@ pub fn run() {
             finish_main_close,
             start_transcription,
             start_minutes_generation,
+            get_minutes_versions,
+            get_minutes_preview,
+            get_minutes_draft,
+            create_minutes_draft,
+            save_minutes_draft,
+            undo_minutes_edit,
+            adopt_minutes_candidate,
+            restore_minutes_version,
             get_analysis_jobs,
             retry_transcription,
             pause_analysis_job,

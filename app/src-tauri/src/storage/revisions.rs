@@ -10,7 +10,8 @@ pub struct CommittedAnalysis {
     pub meeting_lock_version: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommittedMinutes {
     pub id: String,
     pub content_hash: String,
@@ -157,6 +158,23 @@ impl Storage {
         expected_meeting_lock_version: i64,
         confirm_replacing_previous: bool,
     ) -> Result<CommittedMinutes, String> {
+        self.commit_minutes_inner(
+            meeting_id,
+            revision_id,
+            expected_meeting_lock_version,
+            confirm_replacing_previous,
+            None,
+        )
+    }
+
+    pub(super) fn commit_minutes_inner(
+        &self,
+        meeting_id: &str,
+        revision_id: &str,
+        expected_meeting_lock_version: i64,
+        confirm_replacing_previous: bool,
+        checked: Option<(&str, Option<&super::analysis_ui::DraftStamp>)>,
+    ) -> Result<CommittedMinutes, String> {
         let mut connection = self
             .connection
             .lock()
@@ -196,6 +214,30 @@ impl Storage {
             return Err("議事録の入力解析版が変更されています".into());
         }
         let content_hash = minutes_content_hash(&transaction, revision_id)?;
+        if let Some((expected_hash, draft)) = checked {
+            let view = super::minutes::read_content(&transaction, meeting_id, revision_id)?
+                .ok_or("確認できる議事録候補がありません")?;
+            let parent: Option<String> = transaction
+                .query_row(
+                    "SELECT parent_revision_id FROM minutes_revisions WHERE id=?1",
+                    params![revision_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if view.content_hash != expected_hash || content_hash != expected_hash {
+                return Err("確認した議事録候補の内容が変更されています".into());
+            }
+            if parent != current_id {
+                return Err(
+                    "候補作成後に現在の議事録版が切り替わっています。再生成してください".into(),
+                );
+            }
+            if let Some(current) = &current_id {
+                super::minutes::read_content(&transaction, meeting_id, current)?
+                    .ok_or("現在の議事録版がありません")?;
+            }
+            super::minutes_drafts::switch(&transaction, meeting_id, revision_id, draft)?;
+        }
         transaction.execute(
             "UPDATE minutes_revisions SET content_hash = ?1, publication_state = 'committed' WHERE id = ?2 AND meeting_id = ?3 AND publication_state = 'candidate'",
             params![content_hash, revision_id, meeting_id],
@@ -308,6 +350,15 @@ impl Storage {
         meeting_id: &str,
         expected_meeting_lock_version: i64,
     ) -> Result<CommittedMinutes, String> {
+        self.restore_minutes_inner(meeting_id, expected_meeting_lock_version, None)
+    }
+
+    pub(super) fn restore_minutes_inner(
+        &self,
+        meeting_id: &str,
+        expected_meeting_lock_version: i64,
+        checked: Option<(&str, &str, Option<&super::analysis_ui::DraftStamp>)>,
+    ) -> Result<CommittedMinutes, String> {
         if expected_meeting_lock_version < 0 {
             return Err("会議の版番号が不正です".into());
         }
@@ -344,6 +395,16 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         if expected_hash != minutes_content_hash(&transaction, &previous_id)? {
             return Err("直前の議事録版の内容が変化しています".into());
+        }
+        if let Some((preview_id, preview_hash, draft)) = checked {
+            if preview_id != previous_id || preview_hash != expected_hash {
+                return Err("確認した議事録直前版と復元対象が一致しません".into());
+            }
+            super::minutes::read_content(&transaction, meeting_id, &current_id)?
+                .ok_or("現在の議事録版がありません")?;
+            super::minutes::read_content(&transaction, meeting_id, &previous_id)?
+                .ok_or("直前の議事録版がありません")?;
+            super::minutes_drafts::switch(&transaction, meeting_id, &previous_id, draft)?;
         }
         transaction.execute(
             "UPDATE meetings SET current_minutes_id = ?1, previous_minutes_id = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lock_version = ?5",
