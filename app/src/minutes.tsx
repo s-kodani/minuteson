@@ -5,6 +5,7 @@ import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./dra
 import { jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { assertMinutesReview, assertMinutesVersion, minutesConfigured, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
 import { MinutesDocument } from "./minutes-document";
+import { MinutesEditor, type EditorGuard } from "./minutes-editor";
 
 type Preferences = VersionedDraft<MinutesPreferences>;
 type Job = AnalysisJob & { operationId: string; outputMinutesId: string | null };
@@ -33,6 +34,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   const busyRef = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const loadedCurrent = useRef("");
+  const editorGuard = useRef<EditorGuard | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const operations = useRef(new Map<string, string>());
@@ -71,6 +73,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
             const hash = state.versions.find((v) => v.id === state.currentId)?.contentHash;
             const key = JSON.stringify([state.currentId, hash, state.draft]);
             if (loadedCurrent.current !== key) {
+              if (editorGuard.current && !editorGuard.current(state.currentId)) throw new Error("議事録の現在版が変更されています。編集中の内容を保持しています。保存・競合を確認してから再読込してください。");
               const [view, draft] = state.currentId ? await Promise.all([
                 invoke<MinutesView | null>("get_minutes_preview", { meetingId, minutesId: state.currentId }),
                 invoke<MinutesDraft | null>("get_minutes_draft", { meetingId, minutesId: state.currentId }),
@@ -186,7 +189,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
       {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("この議事録生成を取り消しますか？ 現在版と編集は保持します。")) void jobAction("cancel_analysis_job", j.id); }}>生成を取消</button>}
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
-    {current && <><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesDocument key={current.id} content={currentDraft?.payload ?? current.content} title="現在の議事録" /><p>リッチテキスト編集とMarkdown保存は接続作業中です。</p></>}
+    {current && <><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /><p>Markdown保存は接続作業中です。</p></>}
     {error && <p className="action-error" role="alert">{error}</p>}
     {preview && <dialog ref={dialog} className="analysis-dialog" aria-labelledby="minutes-preview-title" onCancel={(e) => { if (disabled) e.preventDefault(); else setPreview(null); }}>
       <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>

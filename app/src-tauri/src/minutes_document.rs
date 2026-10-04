@@ -123,6 +123,8 @@ pub(crate) struct TableRow {
 pub(crate) enum Block {
     Heading {
         level: u8,
+        #[serde(default, rename = "itemId", skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
         content: Vec<Inline>,
     },
     Paragraph {
@@ -326,6 +328,7 @@ pub(crate) fn from_generated(
 fn heading(level: u8, text: &str) -> Block {
     Block::Heading {
         level,
+        item_id: None,
         content: vec![Inline::text(text)],
     }
 }
@@ -471,11 +474,15 @@ impl MinutesContent {
         };
         for block in &self.blocks {
             match block {
-                Block::Heading { level, content } => {
+                Block::Heading {
+                    level,
+                    item_id,
+                    content,
+                } => {
                     if !(1..=6).contains(level) {
                         return Err("見出しのレベルが不正です".into());
                     }
-                    state.inline(content, None)?;
+                    state.text_block(item_id.as_deref(), content)?;
                 }
                 Block::Paragraph { item_id, content } => {
                     state.text_block(item_id.as_deref(), content)?
@@ -534,7 +541,7 @@ impl MinutesContent {
         let mut output = String::new();
         for block in &self.blocks {
             match block {
-                Block::Heading { level, content } => output.push_str(&format!(
+                Block::Heading { level, content, .. } => output.push_str(&format!(
                     "{} {}\n\n",
                     "#".repeat(usize::from(*level)),
                     rendered.inline(content, false)

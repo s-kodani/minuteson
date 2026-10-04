@@ -9,7 +9,7 @@ export type Kind = "summary" | "topic" | "decision" | "open_issue" | "todo";
 export type Inline = { type: "text"; text: string; bold: boolean; italic: boolean } | { type: "evidence"; minutesItemId: string; evidenceLinkId: string };
 export interface TextBlock { itemId: string | null; content: Inline[] }
 export interface TableRow { itemId: string | null; cells: Inline[][] }
-export type Block = { type: "heading"; level: number; content: Inline[] }
+export type Block = { type: "heading"; level: number; itemId?: string | null; content: Inline[] }
   | ({ type: "paragraph" } & TextBlock)
   | { type: "list"; ordered: boolean; items: TextBlock[] }
   | { type: "table"; headers: Inline[][]; rows: TableRow[] };

@@ -7,6 +7,7 @@ export function MinutesDocument({ content, title }: { content: MinutesContent; t
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const evidence = content.evidence.find((e) => e.id === selected);
+  const source = (id: string | null | undefined) => id && content.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
   const inline = (nodes: Inline[]) => nodes.map((node, index) => {
     if (node.type === "evidence") {
       const e = content.evidence.find((e) => e.id === node.evidenceLinkId && e.minutesItemId === node.minutesItemId);
@@ -21,14 +22,14 @@ export function MinutesDocument({ content, title }: { content: MinutesContent; t
     switch (value.type) {
       case "heading": {
         const Heading = (["h1", "h2", "h3", "h4", "h5", "h6"] as const)[Math.max(0, Math.min(5, value.level - 1))];
-        return <Heading key={index}>{inline(value.content)}</Heading>;
+        return <Heading key={index}>{source(value.itemId)}{inline(value.content)}</Heading>;
       }
-      case "paragraph": return <p key={index}>{inline(value.content)}</p>;
+      case "paragraph": return <p key={index}>{source(value.itemId)}{inline(value.content)}</p>;
       case "list": {
         const List = value.ordered ? "ol" : "ul";
-        return <List key={index}>{value.items.map((item, i) => <li key={i}>{inline(item.content)}</li>)}</List>;
+        return <List key={index}>{value.items.map((item, i) => <li key={i}>{source(item.itemId)}{inline(item.content)}</li>)}</List>;
       }
-      case "table": return <div className="document-table" key={index}><table><thead><tr>{value.headers.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead><tbody>{value.rows.map((row, i) => <tr key={i}>{row.cells.map((cell, j) => <td key={j}>{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
+      case "table": return <div className="document-table" key={index}><table><thead><tr>{value.headers.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead><tbody>{value.rows.map((row, i) => <tr key={i}>{row.cells.map((cell, j) => <td key={j}>{j === 0 && source(row.itemId)}{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
     }
   };
   const total = Math.max(1, Math.ceil(content.blocks.length / 50));

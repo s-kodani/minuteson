@@ -239,6 +239,42 @@ fn rich_text_markdown_escapes_payloads_and_keeps_lists_tables_and_footnotes() {
 }
 
 #[test]
+fn heading_formatting_preserves_item_evidence_and_old_canonical_json() {
+    let input = input();
+    let mut content = from_generated(&input, vec![item(ItemKind::Decision)]).unwrap();
+    let old = serde_json::to_value(&content).unwrap();
+    assert!(old["blocks"][0].get("itemId").is_none());
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<MinutesContent>(old.clone()).unwrap())
+            .unwrap(),
+        old
+    );
+    let index = content
+        .blocks
+        .iter()
+        .position(|b| matches!(b, Block::List { items, .. } if !items.is_empty()))
+        .unwrap();
+    let Block::List { items, .. } = &content.blocks[index] else {
+        panic!("list");
+    };
+    let row = items[0].clone();
+    content.blocks[index] = Block::Heading {
+        level: 3,
+        item_id: row.item_id,
+        content: row.content,
+    };
+    content.validate(&input).unwrap();
+    let markdown = content.markdown(&input).unwrap();
+    assert!(markdown.contains("### 点検日を確認する"));
+    assert!(markdown.contains("発言ID: utterance"));
+    let Block::Heading { item_id, .. } = &mut content.blocks[index] else {
+        unreachable!();
+    };
+    *item_id = None;
+    assert!(content.validate(&input).is_err());
+}
+
+#[test]
 fn utc_dates_unknown_participants_empty_output_and_manual_additions_are_explicit() {
     assert_eq!(utc_label(0).as_deref(), Some("1970-01-01 00:00:00 UTC"));
     assert_eq!(utc_label(-1).as_deref(), Some("1969-12-31 23:59:59 UTC"));
