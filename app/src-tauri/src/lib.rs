@@ -1,5 +1,6 @@
 mod analysis_worker;
 mod audio;
+mod diarization;
 mod exports;
 mod generation;
 mod local_engine;

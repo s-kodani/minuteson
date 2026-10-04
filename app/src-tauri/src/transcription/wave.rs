@@ -77,6 +77,90 @@ pub fn write_window(
     Ok(output_frames)
 }
 
+// Diarization clusters the entire track, not independently numbered ASR
+// windows. Stream its mono WAV with global resampling phase and filter context
+// on both sides of each buffer. Memory does not grow with meeting duration.
+pub(crate) fn write_track(
+    audio: &mut PreparedAudio,
+    path: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<u64, String> {
+    let frames = audio.total_frames();
+    if frames == 0
+        || !(8_000..=384_000).contains(&audio.sample_rate)
+        || !(1..=8).contains(&audio.channels)
+    {
+        return Err("話者分離用の音声形式が不正です".into());
+    }
+    let output_frames = frames
+        .checked_mul(u64::from(WHISPER_RATE))
+        .and_then(|n| n.checked_add(u64::from(audio.sample_rate) / 2))
+        .ok_or("話者分離用の音声時間が範囲外です")?
+        / u64::from(audio.sample_rate);
+    // Native sherpa's Process takes an int32 sample count. RIFF also has a
+    // 32-bit size. Reject overflow; never truncate or silently split clusters.
+    if output_frames == 0 || output_frames > u64::from((u32::MAX - 36) / 2) {
+        return Err("話者分離用WAVのサイズ上限を超えています".into());
+    }
+    check_cancelled(cancelled)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(&wav_header(output_frames as u32))
+        .map_err(|e| e.to_string())?;
+    let filter = Filter::new(audio.sample_rate);
+    let mut first_output = 0;
+    while first_output < output_frames {
+        check_cancelled(cancelled)?;
+        let last_output = (first_output + u64::from(WHISPER_RATE)).min(output_frames);
+        let first_source = (first_output * u64::from(audio.sample_rate) / u64::from(WHISPER_RATE))
+            .saturating_sub(filter.half as u64);
+        let last_source = (((last_output - 1) * u64::from(audio.sample_rate)
+            / u64::from(WHISPER_RATE))
+            + filter.half as u64
+            + 1)
+        .min(frames);
+        let mut mono = Vec::with_capacity((last_source - first_source) as usize);
+        let mut offset = first_source;
+        while offset < last_source {
+            check_cancelled(cancelled)?;
+            let count = PREVIEW_FRAMES.min(last_source - offset);
+            let pcm = audio.read_pcm(offset, count)?;
+            for frame in pcm.chunks_exact(audio.channels as usize * 4) {
+                let sum: f64 = frame
+                    .chunks_exact(4)
+                    .map(|sample| f64::from(f32::from_le_bytes(sample.try_into().unwrap())))
+                    .sum();
+                mono.push((sum / f64::from(audio.channels)) as f32);
+            }
+            offset += count;
+        }
+        for index in first_output..last_output {
+            if index % 4096 == 0 {
+                check_cancelled(cancelled)?;
+            }
+            let value = if audio.sample_rate == WHISPER_RATE {
+                mono[(index - first_source) as usize]
+            } else {
+                filter.sample_from(&mono, index, audio.sample_rate, first_source)
+            };
+            let sample = (value.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            writer
+                .write_all(&sample.to_le_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        first_output = last_output;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+    writer.get_ref().sync_all().map_err(|e| e.to_string())?;
+    check_cancelled(cancelled)?;
+    Ok(output_frames)
+}
+
 fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
         Err("解析の一時停止が要求されました".into())
@@ -146,8 +230,12 @@ impl Filter {
     }
 
     fn sample(&self, input: &[f32], index: u64, rate: u32) -> f32 {
+        self.sample_from(input, index, rate, 0)
+    }
+
+    fn sample_from(&self, input: &[f32], index: u64, rate: u32, first_frame: u64) -> f32 {
         let position = index * u64::from(rate);
-        let base = (position / u64::from(WHISPER_RATE)) as i64;
+        let base = (position / u64::from(WHISPER_RATE)) as i64 - first_frame as i64;
         let phase = ((position % u64::from(WHISPER_RATE)) as usize * PHASES
             + WHISPER_RATE as usize / 2)
             / WHISPER_RATE as usize;
@@ -281,5 +369,59 @@ mod tests {
         for sample in bytes[204..].chunks_exact(2) {
             assert_eq!(i16::from_le_bytes(sample.try_into().unwrap()), -16384);
         }
+    }
+
+    #[test]
+    fn whole_track_buffers_match_one_window_including_fractional_phase_and_edges() {
+        for rate in [8_000, 16_000, 44_100, 48_000, 96_000, 192_000, 384_000] {
+            let samples: Vec<f32> = (0..rate * 2 + 123)
+                .flat_map(|i| {
+                    let sample = (2.0 * PI * 1234.0 * f64::from(i) / f64::from(rate)).sin() as f32;
+                    [sample, sample * 0.5]
+                })
+                .collect();
+            let mut source = audio(rate, 2, &samples);
+            let frames = source.total_frames();
+            let directory = tempfile::tempdir().unwrap();
+            let window = directory.path().join("window.wav");
+            let track = directory.path().join("track.wav");
+            let count = write_window(&mut source, 0, frames, &window, &|| false).unwrap();
+            assert_eq!(write_track(&mut source, &track, &|| false).unwrap(), count);
+            assert_eq!(
+                std::fs::read(&track).unwrap(),
+                std::fs::read(window).unwrap()
+            );
+            assert!(write_track(&mut source, &track, &|| false).is_err());
+        }
+    }
+
+    #[test]
+    fn whole_track_crosses_audio_spans_and_asr_window_limit_without_resetting() {
+        let mut source = audio(16_000, 1, &vec![0.25; 16_000 * 63]);
+        source
+            .spans
+            .extend(audio(16_000, 1, &vec![-0.5; 16_000 * 63]).spans);
+        let frames = source.total_frames();
+        let directory = tempfile::tempdir().unwrap();
+        assert!(write_window(
+            &mut source,
+            0,
+            frames,
+            &directory.path().join("window.wav"),
+            &|| false
+        )
+        .is_err());
+        let path = directory.path().join("track.wav");
+        assert_eq!(write_track(&mut source, &path, &|| false).unwrap(), frames);
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(bytes.len(), 44 + frames as usize * 2);
+        for (i, sample) in bytes[44..].chunks_exact(2).enumerate() {
+            assert_eq!(
+                i16::from_le_bytes(sample.try_into().unwrap()),
+                if i < 16_000 * 63 { 8192 } else { -16384 }
+            );
+        }
+        assert!(write_track(&mut source, &directory.path().join("pause.wav"), &|| true).is_err());
+        assert!(!directory.path().join("pause.wav").exists());
     }
 }
