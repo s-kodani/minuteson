@@ -92,7 +92,7 @@ pub(crate) struct BackupReceipt {
     pub sha256: String,
 }
 
-fn private_stage(parent: &Path) -> Result<tempfile::TempDir, String> {
+pub(super) fn private_stage(parent: &Path) -> Result<tempfile::TempDir, String> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(".mon-archive-");
     #[cfg(unix)]
@@ -652,4 +652,4 @@ fn validate_portability(
 
 #[cfg(test)]
 #[path = "archive_tests.rs"]
-mod tests;
+pub(super) mod tests;

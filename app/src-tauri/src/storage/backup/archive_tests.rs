@@ -3,7 +3,7 @@ use crate::audio_import::ImportOptions;
 use serde_json::{json, Value};
 use std::cell::Cell;
 
-fn meeting(storage: &Storage, operation: &str) -> String {
+pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
     let options = ImportOptions {
         profile: "high_accuracy".into(),
         meeting_vocabulary: vec![VocabularyEntry {
