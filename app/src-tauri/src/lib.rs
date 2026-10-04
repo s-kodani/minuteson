@@ -8,6 +8,7 @@ mod generation;
 mod import_controller;
 mod local_engine;
 mod minutes_document;
+mod model_compatibility;
 mod model_inspection;
 mod model_placement;
 mod playback;
@@ -67,6 +68,39 @@ fn get_model_placements(
         return Err("Only the main window can read model placements".into());
     }
     window.state::<Storage>().list_model_placements()
+}
+
+#[tauri::command]
+async fn check_model_compatibility(
+    window: WebviewWindow,
+    token: String,
+    package_id: String,
+    expected_review_hash: String,
+) -> Result<model_compatibility::CheckSummary, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can check model compatibility".into());
+    }
+    let app = window.app_handle().clone();
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_compatibility::check(
+                &app.state::<Storage>(),
+                &models_root,
+                &token,
+                &package_id,
+                &expected_review_hash,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1209,6 +1243,7 @@ pub fn run() {
             inspect_model_package,
             cancel_model_inspection,
             get_model_placements,
+            check_model_compatibility,
             place_model_package,
             get_audio_import,
             select_audio_import,

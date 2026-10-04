@@ -173,6 +173,20 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
                 &[]
             },
         )
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=24)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                ["model_compatibility_checks"].as_slice()
+            } else {
+                &[]
+            },
+        )
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {

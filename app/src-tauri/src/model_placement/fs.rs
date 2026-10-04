@@ -3,7 +3,7 @@
 use std::fs::{File, Metadata};
 use std::path::{Path, PathBuf};
 
-pub(super) struct Directory {
+pub(crate) struct Directory {
     file: File,
     path: PathBuf,
     identity: Metadata,
@@ -40,7 +40,7 @@ impl Directory {
         }
         Ok(result)
     }
-    pub(super) fn root(path: &Path) -> Result<Self, String> {
+    pub(crate) fn root(path: &Path) -> Result<Self, String> {
         use std::os::fd::AsRawFd;
         use std::os::unix::ffi::OsStrExt;
         if !path.is_absolute() {
@@ -83,7 +83,7 @@ impl Directory {
         };
         Self::from_fd(fd, parent.join(leaf))
     }
-    pub(super) fn child(&self, name: &str, new_only: bool) -> Result<Self, String> {
+    pub(crate) fn child(&self, name: &str, new_only: bool) -> Result<Self, String> {
         use std::os::fd::AsRawFd;
         self.verify()?;
         let name_c = Self::name(name)?;
@@ -104,7 +104,7 @@ impl Directory {
         };
         Self::from_fd(fd, self.path.join(name))
     }
-    pub(super) fn create(&self, relative: &str) -> Result<(File, Self), String> {
+    pub(crate) fn create(&self, relative: &str) -> Result<(File, Self), String> {
         use std::os::fd::{AsRawFd, FromRawFd};
         let mut parts = relative.split('/').collect::<Vec<_>>();
         let leaf = Self::name(parts.pop().ok_or("配置ファイル名がありません")?)?;
@@ -131,7 +131,7 @@ impl Directory {
         directory.sync()?;
         Ok((file, directory))
     }
-    pub(super) fn available(&self) -> Result<u64, String> {
+    pub(crate) fn available(&self) -> Result<u64, String> {
         use std::os::fd::AsRawFd;
         let mut info = std::mem::MaybeUninit::<libc::statvfs>::uninit();
         if unsafe { libc::fstatvfs(self.file.as_raw_fd(), info.as_mut_ptr()) } != 0 {
@@ -141,7 +141,7 @@ impl Directory {
         u64::try_from(u128::from(info.f_bavail) * u128::from(info.f_frsize))
             .map_err(|_| "モデル空き容量が範囲外です".into())
     }
-    pub(super) fn verify(&self) -> Result<(), String> {
+    pub(crate) fn verify(&self) -> Result<(), String> {
         use std::os::unix::fs::MetadataExt;
         let current = std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
         let opened = self.file.metadata().map_err(|e| e.to_string())?;
@@ -159,11 +159,11 @@ impl Directory {
         }
         Ok(())
     }
-    pub(super) fn sync(&self) -> Result<(), String> {
+    pub(crate) fn sync(&self) -> Result<(), String> {
         self.verify()?;
         self.file.sync_all().map_err(|e| e.to_string())
     }
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 }

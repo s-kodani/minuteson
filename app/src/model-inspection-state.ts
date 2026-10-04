@@ -36,9 +36,42 @@ export interface ModelPlacementEntry {
   placementRecorded: boolean;
   ready: false;
   reviewHash: string;
+  compatibility?: ModelCompatibilitySummary | null;
 }
-export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready">): string {
+export interface ModelCompatibilitySummary {
+  operationId: string;
+  packageId: string;
+  reviewHash: string;
+  adapterRevision: number;
+  state: "preparing" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  errorMessage: string | null;
+}
+const canonicalId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function validateCompatibility(summary: ModelCompatibilitySummary) {
+  if (!summary || !canonicalId.test(summary.operationId) || !canonicalId.test(summary.packageId) || !/^[0-9a-f]{64}$/.test(summary.reviewHash) || summary.adapterRevision !== 1 || !["preparing", "succeeded", "failed", "cancelled", "interrupted"].includes(summary.state) ||
+    (["preparing", "succeeded"].includes(summary.state) ? summary.errorMessage !== null : typeof summary.errorMessage !== "string" || !summary.errorMessage || new TextEncoder().encode(summary.errorMessage).length > 4096 || summary.errorMessage.includes("\0"))) {
+    throw Error("互換性確認の記録が不正です。配置記録を再読込してください。");
+  }
+}
+export function assertCompatibilitySummary(summary: ModelCompatibilitySummary, token: string, entry: Pick<ModelPlacementEntry, "packageId" | "reviewHash">) {
+  validateCompatibility(summary);
+  if (summary.operationId !== token || summary.packageId !== entry.packageId || summary.reviewHash !== entry.reviewHash || !["succeeded", "failed", "cancelled"].includes(summary.state)) {
+    throw Error("互換性の応答と確認した素材・操作が一致しません。配置記録を再読込してください。");
+  }
+}
+export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready"> & Partial<Pick<ModelPlacementEntry, "compatibility" | "packageId" | "reviewHash">>): string {
   if (entry.ready !== false) throw Error("配置記録だけでAI準備完了とは扱えません。");
+  if (entry.compatibility) {
+    validateCompatibility(entry.compatibility);
+    if (!entry.placementRecorded || entry.compatibility.packageId !== entry.packageId || entry.compatibility.reviewHash !== entry.reviewHash) throw Error("配置と互換性の記録が一致しません。");
+    switch (entry.compatibility.state) {
+      case "preparing": return "互換性確認中・プロファイル未適用";
+      case "succeeded": return "CPU互換性確認済み・プロファイル未適用";
+      case "failed": return "互換性確認失敗・プロファイル未適用";
+      case "cancelled": return "互換性確認取消・明示的な再確認が必要";
+      case "interrupted": return "前回の互換性確認が中断・明示的な再確認が必要";
+    }
+  }
   return entry.placementRecorded ? "配置記録あり・互換性検証待ち" : "未完了の配置・途中ファイルは保全";
 }
 export function assertPlacementReceipt(receipt: ModelPlacementReceipt, token: string, reviewHash: string) {

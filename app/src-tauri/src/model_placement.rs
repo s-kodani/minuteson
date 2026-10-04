@@ -1,7 +1,7 @@
 //! Manual placement is not runtime compatibility or AI readiness. All copying
 //! is explicit, create-new-only, bound to a reviewed byte set and durable intent.
 #[cfg(unix)]
-mod fs;
+pub(crate) mod fs;
 use crate::model_inspection::{self, FileReport, PackageManifest, Report, Role, Source, Target};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,7 @@ pub(crate) struct CatalogEntry {
     pub placement_recorded: bool,
     pub ready: bool,
     pub review_hash: String,
+    pub compatibility: Option<crate::model_compatibility::CheckSummary>,
 }
 fn uuid(text: &str) -> bool {
     uuid::Uuid::parse_str(text).is_ok_and(|id| id.to_string() == text)

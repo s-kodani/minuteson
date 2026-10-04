@@ -29,6 +29,7 @@ mod minutes_evidence;
 mod minutes_input;
 mod minutes_preferences;
 mod minutes_ui;
+mod model_checks;
 mod model_metadata;
 mod model_placements;
 mod playback;
@@ -91,6 +92,7 @@ const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sq
 const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
 const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.sql");
 const MIGRATION_23: &str = include_str!("migrations/0023_model_metadata.sql");
+const MIGRATION_24: &str = include_str!("migrations/0024_model_compatibility.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -145,6 +147,7 @@ impl Storage {
         connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
         connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
         backup::recover_restore_operations(&root, &connection)?;
+        connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
         // A copy or compatibility check is never resumed or executed on startup.
         // Retain intent/fingerprints and partial files for explicit inspection.
         connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
@@ -435,6 +438,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (21, MIGRATION_21),
     (22, MIGRATION_22),
     (23, MIGRATION_23),
+    (24, MIGRATION_24),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

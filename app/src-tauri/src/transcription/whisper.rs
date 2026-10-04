@@ -176,6 +176,10 @@ pub fn run_unit(
         .map_err(|e| e.to_string())?;
     let mut command = Command::new(&config.executable.path);
     command
+        // Do not inherit injected libraries, credentials, or engine overrides.
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("LANG", "en_US.UTF-8")
         .current_dir(&directory)
         .stdin(Stdio::null())
         .stdout(stdout)

@@ -118,6 +118,22 @@ pub(in crate::storage) fn retain(
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
+    if db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=24)",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM model_compatibility_checks", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        db.execute_batch("DROP TABLE model_compatibility_checks; DELETE FROM schema_migrations WHERE version=24;").unwrap();
+    }
     if !db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=23)",

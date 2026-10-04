@@ -13,7 +13,7 @@ fn bytes(record: &PlacementRecord) -> Result<(String, String), String> {
     Ok((json, hash))
 }
 
-fn unused_identity(db: &Connection, id: &str) -> Result<bool, String> {
+pub(super) fn unused_identity(db: &Connection, id: &str) -> Result<bool, String> {
     // Canonical native schema identifiers are quoted, values stay parameters.
     // Reserve IDs across domains and pending additive-restore mappings too.
     let tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").map_err(|e|e.to_string())?.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
@@ -43,7 +43,7 @@ fn unused_identity(db: &Connection, id: &str) -> Result<bool, String> {
     }
     Ok(true)
 }
-fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, String> {
+pub(super) fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, String> {
     let row: Option<(String,String,String,String,String,Option<String>,Option<String>,String,String)> = db.query_row("SELECT manifest_json,manifest_hash,engine,model_name,model_version,quantization,license_ref,source_type,state FROM model_packages WHERE id=?1",params![id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional().map_err(|e|e.to_string())?;
     let Some((json, hash, engine, name, version, quantization, license, source_type, state)) = row
     else {
@@ -52,7 +52,10 @@ fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, St
     if json.len() > 65_536
         || format!("{:x}", Sha256::digest(json.as_bytes())) != hash
         || source_type != "manual_import"
-        || !matches!(state.as_str(), "preparing" | "unavailable")
+        || !matches!(
+            state.as_str(),
+            "preparing" | "unavailable" | "ready" | "incompatible"
+        )
     {
         return Err("モデル配置記録の由来・状態・SHAが一致しません".into());
     }
@@ -104,12 +107,10 @@ fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, St
             pending += 1;
         }
     }
-    if rows.next().map_err(|e| e.to_string())?.is_some()
-        || (ready > 0 && pending > 0)
-        || (ready > 0 && state != "unavailable")
-    {
+    if rows.next().map_err(|e| e.to_string())?.is_some() || (ready > 0 && pending > 0) {
         return Err("モデル配置のファイル構成・確定状態が不正です".into());
     }
+    super::model_checks::validate_package_state(db, &record, pending == 0, &state)?;
     Ok(Some((record, pending == 0)))
 }
 fn receipt(record: &PlacementRecord, placed: bool) -> Result<PlacementReceipt, String> {
@@ -211,6 +212,8 @@ impl Storage {
                 let receipt = receipt(&record, placed)?;
                 let engine =
                     serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
+                let compatibility =
+                    super::model_checks::latest(&db, &id)?.map(|check| check.summary);
                 Ok(CatalogEntry {
                     package_id: id,
                     model_name: record.manifest.model_name,
@@ -221,6 +224,7 @@ impl Storage {
                     placement_recorded: placed,
                     ready: false,
                     review_hash: record.review_hash,
+                    compatibility,
                 })
             })
             .collect()
