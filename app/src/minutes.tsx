@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
-import { jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
+import { canRetryJob, jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, type MinutesExport, type MinutesExportRequest, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
 import { MinutesDocument } from "./minutes-document";
 import { MinutesEditor, type EditorGuard } from "./minutes-editor";
@@ -41,6 +41,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const operations = useRef(new Map<string, string>());
+  const retryOperations = useRef(new Map<string, string>());
 
   useEffect(() => {
     mounted.current = true;
@@ -91,6 +92,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
             // A known job resolves a lost start response. Subsequent explicit
             // generations may then receive a fresh operation ID.
             for (const [key, operation] of operations.current) if (allJobs.some((j) => j.operationId === operation)) operations.current.delete(key);
+            for (const [key, operation] of retryOperations.current) if (allJobs.some((j) => j.operationId === operation)) retryOperations.current.delete(key);
           } catch (cause) { if (!disposed) setError(String(cause)); }
         } while (again && !disposed);
       })().finally(() => { inFlight = null; });
@@ -136,6 +138,17 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     await refreshRef.current();
   }));
   const jobAction = (command: string, jobId: string) => run(async () => { await invoke(command, { jobId }); await refreshRef.current(); });
+  const retryJob = (job: Job) => {
+    if (!window.confirm(`この議事録生成を同じ固定条件で再試行しますか？ 保存済み ${job.completedUnits} 単位を再照合して引き継ぎます。現在の文字起こし・モデル設定の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`)) return;
+    return run(async () => {
+      const operationId = retryOperations.current.get(job.id) ?? crypto.randomUUID();
+      retryOperations.current.set(job.id, operationId);
+      try {
+        await invoke("retry_minutes_generation", { request: { meetingId, jobId: job.id, operationId, expectedSpecHash: job.specHash } });
+        retryOperations.current.delete(job.id);
+      } finally { await refreshRef.current(); }
+    });
+  };
   const writeMarkdown = () => run(() => saved(async () => {
     setExportNotice("");
     // Inspect an unknown response before allowing a new dialog or file write.
@@ -207,10 +220,11 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     </details>
     <div className="analysis-actions"><button type="button" disabled={disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine)} onClick={() => void start()}>{current ? "議事録を再生成" : "議事録を生成"}</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先" : "端末内で処理"}</span></div>
     {!source?.currentId && <p>先に文字起こし候補を確認・採用してください。</p>}
-    {jobs.filter((j) => j.kind === "minutes_generation").length > 0 && <ul className="analysis-jobs" aria-label="議事録生成ジョブ">{jobs.filter((j) => j.kind === "minutes_generation").map((j) => <li key={j.id}><div><strong>{jobLabel(j.state)}</strong><span>保存済み {j.completedUnits} / {j.totalUnits ?? "?"} 単位{j.pauseReason === "recording" ? " · 録音のため停止" : ""}</span><small>ジョブ {j.id.slice(0, 8)}</small>{j.errorCode && <span className="action-error">{j.errorCode}</span>}</div><div className="analysis-actions">
+    {jobs.filter((j) => j.kind === "minutes_generation").length > 0 && <ul className="analysis-jobs" aria-label="議事録生成ジョブ">{jobs.filter((j) => j.kind === "minutes_generation").map((j) => <li key={j.id}><div><strong>{jobLabel(j.state)}{j.attempt > 1 ? ` · 試行 ${j.attempt}` : ""}</strong><span>保存済み {j.completedUnits} / {j.totalUnits ?? "?"} 単位{j.pauseReason === "recording" ? " · 録音のため停止" : ""}</span><small>ジョブ {j.id.slice(0, 8)}{j.retryOfJobId ? ` · 再試行元 ${j.retryOfJobId.slice(0, 8)}` : ""}</small>{j.errorCode && <span className="action-error">{j.errorCode}</span>}</div><div className="analysis-actions">
       {["queued", "running"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", j.id)}>生成を一時停止</button>}
       {["paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", j.id)}>生成を再開</button>}
       {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("この議事録生成を取り消しますか？ 現在版と編集は保持します。")) void jobAction("cancel_analysis_job", j.id); }}>生成を取消</button>}
+      {canRetryJob(j, jobs, "minutes_generation") && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(j)}>議事録を同じ条件で再試行</button>}
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
     {current && <><div className="transcript-actions"><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p><button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button></div>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}

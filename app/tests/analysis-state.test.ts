@@ -35,3 +35,13 @@ test("retry is distinct from resume and excludes unfinished descendants", () => 
   }
   assert.ok(canRetryJob(job, [job, { ...job, id: "retry", retryOfJobId: job.id, state: "failed", attempt: 2 }]));
 });
+
+test("minutes retry explicitly selects its kind and rejects unfinished retries", () => {
+  const job: AnalysisJob = { id: "minutes", kind: "minutes_generation", state: "cancelled", completedUnits: 2, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "fixed", retryOfJobId: null, attempt: 1 };
+  assert.ok(canRetryJob(job, [job], "minutes_generation"));
+  assert.equal(canRetryJob(job, [job]), false);
+  assert.equal(canRetryJob({ ...job, kind: "transcription" }, [job], "minutes_generation"), false);
+  for (const state of ["queued", "running", "pausing", "paused", "interrupted", "succeeded"]) assert.equal(canRetryJob({ ...job, state }, [job], "minutes_generation"), false);
+  for (const state of ["queued", "running", "pausing", "paused", "interrupted"]) assert.equal(canRetryJob(job, [job, { ...job, id: "child", retryOfJobId: job.id, attempt: 2, state }], "minutes_generation"), false);
+  for (const state of ["failed", "cancelled", "succeeded"]) assert.ok(canRetryJob(job, [job, { ...job, id: "child", retryOfJobId: job.id, attempt: 2, state }], "minutes_generation"));
+});

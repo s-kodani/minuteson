@@ -79,6 +79,296 @@ fn current_minutes(storage: &Storage, meeting: &str) -> Option<String> {
         .unwrap()
 }
 
+fn retry_request(job: &JobSnapshot, operation: &str) -> generation::RetryRequest {
+    generation::RetryRequest {
+        meeting_id: job.meeting_id.clone(),
+        job_id: job.id.clone(),
+        operation_id: operation.into(),
+        expected_spec_hash: job.spec_hash.clone(),
+    }
+}
+fn pause_at(storage: &Storage, job: &JobSnapshot, units: i64) {
+    assert_eq!(
+        storage.acquire_local_inference_job().unwrap().unwrap().id,
+        job.id
+    );
+    assert!(generation::process(storage, &job.id, &|| false, &|s| {
+        if s.completed_units == units && s.state == "running" {
+            storage.request_job_pause(&job.id, "user").unwrap();
+        }
+    })
+    .unwrap()
+    .is_none());
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "paused");
+}
+
+#[test]
+fn minutes_retry_chain_preserves_fixed_inputs_edits_and_durable_units_across_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let engine = normal_engine(root.path());
+    let mut request = request(&storage, true);
+    let baseline = minutes_ui::tests::candidate(&storage, &request.meeting_id);
+    storage
+        .adopt_minutes(minutes_ui::tests::request(
+            &storage,
+            &request.meeting_id,
+            &baseline,
+        ))
+        .unwrap();
+    let draft = storage
+        .create_minutes_draft(&request.meeting_id, &baseline)
+        .unwrap();
+    let mut content = draft.payload;
+    content
+        .blocks
+        .push(crate::minutes_document::Block::Paragraph {
+            item_id: None,
+            content: vec![crate::minutes_document::Inline::text("保持する手動編集")],
+        });
+    let minutes_edit = storage
+        .save_minutes_draft(&draft.id, draft.lock_version, content)
+        .unwrap();
+    request.expected_meeting_lock_version = storage
+        .get_meeting(&request.meeting_id)
+        .unwrap()
+        .unwrap()
+        .lock_version;
+    let original =
+        generation::enqueue(&storage, request.clone(), engine, "standard", 2400).unwrap();
+    let fixed_input = storage.load_minutes_input(&original.id).unwrap();
+    pause_at(&storage, &original, 1);
+    let source = storage
+        .finish_job(&original.id, 1, "failed", Some("fixture_failure"))
+        .unwrap();
+    let (spec, checkpoint) = storage.fixed_job_input(&source.id).unwrap();
+    let mut transcript = storage
+        .load_transcript_draft(&request.meeting_id)
+        .unwrap()
+        .unwrap();
+    transcript.payload.utterances.push(drafts::UtteranceEdit {
+        utterance_id: storage
+            .load_current_analysis(&request.meeting_id)
+            .unwrap()
+            .unwrap()
+            .utterances[0]
+            .id
+            .clone(),
+        effective_text: "unused".into(),
+        speaker_ids: vec![],
+    });
+    let transcript_edit = storage
+        .save_transcript_draft(&transcript.id, transcript.lock_version, transcript.payload)
+        .unwrap();
+    let child = retry_request(&source, "retry-2").enqueue(&storage).unwrap();
+    assert_eq!(child.completed_units, 1);
+    assert_eq!(child.attempt, 2);
+    assert_eq!(child.retry_of_job_id.as_deref(), Some(source.id.as_str()));
+    assert_ne!(child.spec_hash, source.spec_hash);
+    let (child_spec, inherited) = storage.fixed_job_input(&child.id).unwrap();
+    assert_eq!(child_spec.parameters, spec.parameters);
+    assert_eq!(child_spec.profile_snapshot, spec.profile_snapshot);
+    assert_eq!(child_spec.input_analysis_id, spec.input_analysis_id);
+    assert_eq!(inherited, checkpoint);
+    assert_eq!(storage.load_minutes_input(&child.id).unwrap(), fixed_input);
+    assert_eq!(
+        storage.fixed_job_initial_operation(&child.id).unwrap(),
+        request.operation_id
+    );
+    assert_eq!(
+        retry_request(&source, "retry-2").enqueue(&storage).unwrap(),
+        child
+    );
+    assert!(retry_request(&source, "competing-retry")
+        .enqueue(&storage)
+        .is_err());
+    assert_eq!(calls(root.path()), 1);
+    pause_at(&storage, &child, 2);
+    let child = storage
+        .finish_job(&child.id, 2, "failed", Some("fixture_failure"))
+        .unwrap();
+    let third = retry_request(&child, "retry-3").enqueue(&storage).unwrap();
+    assert_eq!(third.attempt, 3);
+    assert_eq!(third.completed_units, 2);
+    assert_eq!(
+        storage.fixed_job_initial_operation(&third.id).unwrap(),
+        request.operation_id
+    );
+    drop(storage);
+    let storage = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        storage.acquire_local_inference_job().unwrap().unwrap().id,
+        third.id
+    );
+    let result = generation::process(&storage, &third.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage.get_job(&third.id).unwrap().state, "succeeded");
+    assert_eq!(calls(root.path()) as i64, original.total_units.unwrap());
+    assert_eq!(storage.get_job(&source.id).unwrap(), source);
+    assert_eq!(storage.get_job(&child.id).unwrap(), child);
+    assert_eq!(
+        storage
+            .load_transcript_draft(&request.meeting_id)
+            .unwrap()
+            .unwrap(),
+        transcript_edit
+    );
+    assert_eq!(
+        storage
+            .load_minutes_draft(&request.meeting_id, Some(&baseline))
+            .unwrap()
+            .unwrap(),
+        minutes_edit
+    );
+    assert_eq!(
+        current_minutes(&storage, &request.meeting_id),
+        Some(baseline)
+    );
+    assert!(storage
+        .minutes_versions(&request.meeting_id)
+        .unwrap()
+        .versions
+        .iter()
+        .any(|v| v.id == result && v.publication_state == "candidate" && v.input_updated));
+}
+
+#[test]
+fn cancelled_fully_checkpointed_minutes_retry_does_not_rerun_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let job = generation::enqueue(
+        &storage,
+        request(&storage, false),
+        normal_engine(root.path()),
+        "standard",
+        2400,
+    )
+    .unwrap();
+    pause_at(&storage, &job, job.total_units.unwrap());
+    let source = storage
+        .finish_job(&job.id, job.total_units.unwrap(), "cancelled", None)
+        .unwrap();
+    let count = calls(root.path());
+    let next = retry_request(&source, "retry-complete")
+        .enqueue(&storage)
+        .unwrap();
+    storage.acquire_local_inference_job().unwrap();
+    assert!(generation::process(&storage, &next.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    assert_eq!(calls(root.path()), count);
+    assert!(current_minutes(&storage, &job.meeting_id).is_none());
+}
+
+#[test]
+fn minutes_retry_rejects_changed_models_artifacts_and_stale_identity_without_writes() {
+    for change in [
+        "model",
+        "executable",
+        "normalized",
+        "result",
+        "prompt",
+        "meeting",
+        "spec",
+        "state",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let job = generation::enqueue(
+            &storage,
+            request(&storage, true),
+            normal_engine(root.path()),
+            "standard",
+            2400,
+        )
+        .unwrap();
+        pause_at(&storage, &job, 1);
+        let source = if change == "state" {
+            storage.get_job(&job.id).unwrap()
+        } else {
+            storage
+                .finish_job(&job.id, 1, "failed", Some("fixture_failure"))
+                .unwrap()
+        };
+        let mut retry = retry_request(&source, "rejected-retry");
+        match change {
+            "model" => std::fs::write(root.path().join("model.gguf"), b"changed").unwrap(),
+            "executable" => {
+                std::fs::write(root.path().join("llama-completion"), b"changed").unwrap()
+            }
+            "meeting" => retry.meeting_id = storage.create_meeting("wrong meeting").unwrap().id,
+            "spec" => retry.expected_spec_hash = "changed".into(),
+            "state" => {}
+            _ => {
+                let (_, cp) = storage.fixed_job_input(&job.id).unwrap();
+                let cp = cp.unwrap();
+                let id = match change {
+                    "normalized" => &cp["outputs"][0]["normalized"]["id"],
+                    "result" => &cp["outputs"][0]["artifacts"][3]["id"],
+                    _ => &cp["outputs"][0]["artifacts"][1]["id"],
+                }
+                .as_str()
+                .unwrap();
+                let path: String = storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT relative_path FROM file_assets WHERE id=?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                std::fs::write(root.path().join(path), b"[]").unwrap();
+            }
+        }
+        let jobs = storage.list_jobs(&job.meeting_id).unwrap();
+        assert!(retry.enqueue(&storage).is_err(), "{change}");
+        assert_eq!(storage.list_jobs(&job.meeting_id).unwrap(), jobs);
+        assert_eq!(calls(root.path()), 1);
+        assert!(current_minutes(&storage, &job.meeting_id).is_none());
+    }
+}
+
+#[test]
+fn minutes_retry_checkpoint_copy_failure_is_atomic() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let job = generation::enqueue(
+        &storage,
+        request(&storage, true),
+        normal_engine(root.path()),
+        "standard",
+        2400,
+    )
+    .unwrap();
+    pause_at(&storage, &job, 1);
+    let source = storage
+        .finish_job(&job.id, 1, "failed", Some("fixture_failure"))
+        .unwrap();
+    let jobs = storage.list_jobs(&job.meeting_id).unwrap();
+    storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER fixture_retry_abort BEFORE INSERT ON job_checkpoints BEGIN SELECT RAISE(ABORT,'fixture checkpoint failure'); END;").unwrap();
+    assert!(retry_request(&source, "atomic-retry")
+        .enqueue(&storage)
+        .is_err());
+    assert_eq!(storage.list_jobs(&job.meeting_id).unwrap(), jobs);
+    assert_eq!(calls(root.path()), 1);
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fixture_retry_abort;")
+        .unwrap();
+    assert_eq!(
+        retry_request(&source, "atomic-retry")
+            .enqueue(&storage)
+            .unwrap()
+            .completed_units,
+        1
+    );
+}
+
 #[test]
 fn generation_reopens_and_resumes_only_durable_units_and_preserves_source_edits() {
     let root = tempfile::tempdir().unwrap();
@@ -390,7 +680,8 @@ fn real_llama_worker_saves_candidate_and_reuses_completed_results() {
         gpu_layers: 0,
         seed: 1,
     };
-    let job = generation::enqueue(&storage, request.clone(), engine, "standard", 5400).unwrap();
+    let job =
+        generation::enqueue(&storage, request.clone(), engine.clone(), "standard", 5400).unwrap();
     assert_eq!(job.total_units, Some(1));
     storage.acquire_local_inference_job().unwrap();
     println!("real llama worker synthetic fixture: {}", root.display());
@@ -432,5 +723,37 @@ fn real_llama_worker_saves_candidate_and_reuses_completed_results() {
             .id,
         request.expected_analysis_id
     );
+    let retry_source = generation::enqueue(
+        &storage,
+        MinutesJobRequest {
+            operation_id: Uuid::new_v4().to_string(),
+            ..request.clone()
+        },
+        engine,
+        "standard",
+        5400,
+    )
+    .unwrap();
+    pause_at(&storage, &retry_source, 1);
+    let cancelled = storage
+        .finish_job(&retry_source.id, 1, "cancelled", None)
+        .unwrap();
+    let checkpoint = storage.fixed_job_input(&cancelled.id).unwrap().1;
+    let retry = retry_request(&cancelled, &Uuid::new_v4().to_string())
+        .enqueue(&storage)
+        .unwrap();
+    assert_eq!(storage.fixed_job_input(&retry.id).unwrap().1, checkpoint);
+    storage.acquire_local_inference_job().unwrap();
+    assert!(generation::process(&storage, &retry.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    let retry_units = root
+        .join("meetings")
+        .join(&request.meeting_id)
+        .join("analysis")
+        .join(&retry.id);
+    assert!(!retry_units.exists());
+    assert_eq!(storage.get_job(&cancelled.id).unwrap(), cancelled);
+    assert!(current_minutes(&storage, &request.meeting_id).is_none());
     println!("real llama worker: {} unverified items, durable unit reused without another CLI result directory",view.content.items.len());
 }

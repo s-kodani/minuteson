@@ -21,6 +21,7 @@ async (page) => {
     data.history = { a: [] }; data.failMinutesSave = false; data.minutesSaveDelay = 0;
     data.exports=[];data.exportMode="cancel";data.exportDelay=0;data.exportActive=false;data.lostExportResponse=false;
     data.evidenceDelay=0;data.failEvidence=false;data.corruptEvidence=false;data.playbacks={};
+    data.failMinutesRetry=false;data.lostMinutesRetryResponse=false;
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
@@ -110,6 +111,18 @@ async (page) => {
         if (cmd === "start_minutes_generation") {
           if(args.request.input.expectedDraft.lockVersion!==data.td.lockVersion||args.request.input.expectedMeetingLockVersion!==data.lock) throw Error("stale input");
           const j={id:"job",meetingId:"m1",operationId:args.request.input.operationId,kind:"minutes_generation",state:"queued",completedUnits:0,totalUnits:3,errorCode:null,pauseReason:null,specHash:"spec",outputAnalysisId:null,outputMinutesId:null,retryOfJobId:null,attempt:1};data.jobs.push(j);emit("analysis-job-changed",j);return copy(j);
+        }
+        if (cmd === "retry_minutes_generation") {
+          const r=args.request, source=data.jobs.find(j=>j.id===r.jobId);
+          if(!source||source.meetingId!==r.meetingId||source.specHash!==r.expectedSpecHash||source.kind!=="minutes_generation"||!["failed","cancelled"].includes(source.state))throw Error("stale retry source");
+          if(data.failMinutesRetry)throw Error("模擬固定モデル・完了結果検証失敗");
+          const prior=data.jobs.find(j=>j.operationId===r.operationId);
+          if(prior){if(prior.retryOfJobId!==source.id)throw Error("operation reused");return copy(prior);}
+          if(data.jobs.some(j=>j.retryOfJobId===source.id&&["queued","running","pausing","paused","interrupted"].includes(j.state)))throw Error("unfinished retry");
+          const next={...copy(source),id:`retry-${++sequence}`,operationId:r.operationId,retryOfJobId:source.id,attempt:source.attempt+1,state:"queued",errorCode:null,pauseReason:null,specHash:`retry-spec-${sequence}`,outputMinutesId:null};
+          data.jobs.unshift(next);emit("analysis-job-changed",next);
+          if(data.lostMinutesRetryResponse){data.lostMinutesRetryResponse=false;throw Error("模擬再試行応答喪失");}
+          return copy(next);
         }
         if (["pause_analysis_job","resume_analysis_job","cancel_analysis_job"].includes(cmd)) { const j=data.jobs.find(j=>j.id===args.jobId); j.state=cmd==="pause_analysis_job"?"paused":cmd==="resume_analysis_job"?"running":"cancelled";emit("analysis-job-changed",j);return copy(j); }
         if (cmd === "adopt_minutes_candidate" || cmd === "restore_minutes_version") {

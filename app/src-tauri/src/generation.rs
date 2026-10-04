@@ -45,6 +45,44 @@ impl StartRequest {
         )
     }
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RetryRequest {
+    pub meeting_id: String,
+    pub job_id: String,
+    pub operation_id: String,
+    pub expected_spec_hash: String,
+}
+impl RetryRequest {
+    pub(crate) fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
+        let original = storage.get_job(&self.job_id)?;
+        if original.meeting_id != self.meeting_id || original.spec_hash != self.expected_spec_hash {
+            return Err("確認した議事録再試行の会議・固定条件が一致しません".into());
+        }
+        if original.kind != "minutes_generation"
+            || !matches!(original.state.as_str(), "failed" | "cancelled")
+        {
+            return Err("失敗・取消済みの議事録生成だけ再試行できます".into());
+        }
+        // Keep a new attempt within the bounded lineage verification limit.
+        if original.attempt >= 1000 {
+            return Err("議事録再試行の試行数上限に達しています。新たに生成してください".into());
+        }
+        let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
+        let input = storage.load_minutes_input(&original.id)?;
+        let initial_operation = storage.fixed_job_initial_operation(&original.id)?;
+        let p = checked_parameters(&spec, &input, &initial_operation)?;
+        let decoded = checked_checkpoint(&original, &p, checkpoint.clone())?;
+        p.engine.verify(&|| false)?;
+        verify_saved_outputs(storage, &spec, &input, &p, &decoded, &|| false)?
+            .ok_or("議事録再試行の検証が中断されました")?;
+        p.engine.verify(&|| false)?;
+        if storage.load_minutes_input(&original.id)? != input {
+            return Err("検証中に議事録の固定入力が変更されました".into());
+        }
+        storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
@@ -120,7 +158,11 @@ pub(crate) fn enqueue(
         ))
     })
 }
-fn checked_parameters(spec: &JobSpec, input: &MinutesInput) -> Result<Parameters, String> {
+fn checked_parameters(
+    spec: &JobSpec,
+    input: &MinutesInput,
+    initial_operation: &str,
+) -> Result<Parameters, String> {
     let envelope: Envelope =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let p = envelope.generation;
@@ -132,7 +174,7 @@ fn checked_parameters(spec: &JobSpec, input: &MinutesInput) -> Result<Parameters
         || p.schema_version != 1
         || p.template_version != TEMPLATE_VERSION
         || envelope.request.meeting_id != spec.meeting_id
-        || envelope.request.operation_id != spec.operation_id
+        || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
         || spec.profile_snapshot != profile(&p.engine, name)
         || p.prompt_budget > budget(&p.engine)?
@@ -239,17 +281,12 @@ fn read_artifact(storage: &Storage, meeting: &str, artifact: &Artifact) -> Resul
         2 * 1024 * 1024,
     )
 }
-pub(crate) fn process(
-    storage: &Storage,
-    job_id: &str,
-    stopping: &impl Fn() -> bool,
-    progress: &impl Fn(JobSnapshot),
-) -> Result<Option<String>, String> {
-    let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
-    let input = storage.load_minutes_input(job_id)?;
-    let p = checked_parameters(&spec, &input)?;
-    let job = storage.get_job(job_id)?;
-    let mut checkpoint: Checkpoint = checkpoint
+fn checked_checkpoint(
+    job: &JobSnapshot,
+    p: &Parameters,
+    value: Option<Value>,
+) -> Result<Checkpoint, String> {
+    let checkpoint: Checkpoint = value
         .map(serde_json::from_value)
         .transpose()
         .map_err(|e| e.to_string())?
@@ -264,6 +301,76 @@ pub(crate) fn process(
     {
         return Err("議事録の再開位置が固定計画と一致しません".into());
     }
+    Ok(checkpoint)
+}
+fn verify_saved_outputs(
+    storage: &Storage,
+    spec: &JobSpec,
+    input: &MinutesInput,
+    p: &Parameters,
+    checkpoint: &Checkpoint,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<Vec<Vec<GeneratedItem>>>, String> {
+    let mut outputs = vec![];
+    for saved in &checkpoint.outputs {
+        if cancelled() {
+            return Ok(None);
+        }
+        let task = task(input, &p.plan.nodes[saved.index], &outputs, p)?;
+        let expected = [
+            ("system.txt", task.system.as_bytes().to_vec()),
+            ("prompt.txt", task.prompt.as_bytes().to_vec()),
+            (
+                "schema.json",
+                serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
+            ),
+        ];
+        if saved.artifacts.len() != 4 || saved.normalized.name != "items.json" {
+            return Err("議事録の完了結果ファイルが不足しています".into());
+        }
+        for (artifact, (name, bytes)) in saved.artifacts[..3].iter().zip(expected) {
+            if artifact.name != name || read_artifact(storage, &spec.meeting_id, artifact)? != bytes
+            {
+                return Err("議事録の固定プロンプト・schemaが変更されています".into());
+            }
+        }
+        if saved.artifacts[3].name != "result.json" {
+            return Err("議事録の完了結果形式が不正です".into());
+        }
+        let raw = llama::parse_output(&read_artifact(
+            storage,
+            &spec.meeting_id,
+            &saved.artifacts[3],
+        )?)?;
+        if task.local.is_some_and(|local| local != raw) {
+            return Err("議事録のローカル確定処理が変更されています".into());
+        }
+        let items = parse_node(raw, input, &p.plan.nodes[saved.index], &outputs)?;
+        let normalized: Vec<GeneratedItem> = serde_json::from_slice(&read_artifact(
+            storage,
+            &spec.meeting_id,
+            &saved.normalized,
+        )?)
+        .map_err(|e| e.to_string())?;
+        if normalized != items {
+            return Err("議事録の保存項目と生成原文が一致しません".into());
+        }
+        outputs.push(items);
+    }
+
+    Ok(Some(outputs))
+}
+pub(crate) fn process(
+    storage: &Storage,
+    job_id: &str,
+    stopping: &impl Fn() -> bool,
+    progress: &impl Fn(JobSnapshot),
+) -> Result<Option<String>, String> {
+    let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
+    let input = storage.load_minutes_input(job_id)?;
+    let p = checked_parameters(&spec, &input, &storage.fixed_job_initial_operation(job_id)?)?;
+    let job = storage.get_job(job_id)?;
+    let mut checkpoint = checked_checkpoint(&job, &p, checkpoint)?;
     let cancelled = || {
         stopping()
             || storage
@@ -272,53 +379,11 @@ pub(crate) fn process(
     };
     let attempt = (|| {
         p.engine.verify(&cancelled)?;
-        let mut outputs = vec![];
-        for saved in &checkpoint.outputs {
-            if cancelled() {
-                return Ok(None);
-            }
-            let task = task(&input, &p.plan.nodes[saved.index], &outputs, &p)?;
-            let expected = [
-                ("system.txt", task.system.as_bytes().to_vec()),
-                ("prompt.txt", task.prompt.as_bytes().to_vec()),
-                (
-                    "schema.json",
-                    serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
-                ),
-            ];
-            if saved.artifacts.len() != 4 || saved.normalized.name != "items.json" {
-                return Err("議事録の完了結果ファイルが不足しています".into());
-            }
-            for (artifact, (name, bytes)) in saved.artifacts[..3].iter().zip(expected) {
-                if artifact.name != name
-                    || read_artifact(storage, &spec.meeting_id, artifact)? != bytes
-                {
-                    return Err("議事録の固定プロンプト・schemaが変更されています".into());
-                }
-            }
-            if saved.artifacts[3].name != "result.json" {
-                return Err("議事録の完了結果形式が不正です".into());
-            }
-            let raw = llama::parse_output(&read_artifact(
-                storage,
-                &spec.meeting_id,
-                &saved.artifacts[3],
-            )?)?;
-            if task.local.is_some_and(|local| local != raw) {
-                return Err("議事録のローカル確定処理が変更されています".into());
-            }
-            let items = parse_node(raw, &input, &p.plan.nodes[saved.index], &outputs)?;
-            let normalized: Vec<GeneratedItem> = serde_json::from_slice(&read_artifact(
-                storage,
-                &spec.meeting_id,
-                &saved.normalized,
-            )?)
-            .map_err(|e| e.to_string())?;
-            if normalized != items {
-                return Err("議事録の保存項目と生成原文が一致しません".into());
-            }
-            outputs.push(items);
-        }
+        let Some(mut outputs) =
+            verify_saved_outputs(storage, &spec, &input, &p, &checkpoint, &cancelled)?
+        else {
+            return Ok(None);
+        };
         for index in checkpoint.outputs.len()..p.plan.nodes.len() {
             if cancelled() {
                 return Ok(None);

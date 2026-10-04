@@ -401,6 +401,48 @@ impl Storage {
         Ok(next)
     }
 
+    // Retry parameters remain byte-for-byte fixed, including the original
+    // generation request's operation ID. Resolve it through verified lineage,
+    // rather than weakening the envelope's operation binding.
+    pub(crate) fn fixed_job_initial_operation(&self, job_id: &str) -> Result<String, String> {
+        let mut db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        let (fixed, _) = read_fixed_input(&tx, job_id)?;
+        let mut current = load_job(&tx, job_id)?.ok_or("処理がありません")?;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            if !seen.insert(current.id.clone()) || seen.len() > 1000 {
+                return Err("再試行の由来が循環しているか長すぎます".into());
+            }
+            let Some(parent_id) = current.retry_of_job_id.as_deref() else {
+                if current.attempt != 1 {
+                    return Err("元の試行番号が不正です".into());
+                }
+                return Ok(current.operation_id);
+            };
+            let parent = load_job(&tx, parent_id)?.ok_or("再試行元がありません")?;
+            let (spec, _) = read_fixed_input(&tx, parent_id)?;
+            if parent.attempt.checked_add(1) != Some(current.attempt)
+                || !matches!(parent.state.as_str(), "failed" | "cancelled")
+                || spec.meeting_id != fixed.meeting_id
+                || spec.kind != fixed.kind
+                || spec.input_analysis_id != fixed.input_analysis_id
+                || spec.input_hash != fixed.input_hash
+                || spec.profile_snapshot != fixed.profile_snapshot
+                || spec.parameters != fixed.parameters
+                || spec.total_units != fixed.total_units
+            {
+                return Err("再試行の固定条件または由来が一致しません".into());
+            }
+            current = parent;
+        }
+    }
+
     pub(crate) fn request_job_pause(
         &self,
         job_id: &str,

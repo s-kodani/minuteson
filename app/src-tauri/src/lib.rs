@@ -431,6 +431,21 @@ async fn retry_transcription(
 }
 
 #[tauri::command]
+async fn retry_minutes_generation(
+    window: WebviewWindow,
+    request: generation::RetryRequest,
+) -> Result<storage::JobSnapshot, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn pause_analysis_job(
     window: WebviewWindow,
     job_id: String,
@@ -859,6 +874,7 @@ pub fn run() {
             restore_minutes_version,
             get_analysis_jobs,
             retry_transcription,
+            retry_minutes_generation,
             pause_analysis_job,
             resume_analysis_job,
             cancel_analysis_job,
