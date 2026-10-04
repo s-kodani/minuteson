@@ -7,7 +7,7 @@ use crate::transcription::{
 };
 use std::os::unix::fs::PermissionsExt;
 
-fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
+pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
     let storage = Storage::open(root.to_owned()).unwrap();
     let meeting = storage.create_meeting("解析結合テスト").unwrap();
     let relative = PathBuf::from("meetings").join(&meeting.id).join("audio");
@@ -340,7 +340,7 @@ fn v15_legacy_transcription_migrates_and_retries_without_new_vocabulary() {
         )
         .unwrap();
     }
-    storage.connection.lock().unwrap().execute_batch("DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DELETE FROM schema_migrations WHERE version=16;").unwrap();
+    storage.connection.lock().unwrap().execute_batch("DROP TABLE diarization_manual_assignments; DROP TRIGGER job_analysis_result_insert; DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DELETE FROM schema_migrations WHERE version>=16;").unwrap();
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
     assert_eq!(
@@ -377,7 +377,7 @@ fn v15_legacy_transcription_migrates_and_retries_without_new_vocabulary() {
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        16
+        17
     );
     assert_eq!(
         db.query_row("SELECT COUNT(*) FROM vocabulary_snapshots", [], |r| r

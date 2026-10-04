@@ -211,6 +211,16 @@ impl Storage {
         self.create_analysis_candidate_inner(meeting_id, input, Some((job_id, completed_units)))
     }
 
+    pub(crate) fn finish_diarization_candidate(
+        &self,
+        meeting: &str,
+        job: &str,
+        completed: i64,
+        input: AnalysisInput,
+    ) -> Result<String, String> {
+        self.create_analysis_candidate_inner(meeting, input, Some((job, completed)))
+    }
+
     fn create_analysis_candidate_inner(
         &self,
         meeting_id: &str,
@@ -238,10 +248,55 @@ impl Storage {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let mut fixed_source = None;
         if let Some((job_id, completed_units)) = job {
+            let (spec, _) = super::jobs::read_fixed_input(&transaction, job_id)?;
+            if spec.kind == JobKind::Diarization {
+                let source = super::diarization::read_input(&transaction, &spec)?;
+                if input.audio_manifest_hash != source.audio_manifest_hash
+                    || input.config["jobId"] != job_id
+                    || input.config["inputAnalysisId"] != source.analysis.id
+                    || input.config["inputContentHash"] != spec.input_hash
+                    || input.utterances.len() != source.analysis.utterances.len()
+                {
+                    return Err("話者分離の候補と固定入力が一致しません".into());
+                }
+                for (utterance, original) in
+                    input.utterances.iter().zip(&source.analysis.utterances)
+                {
+                    if utterance.track_id != original.track_id
+                        || utterance.start_us != original.start_us
+                        || utterance.end_us != original.end_us
+                        || utterance.text != original.recognized_text
+                    {
+                        return Err("話者分離は元の認識本文・時刻を変更できません".into());
+                    }
+                    if source.manual_utterances.contains(&original.id)
+                        && utterance.speaker_keys
+                            != original
+                                .speaker_ids
+                                .iter()
+                                .map(|id| super::diarization::prior_speaker_key(id))
+                                .collect::<Vec<_>>()
+                    {
+                        return Err("手動の話者割り当ては保持する必要があります".into());
+                    }
+                }
+                for original in &source.analysis.speakers {
+                    if !input.speakers.iter().any(|s| {
+                        s.key == super::diarization::prior_speaker_key(&original.id)
+                            && s.label == original.label
+                    }) {
+                        return Err("既存の話者名・ラベルを保持する必要があります".into());
+                    }
+                }
+                fixed_source = Some(source);
+            } else if spec.kind != JobKind::Transcription {
+                return Err("未対応の解析候補ジョブです".into());
+            }
             let valid: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id = ?1 AND meeting_id = ?2 AND kind = 'transcription' AND state = 'running' AND completed_units = ?3 AND total_units = ?3 AND input_hash = ?4 AND profile_snapshot_json = ?5 AND output_analysis_id IS NULL)",
-                params![job_id, meeting_id, completed_units, input.audio_manifest_hash, profile], |row| row.get(0),
+                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id = ?1 AND meeting_id = ?2 AND kind IN ('transcription','diarization') AND state = 'running' AND completed_units = ?3 AND total_units = ?3 AND input_hash = ?4 AND profile_snapshot_json = ?5 AND output_analysis_id IS NULL)",
+                params![job_id, meeting_id, completed_units, if fixed_source.is_some() { &spec.input_hash } else { &input.audio_manifest_hash }, profile], |row| row.get(0),
             ).map_err(|e| e.to_string())?;
             if !valid {
                 return Err("解析ジョブの状態・入力・完了位置が一致しません".into());
@@ -333,13 +388,17 @@ impl Storage {
                 return Err("発言の話者割り当てが不正です".into());
             }
         }
-        let (parent_id, parent_hash): (Option<String>, Option<String>) = transaction
+        let (mut parent_id, mut parent_hash): (Option<String>, Option<String>) = transaction
             .query_row(
                 "SELECT a.id, a.content_hash FROM meetings m LEFT JOIN analysis_revisions a ON a.id = m.current_analysis_id WHERE m.id = ?1",
                 params![meeting_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
+        if let Some(source) = &fixed_source {
+            parent_id = Some(source.parent_id.clone());
+            parent_hash = Some(source.parent_hash.clone());
+        }
         if let (Some(parent_id), Some(parent_hash)) = (&parent_id, &parent_hash) {
             if super::revisions::analysis_content_hash(&transaction, parent_id)? != *parent_hash {
                 return Err("現在の解析版の内容が変化しています".into());
@@ -361,9 +420,38 @@ impl Storage {
         let mut speaker_ids = HashMap::new();
         for speaker in &input.speakers {
             let speaker_id = Uuid::new_v4().to_string();
+            let prior = fixed_source.as_ref().and_then(|source| {
+                source
+                    .analysis
+                    .speakers
+                    .iter()
+                    .find(|s| speaker.key == super::diarization::prior_speaker_key(&s.id))
+            });
+            let lineage = if let (Some(source), Some(prior)) = (&fixed_source, prior) {
+                &source.speaker_lineages[&prior.id]
+            } else {
+                &speaker_id
+            };
+            let name = prior.and_then(|s| s.display_name.as_deref());
+            let (scope, identification) = if let Some(prior) = prior {
+                transaction
+                    .query_row(
+                        "SELECT input_scope, identification_state FROM speakers WHERE id=?1 AND analysis_revision_id=?2",
+                        params![prior.id, fixed_source.as_ref().unwrap().analysis.id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                    )
+                    .map_err(|e| e.to_string())?
+            } else if fixed_source.is_some() {
+                (
+                    speaker.key.split(':').next().unwrap_or("all").into(),
+                    "unknown".into(),
+                )
+            } else {
+                ("all".into(), "unknown".into())
+            };
             transaction.execute(
-                "INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, input_scope, identification_state, created_at) VALUES (?1, ?2, ?1, ?3, 'all', 'unknown', ?4)",
-                params![speaker_id, id, speaker.label, now],
+                "INSERT INTO speakers (id, analysis_revision_id, lineage_id, label, display_name, input_scope, identification_state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![speaker_id, id, lineage, speaker.label, name, scope, identification, now],
             ).map_err(|e| e.to_string())?;
             speaker_ids.insert(&speaker.key, speaker_id);
         }
@@ -376,19 +464,52 @@ impl Storage {
         }
         for (sequence, utterance) in input.utterances.iter().enumerate() {
             let utterance_id = Uuid::new_v4().to_string();
+            let original = fixed_source
+                .as_ref()
+                .map(|s| &s.analysis.utterances[sequence]);
+            let lineage = if let (Some(source), Some(original)) = (&fixed_source, original) {
+                &source.utterance_lineages[&original.id]
+            } else {
+                &utterance_id
+            };
+            let effective = original.map_or(utterance.text.trim(), |u| u.effective_text.as_str());
+            let recognized = original.map_or(utterance.text.trim(), |u| u.recognized_text.as_str());
+            // Diarization does not replace the ASR recognition confidence.
+            // Its own speaker intervals carry only native values (or NULL).
+            let confidence =
+                if let Some(original) = original {
+                    transaction.query_row(
+                    "SELECT confidence FROM utterances WHERE id=?1 AND analysis_revision_id=?2",
+                    params![original.id, fixed_source.as_ref().unwrap().analysis.id],
+                    |r| r.get::<_, Option<f64>>(0),
+                ).map_err(|e|e.to_string())?
+                } else {
+                    utterance.confidence
+                };
+            let assignment_source = if original.is_some_and(|u| {
+                fixed_source
+                    .as_ref()
+                    .unwrap()
+                    .manual_utterances
+                    .contains(&u.id)
+            }) {
+                "manual"
+            } else {
+                "inferred"
+            };
             let attribution = match utterance.speaker_keys.len() {
                 0 => "unknown",
                 1 => "assigned",
                 _ => "overlap",
             };
             transaction.execute(
-                "INSERT INTO utterances (id, meeting_id, analysis_revision_id, track_id, lineage_id, sequence, start_us, end_us, recognized_text, effective_text, attribution_state, confidence) VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?6, ?7, ?8, ?8, ?9, ?10)",
-                params![utterance_id, meeting_id, id, utterance.track_id, sequence as i64, utterance.start_us, utterance.end_us, utterance.text.trim(), attribution, utterance.confidence],
+                "INSERT INTO utterances (id, meeting_id, analysis_revision_id, track_id, lineage_id, sequence, start_us, end_us, recognized_text, effective_text, attribution_state, confidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![utterance_id, meeting_id, id, utterance.track_id, lineage, sequence as i64, utterance.start_us, utterance.end_us, recognized, effective, attribution, confidence],
             ).map_err(|e| e.to_string())?;
             for (index, key) in utterance.speaker_keys.iter().enumerate() {
                 transaction.execute(
-                    "INSERT INTO utterance_speakers (utterance_id, speaker_id, analysis_revision_id, role, assignment_source) VALUES (?1, ?2, ?3, ?4, 'inferred')",
-                    params![utterance_id, speaker_ids[key], id, if index == 0 { "primary" } else { "overlap" }],
+                    "INSERT INTO utterance_speakers (utterance_id, speaker_id, analysis_revision_id, role, assignment_source) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![utterance_id, speaker_ids[key], id, if index == 0 { "primary" } else { "overlap" }, assignment_source],
                 ).map_err(|e| e.to_string())?;
             }
         }

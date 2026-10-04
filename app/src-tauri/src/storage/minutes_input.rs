@@ -202,7 +202,7 @@ pub(super) fn input_updated(
     Ok(working_hash(&tx, &view, &title, created_at, started_at)? != fixed.working_content_hash)
 }
 
-fn current_working(
+pub(super) fn current_working(
     tx: &Transaction<'_>,
     meeting: &str,
 ) -> Result<
@@ -236,7 +236,7 @@ fn current_working(
     Ok((view, draft, title, created_at, started_at))
 }
 
-fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayload) {
+pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayload) {
     for edit in &payload.speaker_names {
         if let Some(speaker) = view.speakers.iter_mut().find(|s| s.id == edit.speaker_id) {
             speaker.display_name = edit.display_name.clone();
@@ -263,7 +263,7 @@ fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayload) {
 
 // Stable lineage IDs allow comparison with the edited source despite remapped
 // snapshot IDs. Only fields consumed by generation participate in this hash.
-fn working_hash(
+pub(super) fn working_hash(
     connection: &Connection,
     view: &AnalysisView,
     title: &str,
@@ -314,7 +314,7 @@ fn working_hash(
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn lineage_map(
+pub(super) fn lineage_map(
     connection: &Connection,
     table: &str,
     analysis_id: &str,
@@ -331,7 +331,7 @@ fn lineage_map(
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
-fn copy_snapshot(
+pub(super) fn copy_snapshot(
     tx: &Transaction<'_>,
     source: &AnalysisView,
     payload: &TranscriptDraftPayload,

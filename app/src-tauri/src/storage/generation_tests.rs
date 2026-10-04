@@ -1055,10 +1055,10 @@ fn blank_generation_is_local_and_scheduler_skips_unsupported_engines() {
     let unsupported = storage
         .enqueue_job(JobSpec {
             meeting_id: request.meeting_id.clone(),
-            kind: JobKind::Diarization,
+            kind: JobKind::TranscriptCleanup,
             operation_id: Uuid::new_v4().to_string(),
-            input_analysis_id: None,
-            input_hash: "a".repeat(64),
+            input_analysis_id: Some(request.expected_analysis_id.clone()),
+            input_hash: request.expected_content_hash.clone(),
             profile_snapshot: serde_json::json!({}),
             parameters: serde_json::json!({}),
             total_units: Some(1),

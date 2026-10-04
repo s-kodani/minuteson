@@ -75,7 +75,7 @@ impl SherpaConfig {
     // Source protocol (including config echo):
     // sherpa-onnx/csrc/{offline-speaker-diarization,fast-clustering-config}.cc
     // A changed CLI protocol must be explicitly supported, not guessed.
-    fn expected_header(&self, num_speakers: Option<u32>) -> String {
+    pub(crate) fn expected_header(&self, num_speakers: Option<u32>) -> String {
         format!(
             "OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationModelConfig(pyannote=OfflineSpeakerSegmentationPyannoteModelConfig(model=\"{}\", window_shift_ratio={}), num_threads={}, debug=False, provider=\"cpu\"), embedding=SpeakerEmbeddingExtractorConfig(model=\"{}\", num_threads={}, debug=False, provider=\"cpu\"), clustering=FastClusteringConfig(num_clusters={}, threshold={}, compute_confidence=False), min_duration_on={}, min_duration_off={})",
             self.segmentation_model.path.display(), decimal(self.window_shift_milli),

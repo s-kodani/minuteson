@@ -137,7 +137,7 @@ impl Storage {
             return Ok(None);
         }
         let queued: Option<(String, String, Option<String>, String)> = transaction.query_row(
-            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) AND (?2 = 0 OR kind IN ('transcription','minutes_generation')) ORDER BY created_at, rowid LIMIT 1",
+            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) AND (?2 = 0 OR kind IN ('transcription','diarization','minutes_generation')) ORDER BY created_at, rowid LIMIT 1",
             params![kind.map(JobKind::as_str), local_only], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional().map_err(|error| error.to_string())?;
         let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
@@ -577,7 +577,7 @@ pub(super) fn enqueue_in_transaction(
     }
     if matches!(
         spec.kind,
-        JobKind::MinutesGeneration | JobKind::TranscriptCleanup
+        JobKind::MinutesGeneration | JobKind::TranscriptCleanup | JobKind::Diarization
     ) != spec.input_analysis_id.is_some()
     {
         return Err("処理種別と入力解析版が一致しません".into());

@@ -94,6 +94,12 @@ impl AnalysisController {
                             &stopping,
                             &|job| emit(app, job),
                         ),
+                        "diarization" => crate::diarization::process(
+                            &app.state::<Storage>(),
+                            &job.id,
+                            &stopping,
+                            &|job| emit(app, job),
+                        ),
                         _ => Err("未対応の解析工程です".into()),
                     };
                     if let Err(error) = result {
@@ -103,10 +109,10 @@ impl AnalysisController {
                                 &job.id,
                                 current.completed_units,
                                 "failed",
-                                Some(if job.kind == "minutes_generation" {
-                                    "minutes_generation_failed"
-                                } else {
-                                    "transcription_failed"
+                                Some(match job.kind.as_str() {
+                                    "minutes_generation" => "minutes_generation_failed",
+                                    "diarization" => "diarization_failed",
+                                    _ => "transcription_failed",
                                 }),
                             ) {
                                 emit(app, failed);

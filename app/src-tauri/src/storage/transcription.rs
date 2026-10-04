@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 #[cfg(all(test, unix))]
 #[path = "transcription_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -208,7 +208,12 @@ impl Storage {
         media_type: &str,
         limit: u64,
     ) -> Result<Vec<u8>, String> {
-        if limit == 0 || limit > 8 * 1024 * 1024 {
+        let maximum = if media_type == "text/plain" {
+            16 * 1024 * 1024
+        } else {
+            8 * 1024 * 1024
+        };
+        if limit == 0 || limit > maximum {
             return Err("解析結果の読出し上限が不正です".into());
         }
         let relative: String = self.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT relative_path FROM file_assets WHERE id = ?1 AND meeting_id = ?2 AND content_hash = ?3 AND state = 'ready' AND media_type = ?4 AND size_bytes <= ?5", params![asset_id, meeting_id, hash, media_type, limit as i64], |row| row.get(0)).map_err(|e| e.to_string())?;

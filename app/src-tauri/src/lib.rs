@@ -442,6 +442,58 @@ async fn start_transcription(
 }
 
 #[tauri::command]
+async fn start_diarization(
+    window: WebviewWindow,
+    request: diarization::StartRequest,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can start diarization".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn retry_diarization(
+    window: WebviewWindow,
+    request: diarization::RetryRequest,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can retry diarization".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue(&app.state::<Storage>())?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_diarization_tracks(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::RecordedAudioPlan, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read diarization tracks".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().recorded_audio_plan(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn get_analysis_jobs(
     window: WebviewWindow,
     meeting_id: String,
@@ -929,6 +981,9 @@ pub fn run() {
             close_playback,
             finish_main_close,
             start_transcription,
+            start_diarization,
+            retry_diarization,
+            get_diarization_tracks,
             start_minutes_generation,
             get_minutes_versions,
             get_minutes_exports,

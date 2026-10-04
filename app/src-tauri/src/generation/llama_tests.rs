@@ -147,21 +147,40 @@ fn failure_pause_timeout_and_log_overflow_never_return_a_result_and_reap_child()
         let (dir, config) = fake("printf '%s' \"$$\" > child.pid\nwhile :; do :; done");
         let path = unit(dir.path(), "running");
         let started = Instant::now();
+        let pause_requested = std::cell::Cell::new(None::<Instant>);
         let result = run_unit(
             &config,
             &path,
             "fixed",
             "input",
             &json!({}),
-            Duration::from_millis(250),
-            &|| pause && path.join("child.pid").exists(),
+            // Startup under parallel-test load is not cancellation latency.
+            // Keep the timeout test short, but let the pause fixture become
+            // ready before requesting its stop.
+            if pause {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_millis(250)
+            },
+            &|| {
+                let ready = pause
+                    && std::fs::read_to_string(path.join("child.pid"))
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .is_some_and(|pid| pid > 0);
+                if ready && pause_requested.get().is_none() {
+                    pause_requested.set(Some(Instant::now()));
+                }
+                ready
+            },
         );
         if pause {
             assert!(result.unwrap().is_none());
+            assert!(pause_requested.get().unwrap().elapsed() < Duration::from_secs(3));
         } else {
             assert!(result.unwrap_err().contains("制限時間"));
+            assert!(started.elapsed() < Duration::from_secs(3));
         }
-        assert!(started.elapsed() < Duration::from_secs(3));
         let pid = std::fs::read_to_string(path.join("child.pid")).unwrap();
         assert!(!Command::new("/bin/kill")
             .args(["-0", &pid])

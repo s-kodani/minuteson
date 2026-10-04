@@ -222,7 +222,7 @@ fn v14_database_migrates_without_changing_minutes_drafts_or_heads() {
     s.connection
         .lock()
         .unwrap()
-        .execute_batch("DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DROP TABLE export_records; DELETE FROM schema_migrations WHERE version>=15;")
+        .execute_batch("DROP TABLE diarization_manual_assignments; DROP TRIGGER job_analysis_result_insert; DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DROP TABLE export_records; DELETE FROM schema_migrations WHERE version>=15;")
         .unwrap();
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();
@@ -237,6 +237,6 @@ fn v14_database_migrates_without_changing_minutes_drafts_or_heads() {
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
                 .get::<_, i64>(0))
             .unwrap(),
-        16
+        17
     );
 }

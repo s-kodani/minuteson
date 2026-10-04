@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod analysis;
 mod analysis_ui;
+mod diarization;
 mod drafts;
 mod exports;
 #[cfg(all(test, unix))]
@@ -31,7 +32,9 @@ pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 #[cfg(test)]
 pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
+pub(crate) use analysis::{SpeakerInput, SpeakerSegmentInput};
 pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
+pub(crate) use diarization::DiarizationInput;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
@@ -68,6 +71,7 @@ const MIGRATION_13: &str = include_str!("migrations/0013_minutes_inputs.sql");
 const MIGRATION_14: &str = include_str!("migrations/0014_minutes_results.sql");
 const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
 const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
+const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -381,6 +385,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (14_i64, MIGRATION_14),
         (15_i64, MIGRATION_15),
         (16_i64, MIGRATION_16),
+        (17_i64, MIGRATION_17),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -576,7 +581,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 16);
+        assert_eq!(count, 17);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 
