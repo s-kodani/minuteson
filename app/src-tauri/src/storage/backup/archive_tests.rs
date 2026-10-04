@@ -117,6 +117,10 @@ fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstructi
         &|| false,
     )
     .unwrap()
+    .with_speech_artifacts(&fixed, &|| false)
+    .unwrap()
+    .with_generation_artifacts(&fixed, &|| false)
+    .unwrap()
     .with_processing_history(&fixed, &|| false)
     .unwrap()
     .with_provenance(&fixed, &|| false)

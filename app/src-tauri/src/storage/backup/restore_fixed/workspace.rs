@@ -1,12 +1,13 @@
-//! File-backed reconstruction, never a publishable or validated restore image.
+//! File-backed reconstruction; only seal::SealedWorkspace can pass to publication.
 //! Saved artifacts and processing history have consuming construction passes.
-//! Durable provenance, final validation, sealing and publication need later passes.
+//! Durable provenance and final sealing do not themselves publish live meetings.
 use super::*;
 use std::io::Read;
 mod assets;
 mod generation;
 mod history;
 mod provenance;
+pub(in crate::storage::backup) mod seal;
 mod speech;
 
 pub(in crate::storage::backup) struct FixedWorkspace {
@@ -16,6 +17,8 @@ pub(in crate::storage::backup) struct FixedWorkspace {
     // Definitions come from our migrations, not from archived executable SQL.
     triggers: Vec<String>,
     missing_assets: std::collections::BTreeSet<String>,
+    completed: [bool; 4],
+    final_database_proof: Option<(u64, String)>,
 }
 
 impl FixedWorkspace {
@@ -24,7 +27,15 @@ impl FixedWorkspace {
         fixed: &FixedData<'_, '_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        if self.completed != [true, true, true, false] {
+            return Err("復元成果物と処理履歴の構築が完了していません".into());
+        }
         self.provenance(fixed, cancelled)?;
+        self.completed[3] = true;
+        self.final_database_proof = Some(digest_file(
+            &self.stage.path().join("fixed.sqlite3"),
+            cancelled,
+        )?);
         Ok(self)
     }
     pub(in crate::storage::backup) fn with_processing_history(
@@ -32,7 +43,14 @@ impl FixedWorkspace {
         fixed: &FixedData<'_, '_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        if !self.completed[0] || !self.completed[1] {
+            return Err("音声・生成成果物の構築後に復元処理履歴を構築してください".into());
+        }
+        if self.completed[2] || self.completed[3] {
+            return Err("復元処理履歴の構築が既に完了しています".into());
+        }
         self.processing_history(fixed, cancelled)?;
+        self.completed[2] = true;
         Ok(self)
     }
     pub(in crate::storage::backup) fn with_speech_artifacts(
@@ -40,7 +58,11 @@ impl FixedWorkspace {
         fixed: &FixedData<'_, '_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        if self.completed[0] || self.completed[2] || self.completed[3] {
+            return Err("復元音声成果物の構築が既に完了しています".into());
+        }
         self.speech_artifacts(fixed, cancelled)?;
+        self.completed[0] = true;
         Ok(self)
     }
     // Consumes an unsealed workspace: an error also closes SQLite and removes
@@ -50,7 +72,11 @@ impl FixedWorkspace {
         fixed: &FixedData<'_, '_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        if self.completed[1] || self.completed[2] || self.completed[3] {
+            return Err("復元生成成果物の構築が既に完了しています".into());
+        }
         self.generation_artifacts(fixed, cancelled)?;
+        self.completed[1] = true;
         Ok(self)
     }
 
@@ -103,6 +129,8 @@ impl FixedWorkspace {
             stage,
             triggers: definitions.into_iter().map(|(_, sql)| sql).collect(),
             missing_assets: std::collections::BTreeSet::new(),
+            completed: [false; 4],
+            final_database_proof: None,
         };
         work.load_rows(fixed, cancelled)?;
         work.foundation_assets(fixed, cancelled)?;

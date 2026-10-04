@@ -2,6 +2,11 @@ use super::*;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
+// Internal restore merge; its live publication/controller is not wired yet.
+#[allow(dead_code)]
+mod restore;
+pub(super) use restore::GlobalMerge;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct VocabularyEntry {

@@ -633,7 +633,7 @@ fn bounded_line(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
     }
 }
 
-fn validate_scopes(db: &Connection) -> Result<(), String> {
+pub(super) fn validate_scopes(db: &Connection) -> Result<(), String> {
     for (table, head) in [
         ("analysis_revisions", "current_analysis_id"),
         ("analysis_revisions", "previous_analysis_id"),

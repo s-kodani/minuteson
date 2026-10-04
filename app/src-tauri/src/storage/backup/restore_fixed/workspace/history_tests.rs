@@ -321,6 +321,76 @@ fn persisted_ids_reject_wrong_derived_flow_operation_even_with_rehashed_ledger()
 }
 
 #[test]
+fn restore_seal_native_speech_generation_history_and_missing_assets_without_models_or_auto_start() {
+    use super::super::seal::SealedWorkspace;
+    let (f, _outside, external) = exported_fixture();
+    let output = tempfile::tempdir().unwrap();
+    let source = read(&f, output.path());
+    let ids = ids(&source, output.path());
+    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    for name in [
+        "fake-cli",
+        "model.bin",
+        "sherpa-cli",
+        "seg.onnx",
+        "emb.onnx",
+        "llama-completion",
+        "model.gguf",
+    ] {
+        std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let db = sealed.connection();
+    let meeting = ids.get("meetings", "", &f.meeting).unwrap();
+    let flow = crate::storage::analysis_flows::read_flow(db, &meeting)
+        .unwrap()
+        .unwrap();
+    root_operations(db, &flow);
+    assert_eq!(flow.stage, "review");
+    assert!(
+        db.query_row(
+            "SELECT count(*) FROM file_assets WHERE state='missing'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap()
+            > 0
+    );
+    assert_eq!(db.query_row("SELECT count(*) FROM processing_jobs WHERE state IN ('queued','running','pausing','paused')", [], |r|r.get::<_,i64>(0)).unwrap(),0);
+    let tx = db.unchecked_transaction().unwrap();
+    assert!(crate::storage::analysis_flows::adoption_parent_matches(
+        &tx,
+        &meeting,
+        flow.diarization_job
+            .as_ref()
+            .unwrap()
+            .output_analysis_id
+            .as_ref()
+            .unwrap(),
+        None
+    )
+    .unwrap());
+    tx.commit().unwrap();
+    sealed.verify(&|| false).unwrap();
+    assert_eq!(std::fs::read(&external).unwrap(), b"external edit");
+    assert_eq!(
+        f.storage.analysis_flow(&f.meeting).unwrap().unwrap().stage,
+        "review"
+    );
+    let omitted: String = db
+        .query_row(
+            "SELECT relative_path FROM file_assets WHERE state='missing' LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let path = sealed.root_path().unwrap().join(omitted);
+    assert!(!path.exists());
+    std::fs::write(&path, b"must remain omitted").unwrap();
+    assert!(sealed.verify(&|| false).err().unwrap().contains("除外"));
+}
+
+#[test]
 fn processing_history_interrupts_queued_retry_and_prepared_flow_without_losing_conditions() {
     let mut f = fixture(false);
     let parent = f.flow.transcription_job.as_ref().unwrap();
