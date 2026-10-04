@@ -45,6 +45,8 @@ pub struct TranscriptDraftPayload {
     pub manual_speakers: Vec<ManualSpeaker>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub speaker_merges: Vec<SpeakerMerge>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub utterance_splits: Vec<super::draft_splits::UtteranceSplit>,
 }
 
 impl Default for TranscriptDraftPayload {
@@ -55,6 +57,7 @@ impl Default for TranscriptDraftPayload {
             utterances: vec![],
             manual_speakers: vec![],
             speaker_merges: vec![],
+            utterance_splits: vec![],
         }
     }
 }
@@ -350,9 +353,10 @@ pub(super) fn validate_payload(
     base_analysis_id: &str,
     mut payload: TranscriptDraftPayload,
 ) -> Result<TranscriptDraftPayload, String> {
-    if !matches!(payload.schema_version, 1 | 2)
+    if !matches!(payload.schema_version, 1 | 2 | 3)
         || (payload.schema_version == 1
             && (!payload.manual_speakers.is_empty() || !payload.speaker_merges.is_empty()))
+        || (payload.schema_version < 3 && !payload.utterance_splits.is_empty())
     {
         return Err("未対応の下書き形式です".into());
     }
@@ -406,7 +410,7 @@ pub(super) fn validate_payload(
     {
         return Err("話者統合は循環や多段参照を含めず、最終話者を指定してください".into());
     }
-    let utterances: HashSet<String> = {
+    let mut utterances: HashSet<String> = {
         let mut statement = connection
             .prepare("SELECT id FROM utterances WHERE analysis_revision_id = ?1")
             .map_err(|error| error.to_string())?;
@@ -416,6 +420,13 @@ pub(super) fn validate_payload(
         rows.collect::<Result<_, _>>()
             .map_err(|error| error.to_string())?
     };
+    super::draft_splits::validate_splits(
+        connection,
+        base_analysis_id,
+        &mut payload,
+        &speakers,
+        &mut utterances,
+    )?;
     let mut seen_speakers = HashSet::new();
     for edit in &payload.speaker_names {
         if !speakers.contains(&edit.speaker_id) || !seen_speakers.insert(&edit.speaker_id) {

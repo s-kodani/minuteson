@@ -22,6 +22,7 @@ pub(crate) fn input() -> MinutesInput {
                     "点検日は2026-10-09です。田中が担当します。来週金曜までに確認します。".into(),
                 attribution_state: "assigned".into(),
                 speaker_ids: vec!["speaker".into()],
+                recognition_is_source: false,
             }],
         },
         meeting_title: "開発定例".into(),

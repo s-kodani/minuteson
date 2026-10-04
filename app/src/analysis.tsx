@@ -9,7 +9,7 @@ import type { VocabularyStamp } from "./vocabulary-state";
 import { DiarizationPanel } from "./diarization-panel";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 import { useTranscriptAudio } from "./transcript-audio";
-import { projectTranscript } from "./transcript-state";
+import { projectTranscript, type Utterance } from "./transcript-state";
 
 type Preferences = VersionedDraft<AnalysisPreferences>;
 type Preview = { summary: VersionSummary; analysis: Analysis; draft: Draft | null; current: Analysis | null; currentDraft: Draft | null; restoring: boolean };
@@ -19,22 +19,26 @@ function PreviewText({ analysis, draft, title,locked }: { analysis: Analysis; dr
   const payload=draft?.baseAnalysisId===analysis.id?draft.payload:null;
   const view=projectTranscript(analysis,payload);
   const shown=view.utterances.slice(page*50,(page+1)*50);
-  const review=useSpeakerReviews(analysis,shown.map(u=>u.id));
+  const review=useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const audio=useTranscriptAudio(analysis.meetingId,locked);
   const labels=new Map(view.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")]));
+  const play=(item:Utterance,at?:number)=>audio.start(analysis.id,item.id,item.sourceUtteranceId&&draft?{
+    meetingId:analysis.meetingId,analysisId:analysis.id,expectedContentHash:analysis.contentHash,expectedDraft:{id:draft.id,lockVersion:draft.lockVersion},utteranceId:item.id,expectedStartUs:item.startUs,expectedEndUs:item.endUs,
+  }:undefined,at);
   return <section className="preview-text" aria-label={title}>
     <h3>{title} {draft && <small>保存済み編集を含む</small>}</h3>
     {analysis.utterances.length === 0 && <p>発言はありません。</p>}
     {audio.controls}
     {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
     {shown.map((item) => {
+      const source=analysis.utterances.find(u=>u.id===(item.sourceUtteranceId??item.id))!;
       const speakers = item.speakerIds.map((id) => {
         const speaker = view.speakers.find((value) => value.id === id);
         return speaker?.displayName || speaker?.label || "話者不明";
       });
-      return <article key={item.id}><small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small><button type="button" className="small-secondary" disabled={locked||audio.preparing} onClick={()=>void audio.start(analysis.id,item.id)}>この発言を聞く</button><SpeakerReviewBadge review={review.reviews.get(item.id)}/><p>{item.effectiveText}</p><SpeakerReviewDetails analysis={analysis} utteranceId={item.id} startUs={item.startUs} labels={labels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,item.id,undefined,at)}/></article>;
+      return <article key={item.id}><small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small><button type="button" className="small-secondary" disabled={locked||audio.preparing} onClick={()=>void play(item)}>この発言を聞く</button>{item.sourceUtteranceId?<small>手動分割 · 推定区間は分割元全体</small>:<SpeakerReviewBadge review={review.reviews.get(item.id)}/>}<p>{item.effectiveText}</p>{item.recognitionIsSource&&<small>分割元の認識原文（全文・単語位置未推定）: {item.recognizedText}</small>}<SpeakerReviewDetails analysis={analysis} utteranceId={source.id} startUs={source.startUs} labels={labels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,source.id,undefined,at)}/></article>;
     })}
-    {analysis.utterances.length > 50 && <div className="transcript-pages"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>前へ</button><span>{page + 1} / {Math.ceil(analysis.utterances.length / 50)}</span><button type="button" disabled={(page + 1) * 50 >= analysis.utterances.length} onClick={() => setPage(page + 1)}>次へ</button></div>}
+    {view.utterances.length > 50 && <div className="transcript-pages"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>前へ</button><span>{page + 1} / {Math.ceil(view.utterances.length / 50)}</span><button type="button" disabled={(page + 1) * 50 >= view.utterances.length} onClick={() => setPage(page + 1)}>次へ</button></div>}
   </section>;
 }
 

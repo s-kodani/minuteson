@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
 import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
+import type { DraftUtteranceAudioRequest } from "./transcript-state";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -65,7 +66,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     };
   }, [clock, player, owner]);
 
-  const start = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest, absoluteStartUs?: number) => {
+  const start = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest, absoluteStartUs?: number) => {
     if (locked) return;
     clear();
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
@@ -77,7 +78,10 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
       await clock.resume();
       if (generation !== request.current) return;
       const transcript = reference && "reference" in reference ? reference : null;
-      const info = transcript
+      const split=reference && "expectedDraft" in reference ? reference : null;
+      const info = split
+        ? await invoke<PlaybackInfo>("prepare_draft_utterance_playback",{request:split})
+        : transcript
         ? await invoke<PlaybackInfo>("prepare_minutes_transcript_playback", { request: transcript })
         : reference
         ? await invoke<PlaybackInfo>("prepare_minutes_evidence_playback", { request: reference })
@@ -87,12 +91,12 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
         return;
       }
       token.current = info.token;
-      const startUs = transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
-      const endUs = transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
+      const startUs = split?.expectedStartUs ?? transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
+      const endUs = split?.expectedEndUs ?? transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
       if (reference && (info.startUs !== startUs || info.endUs !== endUs)) {
         void invoke("close_playback", { token: info.token }).catch(() => {});
         token.current = null;
-        throw new Error("根拠と再生する音声区間が一致しません");
+        throw new Error("確認した発言と再生する音声区間が一致しません");
       }
       const startFrame=absoluteStartUs===undefined?null:playbackStartFrame(info,absoluteStartUs);
       player.load(info);

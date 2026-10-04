@@ -712,6 +712,25 @@ async fn prepare_utterance_playback(
 }
 
 #[tauri::command]
+async fn prepare_draft_utterance_playback(
+    window: WebviewWindow,
+    request: storage::DraftUtteranceAudioRequest,
+) -> Result<PlaybackInfo, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can play audio".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app
+            .state::<Storage>()
+            .prepare_draft_utterance_audio(&request)?;
+        app.state::<PlaybackStore>().insert(audio)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn read_playback_chunk(
     window: WebviewWindow,
     token: String,
@@ -1009,6 +1028,7 @@ pub fn run() {
             save_transcript_draft,
             undo_transcript_edit,
             prepare_utterance_playback,
+            prepare_draft_utterance_playback,
             get_minutes_evidence_source,
             get_minutes_transcript_page,
             prepare_minutes_transcript_playback,

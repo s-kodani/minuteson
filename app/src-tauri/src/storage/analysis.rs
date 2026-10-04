@@ -63,6 +63,8 @@ pub struct AnalysisUtterance {
     pub effective_text: String,
     pub attribution_state: String,
     pub speaker_ids: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub recognition_is_source: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -97,9 +99,24 @@ pub(super) fn read_analysis_content(
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?
     };
+    let config: String = connection
+        .query_row(
+            "SELECT config_json FROM analysis_revisions WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let config: Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+    let source_lineages: HashSet<String> =
+        if let Some(value) = config.get("sourceRecognitionLineages") {
+            serde_json::from_value(value.clone())
+                .map_err(|e| format!("分割元の由来情報が不正です: {e}"))?
+        } else {
+            HashSet::new()
+        };
     let mut utterances = {
         let mut statement = connection.prepare(
-                "SELECT id, track_id, start_us, end_us, recognized_text, effective_text, attribution_state FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id",
+                "SELECT id, track_id, start_us, end_us, recognized_text, effective_text, attribution_state,lineage_id FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id",
             ).map_err(|e| e.to_string())?;
         let rows = statement
             .query_map(params![id], |row| {
@@ -112,6 +129,7 @@ pub(super) fn read_analysis_content(
                     effective_text: row.get(5)?,
                     attribution_state: row.get(6)?,
                     speaker_ids: Vec::new(),
+                    recognition_is_source: source_lineages.contains(&row.get::<_, String>(7)?),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -237,7 +255,7 @@ impl Storage {
             return Err("解析候補の入力形式または件数が不正です".into());
         }
         let profile = serde_json::to_string(&input.profile_snapshot).map_err(|e| e.to_string())?;
-        let config = serde_json::to_string(&input.config).map_err(|e| e.to_string())?;
+        let mut config = serde_json::to_string(&input.config).map_err(|e| e.to_string())?;
         if profile.len() > 65_536 || config.len() > 65_536 {
             return Err("解析設定が大きすぎます".into());
         }
@@ -411,6 +429,26 @@ impl Storage {
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
+        if let Some(source) = &fixed_source {
+            let mut stored = input.config.clone();
+            let original: String = transaction
+                .query_row(
+                    "SELECT config_json FROM analysis_revisions WHERE id=?1",
+                    params![source.analysis.id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            let original: Value = serde_json::from_str(&original).map_err(|e| e.to_string())?;
+            for key in ["manualUtteranceSplits", "sourceRecognitionLineages"] {
+                if let Some(value) = original.get(key) {
+                    stored[key] = value.clone();
+                }
+            }
+            config = serde_json::to_string(&stored).map_err(|e| e.to_string())?;
+            if config.len() > 2 * 1024 * 1024 {
+                return Err("手動分割の由来情報が大きすぎます".into());
+            }
+        }
         let id = Uuid::new_v4().to_string();
         let now = now_ms()?;
         transaction.execute(

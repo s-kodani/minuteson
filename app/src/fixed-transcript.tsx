@@ -78,7 +78,7 @@ export function FixedTranscriptWorkspace({ view, evidence, locked, back }: {
         {data.utterances.map((u, index) => <article key={u.id} ref={u.id === evidence.utteranceId ? target : undefined} tabIndex={-1} className={u.id === evidence.utteranceId ? "evidence-target" : ""} aria-label={`固定発言${data.firstSequence + index}${u.id === evidence.utteranceId ? "・根拠の参照先" : ""}`}>
           <div className="utterance-meta"><span>#{data.firstSequence + index}</span><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time><span>{u.speakerIds.length ? u.speakerIds.map((id) => { const s = data.speakers.find((s) => s.id === id); return s?.displayName || s?.label || "話者不明"; }).join(" / ") : "話者不明"}</span><button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => play(u.id)}>固定発言{data.firstSequence + index}の音声を再生</button></div>
           <p className="document-text">{u.effectiveText}</p>
-          {u.effectiveText !== u.recognizedText && <small className="document-text">認識原文: {u.recognizedText}</small>}
+          {(u.recognitionIsSource||u.effectiveText !== u.recognizedText) && <small className="document-text">{u.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {u.recognizedText}</small>}
           {audio.selected === u.id && audio.controls}
         </article>)}
       </div>

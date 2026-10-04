@@ -71,7 +71,7 @@ function MinutesEvidencePanel({ view, evidence, index, selected, suspended, lock
       {source.utterances.map((u) => <article className={u.id === evidence.utteranceId ? "evidence-target" : ""} key={u.id} aria-label={u.id === evidence.utteranceId ? "参照先の固定発言" : "前後の固定発言"}>
         <p><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time> · {u.speakerIds.length ? u.speakerIds.map((id) => { const s = source.speakers.find((s) => s.id === id); return s?.displayName || s?.label || "話者不明"; }).join(" / ") : "話者不明"}</p>
         <p className="document-text">{u.effectiveText}</p>
-        {u.recognizedText !== u.effectiveText && <small className="document-text">認識原文: {u.recognizedText}</small>}
+        {(u.recognitionIsSource||u.recognizedText !== u.effectiveText) && <small className="document-text">{u.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {u.recognizedText}</small>}
       </article>)}
       <small>固定入力SHA-256: {source.analysisContentHash}</small>
     </section>}

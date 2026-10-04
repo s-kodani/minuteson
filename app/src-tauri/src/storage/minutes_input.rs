@@ -276,6 +276,49 @@ pub(super) fn apply_edits(view: &mut AnalysisView, payload: &TranscriptDraftPayl
             .into();
         }
     }
+    if !payload.utterance_splits.is_empty() {
+        let splits: HashMap<_, _> = payload
+            .utterance_splits
+            .iter()
+            .map(|s| (s.source_utterance_id.as_str(), s))
+            .collect();
+        let mut result = Vec::new();
+        for original in &view.utterances {
+            if let Some(split) = splits.get(original.id.as_str()) {
+                for part in &split.parts {
+                    let edit = edits.get(part.id.as_str());
+                    let ids = merged_assignments(
+                        payload,
+                        edit.map_or(&part.speaker_ids, |e| &e.speaker_ids),
+                    );
+                    result.push(super::analysis::AnalysisUtterance {
+                        id: part.id.clone(),
+                        track_id: original.track_id.clone(),
+                        start_us: part.start_us,
+                        end_us: part.end_us,
+                        recognized_text: original.recognized_text.clone(),
+                        effective_text: edit
+                            .map_or(&part.effective_text, |e| &e.effective_text)
+                            .clone(),
+                        attribution_state: match ids.len() {
+                            0 => "unknown",
+                            1 => "assigned",
+                            _ => "overlap",
+                        }
+                        .into(),
+                        speaker_ids: ids,
+                        recognition_is_source: true,
+                    });
+                }
+            } else {
+                result.push(original.clone());
+            }
+        }
+        result.sort_by(|a, b| {
+            (a.start_us, &a.track_id, &a.id).cmp(&(b.start_us, &b.track_id, &b.id))
+        });
+        view.utterances = result;
+    }
 }
 
 // Stable lineage IDs allow comparison with the edited source despite remapped
@@ -294,7 +337,12 @@ pub(super) fn working_hash(
             speaker_lineages.insert(speaker.id.clone(), speaker.id.clone());
         }
     }
-    let utterance_lineages = lineage_map(connection, "utterances", &view.id)?;
+    let mut utterance_lineages = lineage_map(connection, "utterances", &view.id)?;
+    if let Some(payload) = payload {
+        for part in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+            utterance_lineages.insert(part.id.clone(), part.id.clone());
+        }
+    }
     let mut speakers = vec![];
     for speaker in &view.speakers {
         let lineage = speaker_lineages
@@ -377,6 +425,30 @@ pub(super) fn copy_snapshot(
         // assignments change. Explicit provenance avoids false 1:1 lineage.
         config["manualSpeakerOperations"] = json!({"schemaVersion":1,"added":payload.manual_speakers,"merges":payload.speaker_merges});
     }
+    let lineages = lineage_map(tx, "utterances", &source.id)?;
+    let mut source_recognition: Vec<_> = source
+        .utterances
+        .iter()
+        .filter(|u| u.recognition_is_source)
+        .map(|u| lineages.get(&u.id).cloned().unwrap_or_else(|| u.id.clone()))
+        .collect();
+    source_recognition.sort();
+    if !source_recognition.is_empty() {
+        config["sourceRecognitionLineages"] = json!(source_recognition);
+    }
+    if !payload.utterance_splits.is_empty() {
+        let previous = config
+            .get("manualUtteranceSplits")
+            .cloned()
+            .unwrap_or(json!([]));
+        let mut operations: Vec<Value> =
+            serde_json::from_value(previous).map_err(|e| e.to_string())?;
+        operations.push(json!({"sourceAnalysisId":source.id,"sourceContentHash":source.content_hash,"splits":payload.utterance_splits}));
+        config["manualUtteranceSplits"] = json!(operations);
+    }
+    if config.to_string().len() > 2 * 1024 * 1024 {
+        return Err("固定入力の由来情報が大きすぎます".into());
+    }
     let sequence: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(revision_no),0) + 1 FROM analysis_revisions WHERE meeting_id = ?1",
@@ -413,9 +485,26 @@ pub(super) fn copy_snapshot(
             manual.insert(row.map_err(|e| e.to_string())?);
         }
     }
-    for utterance in &source.utterances {
+    let split_sources: HashMap<_, _> = payload
+        .utterance_splits
+        .iter()
+        .flat_map(|s| {
+            s.parts
+                .iter()
+                .map(move |p| (p.id.as_str(), s.source_utterance_id.as_str()))
+        })
+        .collect();
+    for (sequence, utterance) in source.utterances.iter().enumerate() {
         let new_id = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,sequence,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,utterance.effective_text,utterance.attribution_state,utterance.id,source.id]).map_err(|e| e.to_string())?;
+        let changed=if split_sources.contains_key(utterance.id.as_str()) {
+            manual.insert(utterance.id.clone());
+            tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL)",params![new_id,source.meeting_id,id,utterance.track_id,utterance.id,sequence as i64,utterance.start_us,utterance.end_us,utterance.recognized_text,utterance.effective_text,utterance.attribution_state])
+        } else {
+            tx.execute("INSERT INTO utterances (id,meeting_id,analysis_revision_id,track_id,lineage_id,sequence,start_us,end_us,recognized_text,effective_text,attribution_state,confidence) SELECT ?1,meeting_id,?2,track_id,lineage_id,?7,start_us,end_us,recognized_text,?3,?4,confidence FROM utterances WHERE id = ?5 AND analysis_revision_id = ?6", params![new_id,id,utterance.effective_text,utterance.attribution_state,utterance.id,source.id,sequence as i64])
+        }.map_err(|e|e.to_string())?;
+        if changed != 1 {
+            return Err("発言の固定入力保存に失敗しました".into());
+        }
         for (index, old_speaker) in utterance.speaker_ids.iter().enumerate() {
             let new_speaker = speaker_ids
                 .get(old_speaker)

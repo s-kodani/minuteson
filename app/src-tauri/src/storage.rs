@@ -12,6 +12,7 @@ mod analysis;
 mod analysis_ui;
 mod diarization;
 mod diarization_preferences;
+mod draft_splits;
 mod drafts;
 mod exports;
 #[cfg(all(test, unix))]
@@ -38,6 +39,7 @@ pub(crate) use analysis::{SpeakerInput, SpeakerSegmentInput};
 pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
 pub(crate) use diarization::DiarizationInput;
 pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPreferencesSnapshot};
+pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};

@@ -114,6 +114,11 @@ impl Storage {
             }
         }
         apply_edits(&mut source, &payload);
+        for part in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+            // The user supplied both boundaries and assignments, including an
+            // explicit unknown. Inference must not undo that decision.
+            manual_lineages.insert(part.id.clone());
+        }
         let working = working_hash(&tx, &source, &title, created, started, Some(&payload))?;
         let provenance = draft
             .as_ref()

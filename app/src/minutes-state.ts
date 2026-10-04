@@ -42,7 +42,7 @@ export interface MinutesEvidenceRequest {
 export interface MinutesEvidenceSource {
   evidence: Evidence; analysisId: string; analysisContentHash: string;
   speakers: { id: string; label: string; displayName: string | null }[];
-  utterances: { id: string; trackId: string; startUs: number; endUs: number; recognizedText: string; effectiveText: string; attributionState: string; speakerIds: string[] }[];
+  utterances: { id: string; trackId: string; startUs: number; endUs: number; recognizedText: string; effectiveText: string; attributionState: string; speakerIds: string[]; recognitionIsSource?: boolean }[];
   firstSequence: number; totalUtterances: number;
 }
 export const MINUTES_TRANSCRIPT_PAGE_SIZE = 50;

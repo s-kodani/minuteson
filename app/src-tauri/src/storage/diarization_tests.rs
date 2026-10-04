@@ -8,6 +8,92 @@ fn quote(s: &str) -> String {
 }
 
 #[test]
+fn manual_split_ranges_text_original_scope_and_explicit_unknown_survive_reinference_candidate() {
+    use super::super::draft_splits::{SplitPart, UtteranceSplit};
+    let root = tempfile::tempdir().unwrap();
+    let (s, m, c, mut r) = fixture(root.path(), false);
+    let original = s.load_current_analysis(&m).unwrap().unwrap();
+    let draft = s.load_transcript_draft(&m).unwrap().unwrap();
+    let u = &original.utterances[0];
+    let text = draft
+        .payload
+        .utterances
+        .iter()
+        .find(|e| e.utterance_id == u.id)
+        .unwrap()
+        .effective_text
+        .clone();
+    let chars: Vec<_> = text.chars().collect();
+    let mut p = draft.payload.clone();
+    p.schema_version = 3;
+    p.utterance_splits.push(UtteranceSplit {
+        source_utterance_id: u.id.clone(),
+        source_effective_text: text.clone(),
+        parts: vec![
+            SplitPart {
+                id: format!("split:{}", Uuid::new_v4()),
+                start_us: u.start_us,
+                end_us: 500_000,
+                effective_text: chars[..3].iter().collect(),
+                speaker_ids: vec![original.speakers[0].id.clone()],
+            },
+            SplitPart {
+                id: format!("split:{}", Uuid::new_v4()),
+                start_us: 500_000,
+                end_us: u.end_us,
+                effective_text: chars[3..].iter().collect(),
+                speaker_ids: vec![],
+            },
+        ],
+    });
+    let saved = s
+        .save_transcript_draft(&draft.id, draft.lock_version, p)
+        .unwrap();
+    r.expected_draft = Some(DraftStamp {
+        id: saved.id.clone(),
+        lock_version: saved.lock_version,
+    });
+    let job = enqueue(&s, r, c);
+    let fixed = s.load_diarization_input(&job.id).unwrap();
+    let parts: Vec<_> = fixed
+        .analysis
+        .utterances
+        .iter()
+        .filter(|u| u.recognition_is_source)
+        .collect();
+    assert_eq!(parts.len(), 2);
+    assert!(parts
+        .iter()
+        .all(|u| fixed.manual_utterances.contains(&u.id)));
+    s.acquire_local_inference_job().unwrap().unwrap();
+    let candidate = diarization::process(&s, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let result = s.load_visible_analysis(&m, &candidate).unwrap().unwrap();
+    let parts: Vec<_> = result
+        .utterances
+        .iter()
+        .filter(|u| u.recognition_is_source)
+        .collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(
+        parts
+            .iter()
+            .map(|u| u.effective_text.as_str())
+            .collect::<String>(),
+        text
+    );
+    assert!(parts
+        .iter()
+        .all(|part| part.recognized_text == u.recognized_text));
+    assert!(parts[1].speaker_ids.is_empty());
+    assert_eq!(parts[1].attribution_state, "unknown");
+    assert_eq!(parts[0].end_us, parts[1].start_us);
+    assert_eq!(s.load_current_analysis(&m).unwrap().unwrap(), original);
+    assert_eq!(s.load_transcript_draft(&m).unwrap(), Some(saved));
+}
+
+#[test]
 fn merging_into_added_speaker_survives_fixed_diarization_and_manual_preservation() {
     use super::super::drafts::{ManualSpeaker, SpeakerMerge};
     let root = tempfile::tempdir().unwrap();

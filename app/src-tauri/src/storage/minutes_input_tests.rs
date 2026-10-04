@@ -2,6 +2,145 @@ use super::super::analysis::tests::{input, saved_meeting};
 use super::super::drafts::{SpeakerNameEdit, UtteranceEdit};
 
 #[test]
+fn manual_splits_materialize_fresh_lineages_original_scope_and_fixed_minutes_without_rewriting_old_input(
+) {
+    use super::super::draft_splits::{SplitPart, UtteranceSplit};
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    let (mut request, original, draft) = fixture(&storage);
+    let old_job = enqueue(&storage, request.clone());
+    let old_input = storage.load_minutes_input(&old_job.id).unwrap();
+    let mut p = draft.payload.clone();
+    p.schema_version = 3;
+    let u = &original.utterances[0];
+    let text = p
+        .utterances
+        .iter()
+        .find(|e| e.utterance_id == u.id)
+        .unwrap()
+        .effective_text
+        .clone();
+    let chars: Vec<_> = text.chars().collect();
+    let middle = u.start_us + (u.end_us - u.start_us) / 2;
+    let first = format!("split:{}", Uuid::new_v4());
+    let second = format!("split:{}", Uuid::new_v4());
+    p.utterance_splits.push(UtteranceSplit {
+        source_utterance_id: u.id.clone(),
+        source_effective_text: text.clone(),
+        parts: vec![
+            SplitPart {
+                id: first.clone(),
+                start_us: u.start_us,
+                end_us: middle,
+                effective_text: chars[..4].iter().collect(),
+                speaker_ids: vec![original.speakers[0].id.clone()],
+            },
+            SplitPart {
+                id: second.clone(),
+                start_us: middle,
+                end_us: u.end_us,
+                effective_text: chars[4..].iter().collect(),
+                speaker_ids: vec![],
+            },
+        ],
+    });
+    let saved = storage
+        .save_transcript_draft(&draft.id, draft.lock_version, p)
+        .unwrap();
+    request.operation_id = "split-fixed".into();
+    request.expected_draft = Some(DraftStamp {
+        id: saved.id.clone(),
+        lock_version: saved.lock_version,
+    });
+    let job = enqueue(&storage, request.clone());
+    let fixed = storage.load_minutes_input(&job.id).unwrap();
+    assert_eq!(
+        fixed.analysis.utterances.len(),
+        original.utterances.len() + 1
+    );
+    let parts: Vec<_> = fixed
+        .analysis
+        .utterances
+        .iter()
+        .filter(|u| u.recognition_is_source)
+        .collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(
+        parts
+            .iter()
+            .map(|u| u.effective_text.as_str())
+            .collect::<String>(),
+        text
+    );
+    assert!(parts
+        .iter()
+        .all(|part| part.recognized_text == u.recognized_text));
+    assert_eq!(
+        (
+            parts[0].start_us,
+            parts[0].end_us,
+            parts[1].start_us,
+            parts[1].end_us
+        ),
+        (u.start_us, middle, middle, u.end_us)
+    );
+    assert!(parts[1].speaker_ids.is_empty());
+    assert_eq!(storage.load_minutes_input(&old_job.id).unwrap(), old_input);
+    assert_eq!(
+        storage
+            .load_current_analysis(&request.meeting_id)
+            .unwrap()
+            .unwrap(),
+        original
+    );
+    assert!(!storage.minutes_input_updated(&job.id).unwrap());
+    assert!(storage.minutes_input_updated(&old_job.id).unwrap());
+    {
+        let db = storage.connection.lock().unwrap();
+        let lineages = lineage_map(&db, "utterances", &fixed.analysis.id).unwrap();
+        assert_eq!(lineages[&parts[0].id], first);
+        assert_eq!(lineages[&parts[1].id], second);
+        let old = lineage_map(&db, "utterances", &original.id).unwrap();
+        assert!(parts.iter().all(|part| lineages[&part.id] != old[&u.id]));
+        for part in &parts {
+            assert_eq!(
+                db.query_row(
+                    "SELECT confidence FROM utterances WHERE id=?1",
+                    params![part.id],
+                    |r| r.get::<_, Option<f64>>(0)
+                )
+                .unwrap(),
+                None
+            );
+        }
+        assert!(db
+            .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
+            .optional()
+            .unwrap()
+            .is_none());
+    }
+    let mut edited = saved.payload.clone();
+    edited.utterances.push(UtteranceEdit {
+        utterance_id: first,
+        effective_text: "分割後の修正".into(),
+        speaker_ids: vec![],
+    });
+    let edited = storage
+        .save_transcript_draft(&saved.id, saved.lock_version, edited)
+        .unwrap();
+    assert!(storage.minutes_input_updated(&job.id).unwrap());
+    assert_eq!(storage.load_minutes_input(&job.id).unwrap(), fixed);
+    storage
+        .undo_last_transcript_edit(&edited.id, edited.lock_version)
+        .unwrap();
+    assert!(!storage.minutes_input_updated(&job.id).unwrap());
+    drop(storage);
+    let storage = Storage::open(root.path().to_owned()).unwrap();
+    assert_eq!(storage.load_minutes_input(&old_job.id).unwrap(), old_input);
+    assert_eq!(storage.load_minutes_input(&job.id).unwrap(), fixed);
+}
+
+#[test]
 fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_references() {
     use super::super::drafts::{ManualSpeaker, SpeakerMerge};
     let root = tempfile::tempdir().unwrap();
