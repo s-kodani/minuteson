@@ -7,10 +7,11 @@ struct Owned {
     directory: bool,
     proof: Option<(u64, String)>,
 }
-pub(super) struct Installed {
+pub(super) struct Installed<'a> {
     root: PathBuf,
     owned: Vec<Owned>,
     keep: bool,
+    journal: Option<journal::Journal<'a>>,
 }
 fn same_inode(a: &Metadata, b: &Metadata) -> bool {
     #[cfg(unix)]
@@ -43,7 +44,7 @@ fn sync_directory(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-impl Installed {
+impl<'a> Installed<'a> {
     fn create_directory(&mut self, path: PathBuf) -> Result<(), String> {
         directory(path.parent().ok_or("追加復元の親パスがありません")?)?;
         let mut builder = std::fs::DirBuilder::new();
@@ -59,6 +60,12 @@ impl Installed {
             directory: true,
             proof: None,
         });
+        if let Some(journal) = &self.journal {
+            journal.record(
+                &self.owned.last().ok_or("復元実体がありません")?.path,
+                &self.owned.last().ok_or("復元実体がありません")?.metadata,
+            )?;
+        }
         Ok(())
     }
     pub(super) fn prepare(
@@ -66,11 +73,28 @@ impl Installed {
         sealed: &SealedWorkspace,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::prepare_inner(root, sealed, None, check)
+    }
+    pub(super) fn prepare_recorded(
+        root: &Path,
+        sealed: &SealedWorkspace,
+        journal: journal::Journal<'a>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::prepare_inner(root, sealed, Some(journal), check)
+    }
+    fn prepare_inner(
+        root: &Path,
+        sealed: &SealedWorkspace,
+        journal: Option<journal::Journal<'a>>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         directory(root)?;
         let mut install = Self {
             root: root.into(),
             owned: vec![],
             keep: false,
+            journal,
         };
         let parent = root.join("meetings");
         match std::fs::symlink_metadata(&parent) {
@@ -119,6 +143,12 @@ impl Installed {
                 directory: false,
                 proof: Some((asset.size_bytes as u64, asset.content_hash.clone())),
             });
+            if let Some(journal) = &install.journal {
+                journal.record(
+                    &install.owned.last().ok_or("復元実体がありません")?.path,
+                    &install.owned.last().ok_or("復元実体がありません")?.metadata,
+                )?;
+            }
             let proof = stream(
                 &mut input,
                 Some(&mut output),
@@ -171,10 +201,22 @@ impl Installed {
     pub(super) fn keep(&mut self) {
         self.keep = true;
     }
+    pub(super) fn completed(&self, db: &Connection) -> Result<(), String> {
+        self.journal
+            .as_ref()
+            .ok_or("公開する復元回収記録がありません")?
+            .completed(db)
+    }
 }
-impl Drop for Installed {
+impl Drop for Installed<'_> {
     fn drop(&mut self) {
         if self.keep {
+            return;
+        }
+        if let Some(journal) = &self.journal {
+            // Durable batch/body checks precede ANY unlink, even on unwind
+            // immediately after a successful DB commit.
+            let _ = journal.recover();
             return;
         }
         for entry in self.owned.iter().rev() {

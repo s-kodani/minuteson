@@ -171,6 +171,7 @@ impl<'a> RestoreIds<'a> {
             "SELECT batch_id FROM restore_batches",
             "SELECT source_key FROM restore_provenance",
             "SELECT source_scope FROM restore_provenance WHERE source_scope<>''",
+            "SELECT id FROM maintenance_operations",
         ] {
             let mut query = db.prepare(sql).map_err(|e| e.to_string())?;
             let mut rows = if sql.contains("?1") {

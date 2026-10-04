@@ -131,6 +131,64 @@ fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstructi
 }
 
 #[test]
+fn restore_journal_reader_publishes_v21_archives_with_current_local_recovery_ledger() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let source_storage = Storage::open(root.path().into()).unwrap();
+    let original = meeting(&source_storage, "legacy-21");
+    let (path, _) = write(&source_storage, output.path());
+    let source = verified(&path, output.path());
+    let mut manifest = source.manifest.clone();
+    manifest.schema_version = 21;
+    let legacy = output.path().join("legacy-21.monbackup");
+    pack(&legacy, &manifest, &payloads(&source));
+    let source = verified(&legacy, output.path());
+    assert_eq!(
+        super::super::super::verify_migration_history(&source.database).unwrap(),
+        21
+    );
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let ids = match super::super::restore_ids::RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &target.connection.lock().unwrap(),
+        &|| false,
+    )
+    .unwrap()
+    {
+        super::super::restore_ids::BatchPreparation::Pending(ids) => ids,
+        _ => panic!(),
+    };
+    let fixed =
+        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
+        &fixed,
+        output.path(),
+        &|| false,
+    )
+    .unwrap();
+    assert!(matches!(
+        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        super::super::publication::Publication::Published { meetings: 1, .. }
+    ));
+    assert_eq!(target.list_meetings().unwrap().len(), 1);
+    assert_ne!(target.list_meetings().unwrap().remove(0).id, original);
+    assert!(source_storage.get_meeting(&original).unwrap().is_some());
+    assert_eq!(
+        target
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT state FROM maintenance_operations", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "completed"
+    );
+}
+
+#[test]
 fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

@@ -87,6 +87,7 @@ const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
 const MIGRATION_19: &str = include_str!("migrations/0019_audio_import_commits.sql");
 const MIGRATION_20: &str = include_str!("migrations/0020_audio_import_options.sql");
 const MIGRATION_21: &str = include_str!("migrations/0021_restore_ledger.sql");
+const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -140,6 +141,7 @@ impl Storage {
         )?;
         connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
         connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
+        backup::recover_restore_operations(&root, &connection)?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),
@@ -424,6 +426,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (19, MIGRATION_19),
     (20, MIGRATION_20),
     (21, MIGRATION_21),
+    (22, MIGRATION_22),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

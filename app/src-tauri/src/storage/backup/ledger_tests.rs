@@ -48,7 +48,7 @@ fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabula
         vocabulary
     );
     let db = storage.connection.lock().unwrap();
-    assert_eq!(verify_migration_history(&db).unwrap(), 21);
+    assert_eq!(verify_migration_history(&db).unwrap(), MIGRATIONS.len());
     assert_eq!(portable::tables(&db).unwrap().len(), 31);
     assert_eq!(
         db.query_row("SELECT count(*) FROM restore_batches", [], |r| r

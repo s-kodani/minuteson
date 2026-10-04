@@ -138,6 +138,20 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         } else {
             &[]
         })
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=22)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                ["maintenance_operations", "maintenance_paths"].as_slice()
+            } else {
+                &[]
+            },
+        )
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {

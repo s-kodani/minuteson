@@ -10,6 +10,7 @@ use rusqlite::types::Value;
 use rusqlite::TransactionBehavior;
 
 mod files;
+pub(in crate::storage::backup) mod journal;
 use files::Installed;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -181,8 +182,18 @@ impl Storage {
             .ok_or("追加復元容量が範囲外です")?;
         check_capacity(&self.root, required)?;
         let meetings = read_meetings(sealed.connection())?.len();
-        let mut installed = Installed::prepare(&self.root, sealed, check)?;
+        // Persist stable IDs before installing files. Per-path ownership records
+        // must be durable outside the later atomic publication transaction.
+        tx.commit().map_err(|e| e.to_string())?;
+        let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
+        let mut installed = Installed::prepare_recorded(&self.root, sealed, journal, check)?;
+        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         let operation = (|| {
+            if plan.reserve(&mut tx, check)? != BatchState::Prepared {
+                return Err("復元公開の状態が準備後に変化しています".into());
+            }
+            ids.check_publication_destination(&tx, sealed.connection(), check)?;
             tx.execute_batch("PRAGMA defer_foreign_keys=ON;")
                 .map_err(|e| e.to_string())?;
             append(&tx, sealed.connection(), check)?;
@@ -217,6 +228,7 @@ impl Storage {
             if changed != 1 {
                 return Err("復元バッチの同時公開を確定できません".into());
             }
+            installed.completed(&tx)?;
             Ok(vocabulary)
         })();
         let vocabulary = match operation {

@@ -3,12 +3,12 @@ use restore_fixed::FixedData;
 use restore_ids::BatchPreparation;
 use std::cell::Cell;
 
-struct Fixture {
+pub(super) struct Fixture {
     _source_root: tempfile::TempDir,
-    output: tempfile::TempDir,
-    source: archive::VerifiedArchive,
-    target_root: tempfile::TempDir,
-    target: Storage,
+    pub(super) output: tempfile::TempDir,
+    pub(super) source: archive::VerifiedArchive,
+    pub(super) target_root: tempfile::TempDir,
+    pub(super) target: Storage,
 }
 fn entry(term: &str) -> VocabularyEntry {
     VocabularyEntry {
@@ -19,7 +19,7 @@ fn entry(term: &str) -> VocabularyEntry {
         enabled: true,
     }
 }
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let source_storage = Storage::open(root.path().into()).unwrap();
     let first = archive::tests::meeting(&source_storage, "source-one");
@@ -72,8 +72,8 @@ fn fixture() -> Fixture {
         target,
     }
 }
-fn ids<'a>(f: &'a Fixture, batch: &str) -> RestoreIds<'a> {
-    match RestoreIds::prepare_for_batch(
+pub(super) fn ids<'a>(f: &'a Fixture, batch: &str) -> RestoreIds<'a> {
+    let ids = match RestoreIds::prepare_for_batch(
         &f.source,
         f.output.path(),
         batch,
@@ -84,9 +84,17 @@ fn ids<'a>(f: &'a Fixture, batch: &str) -> RestoreIds<'a> {
     {
         BatchPreparation::Pending(ids) => ids,
         _ => panic!("unexpected published"),
-    }
+    };
+    let mut db = f.target.connection.lock().unwrap();
+    let mut tx = db.transaction().unwrap();
+    BatchPlan::new(&ids, &|| false)
+        .unwrap()
+        .reserve(&mut tx, &|| false)
+        .unwrap();
+    tx.commit().unwrap();
+    ids
 }
-fn sealed(f: &Fixture, ids: &RestoreIds<'_>) -> SealedWorkspace {
+pub(super) fn sealed(f: &Fixture, ids: &RestoreIds<'_>) -> SealedWorkspace {
     let fixed = FixedData::new(ids, f.output.path(), &|| false).unwrap();
     SealedWorkspace::prepare(&fixed, f.output.path(), &|| false).unwrap()
 }
@@ -368,13 +376,30 @@ fn restore_publication_commit_failure_rolls_back_meetings_merge_and_batch_and_re
     let before = all_rows(&f.target.connection.lock().unwrap());
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = attempts.clone();
+    let ready: Vec<(PathBuf, i64)> = sealed
+        .connection()
+        .prepare("SELECT relative_path,size_bytes FROM file_assets WHERE state='ready'")
+        .unwrap()
+        .query_map([], |r| {
+            Ok((f.target.root.join(r.get::<_, String>(0)?), r.get(1)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
     f.target
         .connection
         .lock()
         .unwrap()
         .commit_hook(Some(move || {
-            seen.fetch_add(1, Ordering::SeqCst);
-            true
+            if ready
+                .iter()
+                .all(|(path, size)| std::fs::metadata(path).is_ok_and(|m| m.len() == *size as u64))
+            {
+                seen.fetch_add(1, Ordering::SeqCst);
+                true
+            } else {
+                false
+            }
         }))
         .unwrap();
     assert!(f.target.publish_restore(&sealed, &ids, &|| false).is_err());

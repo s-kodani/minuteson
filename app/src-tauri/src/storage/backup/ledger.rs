@@ -261,6 +261,7 @@ impl<'a, 'b> BatchPlan<'a, 'b> {
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_restore_schema_for_test(db: &Connection) {
+    super::publication::journal::remove_schema_for_test(db);
     // Downgrade only empty, test-owned current images into older fixtures.
     // Never discard real provenance or a reservation to simulate migration.
     for table in [

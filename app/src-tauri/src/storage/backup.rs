@@ -19,6 +19,13 @@ pub(crate) mod restore_ids;
 const BUFFER_BYTES: usize = 64 * 1024;
 const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 
+pub(in crate::storage) fn recover_restore_operations(
+    root: &Path,
+    db: &Connection,
+) -> Result<(), String> {
+    publication::journal::recover_all(root, db)
+}
+
 struct Maintenance<'a> {
     storage: &'a Storage,
     unresolved: std::cell::Cell<bool>,

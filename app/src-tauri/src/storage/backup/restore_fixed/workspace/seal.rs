@@ -217,7 +217,13 @@ impl FixedWorkspace {
                 return Err("復元DBの構築件数が元アーカイブと一致しません".into());
             }
         }
-        for table in ["app_settings", "restore_batches", "restore_identity_maps"] {
+        for table in [
+            "app_settings",
+            "restore_batches",
+            "restore_identity_maps",
+            "maintenance_operations",
+            "maintenance_paths",
+        ] {
             if self
                 .database
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
