@@ -141,6 +141,186 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_unadopted_
 }
 
 #[test]
+fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart() {
+    use crate::storage::backup::ledger::BatchPlan;
+    use crate::storage::backup::restore_ids::BatchPreparation;
+    fn pending<'a>(result: Result<BatchPreparation<'a>, String>) -> RestoreIds<'a> {
+        match result.unwrap() {
+            BatchPreparation::Pending(ids) => ids,
+            BatchPreparation::AlreadyPublished { .. } => panic!("unpublished batch expected"),
+        }
+    }
+    fn rows(db: &Connection, table: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut statement = db
+            .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
+            .unwrap();
+        let columns = statement.column_count();
+        statement
+            .query_map([], |row| (0..columns).map(|i| row.get(i)).collect())
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    fn build(ids: &RestoreIds<'_>, output: &Path) -> FixedWorkspace {
+        let fixed = FixedData::new(ids, output, &|| false).unwrap();
+        let mut work = prepared(&fixed, output)
+            .with_processing_history(&fixed, &|| false)
+            .unwrap()
+            .with_provenance(&fixed, &|| false)
+            .unwrap();
+        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
+        work
+    }
+    let (f, _outside, external) = exported_fixture();
+    let output = tempfile::tempdir().unwrap();
+    let source = read(&f, output.path());
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let existing = target.create_meeting("既存会議").unwrap();
+    let batch = Uuid::new_v4().to_string();
+    let ids = pending(RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &batch,
+        &target.connection.lock().unwrap(),
+        &|| false,
+    ));
+    {
+        let mut db = target.connection.lock().unwrap();
+        let mut tx = db.transaction().unwrap();
+        BatchPlan::new(&ids, &|| false)
+            .unwrap()
+            .reserve(&mut tx, &|| false)
+            .unwrap();
+        tx.commit().unwrap();
+    }
+    // All restore passes must work without invoking the original CLI or model.
+    for name in [
+        "fake-cli",
+        "model.bin",
+        "sherpa-cli",
+        "seg.onnx",
+        "emb.onnx",
+        "llama-completion",
+        "model.gguf",
+    ] {
+        std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    let first = build(&ids, output.path());
+    let expected: Vec<_> = portable::tables(&first.database)
+        .unwrap()
+        .into_iter()
+        .filter(|table| table.name != "restore_provenance")
+        .map(|table| (table.name.clone(), rows(&first.database, &table.name)))
+        .collect();
+    let mut statement = first
+        .database
+        .prepare("SELECT relative_path FROM file_assets WHERE state='ready' ORDER BY relative_path")
+        .unwrap();
+    let files: Vec<String> = statement
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let bytes: Vec<_> = files
+        .iter()
+        .map(|file| std::fs::read(first.stage.path().join(file)).unwrap())
+        .collect();
+    let missing = first.missing_assets.clone();
+    drop(statement);
+    drop(first);
+    drop(ids);
+    drop(source);
+    drop(target);
+    let source = archive::read(
+        &mut File::open(output.path().join("fixed.monbackup")).unwrap(),
+        output.path(),
+        &|| false,
+    )
+    .unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let ids = pending(RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &batch,
+        &target.connection.lock().unwrap(),
+        &|| false,
+    ));
+    let second = build(&ids, output.path());
+    for (table, original) in expected {
+        assert_eq!(rows(&second.database, &table), original, "{table}");
+    }
+    for (file, original) in files.iter().zip(bytes) {
+        assert_eq!(
+            std::fs::read(second.stage.path().join(file)).unwrap(),
+            original,
+            "{file}"
+        );
+    }
+    assert_eq!(second.missing_assets, missing);
+    let meeting = ids.get("meetings", "", &f.meeting).unwrap();
+    let flow = crate::storage::analysis_flows::read_flow(&second.database, &meeting)
+        .unwrap()
+        .unwrap();
+    root_operations(&second.database, &flow);
+    assert_eq!(target.list_meetings().unwrap(), vec![existing]);
+    assert_eq!(std::fs::read(&external).unwrap(), b"external edit");
+}
+
+#[test]
+fn persisted_ids_reject_wrong_derived_flow_operation_even_with_rehashed_ledger() {
+    use crate::storage::backup::ledger::{BatchPlan, IdentityMap};
+    use crate::storage::backup::restore_ids::BatchPreparation;
+    let f = fixture(false);
+    let output = tempfile::tempdir().unwrap();
+    let source = read(&f, output.path());
+    let batch = Uuid::new_v4().to_string();
+    let mut db = portable::schema(MIGRATIONS.len()).unwrap();
+    let ids = match RestoreIds::prepare_for_batch(&source, output.path(), &batch, &db, &|| false)
+        .unwrap()
+    {
+        BatchPreparation::Pending(ids) => ids,
+        _ => panic!("new batch expected"),
+    };
+    let mut tx = db.transaction().unwrap();
+    BatchPlan::new(&ids, &|| false)
+        .unwrap()
+        .reserve(&mut tx, &|| false)
+        .unwrap();
+    tx.commit().unwrap();
+    drop(ids);
+    // Only this destination fixture has its immutable triggers removed.
+    db.execute_batch("DROP TRIGGER restore_map_fixed; DROP TRIGGER restore_batch_fixed;")
+        .unwrap();
+    db.execute("UPDATE restore_identity_maps SET target_key=?1 WHERE domain='operation' AND source_key LIKE 'flow:%:transcription'", params![format!("flow:{}:diarization", Uuid::new_v4())]).unwrap();
+    let mut hash = Sha256::new();
+    let mut statement = db.prepare("SELECT domain,source_scope,source_key,target_key FROM restore_identity_maps WHERE batch_id=?1 ORDER BY domain,source_scope,source_key").unwrap();
+    let maps = statement
+        .query_map(params![batch], |r| {
+            Ok(IdentityMap {
+                domain: r.get(0)?,
+                scope: r.get(1)?,
+                source: r.get(2)?,
+                target: r.get(3)?,
+            })
+        })
+        .unwrap();
+    for map in maps {
+        hash.update(serde_json::to_vec(&map.unwrap()).unwrap());
+        hash.update(b"\n");
+    }
+    db.execute(
+        "UPDATE restore_batches SET mapping_hash=?1",
+        params![format!("{:x}", hash.finalize())],
+    )
+    .unwrap();
+    let error = RestoreIds::prepare_for_batch(&source, output.path(), &batch, &db, &|| false)
+        .err()
+        .unwrap();
+    assert!(error.contains("派生操作ID"), "{error}");
+}
+
+#[test]
 fn processing_history_interrupts_queued_retry_and_prepared_flow_without_losing_conditions() {
     let mut f = fixture(false);
     let parent = f.flow.transcription_job.as_ref().unwrap();

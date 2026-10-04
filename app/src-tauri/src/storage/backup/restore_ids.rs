@@ -9,6 +9,16 @@ use std::collections::BTreeMap;
 
 const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 
+mod replay;
+
+pub(crate) enum BatchPreparation<'a> {
+    Pending(RestoreIds<'a>),
+    AlreadyPublished {
+        batch_id: String,
+        archive_id: String,
+    },
+}
+
 pub(crate) struct RestoreIds<'a> {
     // Close the disk-backed map before removing this operation's private files.
     database: Connection,
@@ -17,6 +27,7 @@ pub(crate) struct RestoreIds<'a> {
     bindings: BTreeMap<String, BTreeMap<String, Rule>>,
     pub batch_id: String,
     pub archive_id: String,
+    saved: Option<super::ledger::SavedBatch>,
     stage: tempfile::TempDir,
 }
 
@@ -137,6 +148,16 @@ impl<'a> RestoreIds<'a> {
         batch: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::prepare_inner(archive, parent, batch, None, cancelled)
+    }
+
+    fn prepare_inner(
+        archive: &'a VerifiedArchive,
+        parent: &Path,
+        batch: &str,
+        destination: Option<&Connection>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         if !Uuid::parse_str(batch).is_ok_and(|id| id.to_string() == batch) {
             return Err("復元バッチIDが不正です".into());
         }
@@ -158,6 +179,16 @@ impl<'a> RestoreIds<'a> {
             })
             .ok_or("復元ID領域の見積もりが範囲外です")?;
         check_capacity(parent, estimated)?;
+        let saved = destination
+            .map(|db| super::ledger::saved_batch(db, batch, archive, cancelled))
+            .transpose()?
+            .flatten();
+        if saved
+            .as_ref()
+            .is_some_and(|s| u64::try_from(s.count).map_or(true, |n| n > logical_bytes))
+        {
+            return Err("保存済み復元ID件数が元論理データの上限を超えています".into());
+        }
         let tables = portable::tables(&archive.database)?;
         let bindings = tables
             .iter()
@@ -170,8 +201,10 @@ impl<'a> RestoreIds<'a> {
         database.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA cache_size=-8192;
             CREATE TABLE mappings(domain TEXT NOT NULL,scope TEXT NOT NULL,old_id TEXT NOT NULL,new_id TEXT NOT NULL,
                 PRIMARY KEY(domain,scope,old_id));
+            CREATE INDEX mappings_target ON mappings(new_id);
             CREATE TABLE reserved_ids(id TEXT PRIMARY KEY);
             CREATE TABLE issued_ids(id TEXT PRIMARY KEY);
+            CREATE TABLE cached_mappings(domain TEXT NOT NULL,scope TEXT NOT NULL,old_id TEXT NOT NULL,new_id TEXT NOT NULL,PRIMARY KEY(domain,scope,old_id));
             CREATE TABLE publication_order(domain TEXT NOT NULL,old_id TEXT NOT NULL,position INTEGER NOT NULL,
                 PRIMARY KEY(domain,old_id),UNIQUE(domain,position));
             CREATE TABLE metadata(batch_id TEXT NOT NULL,archive_id TEXT NOT NULL);
@@ -189,8 +222,11 @@ impl<'a> RestoreIds<'a> {
             bindings,
             batch_id: batch.into(),
             archive_id: archive.manifest.archive_id.clone(),
+            saved,
             stage,
         };
+        plan.reserve(&plan.batch_id)?;
+        plan.reserve(&plan.archive_id)?;
         plan.verify_draft_history(cancelled)?;
         plan.order_dependencies(cancelled)?;
         // Reserve every relational identifier before minting any new one. IDs
@@ -217,6 +253,17 @@ impl<'a> RestoreIds<'a> {
         plan.visit_documents(&archive.database, cancelled, 0)?;
         plan.visit_fixed_definitions(cancelled, 0)?;
         plan.visit_provenance(cancelled, false)?;
+        if let Some(destination) = destination {
+            plan.check_destination_capacity(destination)?;
+            plan.load_saved(destination, cancelled)?;
+            if plan
+                .saved
+                .as_ref()
+                .is_none_or(|s| s.state == super::ledger::BatchState::Prepared)
+            {
+                plan.reserve_destination(destination, cancelled)?;
+            }
+        }
         plan.seed_documents(&archive.database, cancelled)?;
         plan.visit_fixed_definitions(cancelled, 1)?;
         plan.seed_flow_operations(cancelled)?;
@@ -297,6 +344,7 @@ impl<'a> RestoreIds<'a> {
             }
         }
         plan.check_documents(&archive.database, cancelled)?;
+        plan.verify_replay(cancelled)?;
         check_cancelled(cancelled)?;
         plan.database
             .execute_batch("COMMIT; PRAGMA query_only=ON;")
@@ -344,6 +392,9 @@ impl<'a> RestoreIds<'a> {
                     return Err("解析工程の初回操作が別会議・別工程または再試行です".into());
                 }
                 let new = format!("flow:{new_flow}:{kind}");
+                if self.saved.is_some() && self.cached_target("operation", &meeting, &old)? != new {
+                    return Err("保存済み解析工程の派生操作IDが一致しません".into());
+                }
                 self.reserve(&old)?;
                 let conflict: bool = self.database.query_row("SELECT EXISTS(SELECT 1 FROM reserved_ids WHERE id=?1) OR EXISTS(SELECT 1 FROM issued_ids WHERE id=?1)",params![new],|r|r.get(0)).map_err(|e|e.to_string())?;
                 if conflict || self.lookup("operation", &meeting, &old)?.is_some() {
@@ -364,9 +415,15 @@ impl<'a> RestoreIds<'a> {
     }
 
     fn declare(&self, domain: &str, meeting: &str, old: &str) -> Result<String, String> {
+        let meeting = scope(domain, meeting);
         self.reserve(old)?;
         if let Some(value) = self.lookup(domain, meeting, old)? {
             return Ok(value);
+        }
+        if self.saved.is_some() {
+            let new = self.cached_target(domain, meeting, old)?;
+            self.insert_cached(domain, meeting, old, &new)?;
+            return Ok(new);
         }
         loop {
             let prefix = match domain {
@@ -411,6 +468,9 @@ impl<'a> RestoreIds<'a> {
         old: &str,
     ) -> Result<(), String> {
         let new = self.declare(domain, meeting, old)?;
+        if self.saved.is_some() && self.cached_target(lineage, meeting, old)? != new {
+            return Err("保存済み手動編集と系譜の対応が一致しません".into());
+        }
         self.database.execute("INSERT INTO mappings VALUES(?1,?2,?3,?4) ON CONFLICT(domain,scope,old_id) DO UPDATE SET new_id=excluded.new_id",params![lineage,meeting,old,new]).map_err(|e|e.to_string())?;
         Ok(())
     }

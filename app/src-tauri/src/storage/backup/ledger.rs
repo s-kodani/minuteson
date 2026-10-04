@@ -13,10 +13,77 @@ pub(super) struct IdentityMap {
     pub target: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum BatchState {
     Prepared,
     Published,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SavedBatch {
+    pub archive: String,
+    pub fingerprint: String,
+    pub hash: String,
+    pub count: i64,
+    pub state: BatchState,
+    pub created_at: i64,
+    pub published_at: Option<i64>,
+}
+
+pub(super) fn fingerprint(source: &archive::VerifiedArchive) -> Result<String, String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&source.manifest).map_err(|e| e.to_string())?)
+    ))
+}
+
+pub(super) fn saved_batch(
+    db: &Connection,
+    batch: &str,
+    source: &archive::VerifiedArchive,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<SavedBatch>, String> {
+    check_cancelled(cancelled)?;
+    if !uuid(batch) || verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len()
+    {
+        return Err("復元バッチまたは保存先DB形式が不正です".into());
+    }
+    let row:Option<(String,String,String,i64,String,i64,Option<i64>)>=db.query_row("SELECT archive_id,archive_fingerprint,mapping_hash,mapping_count,state,created_at,published_at FROM restore_batches WHERE batch_id=?1",params![batch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional().map_err(|e|e.to_string())?;
+    let Some((archive, proof, hash, count, state, created_at, published_at)) = row else {
+        let orphan: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM restore_identity_maps WHERE batch_id=?1)",
+                params![batch],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if orphan {
+            return Err("復元バッチの記録が欠損しています".into());
+        }
+        return Ok(None);
+    };
+    if archive != source.manifest.archive_id
+        || proof != fingerprint(source)?
+        || !portable::valid_hash(&hash)
+        || count < 0
+    {
+        return Err("復元バッチの元アーカイブ・ID対応記録が一致しません".into());
+    }
+    let state = match (state.as_str(), published_at) {
+        ("prepared", None) => BatchState::Prepared,
+        ("published", Some(_)) => BatchState::Published,
+        _ => return Err("復元バッチの公開状態が不正です".into()),
+    };
+    check_cancelled(cancelled)?;
+    Ok(Some(SavedBatch {
+        archive,
+        fingerprint: proof,
+        hash,
+        count,
+        state,
+        created_at,
+        published_at,
+    }))
 }
 
 pub(super) struct BatchPlan<'a, 'b> {
@@ -100,10 +167,7 @@ impl<'a, 'b> BatchPlan<'a, 'b> {
         ids: &'a RestoreIds<'b>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let fingerprint = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&ids.source().manifest).map_err(|e| e.to_string())?)
-        );
+        let fingerprint = fingerprint(ids.source())?;
         let mut hash = Sha256::new();
         let mut count = 0_i64;
         ids.visit_mappings(cancelled, |map| {
