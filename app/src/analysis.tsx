@@ -7,6 +7,8 @@ import { timeLabel, type Analysis, type Draft } from "./transcript";
 import { VocabularyEditor } from "./vocabulary";
 import type { VocabularyStamp } from "./vocabulary-state";
 import { DiarizationPanel } from "./diarization-panel";
+import { AnalysisFlowStatus } from "./analysis-flow";
+import type { AnalysisFlow } from "./analysis-flow-state";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 import { useTranscriptAudio } from "./transcript-audio";
 import { projectTranscript, type Utterance } from "./transcript-state";
@@ -56,6 +58,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const [prompt, setPrompt] = useState("");
   const [jobs, setJobs] = useState<AnalysisJob[]>([]);
   const [versions, setVersions] = useState<VersionState | null>(null);
+  const [flow,setFlow]=useState<AnalysisFlow|null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -87,6 +90,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     let refreshAgain = false;
     let unlisten: (() => void) | undefined;
     let unlistenVersions: (() => void) | undefined;
+    let unlistenFlow: (() => void) | undefined;
     const refresh = (): Promise<void> => {
       if (disposed) return Promise.resolve();
       if (inFlight) { refreshAgain = true; return inFlight; }
@@ -94,12 +98,13 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
         do {
           refreshAgain = false;
           try {
-            const [nextJobs, nextVersions] = await Promise.all([
+            const [nextJobs, nextVersions,nextFlow] = await Promise.all([
               invoke<AnalysisJob[]>("get_analysis_jobs", { meetingId }),
               invoke<VersionState>("get_analysis_versions", { meetingId }),
+              invoke<AnalysisFlow|null>("get_analysis_flow",{meetingId}),
             ]);
             if (disposed) return;
-            setJobs(nextJobs); setVersions(nextVersions);
+            setJobs(nextJobs); setVersions(nextVersions);setFlow(nextFlow);
           } catch (cause) { if (!disposed) setError(String(cause)); }
         } while (refreshAgain && !disposed);
       })().finally(() => { inFlight = null; });
@@ -109,9 +114,10 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     // Events are invalidations. Only authoritative reads can update the display.
     void listen("analysis-job-changed", () => { void refresh(); }).then((stop) => { if (disposed) stop(); else { unlisten = stop; void refresh(); } }).catch((cause: unknown) => { if (!disposed) setError(String(cause)); });
     void listen<string>("analysis-version-changed", (event) => { if (event.payload === meetingId) void refresh(); }).then((stop) => { if (disposed) stop(); else { unlistenVersions = stop; void refresh(); } }).catch((cause: unknown) => { if (!disposed) setError(String(cause)); });
+    void listen("analysis-flow-changed",()=>{void refresh();}).then(stop=>{if(disposed)stop();else{unlistenFlow=stop;void refresh();}}).catch(cause=>{if(!disposed)setError(String(cause));});
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 3000);
-    return () => { disposed = true; unlisten?.(); unlistenVersions?.(); window.clearInterval(timer); };
+    return () => { disposed = true; unlisten?.(); unlistenVersions?.();unlistenFlow?.(); window.clearInterval(timer); };
   }, [meetingId]);
 
   useEffect(() => {
@@ -194,6 +200,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   const previous = versions?.versions.find((item) => item.id === versions.previousId);
 
   return <section className="analysis-card" aria-label="解析操作">
+    <AnalysisFlowStatus flow={flow} recorded={recorded} disabled={disabled||recordingActive} versions={versions?.versions??[]} start={()=>void run(()=>saved(async()=>{await invoke("start_analysis_flow",{meetingId});await refreshRef.current();}))} resume={f=>void run(()=>saved(async()=>{await invoke("continue_analysis_flow",{meetingId,expectedLockVersion:f.lockVersion});await refreshRef.current();}))} review={(summary,opener)=>void openPreview(summary,false,opener)}/>
     <div className="card-head"><h2>ローカル文字起こし</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>状態を再読込</button></div>
     <p>結果は候補として保存します。内容を確認して採用するまで、現在版と編集内容は変更しません。話者分離は採用済み文字起こしから下の操作で開始できます。トラック間の時刻補正は未検証です。</p>
     <details className="analysis-settings"><summary>エンジン設定（端末内に保存）</summary>

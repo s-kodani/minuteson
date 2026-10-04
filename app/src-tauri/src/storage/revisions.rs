@@ -90,7 +90,14 @@ impl Storage {
             if content_hash != expected_hash || stored_hash != expected_hash {
                 return Err("確認した解析候補の内容が変更されています".into());
             }
-            if parent_id != current_id {
+            if parent_id != current_id
+                && !super::analysis_flows::adoption_parent_matches(
+                    &transaction,
+                    meeting_id,
+                    revision_id,
+                    current_id.as_deref(),
+                )?
+            {
                 return Err("候補作成後に現在版が切り替わっています。再解析してください".into());
             }
             if let Some(current) = &current_id {

@@ -29,6 +29,16 @@ impl Storage {
         profile: Value,
         configure: impl FnOnce(&DiarizationInput) -> Result<(Value, i64), String>,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_diarization_source(request, profile, None, configure)
+    }
+
+    pub(crate) fn enqueue_diarization_source(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        transcription_job: Option<&str>,
+        configure: impl FnOnce(&DiarizationInput) -> Result<(Value, i64), String>,
+    ) -> Result<JobSnapshot, String> {
         if request.operation_id.trim().is_empty()
             || request.operation_id.len() > 128
             || request.expected_meeting_lock_version < 0
@@ -65,8 +75,51 @@ impl Storage {
             }
             return super::jobs::load_job(&tx, &id)?.ok_or("処理が見つかりません".into());
         }
-        let (mut source, draft, title, created, started) =
-            current_working(&tx, &request.meeting_id)?;
+        let (mut source, draft, title, created, started) = if let Some(job) = transcription_job {
+            // Only the exact successful transcription output can be handed on.
+            // Reading it never adopts it or activates a draft.
+            let job = super::jobs::load_job(&tx, job)?.ok_or("引継ぎ元ジョブがありません")?;
+            let (spec, _) = super::jobs::read_fixed_input(&tx, &job.id)?;
+            if job.kind != "transcription"
+                || job.state != "succeeded"
+                || job.meeting_id != request.meeting_id
+                || job.output_analysis_id.as_deref() != Some(&request.expected_analysis_id)
+                || request.expected_draft.is_some()
+            {
+                return Err("成功した同じ会議の文字起こしだけを引き継げます".into());
+            }
+            let (hash,audio,state):(String,String,String) = tx.query_row("SELECT content_hash,audio_manifest_hash,publication_state FROM analysis_revisions WHERE id=?1 AND meeting_id=?2",params![request.expected_analysis_id,request.meeting_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
+            if !matches!(state.as_str(), "candidate" | "committed")
+                || audio != spec.input_hash
+                || hash != request.expected_content_hash
+                || super::revisions::analysis_content_hash(&tx, &request.expected_analysis_id)?
+                    != hash
+            {
+                return Err("引継ぎ元の文字起こし内容または音声の由来が一致しません".into());
+            }
+            let view = super::analysis::read_analysis_content(
+                &tx,
+                &request.meeting_id,
+                &request.expected_analysis_id,
+                &hash,
+            )?;
+            let (title, created, started) = tx
+                .query_row(
+                    "SELECT title,created_at,started_at_utc_ms FROM meetings WHERE id=?1",
+                    params![request.meeting_id],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, Option<i64>>(2)?,
+                        ))
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            (view, None, title, created, started)
+        } else {
+            current_working(&tx, &request.meeting_id)?
+        };
         let lock: i64 = tx
             .query_row(
                 "SELECT lock_version FROM meetings WHERE id=?1",

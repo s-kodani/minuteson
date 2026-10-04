@@ -386,6 +386,7 @@ impl Storage {
         ).map_err(|error| error.to_string())?;
         let saved =
             load_session(&transaction, session_id)?.ok_or("録音セッションを読み込めません")?;
+        super::analysis_flows::ensure_flow(&transaction, &session.meeting_id)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(saved)
     }
@@ -817,6 +818,10 @@ mod tests {
         let saved = storage.finalize_recording(&session.id).unwrap();
         assert_eq!(saved.state, "saved");
         assert_eq!(saved.duration_us, 1_000_000);
+        assert_eq!(
+            storage.analysis_flow(&meeting.id).unwrap().unwrap().stage,
+            "pending"
+        );
         let db = storage.connection.lock().unwrap();
         let assets: i64 = db
             .query_row(

@@ -67,6 +67,23 @@ impl AnalysisController {
     fn work(app: &AppHandle) {
         loop {
             let controller = app.state::<Self>();
+            let stopping = || {
+                controller.shutdown.load(Ordering::SeqCst)
+                    || controller
+                        .state
+                        .lock()
+                        .map_or(true, |state| state.recording_intent)
+            };
+            if stopping() {
+                return;
+            }
+            if let Err(error) =
+                crate::analysis_flow::advance(&app.state::<Storage>(), &stopping, &|flow| {
+                    let _ = app.emit("analysis-flow-changed", flow);
+                })
+            {
+                let _ = app.emit("analysis-worker-error", error);
+            }
             let claimed = {
                 let Ok(mut state) = controller.state.lock() else {
                     return;

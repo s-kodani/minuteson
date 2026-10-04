@@ -61,7 +61,7 @@ impl Storage {
             id: draft.id,
             lock_version: draft.lock_version,
         });
-        let mut query = transaction.prepare("SELECT a.id, a.revision_no, a.content_hash, a.publication_state, (SELECT COUNT(*) FROM utterances WHERE analysis_revision_id = a.id), a.created_at, a.profile_snapshot_json, a.config_json FROM analysis_revisions a WHERE a.meeting_id = ?1 AND (a.id IN (?2, ?3) OR a.id IN (SELECT id FROM analysis_revisions WHERE meeting_id = ?1 AND publication_state = 'candidate' ORDER BY revision_no DESC LIMIT 20)) ORDER BY a.revision_no DESC").map_err(|e| e.to_string())?;
+        let mut query = transaction.prepare("SELECT a.id, a.revision_no, a.content_hash, a.publication_state, (SELECT COUNT(*) FROM utterances WHERE analysis_revision_id = a.id), a.created_at, a.profile_snapshot_json, a.config_json FROM analysis_revisions a WHERE a.meeting_id = ?1 AND (a.id IN (?2, ?3) OR a.id IN (SELECT id FROM analysis_revisions WHERE meeting_id = ?1 AND publication_state = 'candidate' ORDER BY revision_no DESC LIMIT 20) OR (a.publication_state='candidate' AND a.id IN (SELECT j.output_analysis_id FROM analysis_flows f JOIN processing_jobs j ON j.id IN (f.transcription_job_id,f.diarization_job_id) WHERE f.meeting_id=?1 AND j.state='succeeded'))) ORDER BY a.revision_no DESC").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![meeting_id, current_id, previous_id], |row| {
                 let profile: String = row.get(6)?;

@@ -198,6 +198,17 @@ pub(crate) fn enqueue(
     profile: &str,
     tracks: Vec<TrackSettings>,
 ) -> Result<JobSnapshot, String> {
+    enqueue_source(storage, request, engine, profile, tracks, None)
+}
+
+pub(crate) fn enqueue_source(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: SherpaConfig,
+    profile: &str,
+    tracks: Vec<TrackSettings>,
+    transcription_job: Option<&str>,
+) -> Result<JobSnapshot, String> {
     if !matches!(profile, "standard" | "high_accuracy") {
         return Err("話者分離のプロファイルが不正です".into());
     }
@@ -210,7 +221,7 @@ pub(crate) fn enqueue(
     )?;
     validate_tracks(&source, &tracks)?;
     let profile = serde_json::json!({"profile":profile,"engine":"sherpa-onnx","segmentationSha256":engine.segmentation_model.sha256,"embeddingSha256":engine.embedding_model.sha256,"qualityStatus":"unverified"});
-    storage.enqueue_diarization_job(request, profile, move |input| {
+    let configure = move |input: &DiarizationInput| -> Result<(serde_json::Value, i64), String> {
         if input.audio_manifest_hash != source.manifest_hash {
             return Err("文字起こしと保存音声の由来が一致しません".into());
         }
@@ -234,7 +245,12 @@ pub(crate) fn enqueue(
             serde_json::to_value(parameters).map_err(|e| e.to_string())?,
             total,
         ))
-    })
+    };
+    if transcription_job.is_some() {
+        storage.enqueue_diarization_source(request, profile, transcription_job, configure)
+    } else {
+        storage.enqueue_diarization_job(request, profile, configure)
+    }
 }
 fn checked_parameters(storage: &Storage, spec: &JobSpec, job: &str) -> Result<Parameters, String> {
     let envelope: Envelope =

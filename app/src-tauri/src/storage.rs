@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod analysis;
+pub(crate) mod analysis_flows;
 mod analysis_ui;
 mod diarization;
 mod diarization_preferences;
@@ -78,6 +79,7 @@ const MIGRATION_14: &str = include_str!("migrations/0014_minutes_results.sql");
 const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
 const MIGRATION_16: &str = include_str!("migrations/0016_vocabulary.sql");
 const MIGRATION_17: &str = include_str!("migrations/0017_diarization.sql");
+const MIGRATION_18: &str = include_str!("migrations/0018_analysis_flows.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -392,6 +394,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (15_i64, MIGRATION_15),
         (16_i64, MIGRATION_16),
         (17_i64, MIGRATION_17),
+        (18_i64, MIGRATION_18),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -587,7 +590,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 17);
+        assert_eq!(count, 18);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

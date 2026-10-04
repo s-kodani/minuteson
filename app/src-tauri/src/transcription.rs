@@ -255,7 +255,7 @@ pub(crate) fn enqueue(
 ) -> Result<JobSnapshot, String> {
     enqueue_with_stamp(storage, meeting_id, operation_id, engine, profile, None)
 }
-fn enqueue_with_stamp(
+pub(crate) fn enqueue_with_stamp(
     storage: &Storage,
     meeting_id: &str,
     operation_id: &str,

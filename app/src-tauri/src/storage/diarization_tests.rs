@@ -362,7 +362,7 @@ fn v16_migration_preserves_heads_drafts_vocabulary_and_fixed_jobs() {
     let job = s.enqueue_job(spec.clone()).unwrap();
     {
         let db = s.connection.lock().unwrap();
-        db.execute_batch("DROP TABLE diarization_manual_assignments; DROP TRIGGER job_analysis_result_insert; DROP TRIGGER job_result_scope; DELETE FROM schema_migrations WHERE version=17;").unwrap();
+        db.execute_batch("DROP TABLE analysis_flows; DROP TABLE diarization_manual_assignments; DROP TRIGGER job_analysis_result_insert; DROP TRIGGER job_result_scope; DELETE FROM schema_migrations WHERE version>=17;").unwrap();
         let old_trigger = MIGRATION_9
             .split_once("CREATE TRIGGER job_result_scope")
             .unwrap()
@@ -392,7 +392,7 @@ fn v16_migration_preserves_heads_drafts_vocabulary_and_fixed_jobs() {
         db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert!(db
         .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))

@@ -1,3 +1,4 @@
+mod analysis_flow;
 mod analysis_worker;
 mod audio;
 mod diarization;
@@ -475,6 +476,59 @@ async fn start_transcription(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn get_analysis_flow(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+) -> Result<Option<storage::analysis_flows::AnalysisFlow>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read analysis flow".into());
+    }
+    storage.analysis_flow(&meeting_id)
+}
+
+#[tauri::command]
+fn start_analysis_flow(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can start analysis flow".into());
+    }
+    let flow = window
+        .state::<Storage>()
+        .ensure_analysis_flow(&meeting_id)?;
+    window
+        .app_handle()
+        .emit("analysis-flow-changed", flow.clone())
+        .map_err(|e| e.to_string())?;
+    AnalysisController::kick(window.app_handle())?;
+    Ok(flow)
+}
+
+#[tauri::command]
+fn continue_analysis_flow(
+    window: WebviewWindow,
+    meeting_id: String,
+    expected_lock_version: i64,
+) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can continue analysis flow".into());
+    }
+    let flow = analysis_flow::continue_flow(
+        &window.state::<Storage>(),
+        &meeting_id,
+        expected_lock_version,
+    )?;
+    window
+        .app_handle()
+        .emit("analysis-flow-changed", flow.clone())
+        .map_err(|e| e.to_string())?;
+    AnalysisController::kick(window.app_handle())?;
+    Ok(flow)
 }
 
 #[tauri::command]
@@ -1002,6 +1056,7 @@ pub fn run() {
                 match handle.state::<Storage>().recover_completed_recordings() {
                     Ok(ids) if !ids.is_empty() => {
                         let _ = handle.emit("recordings-recovered", ids);
+                        let _ = AnalysisController::kick(&handle);
                     }
                     Ok(_) => {}
                     Err(error) => eprintln!("録音回復の確認に失敗しました: {error}"),
@@ -1037,6 +1092,9 @@ pub fn run() {
             close_playback,
             finish_main_close,
             start_transcription,
+            get_analysis_flow,
+            start_analysis_flow,
+            continue_analysis_flow,
             start_diarization,
             retry_diarization,
             get_diarization_tracks,
