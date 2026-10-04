@@ -8,8 +8,9 @@ pub(in crate::storage::backup) struct SealedWorkspace {
     database: Connection,
     stage: tempfile::TempDir,
     database_proof: (u64, String),
-    pub batch_id: String,
-    pub archive_id: String,
+    identity_proof: (String, String, i64),
+    batch_id: String,
+    archive_id: String,
     required_bytes: u64,
 }
 
@@ -282,6 +283,7 @@ impl FixedWorkspace {
         check_capacity(&owned, 0)?;
         let batch_id = fixed.ids.batch_id.clone();
         let archive_id = fixed.ids.archive_id.clone();
+        let identity_proof = super::super::super::ledger::BatchPlan::new(fixed.ids, check)?.proof();
         let FixedWorkspace {
             database, stage, ..
         } = self;
@@ -297,6 +299,7 @@ impl FixedWorkspace {
             database,
             stage,
             database_proof: proof,
+            identity_proof,
             batch_id,
             archive_id,
             required_bytes,
@@ -307,6 +310,21 @@ impl FixedWorkspace {
 }
 
 impl SealedWorkspace {
+    pub(in crate::storage::backup) fn matches_ids(
+        &self,
+        ids: &RestoreIds<'_>,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if self.batch_id != ids.batch_id
+            || self.archive_id != ids.archive_id
+            || self.identity_proof
+                != super::super::super::ledger::BatchPlan::new(ids, check)?.proof()
+        {
+            return Err("復元専用領域と公開するID対応が一致しません".into());
+        }
+        Ok(())
+    }
+
     pub(in crate::storage::backup) fn prepare(
         fixed: &FixedData<'_, '_>,
         parent: &Path,

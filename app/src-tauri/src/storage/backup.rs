@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 pub(crate) mod archive;
 pub(in crate::storage) mod ledger;
 mod portable;
+pub(in crate::storage::backup) mod publication;
 pub(crate) mod restore_fixed;
 pub(crate) mod restore_ids;
 
@@ -20,6 +21,13 @@ const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 
 struct Maintenance<'a> {
     storage: &'a Storage,
+    unresolved: std::cell::Cell<bool>,
+}
+
+impl Maintenance<'_> {
+    fn fail_closed(&self) {
+        self.unresolved.set(true);
+    }
 }
 
 impl Drop for Maintenance<'_> {
@@ -30,11 +38,21 @@ impl Drop for Maintenance<'_> {
             .connection
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if db
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-            .is_ok()
+        if !self.unresolved.get()
+            && db.is_autocommit()
+            && db
+                .set_db_config(
+                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+                    true,
+                )
+                .is_ok()
+            && db
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+                .is_ok()
         {
             self.storage.maintenance.store(false, Ordering::Release);
+        } else {
+            let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
         }
         // An unexpected hook failure stays fail-closed until Storage is reopened.
     }
@@ -112,7 +130,10 @@ impl Storage {
         }))
         .map_err(|e| e.to_string())?;
         self.maintenance.store(true, Ordering::Release);
-        Ok(Maintenance { storage: self })
+        Ok(Maintenance {
+            storage: self,
+            unresolved: std::cell::Cell::new(false),
+        })
     }
 
     pub(crate) fn prepare_backup_snapshot(

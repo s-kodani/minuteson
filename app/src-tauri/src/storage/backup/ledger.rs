@@ -163,6 +163,10 @@ pub(super) fn validate_provenance(
 }
 
 impl<'a, 'b> BatchPlan<'a, 'b> {
+    pub(super) fn proof(&self) -> (String, String, i64) {
+        (self.fingerprint.clone(), self.hash.clone(), self.count)
+    }
+
     pub(super) fn new(
         ids: &'a RestoreIds<'b>,
         cancelled: &impl Fn() -> bool,

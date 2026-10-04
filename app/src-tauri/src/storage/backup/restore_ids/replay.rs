@@ -187,6 +187,63 @@ impl<'a> RestoreIds<'a> {
         check_cancelled(cancelled)
     }
 
+    pub(in crate::storage::backup) fn check_publication_destination(
+        &self,
+        db: &Connection,
+        reconstruction: &Connection,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        // Probe the private disk registry without altering its immutable maps
+        // or retaining a conflict after the destination later removes it.
+        struct ReadOnly<'a>(&'a Connection);
+        impl Drop for ReadOnly<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.execute_batch("PRAGMA query_only=ON;");
+            }
+        }
+        self.database
+            .execute_batch("PRAGMA query_only=OFF;")
+            .map_err(|e| e.to_string())?;
+        let _read_only = ReadOnly(&self.database);
+        let _probe = self
+            .database
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        self.reserve_destination(db, cancelled)?;
+        let collision: bool = self
+            .database
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM mappings m JOIN reserved_ids r ON r.id=m.new_id)",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if collision {
+            return Err("復元IDが準備後の既存データと競合しています".into());
+        }
+        let mut query = reconstruction
+            .prepare("SELECT id FROM restore_provenance")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            check_cancelled(cancelled)?;
+            if self.target_reserved(&row.get::<_, String>(0).map_err(|e| e.to_string())?)? {
+                return Err("復元由来IDが既存データと競合しています".into());
+            }
+        }
+        check_cancelled(cancelled)
+    }
+
+    fn target_reserved(&self, target: &str) -> Result<bool, String> {
+        self.database
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM reserved_ids WHERE id=?1)",
+                params![target],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+
     pub(super) fn cached_target(
         &self,
         domain: &str,

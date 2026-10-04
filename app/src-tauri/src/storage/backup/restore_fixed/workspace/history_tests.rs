@@ -391,6 +391,137 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
 }
 
 #[test]
+fn restore_publication_native_history_preserves_existing_edits_files_and_reopens_without_models() {
+    use super::super::seal::SealedWorkspace;
+    use crate::storage::backup::publication::{tests::all_rows, Publication};
+    let (f, _outside, external) = exported_fixture();
+    let (existing, _existing_outside, existing_external) = exported_fixture();
+    let output = tempfile::tempdir().unwrap();
+    let source = read(&f, output.path());
+    let batch = Uuid::new_v4().to_string();
+    let ids = match RestoreIds::prepare_for_batch(
+        &source,
+        output.path(),
+        &batch,
+        &existing.storage.connection.lock().unwrap(),
+        &|| false,
+    )
+    .unwrap()
+    {
+        crate::storage::backup::restore_ids::BatchPreparation::Pending(ids) => ids,
+        _ => panic!(),
+    };
+    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    for name in [
+        "fake-cli",
+        "model.bin",
+        "sherpa-cli",
+        "seg.onnx",
+        "emb.onnx",
+        "llama-completion",
+        "model.gguf",
+    ] {
+        std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let before = all_rows(&existing.storage.connection.lock().unwrap());
+    assert!(matches!(
+        existing
+            .storage
+            .publish_restore(&sealed, &ids, &|| false)
+            .unwrap(),
+        Publication::Published { meetings: 1, .. }
+    ));
+    let meeting = ids.get("meetings", "", &f.meeting).unwrap();
+    {
+        let mut db = existing.storage.connection.lock().unwrap();
+        crate::storage::backup::validate_database(&mut db, &|| false).unwrap();
+        let after = all_rows(&db);
+        for (index, table) in crate::storage::backup::portable::TABLES
+            .iter()
+            .chain(["app_settings", "restore_batches", "restore_identity_maps"].iter())
+            .enumerate()
+        {
+            assert!(
+                after[index].starts_with(&before[index]),
+                "existing {table} changed"
+            );
+        }
+        let flow = crate::storage::analysis_flows::read_flow(&db, &meeting)
+            .unwrap()
+            .unwrap();
+        root_operations(&db, &flow);
+        assert_eq!(flow.stage, "review");
+        assert_eq!(db.query_row("SELECT count(*) FROM processing_jobs WHERE state IN ('queued','running','pausing','paused')",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert!(
+            db.query_row(
+                "SELECT count(*) FROM file_assets WHERE meeting_id=?1 AND state='missing'",
+                params![meeting],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap()
+                > 0
+        );
+        let mut q=db.prepare("SELECT relative_path,size_bytes,content_hash,state FROM file_assets WHERE meeting_id=?1").unwrap();
+        let mut rows = q.query(params![meeting]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let relative: String = row.get(0).unwrap();
+            let path = existing.storage.root.join(relative);
+            let state: String = row.get(3).unwrap();
+            if state == "missing" {
+                assert!(!path.exists());
+            } else {
+                assert_eq!(
+                    crate::storage::backup::digest_file(&path, &|| false).unwrap(),
+                    (
+                        row.get::<_, i64>(1).unwrap() as u64,
+                        row.get::<_, String>(2).unwrap()
+                    )
+                );
+            }
+        }
+    }
+    assert!(existing
+        .storage
+        .load_current_analysis(&meeting)
+        .unwrap()
+        .is_some());
+    assert!(existing
+        .storage
+        .load_minutes_draft(&meeting, None)
+        .unwrap()
+        .is_some());
+    assert!(existing
+        .storage
+        .acquire_local_inference_job()
+        .unwrap()
+        .is_none());
+    assert_eq!(std::fs::read(&external).unwrap(), b"external edit");
+    assert_eq!(std::fs::read(&existing_external).unwrap(), b"external edit");
+    let root = existing.root.path().to_path_buf();
+    drop(existing.storage);
+    let reopened = Storage::open(root).unwrap();
+    assert_eq!(reopened.list_meetings().unwrap().len(), 2);
+    assert!(reopened.load_current_analysis(&meeting).unwrap().is_some());
+    assert!(reopened
+        .load_minutes_draft(&meeting, None)
+        .unwrap()
+        .is_some());
+    assert!(reopened.acquire_local_inference_job().unwrap().is_none());
+    assert!(matches!(
+        RestoreIds::prepare_for_batch(
+            &source,
+            output.path(),
+            &batch,
+            &reopened.connection.lock().unwrap(),
+            &|| false
+        )
+        .unwrap(),
+        crate::storage::backup::restore_ids::BatchPreparation::AlreadyPublished { .. }
+    ));
+}
+
+#[test]
 fn processing_history_interrupts_queued_retry_and_prepared_flow_without_losing_conditions() {
     let mut f = fixture(false);
     let parent = f.flow.transcription_job.as_ref().unwrap();

@@ -98,7 +98,11 @@ pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, S
     if version < 20 || version > MIGRATIONS.len() {
         return Err("未対応のバックアップDB形式です".into());
     }
-    db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at INTEGER NOT NULL);").map_err(|e| e.to_string())?;
+    db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
+        .map_err(|e| e.to_string())?;
+    // Use the identical trusted bootstrap SQL as Storage::open. Exact schema
+    // comparison at publication must not mistake spacing for a foreign schema.
+    db.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
     for &(version, sql) in &MIGRATIONS[..version] {
         db.execute_batch(sql).map_err(|e| e.to_string())?;
         db.execute(

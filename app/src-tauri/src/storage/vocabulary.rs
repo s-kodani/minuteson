@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 #[allow(dead_code)]
 mod restore;
 pub(super) use restore::GlobalMerge;
+pub(super) use restore::MergeReceipt;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
