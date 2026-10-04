@@ -1,5 +1,6 @@
 mod analysis_worker;
 mod audio;
+mod exports;
 mod generation;
 mod local_engine;
 mod minutes_document;
@@ -159,6 +160,74 @@ fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
         return Err("Only the main window can read or edit minutes".into());
     }
     Ok(window.app_handle().clone())
+}
+
+#[tauri::command]
+async fn get_minutes_exports(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<Vec<storage::ExportRecord>, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().exports(&meeting_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn export_minutes_markdown(
+    window: WebviewWindow,
+    request: storage::ExportRequest,
+) -> Result<Option<storage::ExportRecord>, String> {
+    let app = minutes_app(&window)?;
+    let _lease = app.state::<exports::ExportController>().begin()?;
+    let worker = app.clone();
+    let query = request.clone();
+    if let Some(record) = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().existing_export(&query)
+    })
+    .await
+    .map_err(|e| e.to_string())??
+    {
+        return Ok(Some(record));
+    }
+    let worker = app.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().prepare_export(request)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let Some(path) = exports::save_dialog(&window, prepared.filename.clone()).await? else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().write_export(prepared, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(Some)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportStatus {
+    active: bool,
+    record: Option<storage::ExportRecord>,
+}
+#[tauri::command]
+async fn get_minutes_export_status(
+    window: WebviewWindow,
+    request: storage::ExportRequest,
+) -> Result<ExportStatus, String> {
+    let app = minutes_app(&window)?;
+    let worker = app.clone();
+    let record = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().existing_export(&request)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(ExportStatus {
+        active: app.state::<exports::ExportController>().active(),
+        record,
+    })
 }
 
 #[tauri::command]
@@ -476,6 +545,9 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
+    if window.state::<exports::ExportController>().active() {
+        return Err("Markdownの保存・取消が完了してから終了してください".into());
+    }
     if window.state::<SessionStore>().snapshot().is_active() {
         if quit {
             return Err("録音の停止と保存が完了していません".into());
@@ -700,6 +772,7 @@ pub fn run() {
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(AnalysisController::default())
+        .manage(exports::ExportController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
             app.manage(Storage::open(root)?);
@@ -741,6 +814,9 @@ pub fn run() {
             start_transcription,
             start_minutes_generation,
             get_minutes_versions,
+            get_minutes_exports,
+            get_minutes_export_status,
+            export_minutes_markdown,
             get_minutes_preferences,
             save_minutes_preferences,
             get_minutes_preview,

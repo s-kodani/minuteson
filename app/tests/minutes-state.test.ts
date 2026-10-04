@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertMinutesReview, assertMinutesVersion, minutesConfigured, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
+import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
 
 const engine: MinutesEngine = { executablePath: "/engine/llama-completion", modelPath: "/model.gguf", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 };
 const state: MinutesVersions = { meetingLockVersion: 1, currentId: "current", previousId: "previous", draft: { id: "draft", lockVersion: 3 }, versions: [
@@ -18,4 +18,13 @@ test("minutes review rejects replacement of the reviewed candidate, head, draft 
   assert.throws(() => assertMinutesVersion(state, reviewed, true));
   assert.throws(() => assertMinutesVersion(state, { ...reviewed, contentHash: "other" }, false));
   for (const patch of [{ meetingLockVersion: 2 }, { currentId: "new" }, { previousId: null }, { draft: null }, { draft: { id: "new-draft", lockVersion: 3 } }, { draft: { id: "draft", lockVersion: 4 } }, { versions: [{ ...reviewed, inputUpdated: true }] }]) assert.throws(() => assertMinutesReview({ ...state, ...patch }, state, reviewed, false));
+});
+test("export requests freeze the saved current head and draft stamp, never an unadopted candidate", () => {
+  const committed = { ...state.versions[1], id: "current", contentHash: "current-hash" };
+  const current = { ...state, versions: [...state.versions, committed] };
+  assert.deepEqual(minutesExportRequest(current, "meeting", "operation"), { operationId: "operation", meetingId: "meeting", expectedMinutesId: "current", expectedContentHash: "current-hash", expectedMeetingLockVersion: 1, expectedDraft: { id: "draft", lockVersion: 3 } });
+  assert.throws(() => minutesExportRequest(state, "meeting", "operation"));
+  assert.throws(() => minutesExportRequest({ ...state, currentId: "candidate" }, "meeting", "operation"));
+  assert.match(exportLabel("succeeded"), /完了/); assert.match(exportLabel("failed"), /失敗/);
+  assert.match(exportLabel("writing"), /未確定/); assert.match(exportLabel("interrupted"), /未確定/);
 });

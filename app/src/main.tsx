@@ -301,7 +301,7 @@ function MainWindow() {
           <div className="next-grid">
             <section><span className="step-number">01</span><h2>保存基盤</h2><p>会議・録音・候補版と、版ごとの編集を端末内に保持します。</p><span className="soon">一部実装</span></section>
             <section><span className="step-number">02</span><h2>録音をつなぐ</h2><p>macOSでマイクとシステム音声を別々に保存します。</p><span className="soon">実機検証待ち</span></section>
-            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし・議事録の編集と、候補の生成・確認・採用に対応。話者分離・ファイル出力は接続作業中です。</p><span className="soon">一部実装</span></section>
+            <section><span className="step-number">03</span><h2>内容を整える</h2><p>文字起こし・議事録の編集、候補の生成・確認・採用、macOSのMarkdown出力に対応。話者分離は接続作業中です。</p><span className="soon">一部実装</span></section>
           </div>
         </main>
       </div>

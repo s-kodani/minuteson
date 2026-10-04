@@ -130,4 +130,4 @@ impl Storage {
 
 #[cfg(test)]
 #[path = "minutes_ui_tests.rs"]
-mod tests;
+pub(super) mod tests;

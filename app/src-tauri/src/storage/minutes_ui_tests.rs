@@ -4,7 +4,7 @@ use crate::minutes_document::{
 };
 use serde_json::json;
 
-fn meeting(storage: &Storage) -> String {
+pub(in crate::storage) fn meeting(storage: &Storage) -> String {
     let m = super::super::analysis::tests::saved_meeting(storage);
     let mut input = super::super::analysis::tests::input();
     input.utterances[0].text = "点検日を確認することに決まりました。".into();
@@ -15,7 +15,7 @@ fn meeting(storage: &Storage) -> String {
     storage.create_transcript_draft(&m.id, &id).unwrap();
     m.id
 }
-fn candidate(storage: &Storage, meeting: &str) -> String {
+pub(in crate::storage) fn candidate(storage: &Storage, meeting: &str) -> String {
     let analysis = storage.load_current_analysis(meeting).unwrap().unwrap();
     let draft = storage.load_transcript_draft(meeting).unwrap().unwrap();
     let request = MinutesJobRequest {
@@ -59,7 +59,11 @@ fn candidate(storage: &Storage, meeting: &str) -> String {
         .finish_minutes_candidate(&job.id, 1, content)
         .unwrap()
 }
-fn request(storage: &Storage, meeting: &str, id: &str) -> MinutesAdoptRequest {
+pub(in crate::storage) fn request(
+    storage: &Storage,
+    meeting: &str,
+    id: &str,
+) -> MinutesAdoptRequest {
     let state = storage.minutes_versions(meeting).unwrap();
     let view = storage.load_minutes_content(meeting, id).unwrap().unwrap();
     MinutesAdoptRequest {

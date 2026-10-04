@@ -19,6 +19,7 @@ async (page) => {
     data.drafts.a = { id: "draft-a", meetingId: "m1", baseMinutesId: "a", contentHash: "draft-hash", lockVersion: 4, updatedAt: 0, payload: copy(data.views.a.content) };
     data.drafts.a.payload.blocks.push({ type: "paragraph", itemId: null, content: [text("保存済みの手動追記を保持します。 <img src=x onerror=alert(1)>")] });
     data.history = { a: [] }; data.failMinutesSave = false; data.minutesSaveDelay = 0;
+    data.exports=[];data.exportMode="cancel";data.exportDelay=0;data.exportActive=false;data.lostExportResponse=false;
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
@@ -51,6 +52,21 @@ async (page) => {
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if (cmd === "get_minutes_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : data.current,previousId:args.meetingId === "m2" ? null : data.previous,draft:args.meetingId === "m2" ? null : stamp(),versions:args.meetingId === "m2" ? [] : copy(data.versions.filter(v=>v.publicationState==="candidate"||[data.current,data.previous].includes(v.id)))};
         if (cmd === "get_minutes_preview") return copy(data.views[args.minutesId] ?? null);
+        if (cmd === "get_minutes_exports") return copy(data.exports.filter(e=>e.meetingId===args.meetingId));
+        if (cmd === "get_minutes_export_status") return {active:data.exportActive,record:copy(data.exports.find(e=>e.id===args.request.operationId)??null)};
+        if (cmd === "export_minutes_markdown") {
+          const r=args.request;
+          const prior=data.exports.find(e=>e.id===r.operationId);if(prior)return copy(prior);
+          if(r.expectedMeetingLockVersion!==data.lock||r.expectedMinutesId!==data.current||JSON.stringify(r.expectedDraft)!==JSON.stringify(stamp()))throw Error("stale export input");
+          data.exportActive=true;
+          if(data.exportDelay)await new Promise(resolve=>setTimeout(resolve,data.exportDelay));
+          data.exportActive=false;
+          if(data.exportMode==="cancel")return null;
+          const e={id:r.operationId,meetingId:r.meetingId,minutesRevisionId:r.expectedMinutesId,exportedContentHash:"fixture-json-hash",outputContentHash:"fixture-file-hash",outputSizeBytes:1234,destinationPath:"/fixture/議事録.md",state:data.exportMode==="fail"?"failed":"succeeded",errorMessage:data.exportMode==="fail"?"模擬容量不足":null,createdAt:0,exportedAt:data.exportMode==="fail"?null:0};
+          data.exports.unshift(e);
+          if(data.lostExportResponse){data.lostExportResponse=false;throw Error("模擬応答喪失");}
+          return copy(e);
+        }
         if (cmd === "get_minutes_draft") return copy(data.drafts[args.minutesId ?? data.current] ?? null);
         if (cmd === "create_minutes_draft") {
           if(args.minutesId!==data.current) throw Error("noncurrent minutes");

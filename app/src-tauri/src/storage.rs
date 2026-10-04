@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod analysis;
 mod analysis_ui;
 mod drafts;
+mod exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
 mod jobs;
@@ -30,6 +31,7 @@ pub(crate) use analysis::{AnalysisInput, UtteranceInput};
 pub(crate) use analysis::{AnalysisSpeaker, AnalysisUtterance};
 pub(crate) use analysis_ui::{AdoptRequest, DraftStamp, VersionState};
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
+pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
@@ -55,6 +57,7 @@ const MIGRATION_11: &str = include_str!("migrations/0011_app_settings.sql");
 const MIGRATION_12: &str = include_str!("migrations/0012_job_retry.sql");
 const MIGRATION_13: &str = include_str!("migrations/0013_minutes_inputs.sql");
 const MIGRATION_14: &str = include_str!("migrations/0014_minutes_results.sql");
+const MIGRATION_15: &str = include_str!("migrations/0015_exports.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +104,7 @@ impl Storage {
             "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
             params![now_ms()?],
         )?;
+        connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),
@@ -365,6 +369,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
         (12_i64, MIGRATION_12),
         (13_i64, MIGRATION_13),
         (14_i64, MIGRATION_14),
+        (15_i64, MIGRATION_15),
     ];
     for (index, (version, checksum)) in known.iter().enumerate() {
         let Some((expected_version, sql)) = migrations.get(index) else {
@@ -560,7 +565,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 14);
+        assert_eq!(count, 15);
         assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
     }
 

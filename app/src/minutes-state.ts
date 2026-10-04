@@ -35,6 +35,25 @@ export interface MinutesVersions {
   meetingLockVersion: number; currentId: string | null; previousId: string | null;
   draft: { id: string; lockVersion: number } | null; versions: MinutesVersion[];
 }
+export interface MinutesExportRequest {
+  operationId: string; meetingId: string; expectedMinutesId: string; expectedContentHash: string;
+  expectedMeetingLockVersion: number; expectedDraft: MinutesVersions["draft"];
+}
+export interface MinutesExport {
+  id: string; meetingId: string; minutesRevisionId: string | null; exportedContentHash: string;
+  outputContentHash: string; outputSizeBytes: number; destinationPath: string;
+  state: "writing" | "succeeded" | "failed" | "interrupted"; errorMessage: string | null;
+  createdAt: number; exportedAt: number | null;
+}
+export function minutesExportRequest(state: MinutesVersions, meetingId: string, operationId: string): MinutesExportRequest {
+  const version = state.versions.find((v) => v.id === state.currentId && v.publicationState === "committed");
+  if (!version) throw new Error("採用済みの議事録が必要です。");
+  return { operationId, meetingId, expectedMinutesId: version.id, expectedContentHash: version.contentHash,
+    expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft };
+}
+export function exportLabel(state: MinutesExport["state"]): string {
+  return ({ writing: "結果未確定（保存先を確認）", succeeded: "書き出し完了", failed: "書き出し失敗", interrupted: "結果未確定（保存先を確認）" })[state];
+}
 export function minutesConfigured(engine: MinutesEngine): boolean {
   const integer = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
   return !!engine.executablePath.trim() && !!engine.modelPath.trim() && integer(engine.threads, 1, 64)

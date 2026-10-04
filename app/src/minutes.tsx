@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
-import { assertMinutesReview, assertMinutesVersion, minutesConfigured, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
+import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, type MinutesExport, type MinutesExportRequest, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
 import { MinutesDocument } from "./minutes-document";
 import { MinutesEditor, type EditorGuard } from "./minutes-editor";
 
@@ -30,6 +30,9 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [exports, setExports] = useState<MinutesExport[]>([]);
+  const [exportNotice, setExportNotice] = useState("");
+  const pendingExport = useRef<MinutesExportRequest | null>(null);
   const mounted = useRef(true);
   const busyRef = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
@@ -64,10 +67,11 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
         do {
           again = false;
           try {
-            const [state, analysis, allJobs] = await Promise.all([
+            const [state, analysis, allJobs, exportHistory] = await Promise.all([
               invoke<MinutesVersions>("get_minutes_versions", { meetingId }),
               invoke<VersionState>("get_analysis_versions", { meetingId }),
               invoke<Job[]>("get_analysis_jobs", { meetingId }),
+              invoke<MinutesExport[]>("get_minutes_exports", { meetingId }),
             ]);
             if (disposed) return;
             const hash = state.versions.find((v) => v.id === state.currentId)?.contentHash;
@@ -83,6 +87,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
               setCurrent(view); setCurrentDraft(draft); loadedCurrent.current = key;
             }
             setVersions(state); setSource(analysis); setJobs(allJobs);
+            setExports(exportHistory);
             // A known job resolves a lost start response. Subsequent explicit
             // generations may then receive a fresh operation ID.
             for (const [key, operation] of operations.current) if (allJobs.some((j) => j.operationId === operation)) operations.current.delete(key);
@@ -131,6 +136,25 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     await refreshRef.current();
   }));
   const jobAction = (command: string, jobId: string) => run(async () => { await invoke(command, { jobId }); await refreshRef.current(); });
+  const writeMarkdown = () => run(() => saved(async () => {
+    setExportNotice("");
+    // Inspect an unknown response before allowing a new dialog or file write.
+    if (pendingExport.current) {
+      const status = await invoke<{ active: boolean; record: MinutesExport | null }>("get_minutes_export_status", { request: pendingExport.current });
+      if (status.active) throw new Error("保存ダイアログまたは書き出しが進行中です。完了・取消を待ってください。");
+      pendingExport.current = null;
+      if (!mounted.current) return;
+      setExportNotice(status.record ? `${exportLabel(status.record.state)}: ${status.record.destinationPath}${status.record.errorMessage ? ` — ${status.record.errorMessage}` : ""}` : "前回の出力履歴はありません。保存先を確認し、必要なら改めて書き出してください。");
+      await refreshRef.current(); return;
+    }
+    const state = await invoke<MinutesVersions>("get_minutes_versions", { meetingId });
+    pendingExport.current = minutesExportRequest(state, meetingId, crypto.randomUUID());
+    const record = await invoke<MinutesExport | null>("export_minutes_markdown", { request: pendingExport.current });
+    pendingExport.current = null;
+    if (!mounted.current) return;
+    setExportNotice(record ? `${exportLabel(record.state)}: ${record.destinationPath}${record.errorMessage ? ` — ${record.errorMessage}` : ""}` : "書き出しを取り消しました。ローカルの編集内容は保存されています。");
+    await refreshRef.current();
+  }));
   const openPreview = (summary: MinutesVersion, restoring: boolean, button: HTMLElement) => {
     opener.current = button;
     return run(() => saved(async () => {
@@ -189,7 +213,9 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
       {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("この議事録生成を取り消しますか？ 現在版と編集は保持します。")) void jobAction("cancel_analysis_job", j.id); }}>生成を取消</button>}
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
-    {current && <><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /><p>Markdown保存は接続作業中です。</p></>}
+    {current && <><div className="transcript-actions"><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p><button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button></div>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
+    {exportNotice && <p role="status">{exportNotice}</p>}
+    <details className="minutes-export-history"><summary>Markdown出力履歴（最新50件）</summary><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</details>
     {error && <p className="action-error" role="alert">{error}</p>}
     {preview && <dialog ref={dialog} className="analysis-dialog" aria-labelledby="minutes-preview-title" onCancel={(e) => { if (disabled) e.preventDefault(); else setPreview(null); }}>
       <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>
