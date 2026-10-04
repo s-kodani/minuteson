@@ -22,6 +22,12 @@
 .evidence-chip { display: inline-block; font-size: 0.75rem; padding: 2px 6px; margin: 2px 4px; min-height: 28px; background: #edf4f2; color: #22594e; border: 1px solid #c5d8d1; border-radius: 5px; }
 .fixed-evidence { padding: 16px; background: #f4f7f6; border: 1px solid #d4e1db; border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
 .fixed-evidence blockquote { margin: 12px 0; white-space: pre-wrap; }
+.fixed-evidence-group { min-width: 0; overflow-wrap: anywhere; }
+.fixed-evidence-group > .card-head { gap: 10px; flex-wrap: wrap; }
+.fixed-evidence-group .fixed-evidence { margin: 12px 0; }
+.fixed-evidence.evidence-selected { border-color: #6366f1; }
+.evidence-verification { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 12px 0; }
+.fixed-evidence-group .transcript-pages { flex-wrap: wrap; }
 .document-table { overflow-x: auto; max-width: 100%; }
 .minutes-export-history { margin-top: 20px; overflow-wrap: anywhere; }
 .minutes-export-history li { padding: 12px 0; border-bottom: 1px solid #d4e1db; }

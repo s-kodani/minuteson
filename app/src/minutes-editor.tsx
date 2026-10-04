@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
-import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, type InlineAddress, type InlineSelection } from "./minutes-edit";
+import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
 import { MinutesDocument } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
 import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minutes-state";
@@ -138,6 +138,7 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     </>}
     {error && <p className="action-error" role="alert">{error}</p>}
     {saved.error && <p className="action-error" role="alert">議事録を保存できませんでした。入力はこの画面に保持しています。修正後に再試行してください: {saved.error}</p>}
-    <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"} />
+    <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"}
+      verify={disabled || failure.current || compositions.current.size ? undefined : (id, verified) => { edit((d) => setEvidenceVerification(d, id, verified)); }} />
   </section>;
 }

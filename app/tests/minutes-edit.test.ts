@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changeList, changeTable, compactInline, convertBlock, editInline, formatInline, inlineAt, insertBlock, plain, removeBlock, textNode } from "../src/minutes-edit.ts";
+import { changeList, changeTable, compactInline, convertBlock, editInline, formatInline, inlineAt, insertBlock, plain, removeBlock, setEvidenceVerification, textNode } from "../src/minutes-edit.ts";
 import type { Inline, MinutesContent } from "../src/minutes-state.ts";
 
 const chip: Inline = { type: "evidence", minutesItemId: "decision", evidenceLinkId: "link" };
@@ -17,6 +17,19 @@ function document(): MinutesContent {
     { id: "todo-link", minutesItemId: "todo", analysisRevisionId: "fixed", utteranceId: "u", quoteText: "資料を送る", startUs: 1, endUs: 2, sourceType: "engine", verificationState: "unverified" },
   ] };
 }
+test("explicit verification changes only one annotation, retains frozen anchors and source, and can be cleared", () => {
+  const original = document();
+  const checked = setEvidenceVerification(original, "todo-link", true);
+  assert.deepEqual(checked.evidence[1], {...original.evidence[1], verificationState:"user_verified"});
+  assert.deepEqual(checked.blocks,original.blocks); assert.deepEqual(checked.items,original.items); assert.deepEqual(checked.evidence[0],original.evidence[0]);
+  assert.equal(original.evidence[1].verificationState,"unverified");
+  assert.deepEqual(setEvidenceVerification(checked,"todo-link",false),original);
+  assert.throws(()=>setEvidenceVerification(original,"missing",true));
+  assert.throws(()=>setEvidenceVerification({...original,items:[]},"link",true));
+  const edited=editInline(checked,{block:2,row:0,column:1},[textNode("別の担当者")]);
+  assert.equal(edited.evidence[1].verificationState,"unverified"); assert.equal(edited.evidence[1].sourceType,"manual");
+  assert.equal(edited.evidence[0].verificationState,"user_verified");
+});
 test("semantic rich-text changes update the item and mark its fixed evidence manual without rewriting the anchor", () => {
   const original = document(); const address = { block: 1, item: 0 };
   const edited = editInline(original, address, [textNode("点検日を再確認する"), chip]);

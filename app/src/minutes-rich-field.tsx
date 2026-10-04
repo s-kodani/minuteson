@@ -97,8 +97,22 @@ export function MinutesRichField({ value, label, blockIndex, disabled, evidenceO
   });
   useLayoutEffect(() => {
     const field = root.current; if (!field || composing.current) return;
-    try { if (JSON.stringify(read(field, known.current)) === JSON.stringify(compactInline(value))) { terminalCaret(field); return; } } catch { /* Rebuild from trusted typed nodes. */ }
     const selection = position(field);
+    try {
+      if (JSON.stringify(read(field, known.current)) === JSON.stringify(compactInline(value))) {
+        // Verification changes labels but not the typed inline nodes. Refresh
+        // only the atomic chips; keep text, input composition and caret intact.
+        let updated = false;
+        for (const chip of field.querySelectorAll<HTMLElement>("[data-evidence-id]")) {
+          const id = chip.dataset.evidenceId!;
+          const label = chipLabel(id);
+          if (chip.textContent !== label) { chip.textContent = label; updated = true; }
+        }
+        terminalCaret(field);
+        if (updated && selection) restore(field, selection.start, selection.end);
+        return;
+      }
+    } catch { /* Rebuild from trusted typed nodes. */ }
     const fragment = document.createDocumentFragment();
     for (const node of value) {
       if (node.type === "evidence") {

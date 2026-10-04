@@ -1,12 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, evidenceRequest, assertEvidenceSource, assertMinutesTranscriptPage, minutesTranscriptAudioRequest, type MinutesTranscriptPage, type Evidence, type MinutesEvidenceSource, type MinutesView, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
+import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, evidenceRequest, assertEvidenceSource, assertMinutesTranscriptPage, minutesTranscriptAudioRequest, itemEvidencePage, type MinutesContent, type MinutesTranscriptPage, type Evidence, type MinutesEvidenceSource, type MinutesView, type MinutesEngine, type MinutesVersions } from "../src/minutes-state.ts";
 
 const engine: MinutesEngine = { executablePath: "/engine/llama-completion", modelPath: "/model.gguf", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 };
 const state: MinutesVersions = { meetingLockVersion: 1, currentId: "current", previousId: "previous", draft: { id: "draft", lockVersion: 3 }, versions: [
   { id: "candidate", revisionNo: 3, contentHash: "hash", publicationState: "candidate", inputAnalysisId: "fixed", inputUpdated: false, itemCount: 2, createdAt: 0, profile: {} },
   { id: "previous", revisionNo: 1, contentHash: "previous-hash", publicationState: "committed", inputAnalysisId: "old-fixed", inputUpdated: true, itemCount: 1, createdAt: 0, profile: {} },
 ] };
+test("item evidence groups show every own link in bounded pages and locate the clicked reference without mixing items", () => {
+  const own=Array.from({length:23},(_,i):Evidence=>({id:`e${i}`,minutesItemId:"item",analysisRevisionId:"fixed",utteranceId:`u${i}`,quoteText:`引用${i}`,startUs:i*10,endUs:i*10+5,sourceType:"engine",verificationState:"unverified"}));
+  const other={...own[0],id:"other",minutesItemId:"other-item"};
+  const item={id:"item",kind:"decision" as const,body:"決定事項",assigneeName:null,assigneeSpeakerId:null,dueDate:null,dueText:null,sourceType:"engine" as const};
+  const content:MinutesContent={schemaVersion:1,blocks:[],items:[item,{...item,id:"other-item"}],evidence:[...own.slice(0,4),other,...own.slice(4)]};
+  const located=itemEvidencePage(content,"e20")!;
+  assert.equal(located.page,2); assert.equal(located.pages,3);assert.equal(located.total,23);assert.equal(located.first,20);assert.deepEqual(located.evidence.map(e=>e.id),["e20","e21","e22"]);
+  const all=[0,1,2].flatMap(p=>itemEvidencePage(content,"e20",p)!.evidence);
+  assert.deepEqual(all,own);assert.equal(new Set(all.map(e=>e.id)).size,23);
+  assert.equal(itemEvidencePage(content,"other")!.total,1);
+  assert.equal(itemEvidencePage(content,"missing"),null);assert.equal(itemEvidencePage({...content,items:[]},"e20"),null);
+  assert.equal(itemEvidencePage(content,"e20",99)!.page,2);assert.equal(itemEvidencePage(content,"e20",-1)!.page,0);assert.equal(itemEvidencePage(content,"e20",NaN)!.page,0);
+  assert.equal(content.evidence.length,24);
+});
 test("minutes engine requires integral bounded parameters and context for the fixed input", () => {
   assert.ok(minutesConfigured(engine));
   for (const patch of [{ modelPath: " " }, { executablePath: "" }, { threads: 0 }, { threads: 1.5 }, { contextTokens: 32769 }, { predictionTokens: 8192 }, { gpuLayers: 257 }, { seed: -1 }, { promptBudget: 6000 }, { promptBudget: 2047 }]) assert.equal(minutesConfigured({ ...engine, ...patch }), false);

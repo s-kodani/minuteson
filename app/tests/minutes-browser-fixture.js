@@ -23,6 +23,19 @@ async (page) => {
     data.evidenceDelay=0;data.failEvidence=false;data.corruptEvidence=false;data.playbacks={};
     data.failMinutesRetry=false;data.lostMinutesRetryResponse=false;
     data.transcripts={};data.transcriptDelay=0;data.failTranscript=false;data.corruptTranscript=false;
+    data.failEvidenceId=null;data.corruptEvidenceId=null;
+    // Configure before opening a meeting: multiple distinct fixed utterances
+    // for the same item, plus an unrelated ToDo reference that must not mix in.
+    data.addEvidenceGroup=(count=23)=>{
+      for(const v of Object.values(data.views)){
+        const e=v.content.evidence[0];
+        const extra=Array.from({length:count-1},(_,i)=>({...copy(e),id:`${e.id}-${i+1}`,utteranceId:`${e.utteranceId}-${i+1}`,quoteText:`固定根拠発言${i+2}を確認しました。`,startUs:e.startUs+(i+1)*2000000,endUs:e.endUs+(i+1)*2000000}));
+        v.content.evidence.push(...extra);v.content.blocks[2].items[0].content.push(...extra.map(e=>chip(e.minutesItemId,e.id)));
+        v.generatedContent=copy(v.content);
+        if(data.drafts[v.id]){const tail=data.drafts[v.id].payload.blocks.slice(v.content.blocks.length);data.drafts[v.id].payload=copy(v.content);data.drafts[v.id].payload.blocks.push(...tail);}
+      }
+      data.transcripts={};
+    };
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
@@ -60,7 +73,12 @@ async (page) => {
           if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash||r.expectedInputContentHash!==v.inputContentHash)throw Error("stale fixed transcript base");
           const e=(data.drafts[v.id]?.payload??v.content).evidence.find(e=>e.id===r.expectedEvidence.id);
           if(!e||["minutesItemId","analysisRevisionId","utteranceId","quoteText","startUs","endUs"].some(k=>e[k]!==r.expectedEvidence[k]))throw Error("stale fixed transcript evidence");
-          const utterances=data.transcripts[v.inputAnalysisId]??=(Array.from({length:135},(_,i)=>({id:i===67?e.utteranceId:`fixed-${v.inputAnalysisId}-${i}`,trackId:"fixture-track",startUs:i===67?e.startUs:e.startUs+(i-67)*10000,endUs:i===67?e.endUs:e.startUs+(i-66)*10000,recognizedText:`固定認識原文${i+1}`,effectiveText:i===67?e.quoteText:`固定本文${i+1}（${v.inputAnalysisId}）`,attributionState:"unknown",speakerIds:[]})));
+          const base=v.content.evidence[0],speakerId=`speaker-${v.inputAnalysisId}`;
+          const utterances=data.transcripts[v.inputAnalysisId]??=(()=>{
+            const rows=Array.from({length:135},(_,i)=>({id:`fixed-${v.inputAnalysisId}-${i}`,trackId:"fixture-track",startUs:base.startUs+(i-67)*10000,endUs:base.startUs+(i-66)*10000,recognizedText:`固定認識原文${i+1}`,effectiveText:`固定本文${i+1}（${v.inputAnalysisId}）`,attributionState:"known",speakerIds:[speakerId]}));
+            const refs=[...new Map(v.content.evidence.map(e=>[e.utteranceId,e])).values()];
+            refs.forEach((e,i)=>{rows[67+i]={...rows[67+i],id:e.utteranceId,startUs:e.startUs,endUs:e.endUs,effectiveText:e.quoteText};});return rows;
+          })();
           const target=utterances.findIndex(u=>u.id===e.utteranceId);
           if(target<0)throw Error("missing fixed target");
           if(data.transcriptDelay)await new Promise(resolve=>setTimeout(resolve,data.transcriptDelay));
@@ -74,23 +92,24 @@ async (page) => {
           }
           const page=args.request.page??Math.floor(target/50),first=page*50;
           if(!Number.isInteger(page)||page<0||first>=utterances.length)throw Error("out of range page");
-          const result={evidence:copy(e),analysisId:v.inputAnalysisId,analysisContentHash:v.inputContentHash,speakers:[],utterances:copy(utterances.slice(first,first+50)),firstSequence:first+1,totalUtterances:utterances.length,page,pageSize:50,targetSequence:target+1};
+          const result={evidence:copy(e),analysisId:v.inputAnalysisId,analysisContentHash:v.inputContentHash,speakers:[{id:speakerId,label:"話者1",displayName:`${v.inputAnalysisId}の話者`}],utterances:copy(utterances.slice(first,first+50)),firstSequence:first+1,totalUtterances:utterances.length,page,pageSize:50,targetSequence:target+1};
           if(data.corruptTranscript)result.analysisId="wrong-current-analysis";
           return result;
         }
         if (cmd === "get_minutes_evidence_source" || cmd === "prepare_minutes_evidence_playback") {
           const r=args.request, v=data.views[r.minutesId];
-          if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash)throw Error("stale evidence base");
+          if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash||r.expectedInputContentHash!==v.inputContentHash)throw Error("stale evidence base");
           const e=(data.drafts[v.id]?.payload??v.content).evidence.find(e=>e.id===r.expectedEvidence.id);
-          if(!e||e.analysisRevisionId!==r.expectedEvidence.analysisRevisionId||e.utteranceId!==r.expectedEvidence.utteranceId||e.quoteText!==r.expectedEvidence.quoteText)throw Error("stale evidence");
+          if(!e||["minutesItemId","analysisRevisionId","utteranceId","quoteText","startUs","endUs"].some(k=>e[k]!==r.expectedEvidence[k]))throw Error("stale evidence");
           if(data.evidenceDelay)await new Promise(resolve=>setTimeout(resolve,data.evidenceDelay));
-          if(data.failEvidence)throw Error("模擬固定入力・音声検証失敗");
+          if(data.failEvidence||data.failEvidenceId===e.id)throw Error("模擬固定入力・音声検証失敗");
           if(cmd==="prepare_minutes_evidence_playback"){
             const token=`audio-${++sequence}`;data.playbacks[token]=true;
             return {token,sampleRate:8000,channels:1,totalFrames:16000,startUs:e.startUs,endUs:e.endUs,trackKind:"mic",alignment:"unverified"};
           }
-          const result={evidence:copy(e),analysisId:e.analysisRevisionId,analysisContentHash:v.inputContentHash,speakers:[],utterances:[{id:e.utteranceId,trackId:"fixture-track",startUs:e.startUs,endUs:e.endUs,recognizedText:"点検日を確認する",effectiveText:e.quoteText,attributionState:"unknown",speakerIds:[]}],firstSequence:1,totalUtterances:1};
-          if(data.corruptEvidence)result.analysisId="wrong-current-analysis";
+          const speakerId=`speaker-${v.inputAnalysisId}`;
+          const result={evidence:copy(e),analysisId:e.analysisRevisionId,analysisContentHash:v.inputContentHash,speakers:[{id:speakerId,label:"話者1",displayName:`${v.inputAnalysisId}の話者`}],utterances:[{id:e.utteranceId,trackId:"fixture-track",startUs:e.startUs,endUs:e.endUs,recognizedText:"固定認識原文",effectiveText:e.quoteText,attributionState:"known",speakerIds:[speakerId]}],firstSequence:1,totalUtterances:1};
+          if(data.corruptEvidence||data.corruptEvidenceId===e.id)result.analysisId="wrong-current-analysis";
           return result;
         }
         if(cmd==="read_playback_chunk"){

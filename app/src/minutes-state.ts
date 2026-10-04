@@ -22,6 +22,20 @@ export interface Evidence {
   quoteText: string; startUs: number; endUs: number; sourceType: "engine" | "manual"; verificationState: "unverified" | "user_verified";
 }
 export interface MinutesContent { schemaVersion: number; blocks: Block[]; items: MinutesItem[]; evidence: Evidence[] }
+export const MINUTES_EVIDENCE_PAGE_SIZE = 10;
+// A clicked chip opens all references belonging to that item, never unrelated
+// items in the same document. Only the bounded visible page mounts players.
+export function itemEvidencePage(content: MinutesContent, selectedId: string, requestedPage: number | null = null) {
+  const selected = content.evidence.find((e) => e.id === selectedId);
+  const item = content.items.find((i) => i.id === selected?.minutesItemId);
+  if (!selected || !item) return null;
+  const evidence = content.evidence.filter((e) => e.minutesItemId === item.id);
+  const pages = Math.ceil(evidence.length / MINUTES_EVIDENCE_PAGE_SIZE);
+  const requested = requestedPage ?? Math.floor(evidence.findIndex((e) => e.id === selectedId) / MINUTES_EVIDENCE_PAGE_SIZE);
+  const page = Math.max(0, Math.min(pages - 1, Number.isSafeInteger(requested) ? requested : 0));
+  const first = page * MINUTES_EVIDENCE_PAGE_SIZE;
+  return { item, page, pages, first, total: evidence.length, evidence: evidence.slice(first, first + MINUTES_EVIDENCE_PAGE_SIZE) };
+}
 export interface MinutesEvidenceRequest {
   meetingId: string; minutesId: string; expectedContentHash: string; expectedInputContentHash: string; expectedEvidence: Evidence;
 }

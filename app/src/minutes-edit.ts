@@ -6,6 +6,16 @@ export const textNode = (text: string): Inline => ({ type: "text", text, bold: f
 export const plain = (nodes: Inline[]) => nodes.flatMap((n) => n.type === "text" ? [n.text] : []).join("");
 export const dueLabel = (item: MinutesItem) => item.dueDate && item.dueText && item.dueDate !== item.dueText ? `${item.dueDate}（${item.dueText}）` : item.dueDate ?? item.dueText ?? "未確認";
 
+// Verification is an explicit user annotation, not an engine or semantic edit.
+// Never rewrite the anchor, source type, other links or generated original.
+export function setEvidenceVerification(original: MinutesContent, id: string, verified: boolean): MinutesContent {
+  const doc = structuredClone(original);
+  const e = doc.evidence.find((e) => e.id === id);
+  if (!e || !doc.items.some((i) => i.id === e.minutesItemId)) throw new Error("確認する根拠または文書項目がありません");
+  e.verificationState = verified ? "user_verified" : "unverified";
+  return doc;
+}
+
 export function compactInline(nodes: Inline[]): Inline[] {
   const result: Inline[] = [];
   for (const node of nodes) {
