@@ -1,14 +1,12 @@
 //! Connect native semantic replay to the owned, still-unsealed restore image.
+use super::assets::WorkspaceAssets;
 use super::*;
 use crate::generation::restore::{Assets, Context};
-use crate::saved_artifact::Role;
 use crate::storage::{JobSnapshot, MinutesInput};
 use std::collections::BTreeMap;
 
-const LIMIT: u64 = 2 * 1024 * 1024;
-
 impl FixedData<'_, '_> {
-    fn generation_source_input(&self, spec: &JobSpec) -> Result<MinutesInput, String> {
+    pub(super) fn source_snapshot_input(&self, spec: &JobSpec) -> Result<MinutesInput, String> {
         let id = spec
             .input_analysis_id
             .as_deref()
@@ -51,7 +49,7 @@ impl FixedData<'_, '_> {
         })
     }
 
-    fn generation_initial_operation(
+    pub(super) fn source_initial_operation(
         &self,
         meeting: &str,
         job: &str,
@@ -68,154 +66,6 @@ impl FixedData<'_, '_> {
             let spec = self.source_job_spec(meeting, parent_id)?;
             Ok((parent, spec))
         })
-    }
-}
-
-struct GenerationAssets<'a, 'p, 's, C> {
-    fixed: &'a FixedData<'p, 's>,
-    database: &'a Connection,
-    root: &'a Path,
-    meeting: &'a str,
-    input: &'a str,
-    entries: &'a BTreeMap<&'a str, &'a archive::Entry>,
-    cancelled: &'a C,
-}
-impl<C: Fn() -> bool> GenerationAssets<'_, '_, '_, C> {
-    fn entry(&self, role: Role, id: &str, hash: &str) -> Result<&archive::Entry, String> {
-        check_cancelled(self.cancelled)?;
-        self.fixed.ids.get("file_assets", self.meeting, id)?;
-        let (media,size,old,state):(String,i64,String,String)=self.fixed.ids.source().database.query_row(
-            "SELECT media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1 AND meeting_id=?2",
-            params![id,self.meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
-        ).map_err(|e|e.to_string())?;
-        let entry = self
-            .entries
-            .get(id)
-            .ok_or("生成成果物がアーカイブにありません")?;
-        if media != role.media()
-            || state != "ready"
-            || old != hash
-            || size < 0
-            || entry.meeting_id.as_deref() != Some(self.meeting)
-            || entry.source_sha256.as_deref() != Some(hash)
-            || entry.source_size != Some(size as u64)
-            || entry.size > LIMIT
-        {
-            return Err("生成成果物の会議・種別・元SHA・容量が一致しません".into());
-        }
-        Ok(entry)
-    }
-
-    fn destination(&self, id: &str) -> Result<PathBuf, String> {
-        let new = self.fixed.ids.get("file_assets", self.meeting, id)?;
-        let meeting = self.fixed.ids.get("meetings", "", self.meeting)?;
-        let relative = format!("meetings/{meeting}/restored/{new}");
-        let stored: String = self
-            .database
-            .query_row(
-                "SELECT relative_path FROM file_assets WHERE id=?1 AND meeting_id=?2",
-                params![new, meeting],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if stored != relative {
-            return Err("生成成果物の管理保存先が一致しません".into());
-        }
-        // Walk only minted components. Never create children through an existing
-        // symlink, even before the final path validation or exclusive file open.
-        let mut directory = self.root.to_path_buf();
-        for part in ["meetings", meeting.as_str(), "restored"] {
-            directory.push(part);
-            match std::fs::create_dir(&directory) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e.to_string()),
-            }
-            if !std::fs::symlink_metadata(&directory)
-                .map_err(|e| e.to_string())?
-                .is_dir()
-                || directory.canonicalize().map_err(|e| e.to_string())? != directory
-            {
-                return Err("生成成果物の保存先フォルダーが変更されています".into());
-            }
-        }
-        Ok(directory.join(new))
-    }
-}
-impl<C: Fn() -> bool> Assets for GenerationAssets<'_, '_, '_, C> {
-    fn read(&mut self, role: Role, id: &str, hash: &str) -> Result<Vec<u8>, String> {
-        let entry = self.entry(role, id, hash)?;
-        let path = self.fixed.ids.source().owned_asset_path(id)?;
-        let (mut file, before) = open_source(&path)?;
-        if before.len() != entry.size {
-            return Err("生成成果物の物理容量が変更されています".into());
-        }
-        let mut bytes = Vec::new();
-        (&mut file)
-            .take(entry.size + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        check_cancelled(self.cancelled)?;
-        if bytes.len() as u64 != entry.size
-            || format!("{:x}", Sha256::digest(&bytes)) != entry.sha256
-            || !same_file(&before, &file.metadata().map_err(|e| e.to_string())?)
-            || !same_file(
-                &before,
-                &std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
-            )
-            || path.canonicalize().map_err(|e| e.to_string())? != path
-        {
-            return Err("検査済み生成成果物の内容・パスが変更されています".into());
-        }
-        Ok(bytes)
-    }
-    fn write(
-        &mut self,
-        role: Role,
-        id: &str,
-        hash: &str,
-        bytes: &[u8],
-    ) -> Result<(String, String), String> {
-        self.entry(role, id, hash)?;
-        if bytes.len() as u64 > LIMIT {
-            return Err("再構成した生成成果物が容量上限を超えています".into());
-        }
-        let destination = self.destination(id)?;
-        let expected = (bytes.len() as u64, format!("{:x}", Sha256::digest(bytes)));
-        match private_file(&destination) {
-            Ok(mut file) => {
-                file.write_all(bytes).map_err(|e| e.to_string())?;
-                file.sync_all().map_err(|e| e.to_string())?;
-            }
-            Err(e) => {
-                // Historical checkpoints and retries can legitimately share the
-                // same artifact. An existing different file is never replaced.
-                if !destination.exists()
-                    || digest_file(&destination, self.cancelled)? != expected
-                    || destination.canonicalize().map_err(|e| e.to_string())? != destination
-                {
-                    return Err(format!("同じ生成成果物の保存内容が競合しています: {e}"));
-                }
-            }
-        }
-        check_cancelled(self.cancelled)?;
-        let (size, new_hash) = self.fixed.asset_bytes(self.meeting, id, bytes)?;
-        let new_id = self.fixed.ids.get("file_assets", self.meeting, id)?;
-        if self.database.execute("UPDATE file_assets SET size_bytes=?1,content_hash=?2 WHERE id=?3 AND meeting_id=?4",params![size as i64,new_hash,new_id,self.fixed.ids.get("meetings","",self.meeting)?]).map_err(|e|e.to_string())? != 1 {
-            return Err("再構成した生成成果物の登録先がありません".into());
-        }
-        Ok((new_id, new_hash))
-    }
-    fn map(&mut self, domain: &str, id: &str) -> Result<String, String> {
-        check_cancelled(self.cancelled)?;
-        if !matches!(domain, "speakers" | "utterances") {
-            return Err("生成参照の種別が不正です".into());
-        }
-        let exists:bool=self.fixed.ids.source().database.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {domain} e JOIN analysis_revisions a ON a.id=e.analysis_revision_id WHERE e.id=?1 AND a.id=?2 AND a.meeting_id=?3)"),params![id,self.input,self.meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if !exists {
-            return Err("生成成果物の参照が固定した会議・入力と一致しません".into());
-        }
-        self.fixed.ids.get(domain, self.meeting, id)
     }
 }
 
@@ -254,12 +104,12 @@ impl FixedWorkspace {
             let meeting: String = row.get(1).map_err(|e| e.to_string())?;
             let old_spec = fixed.source_job_spec(&meeting, &job)?;
             let new_spec = fixed.job_spec(&meeting, &job)?;
-            let old_input = fixed.generation_source_input(&old_spec)?;
+            let old_input = fixed.source_snapshot_input(&old_spec)?;
             let new_input = {
                 let tx = self.database.transaction().map_err(|e| e.to_string())?;
                 crate::storage::minutes_input::read_input(&tx, &new_spec)?
             };
-            let old_operation = fixed.generation_initial_operation(&meeting, &job, cancelled)?;
+            let old_operation = fixed.source_initial_operation(&meeting, &job, cancelled)?;
             let new_operation = fixed.ids.get("operation", &meeting, &old_operation)?;
             let original = crate::storage::jobs::load_job(source, &job)?
                 .ok_or("復元元の生成ジョブがありません")?;
@@ -280,15 +130,12 @@ impl FixedWorkspace {
             {
                 return Err("構築済み生成ジョブの固定条件・由来が変更されています".into());
             }
-            let mut assets = GenerationAssets {
+            let mut assets = WorkspaceAssets {
                 fixed,
                 database: &self.database,
                 root: &root,
                 meeting: &meeting,
-                input: old_spec
-                    .input_analysis_id
-                    .as_deref()
-                    .ok_or("固定入力がありません")?,
+                input: old_spec.input_analysis_id.as_deref(),
                 entries: &entries,
                 cancelled,
             };

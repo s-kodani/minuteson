@@ -159,7 +159,10 @@ fn merging_into_added_speaker_survives_fixed_diarization_and_manual_preservation
         original
     );
 }
-fn fixture(root: &Path, two: bool) -> (Storage, String, SherpaConfig, MinutesJobRequest) {
+pub(in crate::storage) fn fixture(
+    root: &Path,
+    two: bool,
+) -> (Storage, String, SherpaConfig, MinutesJobRequest) {
     let (storage, meeting, _) = super::super::transcription::tests::fixture(root, 10);
     if two {
         let relative = PathBuf::from("meetings").join(&meeting).join("audio");
@@ -306,14 +309,18 @@ fn tracks(storage: &Storage, meeting: &str) -> Vec<TrackSettings> {
         })
         .collect()
 }
-fn enqueue(storage: &Storage, request: MinutesJobRequest, config: SherpaConfig) -> JobSnapshot {
+pub(in crate::storage) fn enqueue(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    config: SherpaConfig,
+) -> JobSnapshot {
     let settings = tracks(storage, &request.meeting_id);
     diarization::enqueue(storage, request, config, "standard", settings).unwrap()
 }
 fn calls(root: &Path) -> usize {
     std::fs::read(root.join("cli-calls")).map_or(0, |b| b.len())
 }
-fn pause_after_first(storage: &Storage, job: &str) {
+pub(in crate::storage) fn pause_after_first(storage: &Storage, job: &str) {
     assert_eq!(
         storage.acquire_local_inference_job().unwrap().unwrap().id,
         job

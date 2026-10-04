@@ -453,7 +453,7 @@ impl Storage {
         verify_snapshot(&db, meeting, job, snapshot)
     }
 }
-fn verify_snapshot(
+pub(super) fn verify_snapshot(
     db: &Connection,
     meeting: &str,
     job: &str,

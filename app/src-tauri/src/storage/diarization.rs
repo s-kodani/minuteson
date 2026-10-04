@@ -290,4 +290,4 @@ pub(super) fn manual_assignment_hash(lineages: &BTreeSet<String>) -> Result<Stri
 
 #[cfg(all(test, unix))]
 #[path = "diarization_tests.rs"]
-mod tests;
+pub(super) mod tests;

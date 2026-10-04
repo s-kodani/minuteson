@@ -1,9 +1,11 @@
 //! File-backed reconstruction, never a publishable or validated restore image.
-//! Generation artifacts have a consuming construction pass. Transcription,
-//! diarization, remaining provenance and publication still need later passes.
+//! Saved speech and generation artifacts have consuming construction passes.
+//! Remaining provenance, validation, sealing and publication need later passes.
 use super::*;
 use std::io::Read;
+mod assets;
 mod generation;
+mod speech;
 
 pub(in crate::storage::backup) struct FixedWorkspace {
     // Close SQLite before removing only this operation's private directory.
@@ -11,9 +13,18 @@ pub(in crate::storage::backup) struct FixedWorkspace {
     stage: tempfile::TempDir,
     // Definitions come from our migrations, not from archived executable SQL.
     triggers: Vec<String>,
+    missing_assets: std::collections::BTreeSet<String>,
 }
 
 impl FixedWorkspace {
+    pub(in crate::storage::backup) fn with_speech_artifacts(
+        mut self,
+        fixed: &FixedData<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        self.speech_artifacts(fixed, cancelled)?;
+        Ok(self)
+    }
     // Consumes an unsealed workspace: an error also closes SQLite and removes
     // this operation's partial files. No live DB or available model is exposed.
     pub(in crate::storage::backup) fn with_generation_artifacts(
@@ -73,6 +84,7 @@ impl FixedWorkspace {
             database,
             stage,
             triggers: definitions.into_iter().map(|(_, sql)| sql).collect(),
+            missing_assets: std::collections::BTreeSet::new(),
         };
         work.load_rows(fixed, cancelled)?;
         work.foundation_assets(fixed, cancelled)?;

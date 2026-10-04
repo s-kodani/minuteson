@@ -1,7 +1,9 @@
 //! Local whisper.cpp execution. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
+mod restore;
 pub(crate) mod wave;
 pub(crate) mod whisper;
+pub(crate) use restore::restore_saved_results;
 
 use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
@@ -195,6 +197,15 @@ fn checked_parameters(
     spec: &JobSpec,
     job_id: &str,
 ) -> Result<Parameters, String> {
+    decode_parameters(spec, |snapshot| {
+        storage.verify_vocabulary_snapshot(&spec.meeting_id, job_id, snapshot)
+    })
+}
+
+fn decode_parameters(
+    spec: &JobSpec,
+    mut verify: impl FnMut(&crate::storage::VocabularySnapshot) -> Result<(), String>,
+) -> Result<Parameters, String> {
     let parameters: Parameters =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     if spec.kind != JobKind::Transcription
@@ -208,7 +219,7 @@ fn checked_parameters(
     match (&parameters.vocabulary, parameters.schema_version) {
         (None, 1) => {}
         (Some(snapshot), 2) if parameters.engine.prompt == snapshot.actual_prompt => {
-            storage.verify_vocabulary_snapshot(&spec.meeting_id, job_id, snapshot)?;
+            verify(snapshot)?;
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
     }

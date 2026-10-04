@@ -1,7 +1,9 @@
 //! Whole-track native diarization. Cluster IDs are local to one track/run;
 //! they are never treated as voice identities or shared across meetings.
+mod restore;
 pub(crate) mod sherpa;
 pub(crate) mod timeline;
+pub(crate) use restore::restore_saved_results;
 
 use crate::local_engine::Fingerprint;
 use crate::storage::{

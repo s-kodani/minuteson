@@ -13,21 +13,7 @@ pub(crate) struct Context<'a> {
     pub initial_operation: &'a str,
 }
 
-pub(crate) trait Assets {
-    // Must check exact meeting/asset ownership, original logical hash, media
-    // type, and physical archive hash before returning these bounded bytes.
-    fn read(&mut self, role: Role, id: &str, hash: &str) -> Result<Vec<u8>, String>;
-    // Only a private stage may be written; repeated historical references must
-    // yield identical bytes/IDs/hashes, never overwrite a conflicting file.
-    fn write(
-        &mut self,
-        role: Role,
-        id: &str,
-        hash: &str,
-        bytes: &[u8],
-    ) -> Result<(String, String), String>;
-    fn map(&mut self, domain: &str, id: &str) -> Result<String, String>;
-}
+pub(crate) use crate::saved_artifact::RestoreAssets as Assets;
 
 const LIMIT: usize = 2 * 1024 * 1024;
 fn cancelled(check: &impl Fn() -> bool) -> Result<(), String> {

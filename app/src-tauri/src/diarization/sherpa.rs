@@ -31,16 +31,7 @@ pub(crate) struct SherpaConfig {
 
 impl SherpaConfig {
     fn validate(&self, num_speakers: Option<u32>) -> Result<(), String> {
-        if self.runtime_libraries.len() > 16
-            || !(1..=64).contains(&self.threads)
-            || self.cluster_threshold_milli > 2000
-            || !(1..=1000).contains(&self.window_shift_milli)
-            || self.min_duration_on_ms > 60_000
-            || self.min_duration_off_ms > 60_000
-            || num_speakers.is_some_and(|n| !(1..=MAX_SPEAKERS).contains(&n))
-        {
-            return Err("話者分離の人数または固定設定が不正です".into());
-        }
+        self.validate_settings(num_speakers)?;
         for proof in self.files() {
             if !proof.path.is_absolute()
                 || proof
@@ -50,6 +41,20 @@ impl SherpaConfig {
             {
                 return Err("話者分離のモデル・実行ファイルパスが不正です".into());
             }
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_settings(&self, num_speakers: Option<u32>) -> Result<(), String> {
+        if self.runtime_libraries.len() > 16
+            || !(1..=64).contains(&self.threads)
+            || self.cluster_threshold_milli > 2000
+            || !(1..=1000).contains(&self.window_shift_milli)
+            || self.min_duration_on_ms > 60_000
+            || self.min_duration_off_ms > 60_000
+            || num_speakers.is_some_and(|n| !(1..=MAX_SPEAKERS).contains(&n))
+        {
+            return Err("話者分離の人数または固定設定が不正です".into());
         }
         Ok(())
     }
