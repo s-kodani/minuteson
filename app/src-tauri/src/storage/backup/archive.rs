@@ -82,6 +82,24 @@ pub(crate) struct VerifiedArchive {
     stage: tempfile::TempDir,
 }
 
+impl VerifiedArchive {
+    pub(super) fn owned_asset_path(&self, id: &str) -> Result<PathBuf, String> {
+        let asset = self
+            .assets
+            .get(id)
+            .ok_or("検査済み管理ファイルがありません")?;
+        let relative = asset
+            .strip_prefix(self.stage.path())
+            .map_err(|_| "復元ファイルが検査領域外です")?;
+        Ok(self
+            .stage
+            .path()
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .join(relative))
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BackupReceipt {

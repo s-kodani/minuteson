@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 mod checkpoints;
 mod config;
 mod order;
+pub(in crate::storage::backup) mod workspace;
 
 pub(super) struct Definition {
     pub domain: &'static str,

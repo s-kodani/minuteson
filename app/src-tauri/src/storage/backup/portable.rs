@@ -93,7 +93,7 @@ pub(super) fn schema(version: usize) -> Result<Connection, String> {
     )
 }
 
-fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
+pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
     if version < 20 || version > MIGRATIONS.len() {
         return Err("未対応のバックアップDB形式です".into());
     }
