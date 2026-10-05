@@ -372,6 +372,26 @@ impl Scope {
     pub(super) fn hash(&self) -> Result<String, String> {
         Ok(digest(self.encode()?.as_bytes()))
     }
+    pub(super) fn validate_format(&self, db: &Connection) -> Result<(), String> {
+        let valid_hash = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        if trusted_schema(db)? != self.schema_hash
+            || self.version != 1
+            || !uuid(&self.meeting_id)
+            || !valid_hash(&self.maintenance_hash)
+            || self.tables.len() != TARGETS.len()
+            || self.tables.iter().zip(TARGETS).any(|(t, (name, _))| {
+                t.name != *name || t.rows > MAX_ROWS || !valid_hash(&t.sha256)
+            })
+            || self.tables.last().is_none_or(|t| t.rows != 1)
+        {
+            return Err("削除の確認対象が既知の形式と一致しません".into());
+        }
+        Ok(())
+    }
 }
 
 struct Triggers<'a>(&'a Connection);
@@ -522,22 +542,7 @@ pub(super) fn finish_database_purge(
     if !db.is_autocommit() || !uuid(operation) || !uuid(&expected.meeting_id) {
         return Err("削除後処理の操作・トランザクションが不正です".into());
     }
-    if trusted_schema(db)? != expected.schema_hash
-        || expected.version != 1
-        || expected.tables.len() != TARGETS.len()
-        || expected.tables.iter().zip(TARGETS).any(|(t, (name, _))| {
-            t.name != *name
-                || t.rows > MAX_ROWS
-                || t.sha256.len() != 64
-                || !t
-                    .sha256
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
-        || expected.tables.last().is_none_or(|t| t.rows != 1)
-    {
-        return Err("削除後処理の確認対象が既知の形式と一致しません".into());
-    }
+    expected.validate_format(db)?;
     stopped(db)?;
     let (meeting, manifest, hash, consent, state, progress): (Option<String>, String, String, Option<i64>, String, String) = db.query_row("SELECT meeting_id,target_manifest_json,target_hash,consent_at,state,progress_json FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting' AND state IN ('cleanup','completed')", params![operation], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|e| e.to_string())?;
     let progress: Progress = serde_json::from_str(&progress).map_err(|e| e.to_string())?;

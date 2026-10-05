@@ -17,6 +17,17 @@ pub(super) struct Identity {
     mode: u32,
 }
 impl Identity {
+    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
+        let kind = if directory {
+            libc::S_IFDIR
+        } else {
+            libc::S_IFREG
+        };
+        if self.birth_nanos >= 1_000_000_000 || self.mode & libc::S_IFMT as u32 != kind as u32 {
+            return Err("管理対象の実体記録の形式が不正です".into());
+        }
+        Ok(())
+    }
     fn read(m: &Metadata) -> Result<Self, String> {
         let birth = m
             .created()
@@ -45,6 +56,18 @@ pub(super) struct Proof {
     change_nanos: i64,
 }
 impl Proof {
+    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
+        self.identity.validate(directory)?;
+        if self.links == 0
+            || (!directory && self.links != 1)
+            || !(0..1_000_000_000).contains(&self.modified_nanos)
+            || !(0..1_000_000_000).contains(&self.change_nanos)
+            || self.size > i64::MAX as u64
+        {
+            return Err("管理対象の変更・容量・リンク記録が不正です".into());
+        }
+        Ok(())
+    }
     pub(super) fn read(m: &Metadata) -> Result<Self, String> {
         Ok(Self {
             identity: Identity::read(m)?,

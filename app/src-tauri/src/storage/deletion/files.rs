@@ -11,17 +11,17 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
-const MAX_ENTRIES: usize = 200_000;
+pub(super) const MAX_ENTRIES: usize = 200_000;
 const MAX_DEPTH: usize = 32;
 const MAX_MANIFEST: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Registered {
-    id: String,
-    size: i64,
-    sha256: String,
-    state: String,
+    pub id: String,
+    pub size: i64,
+    pub sha256: String,
+    pub state: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -59,7 +59,7 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
 fn uuid(s: &str) -> bool {
     uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s)
 }
-fn valid_path(s: &str, meeting: &str) -> bool {
+pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
     s.len() <= 256
         && s.starts_with(&format!("meetings/{meeting}/"))
         && !s.contains(['\\', '\0'])
@@ -354,6 +354,16 @@ impl Census {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        Self::capture_locked(storage, &db, meeting, "", check)
+    }
+    // The durable-intent transaction already holds the connection mutex.
+    pub(super) fn capture_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         if storage.restart_required() {
             return Err("旧保存先は停止済みです。再起動してください".into());
         }
@@ -364,14 +374,14 @@ impl Census {
             return Err("保存領域の操作または書込停止が既に進行中です".into());
         }
         let (root, database) = storage.managed_anchor.identity()?;
-        let scope = Scope::capture(&db, meeting, "", check)?;
-        let records = Records::read(&db, meeting)?;
+        let scope = Scope::capture(db, meeting, omitted_operation, check)?;
+        let records = Records::read(db, meeting)?;
         // Enumerate through the startup descriptor, never reopen a path and
         // temporarily treat its replacement as the original root.
         let root_directory = storage.managed_anchor.directory_ref()?;
         let entries = inventory(root_directory, meeting, &records, check)?;
         if inventory(root_directory, meeting, &records, check)? != entries
-            || Scope::capture(&db, meeting, "", check)? != scope
+            || Scope::capture(db, meeting, omitted_operation, check)? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {
             return Err("確認中に削除対象が変更されました".into());
@@ -392,6 +402,9 @@ impl Census {
     }
     pub(super) fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+    pub(super) fn scope(&self) -> &Scope {
+        &self.scope
     }
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         let bytes = serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?;
