@@ -175,6 +175,22 @@ impl Storage {
             return Err("保存先DBの表・索引・トリガーが信頼済み定義と一致しません".into());
         }
         validate_database(&mut db, check)?;
+        if let Some(registry) = &self.scratch {
+            let operation: Option<String> = db
+                .query_row(
+                    "SELECT id FROM maintenance_operations WHERE restore_batch_id=?1",
+                    params![ids.batch_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if let Some(id) = operation {
+                let evidence = journal::recovery_evidence(&db, &id)?;
+                if registry.retained("restore_addition", &id, &evidence.intent_hash)? {
+                    return Err("この復元操作は保持して確認済みです。新しい追加復元を明示して選択してください".into());
+                }
+            }
+        }
         let plan = BatchPlan::new(ids, check)?;
         let mut tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)

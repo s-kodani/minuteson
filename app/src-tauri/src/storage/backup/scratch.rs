@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, Weak};
 
+pub(super) mod review;
+
 const LIMIT: usize = 200_000;
 const SCHEMA: &str = "
 CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),proof TEXT NOT NULL,hash TEXT NOT NULL);
@@ -185,11 +187,19 @@ impl Registry {
             Identity::read(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)?;
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+        let previous_schema = schema(&expected)?;
+        expected
+            .execute_batch(review::SCHEMA)
+            .map_err(|e| e.to_string())?;
         let expected_schema = schema(&expected)?;
         let mut db = Connection::open(&path).map_err(|e| e.to_string())?;
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let upgrade = !new && version == 0 && schema(&db)? == previous_schema;
         // Inspect existing SQL before changing its journaling settings. Even an
         // empty file without a saved root proof is not adopted as ours.
-        if !new && schema(&db)? != expected_schema {
+        if !new && !upgrade && (version != 2 || schema(&db)? != expected_schema) {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
         db.busy_timeout(std::time::Duration::from_secs(5))
@@ -202,14 +212,18 @@ impl Registry {
             let proof = serde_json::to_string(&root_identity).map_err(|e| e.to_string())?;
             let tx = db.transaction().map_err(|e| e.to_string())?;
             tx.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+            tx.execute_batch(review::SCHEMA)
+                .map_err(|e| e.to_string())?;
             tx.execute(
                 "INSERT INTO metadata VALUES(1,?1,?2)",
                 params![proof, hash(proof.as_bytes())],
             )
             .map_err(|e| e.to_string())?;
+            tx.execute_batch("PRAGMA user_version=2;")
+                .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
-        if schema(&db)? != expected_schema {
+        if !upgrade && schema(&db)? != expected_schema {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
         let (json, sha): (String, String) = db
@@ -223,6 +237,22 @@ impl Registry {
         let saved: Identity = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         if saved != root_identity {
             return Err("一時領域の保存先実体が変更されています。コピーを保持します".into());
+        }
+        // Upgrade only an exact known schema with the original root proof.
+        // This is local metadata, not a meeting-DB or archive-format migration.
+        if upgrade {
+            if !root_identity.matches(&directory(root)?)
+                || !file_identity
+                    .matches(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
+            {
+                return Err("台帳の移行前に保存先が変更されています".into());
+            }
+            let tx = db.transaction().map_err(|e| e.to_string())?;
+            tx.execute_batch(review::SCHEMA)
+                .map_err(|e| e.to_string())?;
+            tx.execute_batch("PRAGMA user_version=2;")
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
         }
         let registry = Arc::new(Self {
             root: root.into(),
@@ -316,7 +346,10 @@ impl Registry {
         Ok(value.into())
     }
     fn check_schema(&self, db: &Connection) -> Result<(), String> {
-        if schema(db)? != self.expected_schema {
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if version != 2 || schema(db)? != self.expected_schema {
             return Err("一時領域台帳のSQL定義が変更されています。コピーを保持します".into());
         }
         Ok(())
@@ -531,6 +564,10 @@ impl Registry {
         self.parents(path, &entries)
     }
     fn cleanup(&self, id: &str, scope: &Path) -> Result<(), String> {
+        let evidence = self.scratch_evidence(id)?;
+        if self.retained("scratch", id, &evidence.intent_hash)? {
+            return Err("保持して確認済みの領域は回収しません".into());
+        }
         let db = self
             .db
             .lock()
@@ -635,6 +672,10 @@ impl Registry {
             return Err("一時領域の回収件数が安全上限を超えています".into());
         }
         for (id, path) in pending {
+            let intent = self.scratch_evidence(&id)?;
+            if self.retained("scratch", &id, &intent.intent_hash)? {
+                continue;
+            }
             if let Err(error) = self.cleanup(&id, &self.root.join(path)) {
                 // Ownership uncertainty is non-blocking only after its durable
                 // attention record succeeds. Never swallow journal I/O failure.
@@ -729,7 +770,7 @@ impl Stage {
         })
     }
     #[cfg(test)]
-    fn abandon(mut self) -> PathBuf {
+    pub(in crate::storage::backup) fn abandon(mut self) -> PathBuf {
         stages().lock().unwrap().remove(&self.path);
         if let Some(t) = self.temporary.take() {
             let _ = t.keep();

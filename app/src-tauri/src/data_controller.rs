@@ -2,6 +2,7 @@
 //! Revisioned snapshots survive lost RPC/event responses; client paths and IDs
 //! never substitute for the verified selection. No work runs on the UI thread.
 use crate::analysis_worker::AnalysisController;
+use crate::storage::backup::recovery;
 use crate::storage::backup::{archive::BackupReceipt, operations::*};
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ use work::{Completion, Work};
 pub(crate) enum Kind {
     Backup,
     Restore,
+    Recovery,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -30,6 +32,8 @@ pub(crate) enum Kind {
 pub(crate) enum Action {
     Refresh,
     Publish,
+    Recover,
+    Keep,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -52,6 +56,8 @@ pub(crate) struct Snapshot {
     pub restore_preview: Option<RestorePreview>,
     pub backup_receipt: Option<BackupReceipt>,
     pub restore_receipt: Option<RestoreReceipt>,
+    pub recovery_preview: Option<recovery::Preview>,
+    pub recovery_receipt: Option<recovery::Receipt>,
     pub error_message: Option<String>,
     pub attention_required: bool,
     pub retry_allowed: bool,
@@ -69,6 +75,8 @@ impl Default for Snapshot {
             restore_preview: None,
             backup_receipt: None,
             restore_receipt: None,
+            recovery_preview: None,
+            recovery_receipt: None,
             error_message: None,
             attention_required: false,
             retry_allowed: false,
@@ -79,6 +87,7 @@ impl Default for Snapshot {
 enum Selection {
     Backup(PreparedBackup),
     Restore(PreparedRestore),
+    Recovery(recovery::Prepared),
 }
 
 impl Selection {
@@ -86,6 +95,7 @@ impl Selection {
         match self {
             Self::Backup(p) => p.preview().confirmation_id,
             Self::Restore(p) => p.preview().confirmation_id,
+            Self::Recovery(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -149,6 +159,7 @@ impl DataController {
             && (s.snapshot.busy
                 || s.snapshot.backup_receipt.is_some()
                 || s.snapshot.restore_receipt.is_some()
+                || s.snapshot.recovery_receipt.is_some()
                 || s.snapshot.attention_required
                 || (request.action == Action::Refresh && s.snapshot.phase == "ready"))
         {
@@ -164,10 +175,21 @@ impl DataController {
         if selection.confirmation_id() != request.confirmation_id {
             return Err("確認内容が変更されています。現在の確認内容を使用してください".into());
         }
-        if request.action == Action::Refresh && matches!(selection, Selection::Backup(_)) {
-            return Err("バックアップの保存先は選び直してください".into());
+        if !matches!(
+            (selection, request.action),
+            (Selection::Backup(_), Action::Publish)
+                | (Selection::Restore(_), Action::Publish | Action::Refresh)
+                | (
+                    Selection::Recovery(_),
+                    Action::Refresh | Action::Recover | Action::Keep
+                )
+        ) {
+            return Err("確認した対象と実行する操作が一致しません".into());
         }
-        if s.snapshot.backup_receipt.is_some() || s.snapshot.restore_receipt.is_some() {
+        if s.snapshot.backup_receipt.is_some()
+            || s.snapshot.restore_receipt.is_some()
+            || s.snapshot.recovery_receipt.is_some()
+        {
             return Err("この操作は完了済みです。別の操作を明示して選択してください".into());
         }
         Ok(false)
@@ -228,9 +250,12 @@ impl DataController {
         s.selection = completion.selection;
         s.snapshot.backup_receipt = completion.backup;
         s.snapshot.restore_receipt = completion.restore;
+        s.snapshot.recovery_receipt = completion.recovery;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
-        let published = s.snapshot.backup_receipt.is_some() || s.snapshot.restore_receipt.is_some();
+        let published = s.snapshot.backup_receipt.is_some()
+            || s.snapshot.restore_receipt.is_some()
+            || s.snapshot.recovery_receipt.is_some();
         // Publication wins over late cancellation. Never label a committed
         // restore cancelled or destroy its receipt after a successful commit.
         s.snapshot.phase = if published {
@@ -255,6 +280,10 @@ impl DataController {
             Some(Selection::Restore(p)) => Some(p.preview()),
             _ => None,
         };
+        s.snapshot.recovery_preview = match &s.selection {
+            Some(Selection::Recovery(p)) => Some(p.preview()),
+            _ => None,
+        };
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
         s.snapshot.revision += 1;
@@ -267,6 +296,9 @@ impl DataController {
     }
 
     pub(crate) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Snapshot, String> {
+        if kind == Kind::Recovery {
+            return Err("要確認一覧から対象を選択してください".into());
+        }
         let app = window.app_handle().clone();
         let lease = work::Admission::acquire(&app)?;
         let (snapshot, cancel, previous) = app.state::<Self>().begin(kind)?;
@@ -285,6 +317,25 @@ impl DataController {
                 Work::Select(kind, path, previous),
             );
         });
+        Ok(snapshot)
+    }
+
+    pub(crate) fn review_recovery(
+        app: &AppHandle,
+        source: recovery::Source,
+        id: String,
+    ) -> Result<Snapshot, String> {
+        let lease = work::Admission::acquire(app)?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Recovery)?;
+        let token = snapshot.token.clone().ok_or("確認操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(
+            app,
+            token,
+            cancel,
+            lease,
+            Work::Recovery(source, id, previous),
+        );
         Ok(snapshot)
     }
 
@@ -364,6 +415,7 @@ impl DataController {
             } else if s.selection.is_some()
                 && s.snapshot.backup_receipt.is_none()
                 && s.snapshot.restore_receipt.is_none()
+                && s.snapshot.recovery_receipt.is_none()
                 && !s.snapshot.attention_required
             {
                 let discarded = s.selection.take();
@@ -431,6 +483,7 @@ impl DataController {
         if s.selection.is_none() {
             s.snapshot.backup_preview = None;
             s.snapshot.restore_preview = None;
+            s.snapshot.recovery_preview = None;
             s.snapshot.retry_allowed = false;
         }
         s.snapshot.revision += 1;

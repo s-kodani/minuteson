@@ -14,6 +14,7 @@ mod exclusions;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
+pub(crate) mod recovery;
 pub(in crate::storage) mod scratch;
 
 // Only durable restore omission evidence grants the missing-cache exception.
@@ -118,8 +119,9 @@ const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 pub(in crate::storage) fn recover_restore_operations(
     root: &Path,
     db: &Connection,
+    registry: Option<&scratch::Registry>,
 ) -> Result<(), String> {
-    publication::journal::recover_all(root, db)
+    publication::journal::recover_with_policy(root, db, registry)
 }
 
 struct Maintenance<'a> {

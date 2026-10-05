@@ -108,6 +108,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   };
   useEffect(() => {
     if (!s) return;
+    if (s.kind === "recovery") { setOpen(false); setToast(""); return; }
     if (s.busy) setOpen(false);
     if (unknown) {
       const choice = pendingChoice.current;
@@ -134,7 +135,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     }
   }, [s, rpcBusy, locked, unknown, connected, availability?.available, visible]);
   const canAct = isTauri() && connected && !locked && !rpcBusy && !s?.busy && !unknown && !!availability?.available;
-  const requestReady = !!s?.retryAllowed && !s.attentionRequired;
+  const requestReady = s?.kind !== "recovery" && !!s?.retryAllowed && !s.attentionRequired;
   const restore = s?.restorePreview;
   const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && !!restore && restore.availableBytes >= restore.requiredBytes));
   const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); });
@@ -144,7 +145,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={() => void choose("backup")}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={() => void choose("restore")}>バックアップから追加復元</button></div>
       {!connected && <p role="status">データ操作の状態を確認できるまで変更操作を停止しています。</p>}
       {availability?.reason && !s?.busy && <p role="status">{availability.reason}。停止・完了後にバックアップ／復元できます。</p>}
-      {s?.token && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
+      {s?.token && s.kind !== "recovery" && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
       <div className="analysis-actions">
         <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(read)}>状態を再確認</button>
         {unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}

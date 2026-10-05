@@ -378,6 +378,12 @@ fn parents(root: &Path, target: &str, saved: &Saved) -> Result<(), String> {
     Ok(())
 }
 fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
+    if let Some(registry) = scratch::Registry::known(root)? {
+        let evidence = recovery_evidence(db, id)?;
+        if registry.retained("restore_addition", id, &evidence.intent_hash)? {
+            return Ok(());
+        }
+    }
     if !db.is_autocommit() {
         return Err("公開結果が未確定のため復元追加物を保持します".into());
     }
@@ -498,7 +504,15 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
     tx.execute("UPDATE maintenance_operations SET state='recovered',progress_json='{\"owned\":0}',error_code=NULL,updated_at=?1 WHERE id=?2",params![now_ms()?,id]).map_err(|e|e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
+#[cfg(test)]
 pub(in crate::storage::backup) fn recover_all(root: &Path, db: &Connection) -> Result<(), String> {
+    recover_with_policy(root, db, None)
+}
+pub(in crate::storage::backup) fn recover_with_policy(
+    root: &Path,
+    db: &Connection,
+    registry: Option<&scratch::Registry>,
+) -> Result<(), String> {
     let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='restore_addition' AND state NOT IN ('completed','recovered'))",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     if !pending {
         return Ok(());
@@ -509,13 +523,109 @@ pub(in crate::storage::backup) fn recover_all(root: &Path, db: &Connection) -> R
     let mut query=db.prepare("SELECT id FROM maintenance_operations WHERE kind='restore_addition' AND state NOT IN ('completed','recovered') ORDER BY created_at,id").map_err(|e|e.to_string())?;
     let mut rows = query.query([]).map_err(|e| e.to_string())?;
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        recover_one(
-            root,
-            db,
-            &row.get::<_, String>(0).map_err(|e| e.to_string())?,
-        )?;
+        let id: String = row.get(0).map_err(|e| e.to_string())?;
+        if let Some(registry) = registry {
+            let evidence = recovery_evidence(db, &id)?;
+            if registry.retained("restore_addition", &id, &evidence.intent_hash)? {
+                continue;
+            }
+        }
+        recover_one(root, db, &id)?;
     }
     Ok(())
+}
+
+pub(in crate::storage::backup) fn recovery_evidence(
+    db: &Connection,
+    id: &str,
+) -> Result<recovery::Evidence, String> {
+    if !uuid(id) || schema(db)? != schema(&portable::schema(MIGRATIONS.len())?)? {
+        return Err("復元回収の台帳定義またはIDが不正です".into());
+    }
+    let (batch,json,sha,state,error,progress,created,updated):(String,String,String,String,Option<String>,String,i64,i64)=db.query_row("SELECT restore_batch_id,target_manifest_json,target_hash,state,error_code,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='restore_addition'",params![id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?;
+    if !uuid(&batch)
+        || json.len() > 65536
+        || sha.len() != 64
+        || progress.len() > 4096
+        || error.as_ref().is_some_and(|e| e.len() > 8192)
+    {
+        return Err("復元回収の記録が表示上限を超えています".into());
+    }
+    let batch_state: String = db
+        .query_row(
+            "SELECT state FROM restore_batches WHERE batch_id=?1",
+            params![batch],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut intent = Sha256::new();
+    intent.update(serde_json::to_vec(&(id, batch, json, sha, created)).map_err(|e| e.to_string())?);
+    let status = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(&state, &error, progress, updated, &batch_state))
+                .map_err(|e| e.to_string())?
+        )
+    );
+    let mut paths = std::collections::BTreeSet::new();
+    let mut count = 0;
+    let mut q=db.prepare("SELECT relative_path,kind,size_bytes,content_hash,identity_json,identity_hash FROM maintenance_paths WHERE operation_id=?1 ORDER BY relative_path LIMIT 200001").map_err(|e|e.to_string())?;
+    let mut rows = q.query(params![id]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        count += 1;
+        if count > MAX_PATHS {
+            return Err("復元回収の対象が表示上限を超えています".into());
+        }
+        let entry: (
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = (
+            row.get(0).map_err(|e| e.to_string())?,
+            row.get(1).map_err(|e| e.to_string())?,
+            row.get(2).map_err(|e| e.to_string())?,
+            row.get(3).map_err(|e| e.to_string())?,
+            row.get(4).map_err(|e| e.to_string())?,
+            row.get(5).map_err(|e| e.to_string())?,
+        );
+        let parts: Vec<_> = entry.0.split('/').collect();
+        // Never offer the shared meetings directory or an invalid path for a
+        // recursive inventory. Keeping an invalid manifest still deletes none.
+        if entry.1 == "directory" && parts.len() == 2 && parts[0] == "meetings" && uuid(parts[1]) {
+            paths.insert(entry.0.clone());
+        }
+        intent.update(serde_json::to_vec(&entry).map_err(|e| e.to_string())?);
+        intent.update(b"\n");
+    }
+    Ok(recovery::Evidence {
+        item: recovery::Item {
+            source: recovery::Source::RestoreAddition,
+            operation_id: id.into(),
+            paths: paths.into_iter().collect(),
+            registered_paths: count,
+            reason: error.unwrap_or_else(|| "未公開の復元追加物を回収できていません".into()),
+            retained: false,
+        },
+        state,
+        intent_hash: format!("{:x}", intent.finalize()),
+        status_hash: status,
+        live: batch_state == "published",
+    })
+}
+pub(in crate::storage::backup) fn recover_selected(
+    root: &Path,
+    db: &Connection,
+    id: &str,
+    registry: &scratch::Registry,
+) -> Result<(), String> {
+    let evidence = recovery_evidence(db, id)?;
+    if evidence.live || registry.retained("restore_addition", id, &evidence.intent_hash)? {
+        return Err("公開済みまたは保持して確認済みの対象は回収しません".into());
+    }
+    recover_one(root, db, id)
 }
 
 #[cfg(test)]

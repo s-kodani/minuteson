@@ -38,6 +38,7 @@ impl Drop for Admission {
 pub(super) enum Work {
     Select(Kind, Result<Option<PathBuf>, String>, Option<Selection>),
     Request(Selection, Request),
+    Recovery(recovery::Source, String, Option<Selection>),
 }
 
 #[derive(Default)]
@@ -45,6 +46,7 @@ pub(super) struct Completion {
     pub selection: Option<Selection>,
     pub backup: Option<BackupReceipt>,
     pub restore: Option<RestoreReceipt>,
+    pub recovery: Option<recovery::Receipt>,
     pub error: Option<String>,
     pub attention: bool,
     pub cancelled: bool,
@@ -67,6 +69,29 @@ impl Work {
         progress: &impl Fn(&str),
     ) -> Completion {
         match self {
+            Self::Recovery(source, id, previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    progress("verifying");
+                    storage
+                        .prepare_recovery(source, &id, cancelled)
+                        .map(Selection::Recovery)
+                }))
+                .unwrap_or_else(|_| {
+                    Err("要確認対象の検査が予期せず停止しました。ファイルは保持します".into())
+                });
+                match result {
+                    Ok(selection) => Completion {
+                        selection: Some(selection),
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        cancelled: cancelled(),
+                        ..Completion::default()
+                    },
+                }
+            }
             Self::Select(kind, path, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -84,6 +109,7 @@ impl Work {
                         Kind::Restore => Selection::Restore(
                             storage.prepare_additive_restore(&path, cancelled, progress)?,
                         ),
+                        Kind::Recovery => return Err("要確認一覧から対象を選択してください".into()),
                     };
                     if cancelled() {
                         return Err("データの確認を取り消しました".into());
@@ -131,6 +157,22 @@ impl Work {
                                 progress,
                             )?);
                         }
+                        (Selection::Recovery(prepared), Action::Refresh) => {
+                            let p = prepared.preview();
+                            *prepared = storage.prepare_recovery(
+                                p.item.source,
+                                &p.item.operation_id,
+                                cancelled,
+                            )?;
+                        }
+                        (Selection::Recovery(prepared), Action::Recover | Action::Keep) => {
+                            completion.recovery = Some(prepared.resolve(
+                                storage,
+                                &request.confirmation_id,
+                                request.action == Action::Keep,
+                                cancelled,
+                            )?);
+                        }
                         _ => return Err("このデータ操作は再確認できません".into()),
                     }
                     Ok(())
@@ -149,6 +191,7 @@ impl Work {
                     Ok(Ok(())) => {
                         completion.cancelled = completion.backup.is_none()
                             && completion.restore.is_none()
+                            && completion.recovery.is_none()
                             && cancelled();
                     }
                 }

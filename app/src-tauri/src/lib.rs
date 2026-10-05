@@ -384,6 +384,24 @@ fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot
     data_app(&window)?.state::<DataController>().snapshot()
 }
 
+#[tauri::command]
+async fn get_recovery_items(
+    window: WebviewWindow,
+) -> Result<storage::backup::recovery::Listing, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().recovery_listing())
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn review_recovery_item(
+    window: WebviewWindow,
+    source: storage::backup::recovery::Source,
+    operation_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_recovery(&data_app(&window)?, source, operation_id)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DataAvailability {
@@ -1541,6 +1559,8 @@ pub fn run() {
             start_audio_import,
             cancel_audio_import,
             get_data_operation,
+            get_recovery_items,
+            review_recovery_item,
             get_data_operation_availability,
             list_restored_meeting_ids,
             select_data_operation,

@@ -1,6 +1,140 @@
 use super::super::tests::{all_rows, fixture, ids, sealed};
 use super::*;
 
+#[test]
+fn restore_attention_keep_preserves_files_on_restart_and_disables_old_batch_publication_without_live_edits(
+) {
+    let f = fixture();
+    let batch = Uuid::new_v4().to_string();
+    let ids = ids(&f, &batch);
+    let sealed = sealed(&f, &ids);
+    let root = f.target.root.clone();
+    let first = paths(&sealed, &root)[0].clone();
+    {
+        let db = f.target.connection.lock().unwrap();
+        let install = recorded(&f, &db, &sealed, &ids);
+        std::fs::write(first.join("unknown"), b"keep unknown").unwrap();
+        drop(install);
+        assert_eq!(state(&db, &batch), "attention");
+    }
+    let before = all_rows(&f.target.connection.lock().unwrap());
+    let listing = f.target.recovery_listing().unwrap();
+    let item = listing
+        .items
+        .iter()
+        .find(|i| i.source == recovery::Source::RestoreAddition)
+        .unwrap();
+    let operation = item.operation_id.clone();
+    let mut review = f
+        .target
+        .prepare_recovery(recovery::Source::RestoreAddition, &operation, &|| false)
+        .unwrap();
+    let receipt = review
+        .resolve(&f.target, &review.preview().confirmation_id, true, &|| {
+            false
+        })
+        .unwrap();
+    assert_eq!(receipt.outcome, recovery::Outcome::Retained);
+    assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
+    assert!(f
+        .target
+        .publish_restore(&sealed, &ids, &|| false)
+        .unwrap_err()
+        .contains("保持して確認済み"));
+    assert_eq!(
+        std::fs::read(first.join("unknown")).unwrap(),
+        b"keep unknown"
+    );
+    std::fs::remove_file(first.join("unknown")).unwrap();
+    drop(review);
+    drop(ids);
+    drop(f.target);
+    let reopened = Storage::open(root).unwrap();
+    assert!(
+        first.is_dir(),
+        "keep decision must protect even a now empty area"
+    );
+    assert_eq!(all_rows(&reopened.connection.lock().unwrap()), before);
+    assert!(reopened
+        .recovery_listing()
+        .unwrap()
+        .items
+        .iter()
+        .any(|i| i.operation_id == operation && i.retained));
+}
+
+#[test]
+fn restore_attention_confirmed_retry_cannot_follow_changed_parents_or_delete_existing_meetings() {
+    let f = fixture();
+    let batch = Uuid::new_v4().to_string();
+    let ids = ids(&f, &batch);
+    let sealed = sealed(&f, &ids);
+    let first = paths(&sealed, &f.target.root)[0].clone();
+    {
+        let db = f.target.connection.lock().unwrap();
+        let install = recorded(&f, &db, &sealed, &ids);
+        std::fs::write(first.join("unknown"), b"keep").unwrap();
+        drop(install);
+    }
+    let item = f
+        .target
+        .recovery_listing()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.source == recovery::Source::RestoreAddition)
+        .unwrap();
+    let before = all_rows(&f.target.connection.lock().unwrap());
+    let mut review = f
+        .target
+        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .unwrap();
+    std::fs::write(first.join("new-unknown"), b"new").unwrap();
+    assert!(review
+        .resolve(&f.target, &review.preview().confirmation_id, false, &|| {
+            false
+        })
+        .is_err());
+    assert!(first.join("unknown").exists());
+    let mut refreshed = f
+        .target
+        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .unwrap();
+    assert_eq!(
+        refreshed
+            .resolve(
+                &f.target,
+                &refreshed.preview().confirmation_id,
+                false,
+                &|| false
+            )
+            .unwrap()
+            .outcome,
+        recovery::Outcome::Attention
+    );
+    assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
+    std::fs::remove_file(first.join("unknown")).unwrap();
+    std::fs::remove_file(first.join("new-unknown")).unwrap();
+    let mut final_review = f
+        .target
+        .prepare_recovery(item.source, &item.operation_id, &|| false)
+        .unwrap();
+    assert_eq!(
+        final_review
+            .resolve(
+                &f.target,
+                &final_review.preview().confirmation_id,
+                false,
+                &|| false
+            )
+            .unwrap()
+            .outcome,
+        recovery::Outcome::Recovered
+    );
+    assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
+    assert!(!first.exists());
+}
+
 fn state(db: &Connection, batch: &str) -> String {
     db.query_row(
         "SELECT state FROM maintenance_operations WHERE restore_batch_id=?1",

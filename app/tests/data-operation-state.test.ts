@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "restore", phase: "ready", busy: false,
-  backupPreview: null, backupReceipt: null, restoreReceipt: null, attentionRequired: false, errorMessage: null, retryAllowed: true,
+  backupPreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, attentionRequired: false, errorMessage: null, retryAllowed: true,
   restorePreview: { confirmationId: id(2), batchId: id(3), archiveId: id(4), meetingTitles: ["会議"], requiredBytes: 32, availableBytes: 64, vocabularyAdded: 1, vocabularyDeduplicated: 2, vocabularyConflicts: ["点検日"] } });
 
 test("data requests retain server-issued token and confirmation, never paths or batch substitutions", () => {

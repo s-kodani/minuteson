@@ -75,6 +75,10 @@
 .data-toast { display:flex; flex-wrap:wrap; gap:12px; align-items:center; background:#ecfdf5; border:1px solid #a7f3d0; padding:12px; border-radius:8px; }
 .restore-badge { display:inline-block; color:#0369a1; font-size:11px; }
 .data-dialog li { overflow-wrap:anywhere; }
+.recovery-list { list-style:none; padding:0; }
+.recovery-list>li { border-top:1px solid #e2e8f0; padding:16px 0; overflow-wrap:anywhere; }
+.recovery-list h3 { font-size:14px; }
+.recovery-panel .data-info { position:relative; }
 .import-dialog fieldset { border:0; padding:0; min-width:0; }
 .import-dialog fieldset>label { display:flex; flex-direction:column; gap:7px; margin:14px 0; }
 .import-dialog fieldset>label input,.import-dialog fieldset>label select { font:inherit; width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }

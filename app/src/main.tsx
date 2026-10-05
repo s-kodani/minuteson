@@ -12,6 +12,7 @@ import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
+import { RecoveryPanel } from "./recovery-panel";
 import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
@@ -86,6 +87,7 @@ function MainWindow() {
   const state = useRecordingSession();
   const dataOperation = useDataOperation();
   const [dataPending, setDataPending] = useState(false);
+  const [recoveryPending, setRecoveryPending] = useState(false);
   const [restoredIds, setRestoredIds] = useState<string[]>([]);
   const [restoredFilter, setRestoredFilter] = useState<string[] | null>(null);
   const [originError, setOriginError] = useState("");
@@ -102,7 +104,7 @@ function MainWindow() {
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings">("overview");
-  const writeLocked = navigationBusy || dataPending || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const writeLocked = navigationBusy || dataPending || recoveryPending || !dataOperation.connected || !!dataOperation.snapshot?.busy;
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
@@ -296,7 +298,8 @@ function MainWindow() {
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
           {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>

@@ -1,4 +1,5 @@
-export type DataKind = "backup" | "restore";
+import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, type RecoveryReceipt } from "./recovery-state.ts";
+export type DataKind = "backup" | "restore" | "recovery";
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
 export interface RestorePreview {
   confirmationId: string; batchId: string; archiveId: string; meetingTitles: string[];
@@ -17,9 +18,10 @@ export interface DataSnapshot {
   revision: number; token: string | null; kind: DataKind | null; phase: string; busy: boolean;
   backupPreview: BackupPreview | null; restorePreview: RestorePreview | null;
   backupReceipt: BackupReceipt | null; restoreReceipt: RestoreReceipt | null;
+  recoveryPreview: RecoveryPreview | null; recoveryReceipt: RecoveryReceipt | null;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
-export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" }
+export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" }
 export interface DataAvailability { available: boolean; reason: string | null }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -29,7 +31,7 @@ export function assertDataSnapshot(s: DataSnapshot): void {
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
   if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"
-    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore"].includes(s.kind)
+    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery"].includes(s.kind)
     || (s.errorMessage !== null && typeof s.errorMessage !== "string")) fail();
   if (s.backupPreview !== null) {
     const p = s.backupPreview;
@@ -52,9 +54,14 @@ export function assertDataSnapshot(s: DataSnapshot): void {
       || (r.vocabularyConflicts !== null && !texts(r.vocabularyConflicts))
       || (s.restorePreview && (r.batchId !== s.restorePreview.batchId || r.archiveId !== s.restorePreview.archiveId))) fail();
   }
-  const hasResult = !!(s.backupReceipt || s.restoreReceipt);
+  if (s.recoveryPreview !== null) { assertRecoveryPreview(s.recoveryPreview); if (s.kind !== "recovery") fail(); }
+  if (s.recoveryReceipt !== null) {
+    assertRecoveryReceipt(s.recoveryReceipt);
+    if (s.kind !== "recovery" || (s.recoveryPreview && (s.recoveryReceipt.operationId !== s.recoveryPreview.item.operationId || s.recoveryReceipt.source !== s.recoveryPreview.item.source))) fail();
+  }
+  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
-    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview)))
+    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview)))
     || ((s.busy || s.retryAllowed || hasResult || s.attentionRequired) && (!s.token || !s.kind))) fail();
 }
 export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnapshot): DataSnapshot {
@@ -68,8 +75,10 @@ export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnaps
 }
 export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): DataRequest {
   assertDataSnapshot(s);
-  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId;
-  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || (action === "refresh" && s.kind !== "restore")) throw Error("確認済みの操作を再確認してください。");
+  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId;
+  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery")) throw Error("確認済みの操作を再確認してください。");
+  if ((s.kind === "recovery") !== ["recover", "keep"].includes(action) && action !== "refresh") throw Error("対象と実行する操作が一致しません。");
+  if (["recover", "keep"].includes(action) && (s.kind !== "recovery" || s.phase !== "ready" || !s.recoveryPreview)) throw Error("最新の回収内容を再確認してください。");
   if (action === "publish" && s.kind === "restore" && (s.phase !== "ready" || !s.restorePreview || s.restorePreview.availableBytes < s.restorePreview.requiredBytes)) throw Error("復元内容と容量を再確認してください。");
   return { token: s.token, confirmationId: id, action };
 }

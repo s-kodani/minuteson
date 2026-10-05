@@ -151,11 +151,11 @@ impl Storage {
         )?;
         connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
         connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
-        backup::recover_restore_operations(&root, &connection)?;
         #[cfg(unix)]
         let scratch = Some(backup::scratch::Registry::open(&root)?);
         #[cfg(not(unix))]
         let scratch = None;
+        backup::recover_restore_operations(&root, &connection, scratch.as_deref())?;
         connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
         // A copy or compatibility check is never resumed or executed on startup.
         // Retain intent/fingerprints and partial files for explicit inspection.
