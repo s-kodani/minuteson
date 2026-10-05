@@ -1,5 +1,5 @@
 //! Durable native-copy ownership, separate from source DB and destination data.
-//! No cutover, old-data deletion, automatic cleanup, or adoption of existing files.
+//! Activation uses owned placement evidence; old-data deletion is separate.
 use super::*;
 use crate::storage::backup::relocation::{
     verify_placed_image_with_controls, Entry, Manifest, NativeSnapshot,
@@ -7,6 +7,7 @@ use crate::storage::backup::relocation::{
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::BTreeMap;
 
+pub(super) mod activation;
 mod history;
 
 const SCHEMA: &str = "
@@ -58,8 +59,7 @@ pub(crate) struct Progress {
     pub verified_paths: usize,
 }
 
-// Not deserializable and not a cutover capability. A later coordinator must
-// recheck source/placement and migrate local recovery receipts before switching.
+// Not deserializable. Activation rechecks source, payload and recovery history.
 pub(crate) struct Placement<'a> {
     bootstrap: &'a Bootstrap,
     pending: PendingMove,
@@ -135,6 +135,15 @@ impl Bootstrap {
             }
             p
         };
+        self.open_placement(pending, Some(snapshot.manifest()))
+    }
+    // None loads ONLY an existing owned journal for cold activation. It never
+    // creates a journal/lock, adopts a target, or requires the old source root.
+    fn open_placement<'a>(
+        &'a self,
+        pending: PendingMove,
+        snapshot_manifest: Option<&Manifest>,
+    ) -> Result<Placement<'a>, String> {
         let target = directory(&pending.target)?;
         local(&pending.target)?;
         if target.mode() & 0o077 != 0 || !pending.target_directory.matches(&target) {
@@ -160,6 +169,9 @@ impl Bootstrap {
             Ok(_) => false,
             Err(e) => return Err(e.to_string()),
         };
+        if new && snapshot_manifest.is_none() {
+            return Err("切替対象の配置台帳が欠落しています。再作成しません".into());
+        }
         if new
             && std::fs::read_dir(&pending.target)
                 .map_err(|e| e.to_string())?
@@ -247,12 +259,37 @@ impl Bootstrap {
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
             .map_err(|e| e.to_string())?;
-        db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE; COMMIT;").map_err(|e|e.to_string())?;
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+        let legacy_schema = schema(&expected)?;
+        expected
+            .execute_batch(activation::ADMISSION_SCHEMA)
+            .map_err(|e| e.to_string())?;
         let expected_schema = schema(&expected)?;
-        let manifest = snapshot.manifest().clone();
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if !new
+            && !((version == 1 && schema(&db)? == legacy_schema)
+                || (version == 2 && schema(&db)? == expected_schema))
+        {
+            return Err("配置台帳の形式・版が変更されています".into());
+        }
+        let manifest = match snapshot_manifest {
+            Some(m) => m.clone(),
+            None => {
+                let (json, sha): (String, String) = db.query_row("SELECT manifest,manifest_hash FROM metadata WHERE id=1 AND length(CAST(manifest AS BLOB))<=67108864", [], |r| Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+                if sha != pending.manifest_hash || hash(json.as_bytes()) != sha {
+                    return Err("切替対象のmanifestが一致しません".into());
+                }
+                serde_json::from_str(&json).map_err(|e| e.to_string())?
+            }
+        };
+        activation::validate_manifest(&manifest)?;
         let manifest_json = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
+        if hash(manifest_json.as_bytes()) != pending.manifest_hash {
+            return Err("配置台帳のmanifest SHAが一致しません".into());
+        }
         let intent = serde_json::to_string(&pending).map_err(|e| e.to_string())?;
         let mut entries = vec![Entry {
             relative_path: "meetings.sqlite3".into(),
@@ -262,9 +299,10 @@ impl Bootstrap {
         }];
         entries.extend(manifest.entries.clone());
         if new {
-            db.execute_batch("BEGIN IMMEDIATE;")
-                .map_err(|e| e.to_string())?;
+            db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE;").map_err(|e|e.to_string())?;
             db.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+            db.execute_batch(activation::ADMISSION_SCHEMA)
+                .map_err(|e| e.to_string())?;
             for e in &entries {
                 db.execute(
                     "INSERT INTO paths VALUES(?1,?2,?3,?4,NULL,NULL,'pending')",
@@ -283,23 +321,15 @@ impl Bootstrap {
                     intent,
                     hash(intent.as_bytes()),
                     manifest_json,
-                    snapshot.manifest_hash(),
+                    pending.manifest_hash,
                     entries.len() as i64
                 ],
             )
             .map_err(|e| e.to_string())?;
-            db.execute_batch("PRAGMA user_version=1; COMMIT;")
+            db.execute_batch("PRAGMA user_version=2; COMMIT;")
                 .map_err(|e| e.to_string())?;
             file.sync_all().map_err(|e| e.to_string())?;
             self.directory.sync_all().map_err(|e| e.to_string())?;
-        }
-        if schema(&db)? != expected_schema
-            || db
-                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                .map_err(|e| e.to_string())?
-                != 1
-        {
-            return Err("配置台帳の形式・版が変更されています".into());
         }
         let integrity: String = db
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
@@ -318,7 +348,7 @@ impl Bootstrap {
         if saved.0 != intent
             || saved.1 != hash(intent.as_bytes())
             || saved.2 != manifest_json
-            || saved.3 != snapshot.manifest_hash()
+            || saved.3 != pending.manifest_hash
             || saved.4 != entries.len() as i64
             || !matches!(saved.5.as_str(), "copying" | "ready")
         {
@@ -358,6 +388,20 @@ impl Bootstrap {
         if saved.5 == "ready" && nodes.values().any(|n| n.state != "copied") {
             return Err("配置完了の記録と所有・進行の記録が一致しません".into());
         }
+        if !new {
+            // Only a known schema and the exact saved intent/manifest/nodes may
+            // be opened for writes or upgraded; retain legacy owner evidence.
+            db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE;").map_err(|e|e.to_string())?;
+            if version == 1 {
+                db.execute_batch(activation::ADMISSION_SCHEMA)
+                    .map_err(|e| e.to_string())?;
+                db.execute_batch("PRAGMA user_version=2;")
+                    .map_err(|e| e.to_string())?;
+            }
+            db.execute_batch("COMMIT;").map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
+            self.directory.sync_all().map_err(|e| e.to_string())?;
+        }
         let proof = ControlProof::read(&file.metadata().map_err(|e| e.to_string())?)?;
         if proof.identity != initial.identity {
             return Err("配置台帳の実体が変更されています".into());
@@ -395,7 +439,11 @@ impl Placement<'_> {
             .map_err(|_| "起動設定ロックを取得できません")?;
         self.bootstrap.guard(&state)?;
         let record = &state.loaded.as_ref().ok_or("起動設定がありません")?.record;
-        if record.pending_move.as_ref() != Some(&self.pending) {
+        if record.pending_move.as_ref() != Some(&self.pending)
+            && !record.activation.as_ref().is_some_and(|a| {
+                a.pending == self.pending && record.current.path == self.pending.target
+            })
+        {
             return Err("配置確認が失効しています".into());
         }
         record.current.verify()?;
@@ -420,6 +468,30 @@ impl Placement<'_> {
             return Err("配置先・台帳の実体または形式が変更されています".into());
         }
         local(&self.pending.target)
+    }
+    fn require_pending(&self) -> Result<(), String> {
+        self.guard()?;
+        let state = self
+            .bootstrap
+            .state
+            .lock()
+            .map_err(|_| "起動設定ロックを取得できません")?;
+        if state
+            .loaded
+            .as_ref()
+            .is_none_or(|l| l.record.pending_move.as_ref() != Some(&self.pending))
+        {
+            return Err("保存先は既に切替済みです。旧コピーの書換えは行いません".into());
+        }
+        if self
+            .db
+            .query_row("SELECT count(*) FROM admission", [], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            != 0
+        {
+            return Err("初回起動を承認済みのコピーは書き換えません".into());
+        }
+        Ok(())
     }
     fn committed(&mut self) -> Result<(), String> {
         self.uncertain = true;
@@ -569,6 +641,7 @@ impl Placement<'_> {
         }
         snapshot.verify(cancelled)?;
         snapshot.verify_source(cancelled)?;
+        self.require_pending()?;
         self.guard()?;
         // Space accounting is conservative for a resumed partial copy. Never
         // consume the source reserve to complete a destination with low space.

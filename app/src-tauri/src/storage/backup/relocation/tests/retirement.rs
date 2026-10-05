@@ -2,6 +2,42 @@ use super::*;
 use std::sync::atomic::Ordering;
 
 #[test]
+fn snapshot_drop_rechecks_source_binding_even_when_cancelled_before_source_verification() {
+    for failure in ["db", "rewrite", "root"] {
+        let f = Fixture::new();
+        let saved = snapshot(&f);
+        let path = f.storage.root.join("meetings.sqlite3");
+        match failure {
+            "db" => {
+                std::fs::rename(&path, path.with_extension("retained")).unwrap();
+                std::fs::write(&path, b"unknown replacement").unwrap();
+            }
+            "rewrite" => {
+                let bytes = std::fs::read(&path).unwrap();
+                std::fs::write(&path, bytes).unwrap();
+            }
+            "root" => {
+                std::fs::rename(&f.storage.root, f.storage.root.with_extension("retained"))
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(saved.verify(&|| true).is_err());
+        drop(saved);
+        assert!(
+            f.storage
+                .create_meeting("早期取消でも不確定な元へ書かない")
+                .is_err(),
+            "{failure}"
+        );
+        assert!(f.storage.list_meetings().is_err(), "{failure}");
+        if failure == "db" {
+            assert_eq!(std::fs::read(path).unwrap(), b"unknown replacement");
+        }
+    }
+}
+
+#[test]
 fn retired_source_keeps_reads_but_rejects_writes_and_new_stages_after_snapshot_drop() {
     let f = Fixture::new();
     let saved = snapshot(&f);

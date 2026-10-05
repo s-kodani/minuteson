@@ -4,7 +4,7 @@
 //! stay at the source; their rebinding is a separate, still-required operation.
 use super::*;
 use rusqlite::types::ValueRef;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
@@ -14,23 +14,23 @@ const MAX_ENTRIES: usize = 200_000;
 const MAX_ROWS: usize = 2_000_000;
 const MAX_MANIFEST: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Table {
     pub name: String,
     pub rows: usize,
     pub hash: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {
     pub relative_path: String,
     pub directory: bool,
     pub size: u64,
     pub hash: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Asset {
     pub id: String,
     pub meeting_id: String,
@@ -39,8 +39,8 @@ pub(crate) struct Asset {
     pub hash: String,
     pub state: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Manifest {
     pub version: u32,
     pub schema_hash: String,
@@ -105,6 +105,26 @@ pub(crate) struct NativeSnapshot<'a> {
     source: Vec<Observed>,
     copied: Vec<Observed>,
     maintenance: Maintenance<'a>,
+}
+
+impl Drop for NativeSnapshot<'_> {
+    fn drop(&mut self) {
+        // Cancellation, stale confirmation or a bootstrap error can return
+        // before verify_source. Never unlock an uncertain root/DB merely
+        // because that earlier check ended the operation. Stage cleanup still
+        // runs before Maintenance, and is independently restricted to ownership.
+        let storage = self.maintenance.storage;
+        let valid = (|| -> Result<bool, String> {
+            Ok(
+                Identity::read(&directory(&storage.root)?)? == self.source_identity
+                    && database_proof(&storage.root.join("meetings.sqlite3"))?
+                        == self.source_database_proof,
+            )
+        })();
+        if !valid.is_ok_and(|valid| valid) {
+            self.maintenance.fail_closed();
+        }
+    }
 }
 
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {

@@ -519,6 +519,7 @@ fn bootstrap_valid_configured_root_routes_startup_without_moving_models_or_adopt
     let mut d = f.document();
     d.record.current = Root::inspect(relocated.root()).unwrap();
     d.record.origin = Origin::Relocated;
+    d.schema_version = 1; // Existing configured roots retain the legacy format.
     d.record.revision = 1;
     resign(&mut d);
     f.replace_document(&d);

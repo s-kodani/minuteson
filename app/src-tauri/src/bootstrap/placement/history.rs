@@ -281,6 +281,7 @@ impl Placement<'_> {
         check(cancelled)?;
         let snapshot = handoff.snapshot();
         handoff.verify(cancelled)?;
+        self.require_pending()?;
         self.verify(snapshot, cancelled)?;
         let mut local = Local::open(self, true)?.ok_or("移行先台帳を作成できません")?;
         let mut saved = local.saved()?;
@@ -374,6 +375,38 @@ impl Placement<'_> {
             control_hash: handoff.hash().into(),
         })
     }
+}
+
+// Read actual owned installed evidence, never a deserialized success receipt.
+pub(super) fn installed_control(p: &Placement<'_>) -> Result<(String, String, Identity), String> {
+    let local = Local::open(p, false)?.ok_or("移行先の履歴台帳が欠落しています")?;
+    let saved = local.saved()?;
+    local.verify_installed(p, &saved)?;
+    let (json, hash) = saved.control.ok_or("履歴の制御記録がありません")?;
+    Ok((
+        json,
+        hash,
+        saved.registry.ok_or("履歴台帳の所有証拠がありません")?,
+    ))
+}
+
+// After admission, registry contents can change during normal recovery/use.
+// Still require the original installed journal and the admitted registry inode.
+pub(super) fn admitted_registry(
+    p: &Placement<'_>,
+    control: &str,
+    registry: &Identity,
+) -> Result<(), String> {
+    let local = Local::open(p, false)?.ok_or("承認済みの履歴台帳が欠落しています")?;
+    let saved = local.saved()?;
+    if saved.state != "installed"
+        || saved.control.as_ref().is_none_or(|c| c.1 != control)
+        || saved.registry.as_ref() != Some(registry)
+    {
+        return Err("承認済みの履歴・台帳所有証拠が一致しません".into());
+    }
+    local.registry_file(p, &saved)?;
+    local.guard(p)
 }
 
 #[cfg(test)]

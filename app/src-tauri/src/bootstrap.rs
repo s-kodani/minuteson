@@ -182,11 +182,20 @@ struct PendingMove {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Activation {
+    pending: PendingMove,
+    control_hash: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Record {
     revision: u64,
     origin: Origin,
     current: Root,
     pending_move: Option<PendingMove>,
+    // Omitting None preserves the canonical hashes of existing schema-1 files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activation: Option<Activation>,
 }
 impl Record {
     fn validate(&self) -> Result<(), String> {
@@ -204,6 +213,27 @@ impl Record {
                 || self.current.path.starts_with(&p.target)
             {
                 return Err("移動の起動設定が不正です。旧保存先を変更しません".into());
+            }
+        }
+        if let Some(a) = &self.activation {
+            let p = &a.pending;
+            absolute(&p.source.path)?;
+            absolute(&p.target)?;
+            if self.origin != Origin::Relocated
+                || !uuid(&p.operation_id)
+                || !uuid(&p.confirmation_id)
+                || !sha(&p.manifest_hash)
+                || !sha(&a.control_hash)
+                || p.target != self.current.path
+                || p.target_directory != self.current.directory
+                || p.target.starts_with(&p.source.path)
+                || p.source.path.starts_with(&p.target)
+                || self
+                    .pending_move
+                    .as_ref()
+                    .is_some_and(|next| next.operation_id == p.operation_id)
+            {
+                return Err("保存先切替の所有確認が不正です。自動初期化しません".into());
             }
         }
         Ok(())
@@ -230,6 +260,8 @@ struct State {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct View {
     pub meeting_root: PathBuf,
+    pub active_meeting_root: PathBuf,
+    pub restart_required: bool,
     pub models_root: PathBuf,
     pub bootstrap_path: PathBuf,
     pub revision: u64,
@@ -248,6 +280,7 @@ pub(crate) struct Bootstrap {
     initial_origin: Origin,
     models_root: PathBuf,
     state: Mutex<State>,
+    restart_required: std::sync::atomic::AtomicBool,
 }
 
 impl Bootstrap {
@@ -325,6 +358,7 @@ impl Bootstrap {
                 loaded: None,
                 uncertain: false,
             }),
+            restart_required: std::sync::atomic::AtomicBool::new(false),
         };
         result.guard_directory()?;
         let loaded = result.read()?;
@@ -383,6 +417,8 @@ impl Bootstrap {
             .get_mut()
             .map_err(|_| "起動設定ロックを取得できません")?
             .loaded = loaded;
+        // Before Storage::open can migrate/recover/write the selected root.
+        result.admit_activation()?;
         Ok(result)
     }
     pub(crate) fn root(&self) -> &Path {
@@ -436,7 +472,11 @@ impl Bootstrap {
         }
         let doc: Document = serde_json::from_slice(&bytes)
             .map_err(|e| format!("起動設定が不正です。空DBへ切り替えません: {e}"))?;
-        if doc.schema_version != 1
+        if !matches!(doc.schema_version, 1 | 2)
+            || (doc.schema_version == 1 && doc.record.activation.is_some())
+            || (doc.schema_version == 2
+                && doc.record.origin == Origin::Relocated
+                && doc.record.activation.is_none())
             || !sha(&doc.sha256)
             || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
         {
@@ -477,9 +517,12 @@ impl Bootstrap {
     fn write(&self, state: &mut State, record: Record) -> Result<(), String> {
         self.guard(state)?;
         record.validate()?;
+        if record.origin == Origin::Relocated && record.activation.is_none() {
+            return Err("保存先切替の所有確認が欠落しています".into());
+        }
         let digest = hash(&serde_json::to_vec(&record).map_err(|e| e.to_string())?);
         let bytes = serde_json::to_vec(&Document {
-            schema_version: 1,
+            schema_version: 2,
             record,
             sha256: digest,
         })
@@ -526,6 +569,7 @@ impl Bootstrap {
         // Rename may already have committed. Never retry against stale state
         // after a sync/read failure; next launch reads the durable selection.
         state.uncertain = true;
+        placement::activation::publication_checkpoint()?;
         self.directory.sync_all().map_err(|e| e.to_string())?;
         state.loaded = self.read()?;
         if state
@@ -550,6 +594,9 @@ impl Bootstrap {
             return Err("開いた会議保存先が起動設定と一致しません".into());
         }
         if let Some(l) = &state.loaded {
+            if l.record.current.path != storage.root() {
+                return Err("旧Storageは終了待ちです。保存先切替後に再起動してください".into());
+            }
             return l.record.current.verify();
         }
         let root = Root::inspect(&self.selected)?;
@@ -567,6 +614,7 @@ impl Bootstrap {
                 origin: self.initial_origin.clone(),
                 current: root,
                 pending_move: None,
+                activation: None,
             },
         )
     }
@@ -580,6 +628,11 @@ impl Bootstrap {
         r.current.verify()?;
         Ok(View {
             meeting_root: r.current.path.clone(),
+            active_meeting_root: self.selected.clone(),
+            restart_required: self
+                .restart_required
+                .load(std::sync::atomic::Ordering::Acquire)
+                || self.selected != r.current.path,
             models_root: self.models_root.clone(),
             bootstrap_path: self.config.join(NAME),
             revision: r.revision,
@@ -616,6 +669,13 @@ impl Bootstrap {
             .record
             .clone();
         r.current.verify()?;
+        if self
+            .restart_required
+            .load(std::sync::atomic::Ordering::Acquire)
+            || self.selected != r.current.path
+        {
+            return Err("旧Storageは終了待ちです。次の移動は再起動後に確認してください".into());
+        }
         if let Some(p) = &r.pending_move {
             if p.operation_id == operation
                 && p.confirmation_id == confirmation
@@ -658,6 +718,11 @@ impl Bootstrap {
             manifest_hash: manifest.into(),
         };
         r.pending_move = Some(p);
+        // Preserve schema-1 configured roots as legacy selections; they never
+        // acquired the new native relocation admission capability.
+        if r.origin == Origin::Relocated && r.activation.is_none() {
+            r.origin = Origin::Legacy;
+        }
         r.revision = r.revision.checked_add(1).ok_or("起動設定の版が上限です")?;
         self.write(&mut state, r)?;
         drop(state);
@@ -696,6 +761,9 @@ impl Bootstrap {
             }
         }
         r.pending_move = None;
+        if r.origin == Origin::Relocated && r.activation.is_none() {
+            r.origin = Origin::Legacy;
+        }
         r.revision = r.revision.checked_add(1).ok_or("起動設定の版が上限です")?;
         self.write(&mut state, r)?;
         drop(state);
