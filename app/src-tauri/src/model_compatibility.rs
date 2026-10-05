@@ -100,6 +100,10 @@ pub(crate) fn artifact_names(engine: Engine) -> &'static [&'static str] {
 impl ProbeReport {
     pub(crate) fn validate(&self, record: &PlacementRecord) -> Result<(), String> {
         record.validate()?;
+        self.validate_portable(record)
+    }
+    pub(crate) fn validate_portable(&self, record: &PlacementRecord) -> Result<(), String> {
+        record.validate_portable()?;
         if self.schema_version != 1
             || self.adapter_revision != 1
             || !canonical_id(&self.operation_id)
@@ -129,6 +133,25 @@ impl ProbeReport {
         }
         let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
         Ok((json, hash))
+    }
+}
+
+// Fixed jobs recheck their own package, not today's profile/check selection.
+// No trial is run and no database/model record is changed.
+pub(crate) fn verify_fixed_package(
+    models_root: &Path,
+    record: &PlacementRecord,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    record.validate()?;
+    #[cfg(unix)]
+    {
+        probe::verify_package(models_root, record, cancelled).map(|_| ())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (models_root, cancelled);
+        Err("Windowsの管理モデル実行は保留中です".into())
     }
 }
 

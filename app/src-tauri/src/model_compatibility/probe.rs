@@ -33,7 +33,7 @@ fn package_path(models_root: &Path, package: &str) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
-fn verify_package(
+pub(super) fn verify_package(
     models_root: &Path,
     record: &PlacementRecord,
     cancelled: &impl Fn() -> bool,

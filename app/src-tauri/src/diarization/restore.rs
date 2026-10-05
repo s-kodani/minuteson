@@ -27,6 +27,10 @@ pub(crate) fn restore_saved_results(
             return Err("復元する話者分離の固定計画・由来が不正です".into());
         }
         validate_tracks(&envelope.diarization.source, &envelope.diarization.tracks)?;
+        managed::validate(
+            &spec.profile_snapshot,
+            Execution::Sherpa(&envelope.diarization.engine),
+        )?;
         for track in &envelope.diarization.tracks {
             envelope
                 .diarization

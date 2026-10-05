@@ -2,6 +2,7 @@
 //! worker owns this coordinator so recording priority and a single CLI remain.
 use crate::diarization::sherpa::SherpaConfig;
 use crate::local_engine::Fingerprint;
+use crate::storage::model_profiles::jobs::{Execution, Snapshot};
 use crate::storage::{analysis_flows::AnalysisFlow, MinutesJobRequest, Storage};
 use crate::transcription::whisper::WhisperConfig;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,10 @@ pub(crate) struct Plan {
     pub(crate) profile: String,
     pub(crate) whisper: WhisperConfig,
     pub(crate) sherpa: SherpaConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) whisper_managed: Option<Snapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sherpa_managed: Option<Snapshot>,
 }
 
 // Pure saved-plan decoding: never checks model availability or starts a CLI.
@@ -27,6 +32,12 @@ pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan
     }
     plan.whisper.validate_settings()?;
     plan.sherpa.validate_settings(None)?;
+    if let Some(s) = &plan.whisper_managed {
+        s.validate(profile, &Execution::Whisper(&plan.whisper))?;
+    }
+    if let Some(s) = &plan.sherpa_managed {
+        s.validate(profile, &Execution::Sherpa(&plan.sherpa))?;
+    }
     Ok(plan)
 }
 fn prepare(
@@ -67,11 +78,17 @@ fn prepare(
     };
     whisper.verify(cancelled)?;
     sherpa.verify(cancelled)?;
+    let whisper_managed =
+        storage.prepare_model_selection(profile, Execution::Whisper(&whisper), cancelled)?;
+    let sherpa_managed =
+        storage.prepare_model_selection(profile, Execution::Sherpa(&sherpa), cancelled)?;
     Ok(Plan {
         schema_version: 1,
         profile: profile.into(),
         whisper,
         sherpa,
+        whisper_managed,
+        sherpa_managed,
     })
 }
 

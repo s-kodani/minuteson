@@ -225,6 +225,11 @@ impl FixedWorkspace {
         }
         match kind {
             "transcription" => {
+                if crate::storage::model_profiles::jobs::read(&source.profile_snapshot)?
+                    != plan.whisper_managed
+                {
+                    return Err("文字起こしの管理モデルが固定計画と一致しません".into());
+                }
                 let mut engine: crate::transcription::whisper::WhisperConfig =
                     serde_json::from_value(source.parameters["engine"].clone())
                         .map_err(|e| e.to_string())?;
@@ -238,6 +243,11 @@ impl FixedWorkspace {
                 }
             }
             "diarization" => {
+                if crate::storage::model_profiles::jobs::read(&source.profile_snapshot)?
+                    != plan.sherpa_managed
+                {
+                    return Err("話者分離の管理モデルが固定計画と一致しません".into());
+                }
                 let engine: crate::diarization::sherpa::SherpaConfig =
                     serde_json::from_value(source.parameters["diarization"]["engine"].clone())
                         .map_err(|e| e.to_string())?;

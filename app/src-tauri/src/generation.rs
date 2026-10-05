@@ -6,6 +6,7 @@ mod plan;
 pub(crate) mod restore;
 pub(crate) mod result;
 use crate::minutes_document::{from_generated, GeneratedItem, TEMPLATE_VERSION};
+use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::storage::{JobKind, JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -76,9 +77,19 @@ impl RetryRequest {
         let p = checked_parameters(&spec, &input, &initial_operation)?;
         let decoded = checked_checkpoint(&original, &p, checkpoint.clone())?;
         p.engine.verify(&|| false)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Llama(&p.engine, p.prompt_budget),
+            &|| false,
+        )?;
         verify_saved_outputs(storage, &spec, &input, &p, &decoded, &|| false)?
             .ok_or("議事録再試行の検証が中断されました")?;
         p.engine.verify(&|| false)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Llama(&p.engine, p.prompt_budget),
+            &|| false,
+        )?;
         if storage.load_minutes_input(&original.id)? != input {
             return Err("検証中に議事録の固定入力が変更されました".into());
         }
@@ -265,7 +276,14 @@ fn enqueue_version(
         return Err("議事録プロファイルまたは入力上限が不正です".into());
     }
     engine.verify(&|| false)?;
-    storage.enqueue_minutes_job_configured(request, profile(&engine, name), |input| {
+    let selected = storage.job_model_selection(
+        &request.meeting_id,
+        &request.operation_id,
+        name,
+        Execution::Llama(&engine, prompt_budget),
+    )?;
+    let profile = managed::attach(profile(&engine, name), selected)?;
+    storage.enqueue_minutes_job_configured(request, profile, |input| {
         let plan = plan::build(input, prompt_budget)?;
         let total = plan.nodes.len() as i64;
         let parameters = Parameters {
@@ -299,13 +317,21 @@ fn checked_parameters(
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
-        || spec.profile_snapshot != profile(&p.engine, name)
+        || spec.profile_snapshot
+            != managed::attach(
+                profile(&p.engine, name),
+                managed::read(&spec.profile_snapshot)?,
+            )?
         || p.prompt_budget > budget(&p.engine)?
         || p.plan != plan::build(input, p.prompt_budget)?
         || spec.total_units != Some(p.plan.nodes.len() as i64)
     {
         return Err("議事録の固定入力・モデル・処理計画が不正です".into());
     }
+    managed::validate(
+        &spec.profile_snapshot,
+        Execution::Llama(&p.engine, p.prompt_budget),
+    )?;
     Ok(p)
 }
 struct Task {
@@ -652,6 +678,11 @@ fn run_task(
         }
         local
     } else {
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Llama(&p.engine, p.prompt_budget),
+            cancelled,
+        )?;
         let Some(raw) = llama::run_unit(
             &p.engine,
             &directory,
@@ -669,6 +700,11 @@ fn run_task(
     if cancelled() {
         return Ok(None);
     }
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Llama(&p.engine, p.prompt_budget),
+        cancelled,
+    )?;
     Ok(Some((raw, directory)))
 }
 fn save_items(
@@ -807,6 +843,11 @@ pub(crate) fn process(
     };
     let attempt = (|| {
         p.engine.verify(&cancelled)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Llama(&p.engine, p.prompt_budget),
+            &cancelled,
+        )?;
         let Some(VerifiedOutputs {
             nodes: mut outputs,
             pending: mut resumed_merge,
@@ -906,6 +947,11 @@ pub(crate) fn process(
             }
         }
         p.engine.verify(&cancelled)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Llama(&p.engine, p.prompt_budget),
+            &cancelled,
+        )?;
         if storage.load_minutes_input(job_id)? != input {
             return Err("議事録の固定入力が変更されています".into());
         }

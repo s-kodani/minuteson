@@ -3,6 +3,18 @@ use crate::local_engine::Fingerprint;
 use crate::model_inspection::{PackageFile, PackageManifest, Target};
 use std::os::unix::fs::PermissionsExt;
 
+mod jobs;
+
+pub(in crate::storage) fn publication_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Storage,
+    String,
+    Vec<String>,
+) {
+    jobs::publication_fixture()
+}
+
 struct Package {
     id: String,
     check: String,
@@ -80,13 +92,21 @@ impl Fixture {
         let check = Uuid::new_v4().to_string();
         let models = self.models();
         let roles = match engine {
-            Engine::Whisper => vec![("model.bin", Role::Asr), ("vad.bin", Role::Vad)],
+            Engine::Whisper => vec![
+                ("model.bin", Role::Asr),
+                ("vad.bin", Role::Vad),
+                ("lib/whisper-runtime.dylib", Role::RuntimeLibrary),
+            ],
             Engine::Sherpa => vec![
                 ("seg.onnx", Role::Segmentation),
                 ("embed.onnx", Role::SpeakerEmbedding),
                 ("lib/runtime.dylib", Role::RuntimeLibrary),
+                ("lib/sub/runtime.dylib", Role::RuntimeLibrary),
             ],
-            Engine::Llama => vec![("model.bin", Role::Llm)],
+            Engine::Llama => vec![
+                ("model.bin", Role::Llm),
+                ("lib/llama-runtime.dylib", Role::RuntimeLibrary),
+            ],
         };
         for (name, _) in &roles {
             let file = source.path().join(name);
@@ -277,7 +297,7 @@ fn profile_application_three_engines_keep_parameters_other_profiles_meetings_and
     assert_eq!(speakers.payload.standard.window_shift_milli, 400);
     assert_eq!(speakers.payload.standard.min_duration_on_ms, 200);
     assert_eq!(speakers.payload.standard.min_duration_off_ms, 600);
-    assert_eq!(speakers.payload.standard.runtime_library_paths.len(), 1);
+    assert_eq!(speakers.payload.standard.runtime_library_paths.len(), 2);
     assert_eq!(
         speakers.payload.high_accuracy,
         original_speakers.payload.high_accuracy

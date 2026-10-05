@@ -131,6 +131,23 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
+        let current = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
+        if current.id != old.id || current.lock_version != old.lock_version {
+            return Err("確認後に解析工程が変化しています。再読込してください".into());
+        }
+        let next_plan: Option<Value> = text
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        if current.plan.is_some() && next_plan != current.plan {
+            return Err("保存済みの解析工程条件は変更できません".into());
+        }
+        if current.plan.is_none() {
+            if let Some(value) = &next_plan {
+                super::model_profiles::jobs::gate_plan(&tx, &current.profile, value)?;
+            }
+        }
         let changed=tx.execute("UPDATE analysis_flows SET stage=?1,plan_json=?2,plan_hash=?3,transcription_job_id=?4,diarization_job_id=?5,error_message=?6,lock_version=lock_version+1,updated_at=?7 WHERE id=?8 AND meeting_id=?9 AND lock_version=?10",params![stage,text,hash,trans.map(|j|&j.id),diar.map(|j|&j.id),message,now_ms()?,old.id,old.meeting_id,old.lock_version]).map_err(|e|e.to_string())?;
         if changed != 1 {
             return Err("確認後に解析工程が変化しています。再読込してください".into());

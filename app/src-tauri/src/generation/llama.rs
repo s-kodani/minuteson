@@ -86,7 +86,7 @@ pub(crate) struct LlamaConfig {
     pub seed: u32,
 }
 impl LlamaConfig {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.threads)
             || !(2048..=32768).contains(&self.context_tokens)
             || !(64..=8192).contains(&self.prediction_tokens)

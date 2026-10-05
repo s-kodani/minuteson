@@ -2,6 +2,84 @@ use super::*;
 use crate::storage::model_metadata::{historical, ModelFileMetadata};
 
 #[test]
+fn restore_managed_model_jobs_and_flow_preserve_all_engine_proofs_without_installing_models_and_rebackup_again(
+) {
+    let (_root, app_data, storage, meeting, jobs) =
+        crate::storage::model_profiles::tests::publication_fixture();
+    let snapshots = jobs
+        .iter()
+        .map(|id| storage.fixed_job_input(id).unwrap().0.profile_snapshot)
+        .collect::<Vec<_>>();
+    let plan = storage
+        .analysis_flow(&meeting)
+        .unwrap()
+        .unwrap()
+        .plan
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("managed.monbackup");
+    storage.create_backup_archive(&path, &|| false).unwrap();
+    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    for library in [
+        "whisper-runtime.dylib",
+        "llama-runtime.dylib",
+        "runtime.dylib",
+    ] {
+        assert!(source
+            .manifest
+            .file_references
+            .iter()
+            .any(|f| f.name == library && f.role == "artifact"));
+    }
+    // Source package roots can disappear before the pure reconstruction.
+    drop(app_data);
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
+        false
+    })
+    .unwrap();
+    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    let new_meeting = ids.get("meetings", "", &meeting).unwrap();
+    let restored = target.analysis_flow(&new_meeting).unwrap().unwrap();
+    assert_eq!(restored.stage, "attention");
+    assert_eq!(
+        restored.plan.as_ref().unwrap()["whisperManaged"],
+        plan["whisperManaged"]
+    );
+    assert_eq!(
+        restored.plan.as_ref().unwrap()["sherpaManaged"],
+        plan["sherpaManaged"]
+    );
+    for (id, snapshot) in jobs.iter().zip(&snapshots) {
+        let new = ids.get("processing_jobs", &meeting, id).unwrap();
+        let (spec, _) = target.fixed_job_input(&new).unwrap();
+        assert_eq!(&spec.profile_snapshot, snapshot);
+        assert!(!serde_json::to_string(&spec.parameters)
+            .unwrap()
+            .contains("/models/"));
+    }
+    let views = target.model_profiles().unwrap();
+    assert!(views
+        .iter()
+        .all(|v| v.id.is_none() && !v.configuration_complete));
+    assert!(target.acquire_local_inference_job().unwrap().is_none());
+    let next = output.path().join("managed-rebackup.monbackup");
+    target.create_backup_archive(&next, &|| false).unwrap();
+    let next = archive::read(&mut File::open(next).unwrap(), output.path(), &|| false).unwrap();
+    assert_eq!(
+        next.manifest.file_references,
+        source.manifest.file_references
+    );
+    let next_ids =
+        RestoreIds::prepare(&next, output.path(), &Uuid::new_v4().to_string(), &|| false).unwrap();
+    let next_fixed = restore_fixed::FixedData::new(&next_ids, output.path(), &|| false).unwrap();
+    SealedWorkspace::prepare(&next_fixed, output.path(), &|| false).unwrap();
+}
+
+#[test]
 fn restore_model_metadata_diarization_rebackup_preserves_omitted_log_reason_and_reconstructs_again()
 {
     let root = tempfile::tempdir().unwrap();

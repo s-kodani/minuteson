@@ -21,10 +21,18 @@ pub(crate) struct PlacementRecord {
 }
 impl PlacementRecord {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_for(Target::current()?)
+    }
+    // Historical provenance can be decoded on a different supported host.
+    // This does not grant permission to execute that host's package here.
+    pub(crate) fn validate_portable(&self) -> Result<(), String> {
+        self.validate_for(self.manifest.target)
+    }
+    fn validate_for(&self, target: Target) -> Result<(), String> {
         if self.schema_version != 1 || !uuid(&self.package_id) {
             return Err("モデル配置記録の形式版・操作IDが不正です".into());
         }
-        self.manifest.validate(Target::current()?)?;
+        self.manifest.validate(target)?;
         if self.source_manifest_hash.len() != 64
             || !self
                 .source_manifest_hash

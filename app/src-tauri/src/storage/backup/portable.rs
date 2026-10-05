@@ -320,6 +320,11 @@ fn redact_json(
                     if item.is_string() {
                         *item = Value::String("mon-unavailable:unfingerprinted".into());
                     }
+                } else if matches!(
+                    key.as_str(),
+                    "managedModel" | "whisperManaged" | "sherpaManaged"
+                ) {
+                    references.extend(crate::storage::model_profiles::jobs::portable_files(item)?);
                 } else {
                     redact_json(
                         item,

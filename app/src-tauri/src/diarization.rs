@@ -1,6 +1,7 @@
 //! Whole-track native diarization. Cluster IDs are local to one track/run;
 //! they are never treated as voice identities or shared across meetings.
 mod restore;
+use crate::storage::model_profiles::jobs::{self as managed, Execution};
 pub(crate) mod sherpa;
 pub(crate) mod timeline;
 pub(crate) use restore::restore_saved_results;
@@ -337,6 +338,12 @@ pub(crate) fn enqueue_source(
         return Err("話者分離のプロファイルが不正です".into());
     }
     engine.verify(&|| false)?;
+    let selected = storage.job_model_selection(
+        &request.meeting_id,
+        &request.operation_id,
+        profile,
+        Execution::Sherpa(&engine),
+    )?;
     let source = storage.recorded_audio_plan(&request.meeting_id)?;
     storage.verify_meeting_asset(
         &request.meeting_id,
@@ -344,7 +351,10 @@ pub(crate) fn enqueue_source(
         &source.manifest_hash,
     )?;
     validate_tracks(&source, &tracks)?;
-    let profile = serde_json::json!({"profile":profile,"engine":"sherpa-onnx","segmentationSha256":engine.segmentation_model.sha256,"embeddingSha256":engine.embedding_model.sha256,"qualityStatus":"unverified"});
+    let profile = managed::attach(
+        serde_json::json!({"profile":profile,"engine":"sherpa-onnx","segmentationSha256":engine.segmentation_model.sha256,"embeddingSha256":engine.embedding_model.sha256,"qualityStatus":"unverified"}),
+        selected,
+    )?;
     let configure = move |input: &DiarizationInput| -> Result<(serde_json::Value, i64), String> {
         if input.audio_manifest_hash != source.manifest_hash {
             return Err("文字起こしと保存音声の由来が一致しません".into());
@@ -392,6 +402,10 @@ fn checked_parameters(storage: &Storage, spec: &JobSpec, job: &str) -> Result<Pa
         return Err("話者分離の固定入力計画が不正です".into());
     }
     validate_tracks(&parameters.source, &parameters.tracks)?;
+    managed::validate(
+        &spec.profile_snapshot,
+        Execution::Sherpa(&parameters.engine),
+    )?;
     Ok(parameters)
 }
 fn checked_checkpoint(
@@ -421,6 +435,11 @@ fn preflight(
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<crate::playback::PreparedAudio>, String> {
     parameters.engine.verify(cancelled)?;
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Sherpa(&parameters.engine),
+        cancelled,
+    )?;
     if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
         return Err("固定した録音入力が変更されています".into());
     }
@@ -547,6 +566,11 @@ pub(crate) fn process(
                 &cancelled,
             )?;
             let native_duration = (frames * 1_000_000 / 16_000) as i64;
+            managed::verify(
+                &spec.profile_snapshot,
+                Execution::Sherpa(&parameters.engine),
+                &cancelled,
+            )?;
             let Some(parsed) = sherpa::run_track(
                 &parameters.engine,
                 parameters.tracks[index].num_speakers,
@@ -561,6 +585,11 @@ pub(crate) fn process(
             if cancelled() {
                 return Ok(None);
             }
+            managed::verify(
+                &spec.profile_snapshot,
+                Execution::Sherpa(&parameters.engine),
+                &cancelled,
+            )?;
             let track = &parameters.source.tracks[index];
             let result = ResultFile {
                 schema_version: 1,

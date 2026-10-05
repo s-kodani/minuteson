@@ -6,6 +6,8 @@ use crate::model_inspection::{Engine, Role};
 use crate::model_placement::PlacementRecord;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod jobs;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProfileName {
@@ -787,4 +789,4 @@ pub(crate) fn remove_schema_for_test(db: &Connection) {
     }
 }
 #[cfg(all(test, unix))]
-mod tests;
+pub(in crate::storage) mod tests;

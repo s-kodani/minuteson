@@ -5,6 +5,7 @@ pub(crate) mod wave;
 pub(crate) mod whisper;
 pub(crate) use restore::restore_saved_results;
 
+use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
 };
@@ -79,6 +80,11 @@ impl RetryRequest {
         let parameters = checked_parameters(storage, &spec, &original.id)?;
         let decoded = checked_checkpoint(&original, checkpoint.clone())?;
         parameters.engine.verify(&|| false)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Whisper(&parameters.engine),
+            &|| false,
+        )?;
         if storage.recorded_audio_plan(&self.meeting_id)? != parameters.source {
             return Err("固定した録音入力が変更されています".into());
         }
@@ -223,6 +229,10 @@ fn decode_parameters(
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
     }
+    managed::validate(
+        &spec.profile_snapshot,
+        Execution::Whisper(&parameters.engine),
+    )?;
     Ok(parameters)
 }
 
@@ -303,6 +313,12 @@ pub(crate) fn enqueue_with_stamp(
         return Err("解析プロファイルが不正です".into());
     }
     engine.verify(&|| false)?;
+    let selected = storage.job_model_selection(
+        meeting_id,
+        operation_id,
+        profile,
+        Execution::Whisper(&engine),
+    )?;
     let source = storage.recorded_audio_plan(meeting_id)?;
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
     let units = units(&source)?;
@@ -311,7 +327,7 @@ pub(crate) fn enqueue_with_stamp(
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
         let parameters=Parameters{schema_version:2,source,engine,units,vocabulary:Some(snapshot)};
-        Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
+        Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
 
@@ -335,6 +351,11 @@ pub(crate) fn process(
     };
     let attempt = (|| {
         parameters.engine.verify(&cancelled)?;
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Whisper(&parameters.engine),
+            &cancelled,
+        )?;
         if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
             return Err("固定した録音入力が変更されています".into());
         }
@@ -396,6 +417,11 @@ pub(crate) fn process(
                 &cancelled,
             )?;
             let duration = (frames * 1_000_000 / u64::from(wave::WHISPER_RATE)) as i64;
+            managed::verify(
+                &spec.profile_snapshot,
+                Execution::Whisper(&parameters.engine),
+                &cancelled,
+            )?;
             if whisper::run_unit(
                 &parameters.engine,
                 &directory,
@@ -410,6 +436,11 @@ pub(crate) fn process(
             if cancelled() {
                 return Ok(None);
             }
+            managed::verify(
+                &spec.profile_snapshot,
+                Execution::Whisper(&parameters.engine),
+                &cancelled,
+            )?;
             let wav = storage.register_analysis_artifact(
                 &spec.meeting_id,
                 &directory.join("input.wav"),
@@ -448,6 +479,11 @@ pub(crate) fn process(
         }
         parameters.engine.verify(&cancelled)?;
         let mut utterances = Vec::new();
+        managed::verify(
+            &spec.profile_snapshot,
+            Execution::Whisper(&parameters.engine),
+            &cancelled,
+        )?;
         for output in &checkpoint.outputs {
             if cancelled() {
                 return Ok(None);

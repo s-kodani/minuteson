@@ -578,6 +578,7 @@ pub(super) fn enqueue_in_transaction(
             }
             return Ok(existing);
         }
+    super::model_profiles::jobs::gate(transaction, spec)?;
     let meeting_exists: bool = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1)",
