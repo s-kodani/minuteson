@@ -1,5 +1,6 @@
 // Development-only mocked IPC. Not imported by the application or its build.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { dataIdleRead } from "./data-idle-browser-fixture.js";
 const engines = ["whisper.cpp", "sherpa-onnx", "llama.cpp"];
 const role = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
 const ids = engines.map((_, i) => `${i + 1}1111111-1111-4111-8111-111111111111`);
@@ -29,6 +30,8 @@ const configured = (engine, before, packageId) => {
 window.isTauri = true;
 mockWindows("main");
 mockIPC(async (command, args) => {
+  const baseline = dataIdleRead(command);
+  if (baseline !== undefined) return baseline;
   data.calls.push({ command, args: structuredClone(args) });
   if (command === "get_recording_snapshot") return { revision: 1, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
   if (command === "capture_available") return false;

@@ -81,6 +81,7 @@ fn restore_controller_refresh_response_loss_and_publication_do_not_duplicate_mee
     source.create_backup_archive(&path, &|| false).unwrap();
     let target = Storage::open(target_root.path().to_path_buf()).unwrap();
     let existing = target.create_meeting("existing").unwrap();
+    assert!(target.restored_meeting_ids().unwrap().is_empty());
     let controller = DataController::default();
     let selected = select(&controller, Kind::Restore, path, &target);
     assert_eq!(selected.phase, "ready", "{:?}", selected.error_message);
@@ -104,6 +105,10 @@ fn restore_controller_refresh_response_loss_and_publication_do_not_duplicate_mee
     assert_eq!(done.restore_receipt.as_ref().unwrap().meeting_ids.len(), 1);
     assert!(controller.begin_request(publish).unwrap().is_none());
     assert_eq!(target.list_meetings().unwrap().len(), 2);
+    assert_eq!(
+        target.restored_meeting_ids().unwrap(),
+        done.restore_receipt.unwrap().meeting_ids
+    );
     assert_eq!(
         target.get_meeting(&existing.id).unwrap().unwrap().title,
         "existing"

@@ -1,0 +1,169 @@
+// CLI-first verification with mocked IPC; not a Playwright test spec.
+// Route local index.html to data-save-browser-fixture.js, then run this file
+// with playwright-cli run-code --filename <absolute path>.
+async (page) => {
+  const results = [];
+  const check = (value, message) => { if (!value) throw Error(message); };
+  const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
+  const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
+  const boot = async () => {
+    await page.reload();
+    // CLI modal interception ends a run-code call early; only native confirm
+    // prompts are accepted here. HTML review dialogs still require clicks.
+    await page.evaluate(() => { window.confirm = () => true; });
+    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await page.getByRole("region", { name: "データと保存" }).waitFor();
+  };
+  const region = () => page.getByRole("region", { name: "データと保存" });
+  const choose = kind => region().getByRole("button", { name: kind === "backup" ? "バックアップを作成" : "バックアップから追加復元", exact: true }).click();
+  const done = () => region().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
+  const confirm = () => page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).click();
+  const ready = async () => { await page.getByRole("dialog").waitFor(); await page.getByRole("heading", { name: "バックアップから追加復元", exact: true }).waitFor(); };
+
+  await boot(); await page.getByLabel("バックアップと追加復元の説明").click();
+  const info = await region().innerText();
+  check(info.includes("AIモデル本体") && info.includes("独自暗号化やクラウド同期ではありません") && info.includes("新しい別会議"), "data scope explanation missing");
+  results.push("scope info: no model-body, encryption or replace-existing claim");
+
+  await boot(); await set({ mode: "delay" }); await choose("backup");
+  await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
+  check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
+  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled during native work");
+  check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "navigation enabled during native work");
+  check(!await region().getByText("バックアップを作成しました。", { exact: true }).count(), "partial output labelled usable");
+  await page.evaluate(() => window.dataFixture.complete()); await done();
+  check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
+  results.push("new backup: one admission, busy locks, terminal-only success");
+
+  await boot(); await set({ replacesExisting: true }); await choose("backup");
+  await page.getByRole("dialog").waitFor();
+  check((await calls("start_data_operation")).length === 0 && (await page.getByRole("dialog").innerText()).includes("/safe/会議.monbackup"), "overwrite ran without target confirmation");
+  await page.keyboard.press("Escape"); await page.getByRole("dialog").waitFor({ state: "hidden" });
+  check((await calls("start_data_operation")).length === 0, "Escape published backup");
+  await page.waitForFunction(() => document.activeElement?.textContent === "バックアップを作成");
+  results.push("overwrite selection: explicit target confirmation, Escape cancels and returns focus");
+
+  await boot(); await set({ replacesExisting: true }); await choose("backup");
+  await page.getByRole("dialog").getByRole("button", { name: "上書きして作成", exact: true }).click(); await done();
+  check((await calls("start_data_operation")).length === 1, "overwrite not exactly once");
+  results.push("overwrite: explicit confirmation publishes once");
+
+  await boot(); await choose("restore"); await ready();
+  const first = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.restorePreview));
+  check((await calls("start_data_operation")).length === 0, "preview published meetings");
+  const body = await page.getByRole("dialog").innerText();
+  check(body.includes("会議 2 件") && body.includes("32 MiB") && body.includes("新しい別会議") && body.includes("既存を保持する競合 1 件"), "restore review missing");
+  await confirm(); await done();
+  check(await page.evaluate(() => window.dataFixture.meetings.length) === 3, "existing meeting replaced");
+  await region().getByRole("button", { name: "復元した会議一覧を開く", exact: true }).click();
+  await page.getByRole("heading", { name: "会議一覧", exact: true }).waitFor();
+  check(await page.getByText("バックアップから復元", { exact: true }).count() === 2 && await page.getByText("既存会議", { exact: true }).count() === 0, "restored filter or provenance missing");
+  await page.getByRole("button", { name: "すべての会議を表示", exact: true }).click();
+  check(await page.getByText("既存会議", { exact: true }).count() === 1, "existing meeting lost from all-meetings view");
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await choose("restore"); await ready();
+  const second = await page.evaluate(() => window.dataFixture.snapshot.restorePreview);
+  check(first.batchId !== second.batchId && first.archiveId === second.archiveId, "explicit new operation changed source or reused batch");
+  await confirm(); await done();
+  check(await page.evaluate(() => window.dataFixture.meetings.length) === 5, "explicit second operation did not add distinct meetings");
+  results.push("restore: review, existing preservation, provenance/filter and explicit new batch");
+
+  await boot(); await set({ previewMode: "capacity" }); await choose("restore"); await ready();
+  check(await page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).isDisabled(), "insufficient capacity admitted");
+  const old = await page.evaluate(() => window.dataFixture.snapshot.restorePreview);
+  await page.getByRole("dialog").getByRole("button", { name: "同じバックアップを再検証", exact: true }).click(); await ready();
+  const refreshed = await page.evaluate(() => window.dataFixture.snapshot.restorePreview);
+  check(old.batchId === refreshed.batchId && old.confirmationId !== refreshed.confirmationId, "refresh lost batch or retained stale confirmation");
+  await confirm(); await done();
+  results.push("capacity refusal + same-batch refreshed confirmation");
+
+  await boot(); await set({ previewMode: "invalid" }); await choose("restore");
+  await region().getByRole("alert").filter({ hasText: "不正な形式" }).waitFor();
+  check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "invalid archive exposed confirmation");
+  results.push("invalid archive: no publication capability");
+
+  await boot(); await set({ previewMode: "delay" }); await choose("restore");
+  await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
+  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "preview cancellation unlocked before actual completion");
+  await page.evaluate(() => window.dataFixture.complete());
+  await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor();
+  check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "late preview resurrected confirmation");
+  results.push("cancel preview: wait for completion, no late resurrection");
+
+  for (const mode of ["delay", "cancelRace"]) {
+    await boot(); await set({ mode }); await choose("restore"); await ready(); await confirm();
+    await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
+    check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "cancel released write protection early");
+    await page.evaluate(() => window.dataFixture.complete());
+    if (mode === "cancelRace") { await done(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 3, "winning commit suppressed"); }
+    else { await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 1, "cancel published meetings"); }
+    results.push(mode === "cancelRace" ? "commit/cancel race: commit remains successful" : "cancel publication: wait for cleanup, preserve existing");
+  }
+
+  await boot(); await choose("restore"); await ready(); await set({ mode: "lost", suppressEvents: true }); await confirm(); await done();
+  check((await calls("start_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.published) === 1, "lost reply caused another publication");
+  results.push("lost reply + missing events: polling recovers without new admission");
+
+  await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  check(await region().getByRole("button", { name: "バックアップから追加復元", exact: true }).isDisabled(), "unknown request allowed a new operation");
+  await set({ mode: "success" });
+  await page.getByRole("dialog").getByRole("button", { name: "同じ操作の結果を確認", exact: true }).click(); await done();
+  const attempts = await calls("start_data_operation");
+  check(attempts.length === 2 && JSON.stringify(attempts[0].args) === JSON.stringify(attempts[1].args), "unknown receipt replaced confirmation identity");
+  results.push("unknown unaccepted request: explicit retry retains exact identity");
+
+  await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
+  await page.getByRole("dialog").getByRole("button", { name: "同じ操作を取り消して確認", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "概要" && !b.disabled));
+  check((await calls("start_data_operation")).length === 1 && (await calls("cancel_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.meetings.length) === 1, "unknown cancellation published or retried work");
+  results.push("unknown unaccepted request: explicit native cancellation releases review without publication");
+
+  await boot(); await choose("restore"); await ready(); await set({ mode: "forged" }); await confirm();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
+  check(await region().getByRole("button", { name: "復元した会議一覧を開く", exact: true }).count() === 0, "forged completion displayed success");
+  results.push("forged completion: no receipt, no success");
+
+  await boot(); await set({ mode: "attention" }); await choose("backup");
+  await region().getByRole("alert").filter({ hasText: "同じ操作での再上書きは行いません" }).waitFor();
+  await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  check((await calls("start_data_operation")).length === 1 && !await region().getByText("バックアップを作成しました。", { exact: true }).count(), "attention result was re-published or labelled successful");
+  results.push("uncertain backup publication: manual verification, no automatic overwrite or success");
+
+  await boot(); await set({ mode: "unknownStats" }); await choose("restore"); await ready(); await confirm(); await done();
+  check((await region().innerText()).includes("追加 記録不明 件、完全一致の重複 記録不明 件、既存を保持した競合 記録不明 件"), "unknown ledger statistics replaced with preview or zero");
+  results.push("replayed receipt: unknown actual vocabulary counts remain unknown");
+
+  await boot(); await set({ selectLost: true, suppressEvents: true }); await choose("restore"); await ready();
+  check((await calls("select_data_operation")).length === 1 && (await calls("start_data_operation")).length === 0, "lost selection auto-selected or published");
+  await confirm(); await done();
+  check((await calls("start_data_operation")).length === 1, "recovered selection not exactly once");
+  results.push("lost selection reply: read-only polling recovers review, explicit publication only");
+
+  await boot(); await set({ blocker: "AI処理中" }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  check(await region().getByRole("button", { name: "バックアップを作成", exact: true }).isDisabled(), "active AI allowed data selection");
+  check((await region().innerText()).includes("停止・完了後"), "stop/wait guidance missing");
+  await set({ blocker: null, failRead: true }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "failed state read did not lock writes");
+  await set({ failRead: false }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "用語を追加" && !b.disabled));
+  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isEnabled(), "successful reread did not recover writes");
+  results.push("active processing guidance + fail-closed state read recovery");
+
+  await boot(); await set({ failSave: true }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await choose("backup");
+  await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
+  check((await calls("select_data_operation")).length === 0 && await page.getByRole("textbox", { name: "用語（必須）", exact: true }).inputValue() === "点検日", "save failure lost edits or selected backup");
+  await set({ failSave: false }); await page.getByRole("button", { name: "用語保存を再試行", exact: true }).click();
+  await choose("backup"); await done();
+  results.push("draft save failure blocks data operation and preserves input");
+
+  await boot(); await set({ saveDelay: 500 }); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await choose("backup"); await done();
+  const order = await page.evaluate(() => window.dataFixture.calls.map(c => c.command));
+  check(order.indexOf("save_vocabulary_book") < order.indexOf("select_data_operation") && await page.evaluate(() => window.dataFixture.book.payload[0].term) === "点検日", "data snapshot did not wait for draft save");
+  results.push("draft flush before file selection and publication");
+  console.log(JSON.stringify({ passed: results.length, results }));
+  return { passed: results.length, results };
+}

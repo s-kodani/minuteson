@@ -13,6 +13,32 @@ pub(crate) struct DataMaintenanceLease {
 pub(crate) struct ExportAdmissionLease(Arc<Mutex<State>>);
 
 impl AnalysisController {
+    // Informational only. Actual starts recheck all gates atomically.
+    pub(crate) fn data_operation_blocker(&self) -> Result<Option<String>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "解析ロックを取得できません")?;
+        Ok(if self.shutdown.load(Ordering::SeqCst) {
+            Some("終了処理中")
+        } else if state.data_maintenance.is_some() {
+            Some("バックアップ／復元中")
+        } else if state.recording_intent {
+            Some("録音開始・録音処理中")
+        } else if state.import_intent {
+            Some("音声取り込み中")
+        } else if state.model_preparation.is_some() {
+            Some("AIモデルの検査・準備中")
+        } else if state.export_intent {
+            Some("Markdownの書き出し中")
+        } else if state.busy {
+            Some("AI処理中")
+        } else {
+            None
+        }
+        .map(str::to_owned))
+    }
+
     pub(crate) fn begin_data_maintenance(
         &self,
         recording_active: bool,

@@ -384,6 +384,38 @@ fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot
     data_app(&window)?.state::<DataController>().snapshot()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataAvailability {
+    available: bool,
+    reason: Option<String>,
+}
+
+#[tauri::command]
+fn get_data_operation_availability(window: WebviewWindow) -> Result<DataAvailability, String> {
+    let app = data_app(&window)?;
+    let importing = app.state::<ImportController>().snapshot()?;
+    let reason = if app.state::<SessionStore>().snapshot().is_active() {
+        Some("録音・音声保存中".into())
+    } else if importing.busy || importing.recording_blocked {
+        Some("音声取り込み・録音開始の停止待ち中".into())
+    } else {
+        app.state::<AnalysisController>().data_operation_blocker()?
+    };
+    Ok(DataAvailability {
+        available: reason.is_none(),
+        reason,
+    })
+}
+
+#[tauri::command]
+async fn list_restored_meeting_ids(window: WebviewWindow) -> Result<Vec<String>, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().restored_meeting_ids())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn select_data_operation(
     window: WebviewWindow,
@@ -1509,6 +1541,8 @@ pub fn run() {
             start_audio_import,
             cancel_audio_import,
             get_data_operation,
+            get_data_operation_availability,
+            list_restored_meeting_ids,
             select_data_operation,
             start_data_operation,
             cancel_data_operation,

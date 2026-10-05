@@ -214,6 +214,21 @@ impl Storage {
             .map_err(|error| error.to_string())
     }
 
+    // Separate read view: do not change Meeting's portable serialization and
+    // therefore the fingerprints of existing backups and prepared batches.
+    pub(crate) fn restored_meeting_ids(&self) -> Result<Vec<String>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = db.prepare("SELECT DISTINCT m.id FROM meetings m JOIN restore_provenance p ON p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id ORDER BY m.id").map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     pub fn get_meeting(&self, id: &str) -> Result<Option<Meeting>, String> {
         self.connection
             .lock()

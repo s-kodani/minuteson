@@ -2,6 +2,54 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn data_availability_is_informational_and_reports_the_held_start_gate() {
+    let controller = AnalysisController::default();
+    assert!(controller.data_operation_blocker().unwrap().is_none());
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("バックアップ／復元中")
+    );
+    drop(lease);
+    let export = controller.begin_export().unwrap();
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("Markdownの書き出し中")
+    );
+    drop(export);
+    let model = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("AIモデルの検査・準備中")
+    );
+    drop(model);
+    for (gate, reason) in [
+        (0, "AI処理中"),
+        (1, "録音開始・録音処理中"),
+        (2, "音声取り込み中"),
+    ] {
+        let mut state = controller.state.lock().unwrap();
+        state.busy = gate == 0;
+        state.recording_intent = gate == 1;
+        state.import_intent = gate == 2;
+        drop(state);
+        assert_eq!(
+            controller.data_operation_blocker().unwrap().as_deref(),
+            Some(reason)
+        );
+    }
+    controller.shutdown.store(true, Ordering::SeqCst);
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("終了処理中")
+    );
+}
+
+#[test]
 fn detached_runtime_task_retains_data_admission_after_its_receiver_is_dropped() {
     let controller = Arc::new(AnalysisController::default());
     let lease = controller

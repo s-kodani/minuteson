@@ -10,6 +10,9 @@ import { VocabularyEditor } from "./vocabulary";
 import { flushPendingEdits } from "./draft-save";
 import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
+import { useDataOperation } from "./data-operation";
+import { DataSavePanel } from "./data-save";
+import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
@@ -81,6 +84,11 @@ function RecorderPanel() {
 
 function MainWindow() {
   const state = useRecordingSession();
+  const dataOperation = useDataOperation();
+  const [dataPending, setDataPending] = useState(false);
+  const [restoredIds, setRestoredIds] = useState<string[]>([]);
+  const [restoredFilter, setRestoredFilter] = useState<string[] | null>(null);
+  const [originError, setOriginError] = useState("");
   const action = useWindowAction();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
@@ -93,7 +101,12 @@ function MainWindow() {
   const [captureError, setCaptureError] = useState("");
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
-  const [screen, setScreen] = useState<"overview" | "settings">("overview");
+  const [screen, setScreen] = useState<"overview" | "meetings" | "settings">("overview");
+  const writeLocked = navigationBusy || dataPending || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const loadOrigins = async () => {
+    try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
+    catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
+  };
   const [analysisEpoch, setAnalysisEpoch] = useState(0);
   const navigating = useRef(false);
   const priorPhase = useRef<string | null>(null);
@@ -139,6 +152,12 @@ function MainWindow() {
           if(!window.confirm(importing.busy?"進行中の音声取り込みを取り消して終了しますか？ 未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。":"音声取り込みの確認内容を破棄して終了しますか？ 元ファイルは変更しません。"))return;
           if(importing.token)await invoke("cancel_audio_import",{token:importing.token});
         }
+        const data = await invoke<DataSnapshot>("get_data_operation");
+        assertDataSnapshot(data);
+        if (data.busy || data.retryAllowed) {
+          if (!window.confirm(data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
+          if (data.token) await invoke("cancel_data_operation", { token: data.token });
+        }
         await invoke("finish_main_close", { quit: event.payload.quit });
       });
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((cause: unknown) => setMeetingError(String(cause)));
@@ -147,6 +166,7 @@ function MainWindow() {
   useEffect(() => {
     if (!isTauri()) return;
     void invoke<Meeting[]>("list_meetings").then(setMeetings).catch((error: unknown) => setMeetingError(String(error)));
+    void loadOrigins();
     void invoke<boolean>("capture_available").then(setCaptureAvailable).catch(() => setCaptureAvailable(false));
   }, []);
   useEffect(() => {
@@ -245,6 +265,7 @@ function MainWindow() {
   const reloadMeetings = async () => {
     await withSavedEdits(async () => {
       setMeetings(await invoke<Meeting[]>("list_meetings"));
+      await loadOrigins();
       if (selectedMeeting) {
         const current = await invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id });
         setSelectedMeeting(current);
@@ -253,36 +274,39 @@ function MainWindow() {
     });
   };
   const canPreview = state.kind === "ready" && state.snapshot.phase === "idle";
+  const shownMeetings = restoredFilter ? meetings.filter(meeting => restoredFilter.includes(meeting.id)) : meetings;
   return (
     <div className="app-layout">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">m</span><span>mon</span></div>
         <nav aria-label="メインナビゲーション">
-          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={navigationBusy} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
-          <span className="nav-item disabled">会議一覧 <small>準備中</small></span>
-          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={navigationBusy} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
+          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
+          <button type="button" className={`nav-item ${screen === "meetings" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => { setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button>
+          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
         </nav>
         <div className="sidebar-foot">端末内で会議を記録</div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><span>{screen === "overview" ? "概要" : "設定"}</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
+        <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
         <main className="content">
-          <AudioImportPanel visible={screen==="overview"} locked={navigationBusy} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={()=>{document.getElementById("meeting-title")?.focus();}} onSaved={async(id)=>{
+          <AudioImportPanel visible={screen==="overview"} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={()=>{document.getElementById("meeting-title")?.focus();}} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);
             if(!meeting)throw Error("保存した会議が見つかりません。");
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
-          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語とAIモデルの検査・配置・CPU互換性確認、標準／高精度へのモデル選択を利用できます。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} /><ModelInspectionPanel locked={navigationBusy} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
+          {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
-          <h1>会議の記録を、手元で。</h1>
+          <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
           <section className="status-card" aria-label="録音状態">
             <div className="card-head"><h2>録音セッション</h2><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
             <div className="card-actions">
-              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
+              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || writeLocked || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
               <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
               <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
             </div>
@@ -291,28 +315,30 @@ function MainWindow() {
             {action.error && <p className="action-error" role="alert">{action.error}</p>}
           </section>
           <section className="meetings-card" aria-label="保存済み会議">
-            <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri() || navigationBusy}>再読込</button></div>
+            <div className="card-head"><h2>会議</h2><button type="button" className="small-secondary" onClick={reloadMeetings} disabled={!isTauri() || writeLocked}>再読込</button></div>
             {navigationBusy && <p role="status">編集内容を保存して操作を完了しています。</p>}
             {recoveredCount > 0 && <p role="status">前回の音声保存 {recoveredCount} 件を検証して復旧しました。</p>}
             <form className="meeting-form" onSubmit={createMeeting}>
               <label htmlFor="meeting-title">会議名</label>
-              <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy || navigationBusy} /><button type="submit" disabled={!isTauri() || meetingBusy || navigationBusy || !meetingTitle.trim()}>会議を作成</button></div>
+              <div className="meeting-form-row"><input id="meeting-title" value={meetingTitle} onChange={(event) => setMeetingTitle(event.target.value)} maxLength={200} placeholder="例：週次定例" disabled={!isTauri() || meetingBusy || writeLocked} /><button type="submit" disabled={!isTauri() || meetingBusy || writeLocked || !meetingTitle.trim()}>会議を作成</button></div>
             </form>
             {meetingError && <p className="action-error" role="alert">{meetingError}</p>}
-            {meetings.length === 0 ? <p className="empty-meetings">保存済み会議はありません。</p> : <ul className="meeting-list">{meetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong><span>{meeting.lifecycle === "imported" ? "取り込み済み" : meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={navigationBusy}>開く</button></li>)}</ul>}
+            {restoredFilter && <p>今回復元した会議を表示しています。<button type="button" className="small-secondary" disabled={writeLocked} onClick={() => void withSavedEdits(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}
+            {originError && <p role="alert">{originError}</p>}
+            {shownMeetings.length === 0 ? <p className="empty-meetings">{restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <ul className="meeting-list">{shownMeetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}<span>{meeting.lifecycle === "imported" ? "取り込み済み" : meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={writeLocked}>開く</button></li>)}</ul>}
             {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}>
               <h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label>
-              <div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || navigationBusy} /><button type="submit" disabled={meetingBusy || navigationBusy || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={navigationBusy}>閉じる</button></div>
+              <div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || writeLocked} /><button type="submit" disabled={meetingBusy || writeLocked || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={writeLocked}>閉じる</button></div>
               <p>{selectedMeeting.sourceType === "audio_import" && selectedMeeting.lifecycle === "draft" ? "音声取り込みが未完了です。保存状況を確認してから取り込み直してください。" : selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : ["recorded","imported"].includes(selectedMeeting.lifecycle) ? "音声を保存済みです。文字起こしを確認・採用してから、議事録を生成できます。" : "録音状態を確認してください。"}</p>
             </form>}
           </section>
-          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
+          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}
-          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} locked={navigationBusy} />}
-          {selectedMeeting && <MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={navigationBusy} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
+          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} locked={writeLocked} />}
+          {selectedMeeting && <MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}

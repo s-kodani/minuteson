@@ -68,6 +68,13 @@
 .import-entry.drag-over { background:#edf6f2; border-color:#287460; }
 .import-dialog { width:min(780px,calc(100vw - 48px)); max-height:calc(100vh - 64px); overflow:auto; padding:28px; border:1px solid #d8dde2; border-radius:14px; }
 .import-dialog::backdrop { background:#14212c88; }
+.data-save .data-info { position:relative; }
+.data-info summary { cursor:pointer; color:#475569; font-size:12px; }
+.data-info p { max-width:560px; }
+.data-path { overflow-wrap:anywhere; }
+.data-toast { display:flex; flex-wrap:wrap; gap:12px; align-items:center; background:#ecfdf5; border:1px solid #a7f3d0; padding:12px; border-radius:8px; }
+.restore-badge { display:inline-block; color:#0369a1; font-size:11px; }
+.data-dialog li { overflow-wrap:anywhere; }
 .import-dialog fieldset { border:0; padding:0; min-width:0; }
 .import-dialog fieldset>label { display:flex; flex-direction:column; gap:7px; margin:14px 0; }
 .import-dialog fieldset>label input,.import-dialog fieldset>label select { font:inherit; width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }

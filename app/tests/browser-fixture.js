@@ -1,6 +1,7 @@
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { dataIdleRead } from "./data-idle-browser-fixture.js";
 
 const meetings = ["会議A", "会議B"].map((title, index) => ({ id: `meeting-${index}`, title, lifecycle: "recorded", createdAt: 1791028800000, updatedAt: 1791028800000, lockVersion: 1 }));
 const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: "speaker-a", label: "話者A", displayName: "田中" }, { id: "speaker-b", label: "話者B", displayName: "佐藤" }], utterances: [
@@ -26,6 +27,8 @@ const switchDraft = (nextId) => {
 window.isTauri = true;
 mockWindows("main");
 mockIPC(async (command, args) => {
+  const baseline = dataIdleRead(command);
+  if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
     case "get_recording_snapshot": return { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };

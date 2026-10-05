@@ -1,5 +1,6 @@
 // Browser-only IPC verification; never imported by the production application.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { dataIdleRead } from "./data-idle-browser-fixture.js";
 import { emit } from "@tauri-apps/api/event";
 const engine = { executablePath:"",modelPath:"",vadModelPath:null,threads:4,useGpu:false };
 const diar = { executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:500,windowShiftMilli:100,minDurationOnMs:0,minDurationOffMs:0 };
@@ -14,6 +15,8 @@ const f = window.monImportFixture = {
 };
 window.isTauri=true;mockWindows("main");
 mockIPC(async(command,args)=>{
+  const baseline = dataIdleRead(command);
+  if (baseline !== undefined) return baseline;
   f.calls.push({command,args:structuredClone(args)});
   switch(command){
     case "get_recording_snapshot":return {revision:0,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};

@@ -1,5 +1,6 @@
 // Development-only mocked IPC; never imported by the application build.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { dataIdleRead } from "./data-idle-browser-fixture.js";
 import { rebindingFixture, meetingId } from "./model-rebinding-fixture.ts";
 const fixtures = ["transcription", "diarization", "minutes_generation"].map(rebindingFixture);
 const meetings = [meetingId, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"].map((id, i) => ({ id, title: `再配置確認会議${i + 1}`, lifecycle: "recorded", lockVersion: 1, createdAt: 1791160000000, updatedAt: 1791160000000 }));
@@ -12,6 +13,8 @@ const preferences = {
 };
 window.isTauri = true; mockWindows("main");
 mockIPC(async (command, args) => {
+  const baseline = dataIdleRead(command);
+  if (baseline !== undefined) return baseline;
   data.calls.push({ command, args: structuredClone(args) });
   if (command === "save_analysis_preferences") { if (data.failSave) throw Error("模擬設定保存競合"); return { id: "fixture", lockVersion: args.expectedLockVersion + 1, payload: structuredClone(args.payload) }; }
   if (preferences[command]) return { id: "fixture", lockVersion: 0, payload: { standard: structuredClone(preferences[command]), highAccuracy: structuredClone(preferences[command]) } };
