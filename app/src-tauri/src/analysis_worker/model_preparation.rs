@@ -57,7 +57,7 @@ impl AnalysisController {
             || state.busy
             || state.blocks_worker()
         {
-            return Err("AI処理・録音・取り込み・モデル準備・終了処理が停止してからモデルを準備してください".into());
+            return Err("AI処理・録音・取り込み・モデル準備・バックアップ・復元・終了処理が停止してからモデルを準備してください".into());
         }
         let cancel = Arc::new(AtomicBool::new(false));
         state.model_preparation = Some(cancel.clone());

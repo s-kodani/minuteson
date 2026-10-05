@@ -6,6 +6,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub(crate) mod data_maintenance;
 mod model_preparation;
 
 #[cfg(test)]
@@ -19,11 +20,16 @@ struct State {
     recording_intent: bool,
     import_intent: bool,
     model_preparation: Option<std::sync::Arc<AtomicBool>>,
+    data_maintenance: Option<std::sync::Arc<AtomicBool>>,
+    export_intent: bool,
 }
 
 impl State {
     fn blocks_worker(&self) -> bool {
-        self.recording_intent || self.import_intent || self.model_preparation.is_some()
+        self.recording_intent
+            || self.import_intent
+            || self.model_preparation.is_some()
+            || self.data_maintenance.is_some()
     }
 
     fn cancel_model_preparation(&self) {
@@ -35,9 +41,9 @@ impl State {
 
 #[derive(Default)]
 pub struct AnalysisController {
-    state: Mutex<State>,
-    idle: Condvar,
-    shutdown: AtomicBool,
+    state: std::sync::Arc<Mutex<State>>,
+    idle: std::sync::Arc<Condvar>,
+    shutdown: std::sync::Arc<AtomicBool>,
 }
 
 impl AnalysisController {
@@ -195,9 +201,10 @@ impl AnalysisController {
                 .map_err(|_| "解析ロックを取得できません")?;
             if state.recording_intent
                 || state.import_intent
+                || state.data_maintenance.is_some()
                 || controller.shutdown.load(Ordering::SeqCst)
             {
-                return Err("録音開始または終了処理が進行中です".into());
+                return Err("録音開始・取り込み・バックアップ・復元・終了処理が進行中です".into());
             }
             app.state::<Storage>().request_pause_for_recording()?;
             state.recording_intent = true;
@@ -232,10 +239,14 @@ impl AnalysisController {
             if state.recording_intent
                 || state.import_intent
                 || state.model_preparation.is_some()
+                || state.data_maintenance.is_some()
                 || c.shutdown.load(Ordering::SeqCst)
                 || cancelled()
             {
-                return Err("録音開始・モデル準備・取り込み・終了処理が進行中です".into());
+                return Err(
+                    "録音開始・モデル準備・取り込み・バックアップ・復元・終了処理が進行中です"
+                        .into(),
+                );
             }
             if app
                 .state::<crate::session::SessionStore>()
@@ -274,6 +285,9 @@ impl AnalysisController {
             app.state::<Storage>().pause_for_exit()?;
             controller.shutdown.store(true, Ordering::SeqCst);
             state.cancel_model_preparation();
+            if let Some(cancel) = &state.data_maintenance {
+                cancel.store(true, Ordering::SeqCst);
+            }
         }
         let result = controller.wait_idle(Duration::from_secs(15));
         if result.is_err() {
@@ -282,6 +296,28 @@ impl AnalysisController {
             controller.shutdown.store(false, Ordering::SeqCst);
         }
         result
+    }
+
+    // Seal admission before waiting for imports/data cleanup. This also closes
+    // the previous export/start-recording race between exit checks and shutdown.
+    pub(crate) fn begin_exit(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "解析ロックを取得できません")?;
+        if state.export_intent || state.recording_intent || self.shutdown.load(Ordering::SeqCst) {
+            return Err("書き出し・録音開始・終了処理が進行中です".into());
+        }
+        self.shutdown.store(true, Ordering::SeqCst);
+        state.cancel_model_preparation();
+        if let Some(cancel) = &state.data_maintenance {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn abort_shutdown(&self) {
+        self.shutdown.store(false, Ordering::SeqCst);
     }
 
     fn wait_idle(&self, timeout: Duration) -> Result<(), String> {
@@ -297,13 +333,13 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        while state.busy || state.model_preparation.is_some() {
+        while state.busy || state.model_preparation.is_some() || state.data_maintenance.is_some() {
             if cancelled() {
                 return Err("解析停止の待機を取り消しました".into());
             }
             let remaining = timeout
                 .checked_sub(started.elapsed())
-                .ok_or("解析・モデル準備の安全な停止を待っています。完了後に再試行してください")?;
+                .ok_or("解析・モデル準備・データ操作の安全な停止を待っています。完了後に再試行してください")?;
             state = self
                 .idle
                 .wait_timeout(state, remaining.min(Duration::from_millis(100)))

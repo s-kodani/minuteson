@@ -2,6 +2,7 @@ mod analysis_flow;
 mod analysis_worker;
 mod audio;
 mod audio_import;
+mod data_controller;
 mod diarization;
 mod exports;
 mod generation;
@@ -22,6 +23,7 @@ mod storage;
 mod transcription;
 
 use analysis_worker::AnalysisController;
+use data_controller::DataController;
 use import_controller::ImportController;
 use playback::{PlaybackInfo, PlaybackStore};
 use recorder::RecorderController;
@@ -370,6 +372,43 @@ fn cancel_audio_import(
     ImportController::cancel_from_app(window.app_handle(), &token)
 }
 
+fn data_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can manage backups and restores".into());
+    }
+    Ok(window.app_handle().clone())
+}
+
+#[tauri::command]
+fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
+    data_app(&window)?.state::<DataController>().snapshot()
+}
+
+#[tauri::command]
+async fn select_data_operation(
+    window: WebviewWindow,
+    kind: data_controller::Kind,
+) -> Result<data_controller::Snapshot, String> {
+    data_app(&window)?;
+    DataController::select(&window, kind).await
+}
+
+#[tauri::command]
+fn start_data_operation(
+    window: WebviewWindow,
+    request: data_controller::Request,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::start(&data_app(&window)?, request)
+}
+
+#[tauri::command]
+fn cancel_data_operation(
+    window: WebviewWindow,
+    token: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::cancel(&data_app(&window)?, &token)
+}
+
 #[tauri::command]
 fn get_vocabulary_book(
     window: WebviewWindow,
@@ -602,32 +641,41 @@ async fn export_minutes_markdown(
     request: storage::ExportRequest,
 ) -> Result<Option<storage::ExportRecord>, String> {
     let app = minutes_app(&window)?;
-    let _lease = app.state::<exports::ExportController>().begin()?;
-    let worker = app.clone();
-    let query = request.clone();
-    if let Some(record) = tauri::async_runtime::spawn_blocking(move || {
-        worker.state::<Storage>().existing_export(&query)
-    })
-    .await
-    .map_err(|e| e.to_string())??
-    {
-        return Ok(Some(record));
-    }
-    let worker = app.clone();
-    let prepared = tauri::async_runtime::spawn_blocking(move || {
-        worker.state::<Storage>().prepare_export(request)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let Some(path) = exports::save_dialog(&window, prepared.filename.clone()).await? else {
-        return Ok(None);
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().write_export(prepared, &path)
+    let admission = app.state::<AnalysisController>().begin_export()?;
+    let lease = app.state::<exports::ExportController>().begin()?;
+    // Own both guards in a detached task: losing the command receiver must not
+    // unblock backup/exit while a save dialog or blocking publication is alive.
+    tauri::async_runtime::spawn(async move {
+        let _admission = admission;
+        let _lease = lease;
+        let worker = app.clone();
+        let query = request.clone();
+        if let Some(record) = tauri::async_runtime::spawn_blocking(move || {
+            worker.state::<Storage>().existing_export(&query)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+        {
+            return Ok(Some(record));
+        }
+        let worker = app.clone();
+        let prepared = tauri::async_runtime::spawn_blocking(move || {
+            worker.state::<Storage>().prepare_export(request)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let Some(path) = exports::save_dialog(&window, prepared.filename.clone()).await? else {
+            return Ok(None);
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Storage>().write_export(prepared, &path)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map(Some)
     })
     .await
     .map_err(|e| e.to_string())?
-    .map(Some)
 }
 
 #[derive(serde::Serialize)]
@@ -1183,20 +1231,31 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
         }
         return window.hide().map_err(|error| error.to_string());
     }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        ImportController::shutdown(&app)?;
-        let result = AnalysisController::shutdown(&app);
-        if result.is_err() {
-            ImportController::abort_shutdown(&app);
-        }
-        result
+    // Keep the exit epilogue alive too: a lost close response must neither
+    // release running work nor leave the open app stranded behind an exit gate.
+    tauri::async_runtime::spawn(async move {
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<AnalysisController>().begin_exit()?;
+            let result = DataController::shutdown(&app)
+                .and_then(|_| ImportController::shutdown(&app))
+                .and_then(|_| AnalysisController::shutdown(&app));
+            if result.is_err() {
+                app.state::<AnalysisController>().abort_shutdown();
+                ImportController::abort_shutdown(&app);
+                DataController::abort_shutdown(&app);
+                let _ = AnalysisController::kick(&app);
+            }
+            result
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
+        window.app_handle().exit(0);
+        Ok(())
     })
     .await
-    .map_err(|e| e.to_string())??;
-    window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
-    window.app_handle().exit(0);
-    Ok(())
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1410,6 +1469,7 @@ pub fn run() {
         .manage(PlaybackStore::default())
         .manage(AnalysisController::default())
         .manage(ImportController::default())
+        .manage(DataController::default())
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
@@ -1448,6 +1508,10 @@ pub fn run() {
             select_audio_import,
             start_audio_import,
             cancel_audio_import,
+            get_data_operation,
+            select_data_operation,
+            start_data_operation,
+            cancel_data_operation,
             get_recording_snapshot,
             capture_available,
             start_recording,

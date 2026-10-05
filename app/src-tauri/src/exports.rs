@@ -260,6 +260,15 @@ pub(crate) async fn save_dialog(
     window: &tauri::WebviewWindow,
     filename: String,
 ) -> Result<Option<PathBuf>, String> {
+    save_dialog_with(window, filename, "議事録をMarkdownで保存", "md").await
+}
+
+pub(crate) async fn save_dialog_with(
+    window: &tauri::WebviewWindow,
+    filename: String,
+    title: &'static str,
+    extension: &'static str,
+) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
         let (send, receive) = std::sync::mpsc::sync_channel(1);
@@ -272,13 +281,13 @@ pub(crate) async fn save_dialog(
                     let mtm = MainThreadMarker::new()
                         .ok_or("保存ダイアログはメインスレッドが必要です")?;
                     let panel = NSSavePanel::savePanel(mtm);
-                    panel.setTitle(Some(&NSString::from_str("議事録をMarkdownで保存")));
+                    panel.setTitle(Some(&NSString::from_str(title)));
                     panel.setNameFieldStringValue(&NSString::from_str(&filename));
                     panel.setCanCreateDirectories(true);
                     panel.setAllowsOtherFileTypes(false);
                     #[allow(deprecated)]
                     panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
-                        NSString::from_str("md"),
+                        NSString::from_str(extension),
                     ])));
                     let response = panel.runModal();
                     if response == NSModalResponseCancel {
@@ -307,7 +316,7 @@ pub(crate) async fn save_dialog(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, filename);
+        let _ = (window, filename, title, extension);
         Err("このOSの保存ダイアログはまだ接続していません".into())
     }
 }

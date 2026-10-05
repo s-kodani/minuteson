@@ -2,6 +2,181 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn detached_runtime_task_retains_data_admission_after_its_receiver_is_dropped() {
+    let controller = Arc::new(AnalysisController::default());
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (release, stop) = std::sync::mpsc::channel();
+    let worker = controller.clone();
+    let receiver = tauri::async_runtime::spawn(async move {
+        let _lease = lease;
+        tauri::async_runtime::spawn_blocking(move || {
+            started.send(()).unwrap();
+            stop.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(worker.state.lock().unwrap().data_maintenance.is_some());
+        })
+        .await
+        .unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    drop(receiver);
+    controller.begin_exit().unwrap();
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+    assert!(controller.begin_export().is_err());
+    release.send(()).unwrap();
+    controller.wait_idle(Duration::from_secs(2)).unwrap();
+    assert!(controller.state.lock().unwrap().data_maintenance.is_none());
+    controller.abort_shutdown();
+    assert!(controller.begin_export().is_ok());
+}
+
+#[test]
+fn data_maintenance_cancellation_does_not_release_admission_or_allow_export_or_model_work() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(controller.state.lock().unwrap().blocks_worker());
+    assert!(controller.begin_export().is_err());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_err());
+    controller.begin_exit().unwrap();
+    assert!(lease.cancelled());
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_err());
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_err());
+    controller.abort_shutdown();
+    assert!(lease.cancelled());
+    assert!(controller.begin_export().is_err());
+    drop(lease);
+    controller.wait_idle(Duration::from_millis(10)).unwrap();
+    assert!(controller.begin_export().is_ok());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_ok());
+}
+
+#[test]
+fn data_maintenance_rejects_each_admission_gate_without_pausing_existing_work() {
+    for gate in 0..10 {
+        let controller = AnalysisController::default();
+        {
+            let mut state = controller.state.lock().unwrap();
+            state.busy = gate == 0;
+            state.recording_intent = gate == 1;
+            state.import_intent = gate == 2;
+            state.export_intent = gate == 8;
+            state.wake = true;
+        }
+        controller.shutdown.store(gate == 3, Ordering::SeqCst);
+        let model = (gate == 7).then(|| {
+            controller
+                .begin_model_preparation(false, false, &|| false)
+                .unwrap()
+        });
+        let data = (gate == 9).then(|| {
+            controller
+                .begin_data_maintenance(false, false, &|| false)
+                .unwrap()
+        });
+        assert!(
+            controller
+                .begin_data_maintenance(gate == 4, gate == 5, &|| gate == 6)
+                .is_err(),
+            "gate {gate}"
+        );
+        let state = controller.state.lock().unwrap();
+        assert_eq!(state.busy, gate == 0);
+        assert_eq!(state.recording_intent, gate == 1);
+        assert_eq!(state.import_intent, gate == 2);
+        assert_eq!(state.export_intent, gate == 8);
+        assert!(state.wake);
+        drop(state);
+        drop(model);
+        drop(data);
+    }
+}
+
+#[test]
+fn data_and_markdown_admission_are_atomic_and_exit_seals_the_lane() {
+    let controller = Arc::new(AnalysisController::default());
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let finish = Arc::new(std::sync::Barrier::new(3));
+    let (sent, received) = std::sync::mpsc::channel();
+    let workers = (0..2)
+        .map(|index| {
+            let controller = controller.clone();
+            let start = start.clone();
+            let finish = finish.clone();
+            let sent = sent.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                if index == 0 {
+                    let lease = controller.begin_data_maintenance(false, false, &|| false);
+                    sent.send(lease.is_ok()).unwrap();
+                    finish.wait();
+                    drop(lease);
+                } else {
+                    let lease = controller.begin_export();
+                    sent.send(lease.is_ok()).unwrap();
+                    finish.wait();
+                    drop(lease);
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    start.wait();
+    assert_eq!(
+        (0..2)
+            .filter(|_| received.recv_timeout(Duration::from_secs(2)).unwrap())
+            .count(),
+        1
+    );
+    finish.wait();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    let export = controller.begin_export().unwrap();
+    assert!(controller.begin_exit().is_err());
+    assert!(!controller.shutdown.load(Ordering::SeqCst));
+    drop(export);
+    controller.begin_exit().unwrap();
+    assert!(controller.begin_export().is_err());
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_err());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_err());
+    controller.abort_shutdown();
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_ok());
+}
+
+#[test]
+fn data_maintenance_unwind_releases_only_its_lease_and_retains_wake() {
+    let controller = AnalysisController::default();
+    controller.state.lock().unwrap().wake = true;
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _lease = controller
+            .begin_data_maintenance(false, false, &|| false)
+            .unwrap();
+        panic!("synthetic data work panic");
+    }))
+    .is_err());
+    controller.wait_idle(Duration::from_millis(10)).unwrap();
+    assert!(controller.state.lock().unwrap().wake);
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_ok());
+}
+
+#[test]
 fn idle_wait_observes_completion_and_timeout_without_holding_worker_lock() {
     let controller = Arc::new(AnalysisController::default());
     controller.wait_idle(Duration::from_millis(10)).unwrap();
