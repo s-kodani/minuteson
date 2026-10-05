@@ -81,10 +81,28 @@ pub(crate) struct VerifiedArchive {
     pub(super) database: Connection,
     pub manifest: Manifest,
     pub(super) assets: BTreeMap<String, PathBuf>,
+    database_proof: (u64, String),
+    database_identity: Metadata,
     stage: tempfile::TempDir,
 }
 
 impl VerifiedArchive {
+    pub(super) fn verify_validation_database(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let path = self.stage.path().join("validation.sqlite3");
+        if !same_file(
+            &self.database_identity,
+            &std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?,
+        ) {
+            return Err("検証済みバックアップの確認用DBの実体が変更されています".into());
+        }
+        if digest_file(&path, cancelled)? != self.database_proof {
+            return Err("検証済みバックアップの確認用DBが変更されています".into());
+        }
+        Ok(())
+    }
     pub(super) fn owned_asset_path(&self, id: &str) -> Result<PathBuf, String> {
         if !std::fs::symlink_metadata(self.stage.path())
             .map_err(|e| e.to_string())?
@@ -108,7 +126,7 @@ impl VerifiedArchive {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BackupReceipt {
     pub archive_id: String,
@@ -321,13 +339,29 @@ impl Storage {
         destination: &Path,
         cancelled: &impl Fn() -> bool,
     ) -> Result<BackupReceipt, crate::exports::PublishError> {
-        let mut receipt = None;
         let target =
             crate::exports::Destination::selected_backup(&self.root, destination, cancelled)
                 .map_err(|message| crate::exports::PublishError {
                     published: false,
                     message,
                 })?;
+        self.create_backup_selected(&target, cancelled)
+    }
+
+    /// Keep the exact selection proof through explicit overwrite confirmation.
+    /// Never recapture a changed destination and silently approve its contents.
+    pub(crate) fn create_backup_selected(
+        &self,
+        target: &crate::exports::Destination,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<BackupReceipt, crate::exports::PublishError> {
+        target
+            .validate_backup_owner(&self.root)
+            .map_err(|message| crate::exports::PublishError {
+                published: false,
+                message,
+            })?;
+        let mut receipt = None;
         let snapshot = self.prepare_backup_snapshot(cancelled).map_err(|message| {
             crate::exports::PublishError {
                 published: false,
@@ -555,10 +589,15 @@ pub(crate) fn read(
     database
         .execute_batch("PRAGMA query_only=ON")
         .map_err(|e| e.to_string())?;
+    let database_proof = digest_file(&stage.path().join("validation.sqlite3"), cancelled)?;
+    let database_identity = std::fs::symlink_metadata(stage.path().join("validation.sqlite3"))
+        .map_err(|e| e.to_string())?;
     Ok(VerifiedArchive {
         database,
         manifest,
         assets,
+        database_proof,
+        database_identity,
         stage,
     })
 }

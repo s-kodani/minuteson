@@ -121,13 +121,26 @@ pub(crate) struct Destination {
     parent_metadata: Metadata,
     before: Option<Fingerprint>,
     maximum_existing_bytes: u64,
+    managed_root: PathBuf,
+    extension: String,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PublishError {
     pub published: bool,
     pub message: String,
 }
 impl Destination {
+    pub(crate) fn replaces_existing(&self) -> bool {
+        self.before.is_some()
+    }
+    pub(crate) fn validate_backup_owner(&self, root: &Path) -> Result<(), String> {
+        if self.extension != "monbackup"
+            || self.managed_root != root.canonicalize().map_err(|e| e.to_string())?
+        {
+            return Err("バックアップの保存先確認が別の保存領域または形式に属しています".into());
+        }
+        Ok(())
+    }
     pub(crate) fn selected(root: &Path, path: &Path) -> Result<Self, String> {
         Self::selected_with(root, path, "md", 64 * 1024 * 1024, &|| false)
     }
@@ -164,7 +177,8 @@ impl Destination {
             .ok_or("保存先フォルダーがありません")?
             .canonicalize()
             .map_err(|e| e.to_string())?;
-        if parent.starts_with(root.canonicalize().map_err(|e| e.to_string())?) {
+        let managed_root = root.canonicalize().map_err(|e| e.to_string())?;
+        if parent.starts_with(&managed_root) {
             return Err("アプリ管理データの中へは書き出せません".into());
         }
         let parent_metadata = std::fs::metadata(&parent).map_err(|e| e.to_string())?;
@@ -179,6 +193,8 @@ impl Destination {
             parent_metadata,
             before,
             maximum_existing_bytes: maximum,
+            managed_root,
+            extension: extension.into(),
         })
     }
     pub(crate) fn publish(&self, bytes: &[u8]) -> Result<(), PublishError> {

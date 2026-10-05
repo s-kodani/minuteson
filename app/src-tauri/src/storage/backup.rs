@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 pub(crate) mod archive;
 mod exclusions;
 pub(in crate::storage) mod ledger;
+pub(crate) mod operations;
 mod portable;
 
 // Only durable restore omission evidence grants the missing-cache exception.
@@ -225,6 +226,16 @@ impl Storage {
                     | "page_size"
                     | "query_only"
             ) =>
+            {
+                Authorization::Allow
+            }
+            // Schema arguments are reads, not mutable pragma settings. Permit
+            // only the application's portable table metadata during preview.
+            AuthAction::Pragma {
+                pragma_name,
+                pragma_value: Some(table),
+            } if matches!(pragma_name, "table_info" | "foreign_key_list")
+                && portable::TABLES.contains(&table) =>
             {
                 Authorization::Allow
             }

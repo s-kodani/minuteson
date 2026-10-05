@@ -113,6 +113,10 @@ impl GlobalMerge {
         &self.receipt
     }
 
+    pub(in crate::storage) fn confirmation_fingerprint(&self) -> &str {
+        &self.expected
+    }
+
     // Publication owns the outer transaction. Even if it commits after an
     // error, this merge cannot leave a scope or a subset of additions behind.
     pub(in crate::storage) fn apply(

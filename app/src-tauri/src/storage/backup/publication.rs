@@ -137,6 +137,26 @@ impl Storage {
         ids: &RestoreIds<'_>,
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
+        self.publish_restore_inner(sealed, ids, None, check)
+    }
+
+    pub(super) fn publish_restore_confirmed(
+        &self,
+        sealed: &SealedWorkspace,
+        ids: &RestoreIds<'_>,
+        confirmation: (&str, u64),
+        check: &impl Fn() -> bool,
+    ) -> Result<Publication, String> {
+        self.publish_restore_inner(sealed, ids, Some(confirmation), check)
+    }
+
+    fn publish_restore_inner(
+        &self,
+        sealed: &SealedWorkspace,
+        ids: &RestoreIds<'_>,
+        confirmation: Option<(&str, u64)>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Publication, String> {
         check_cancelled(check)?;
         sealed.matches_ids(ids, check)?;
         // Maintenance is declared first and drops after the mutex/transaction.
@@ -168,20 +188,19 @@ impl Storage {
         sealed.verify(check)?;
         ids.check_publication_destination(&tx, sealed.connection(), check)?;
         let merge = sealed.global_merge(&tx, check)?;
-        let live_size: i64 = tx
-            .query_row(
-                "SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let metadata_required = metadata_bytes(ids)?;
-        let required = u64::try_from(live_size)
-            .map_err(|_| "保存先DB容量が不正です")?
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(sealed.required_bytes()))
-            .and_then(|n| n.checked_add(metadata_required))
-            .ok_or("追加復元容量が範囲外です")?;
+        let required = required_bytes(&tx, sealed, ids)?;
+        if let Some((vocabulary, maximum_bytes)) = confirmation {
+            if merge.confirmation_fingerprint() != vocabulary
+                || required
+                    .checked_add(CAPACITY_RESERVE)
+                    .ok_or("追加復元容量が範囲外です")?
+                    > maximum_bytes
+            {
+                return Err(
+                    "確認後に共通用語または必要容量が変更されています。再確認してください".into(),
+                );
+            }
+        }
         check_capacity(&self.root, required)?;
         let meetings = read_meetings(sealed.connection())?.len();
         // Persist stable IDs before installing files. Per-path ownership records
@@ -290,6 +309,27 @@ impl Storage {
             vocabulary,
         })
     }
+}
+
+pub(super) fn required_bytes(
+    db: &Connection,
+    sealed: &SealedWorkspace,
+    ids: &RestoreIds<'_>,
+) -> Result<u64, String> {
+    let live_size: i64 = db
+        .query_row(
+            "SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let metadata = metadata_bytes(ids)?;
+    u64::try_from(live_size)
+        .map_err(|_| "保存先DB容量が不正です")?
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(sealed.required_bytes()))
+        .and_then(|n| n.checked_add(metadata))
+        .ok_or("追加復元容量が範囲外です".into())
 }
 
 // Include JSON overflow pages, indexes and commit/WAL copies conservatively.
