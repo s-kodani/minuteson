@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "./model-inspection-state";
 import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, profileName, type ModelApplicationPreview, type ModelProfileName, type ModelProfileView } from "./model-profile-state";
+import { assertModelDeletionPreview, modelDeletionEntryLabel, type ModelDeletionPreview } from "./model-deletion-state";
 
 export function ModelInspectionPanel({ locked, recordingActive }: { locked: boolean; recordingActive: boolean }) {
   const [directory, setDirectory] = useState("");
@@ -21,6 +22,11 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
   const [application, setApplication] = useState<{ preview: ModelApplicationPreview; entry: ModelPlacementEntry; operationId: string } | null>(null);
   const [applicationError, setApplicationError] = useState("");
   const [applicationUnknown, setApplicationUnknown] = useState(false);
+  const [deletionReviewing, setDeletionReviewing] = useState(false);
+  const [deletionReview, setDeletionReview] = useState<ModelDeletionPreview | null>(null);
+  const [deletionPage, setDeletionPage] = useState(0);
+  const deletionDialog = useRef<HTMLDialogElement>(null);
+  const deletionOpener = useRef<HTMLElement | null>(null);
   const catalogSequence = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -62,6 +68,36 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
       setError("録音状態が変わったため適用の確認を閉じました。録音停止後に再確認してください。");
     }
   }, [recordingActive, application, busy]);
+  useEffect(() => {
+    if (!deletionReview || !deletionDialog.current) return;
+    const element = deletionDialog.current;
+    if (!element.open) element.showModal();
+    element.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
+    element.scrollTop = 0;
+    return () => { element.close(); if (deletionOpener.current?.isConnected) deletionOpener.current.focus(); };
+  }, [deletionReview]);
+  useEffect(() => {
+    if ((recordingActive || locked) && deletionReview && !busy) {
+      setDeletionReview(null);
+      setError("録音・操作の状態が変わったためモデル削除の対象確認を閉じました。処理停止後に再検査してください。データは変更していません。");
+    }
+  }, [recordingActive, locked, deletionReview, busy]);
+  const reviewDeletion = async (entry: ModelPlacementEntry, element: HTMLElement) => {
+    if (busy || locked || recordingActive || catalogLoading || catalogError || !isTauri()) return;
+    deletionOpener.current = element;
+    const token = crypto.randomUUID();
+    attempt.current.begin(token); setBusy(true); setDeletionReviewing(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage(""); setDeletionReview(null);
+    try {
+      const result = await invoke<unknown>("preview_model_deletion", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
+      if (mounted.current && attempt.current.accepts(token)) {
+        assertModelDeletionPreview(result, token, entry);
+        setDeletionPage(0); setDeletionReview(structuredClone(result));
+      }
+    } catch (cause) { if (mounted.current && attempt.current.accepts(token)) setError(String(cause)); }
+    finally {
+      if (attempt.current.finish(token) && mounted.current) { setBusy(false); setDeletionReviewing(false); setCancelling(false); }
+    }
+  };
   const reviewApplication = async (entry: ModelPlacementEntry, name: ModelProfileName, element: HTMLElement) => {
     if (busy || locked || recordingActive || catalogLoading || !profiles || !isTauri() || !canReviewApplication(entry)) return;
     const current = profiles.find(p => p.name === name);
@@ -178,9 +214,9 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
     </details>
     <form onSubmit={event => void inspect(event)}>
       <label className="prompt-label" htmlFor="model-package-directory">パッケージフォルダーの絶対パス<input id="model-package-directory" value={directory} maxLength={4096} disabled={busy || locked || recordingActive || !isTauri()} onChange={event => { setDirectory(event.target.value); setReport(null); setError(""); }} placeholder="/Users/…/model-package" /></label>
-      <div className="analysis-actions"><button type="submit" disabled={busy || locked || recordingActive || !isTauri() || !directory.trim()}>ファイルを事前検査</button>{busy && !application && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{checking ? "互換性確認を取り消す" : placing ? "配置を取り消す" : reviewing ? "適用の事前確認を取り消す" : "検査を取り消す"}</button>}</div>
+      <div className="analysis-actions"><button type="submit" disabled={busy || locked || recordingActive || !isTauri() || !directory.trim()}>ファイルを事前検査</button>{busy && !application && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{deletionReviewing ? "削除対象の検査を取り消す" : checking ? "互換性確認を取り消す" : placing ? "配置を取り消す" : reviewing ? "適用の事前確認を取り消す" : "検査を取り消す"}</button>}</div>
     </form>
-    {busy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
+    {busy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
     {!isTauri() && <p>デスクトップアプリで利用できます。</p>}
     {recordingActive && <p>録音停止後に検査・配置・互換性確認・適用できます。録音開始要求があった場合は処理を取り消し、停止完了を待ちます。</p>}
     {error && <p className="action-error" role="alert">{error}</p>}
@@ -196,12 +232,34 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
       {catalogLoading && <p role="status">配置とプロファイル構成を再読込しています。</p>}
       <p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>
       {catalogError && <p className="action-error" role="alert">{catalogError}</p>}
-      {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}><strong>{entry.modelName}</strong> / {entry.modelVersion} · {entry.engine} / {entry.engineVersion}<p>{placementLabel(entry)} · {entry.totalBytes.toLocaleString()} bytes<br />配置ID: <code>{entry.packageId}</code></p>{entry.compatibility && <p>確認操作ID: <code>{entry.compatibility.operationId}</code>{entry.compatibility.errorMessage && <><br />{entry.compatibility.errorMessage}</>}</p>}<div className="analysis-actions"><button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>{(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}</div></li>)}</ul>}
+      {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}>
+        <strong>{entry.modelName}</strong> / {entry.modelVersion} · {entry.engine} / {entry.engineVersion}
+        <p>{placementLabel(entry)} · {entry.totalBytes.toLocaleString()} bytes<br />配置ID: <code>{entry.packageId}</code></p>
+        {entry.compatibility && <p>確認操作ID: <code>{entry.compatibility.operationId}</code>{entry.compatibility.errorMessage && <><br />{entry.compatibility.errorMessage}</>}</p>}
+        <div className="analysis-actions">
+          <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>
+          {(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}
+          <button type="button" className="small-secondary" disabled={busy || locked || recordingActive || catalogLoading || !!catalogError || !isTauri()} onClick={event => void reviewDeletion(entry, event.currentTarget)}>削除対象を確認（まだ削除しません）</button>
+        </div>
+      </li>)}</ul>}
     </section>
     <section aria-label="プロファイル構成記録"><h3>プロファイル構成記録</h3>
       <p>保存した管理モデルの選択を表示します。設定や最新の互換性記録との一致は、現在のファイル健全性・GPU互換性・AI準備完了を保証しません。会議の解析条件を手動変更した場合は不一致として表示し、再適用の確認時に現在の数値条件を維持します。</p>
       {!profiles ? <p>構成記録を読込できていません。配置・構成記録を再読込してください。</p> : profiles.map(view => <article key={view.name}><h4>{profileName(view.name)} · {view.id ? `構成版 #${view.profileVersion}` : "構成版なし"}</h4><p>{profileConfigurationLabel(view)}</p>{view.components.length > 0 && <ul>{view.components.map(component => <li key={component.engine}><strong>{component.engine}</strong> · {component.modelName} / {component.modelVersion}<p>{component.settingsMatch ? "保存設定と一致" : "現在の設定と不一致"} · {component.compatibilityCurrent ? "最新のCPU成功記録と一致" : "最新の互換性記録と不一致"}<br />配置ID: <code>{component.packageId}</code></p></li>)}</ul>}<p>不足: {(["whisper.cpp", "sherpa-onnx", "llama.cpp"] as const).filter(engine => !view.components.some(c => c.engine === engine)).join("、") || "なし（DB上の選択のみ）"}</p></article>)}
     </section>
+    {deletionReview && <dialog ref={deletionDialog} className="model-application-dialog model-deletion-dialog" aria-labelledby="model-deletion-title" onCancel={event => { event.preventDefault(); setDeletionReview(null); }}>
+      <h2 id="model-deletion-title" tabIndex={-1}>モデル削除の対象確認（読み取り専用）</h2>
+      <p>{deletionReview.modelName} / {deletionReview.modelVersion}</p>
+      <p>削除の実行・確認内容の永続化・中断後の続行は実装中です。この画面で削除や設定変更はできません。検査結果のSHAは削除許可ではありません。</p>
+      <p>対象フォルダー: <code>{deletionReview.modelsRoot}/{deletionReview.packageId}</code></p>
+      <p>フォルダーを含む {deletionReview.entries.length} 件・現在存在するファイル {deletionReview.bytes.toLocaleString()} bytes。欠落 {deletionReview.missingFiles} 件・登録内容から変更 {deletionReview.changedFiles} 件・未登録ファイル {deletionReview.unregisteredFiles} 件。</p>
+      <p>構成履歴の参照 {deletionReview.profileReferences} 件・ジョブ履歴の参照 {deletionReview.jobReferences} 件。履歴参照数は現在の利用中プロセス数や削除可否を示しません。DB上の実行／停止待ちジョブはアプリ全体で {deletionReview.activeJobs} 件（このモデルに限定した数ではありません）。</p>
+      <p>会議音声・本文・議事録・モデル名／SHA・構成履歴・ジョブ履歴・現在の設定は保持しています。他モデル、取り込み元、バックアップ、互換性試行ログは対象に含みません。リンク・特殊ファイル・検査中の変更を検出した場合は確認を拒否します。</p>
+      <p>一覧 {deletionPage * 50 + 1}–{Math.min((deletionPage + 1) * 50, deletionReview.entries.length)} / {deletionReview.entries.length} 件</p>
+      <ul className="model-deletion-paths" aria-label="モデル削除の検査対象">{deletionReview.entries.slice(deletionPage * 50, (deletionPage + 1) * 50).map(item => <li key={item.relativePath}><code>{item.relativePath || ".（対象フォルダー）"}</code> · {modelDeletionEntryLabel(item)}{item.bytes !== null && <> · {item.bytes.toLocaleString()} bytes</>}{item.sha256 && <details><summary>現在のファイルSHA</summary><code>{item.sha256}</code></details>}</li>)}</ul>
+      <div className="analysis-actions"><button type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)}>前の50件</button><button type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)}>次の50件</button><button type="button" onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
+      <details><summary>検査結果の識別子（削除許可ではありません）</summary><p>配置ID: <code>{deletionReview.packageId}</code><br />検査操作ID: <code>{deletionReview.inspectionId}</code><br />配置確認SHA: <code>{deletionReview.reviewHash}</code><br />今回の観測SHA: <code>{deletionReview.censusHash}</code></p></details>
+    </dialog>}
     {application && <dialog ref={dialog} className="model-application-dialog" aria-labelledby="model-application-title" onCancel={event => { event.preventDefault(); if (!busy) setApplication(null); }}>
       <h2 id="model-application-title" tabIndex={-1}>{profileName(application.preview.profile)}へのモデル適用を確認</h2>
       <p>{application.entry.modelName} / {application.entry.modelVersion} · {application.preview.after.engine}</p>

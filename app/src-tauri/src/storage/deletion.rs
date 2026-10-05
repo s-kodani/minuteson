@@ -11,6 +11,8 @@ pub(in crate::storage) mod fs;
 #[cfg(unix)]
 mod intent;
 #[cfg(unix)]
+pub(crate) mod models;
+#[cfg(unix)]
 pub(crate) mod operations;
 #[cfg(unix)]
 mod removal;

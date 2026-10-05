@@ -67,6 +67,54 @@ fn cancel_model_inspection(window: WebviewWindow, token: String) -> Result<(), S
     window.state::<model_inspection::Inspector>().cancel(&token)
 }
 
+#[cfg(unix)]
+#[tauri::command]
+async fn preview_model_deletion(
+    window: WebviewWindow,
+    token: String,
+    package_id: String,
+    expected_review_hash: String,
+) -> Result<storage::deletion::models::Preview, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can inspect model deletion".into());
+    }
+    let guard = window
+        .state::<model_inspection::Inspector>()
+        .begin(&token)?;
+    let app = window.app_handle().clone();
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            storage::deletion::models::preview(
+                &app.state::<Storage>(),
+                &root,
+                &token,
+                &package_id,
+                &expected_review_hash,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+async fn preview_model_deletion(
+    window: WebviewWindow,
+    token: String,
+    package_id: String,
+    expected_review_hash: String,
+) -> Result<serde_json::Value, String> {
+    let _ = (window, token, package_id, expected_review_hash);
+    Err("Windowsのモデル削除対象の検査は保留中です".into())
+}
+
 #[tauri::command]
 fn get_model_placements(
     window: WebviewWindow,
@@ -1610,6 +1658,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             inspect_model_package,
+            preview_model_deletion,
             cancel_model_inspection,
             get_model_placements,
             get_model_profiles,
