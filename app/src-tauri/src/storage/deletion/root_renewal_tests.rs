@@ -57,7 +57,7 @@ fn root_renewal_native_names_and_header_bounds_reject_overflow_without_adopting_
     f.unaffected();
 }
 
-fn paused_root(f: &Fixture, point: &str) -> (Receipt, PathBuf) {
+pub(super) fn paused_root(f: &Fixture, point: &str) -> (Receipt, PathBuf) {
     let mut r = f.begin(false);
     let logical = f.storage.root().join(format!("meetings/{}", f.meeting));
     let stop = Cell::new(false);

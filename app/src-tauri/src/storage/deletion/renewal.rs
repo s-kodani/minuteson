@@ -13,6 +13,7 @@ use crate::{
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 const MAX_GENERATIONS: u32 = 32;
 const AUDIT_PROGRESS: &str = "{\"confirmationRecorded\":true}";
@@ -76,6 +77,22 @@ pub(super) fn active_manifest(
     progress: &Progress,
     check: &impl Fn() -> bool,
 ) -> Result<Manifest, String> {
+    Ok(active_plan(db, original, progress, check)?.0)
+}
+pub(super) fn reconfirmation_roots(
+    db: &Connection,
+    original: &Prepared,
+    progress: &Progress,
+    check: &impl Fn() -> bool,
+) -> Result<Vec<String>, String> {
+    Ok(active_plan(db, original, progress, check)?.1)
+}
+fn active_plan(
+    db: &Connection,
+    original: &Prepared,
+    progress: &Progress,
+    check: &impl Fn() -> bool,
+) -> Result<(Manifest, Vec<String>), String> {
     let mut chain = Vec::new();
     let mut current = progress.confirmation.clone();
     let source_hash = original.intent_hash()?;
@@ -104,7 +121,7 @@ pub(super) fn active_manifest(
             return Err("残りの削除範囲の固定確認記録を検証できません".into());
         }
         let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if !matches!(record.version, 1 | 2)
+        if !matches!(record.version, 1 | 2 | 3)
             || record.source_operation != original.operation()
             || record.source_intent_hash != source_hash
             || record.encode()? != json
@@ -125,6 +142,7 @@ pub(super) fn active_manifest(
     let mut previous: Option<Reference> = None;
     let mut latest_consent = None;
     let mut database_phase = None;
+    let mut historical = BTreeSet::new();
     for (reference, record, consent) in chain.into_iter().rev() {
         if record.previous_progress.confirmation != previous
             || latest_consent.is_some_and(|c| c != record.previous_progress.consent_at())
@@ -132,6 +150,12 @@ pub(super) fn active_manifest(
             return Err("再確認履歴の接続が一致しません".into());
         }
         record.previous_progress.validate(original, &manifest)?;
+        extend_roots(
+            &mut historical,
+            record
+                .previous_progress
+                .reconfirmation_roots(&manifest, original.operation())?,
+        )?;
         match (
             record.previous_database_phase,
             record.previous_progress.database_phase,
@@ -153,13 +177,21 @@ pub(super) fn active_manifest(
         {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
-        verify_root_lineage(
-            record.version,
-            &manifest,
-            &record.previous_progress,
-            &observations.manifest,
-            original.operation(),
-        )?;
+        if record.version == 3 {
+            if observations.manifest.reservation_roots
+                != historical.iter().cloned().collect::<Vec<_>>()
+            {
+                return Err("旧形式を含む確認履歴の予約範囲を忘れたり追加できません".into());
+            }
+        } else {
+            verify_root_lineage(
+                record.version,
+                &manifest,
+                &record.previous_progress,
+                &observations.manifest,
+                original.operation(),
+            )?;
+        }
         manifest = observations.manifest;
         previous = Some(reference);
         latest_consent = Some(consent);
@@ -171,7 +203,19 @@ pub(super) fn active_manifest(
         return Err("現在の削除計画が固定した再同意と一致しません".into());
     }
     progress.validate(original, &manifest)?;
-    Ok(manifest)
+    extend_roots(
+        &mut historical,
+        progress.reconfirmation_roots(&manifest, original.operation())?,
+    )?;
+    Ok((manifest, historical.into_iter().collect()))
+}
+fn extend_roots(historical: &mut BTreeSet<String>, roots: Vec<String>) -> Result<(), String> {
+    historical.extend(roots);
+    if historical.len() > super::files::MAX_RESERVATION_ROOTS {
+        Err("確認履歴の予約ルートが安全上限を超えています".into())
+    } else {
+        Ok(())
+    }
 }
 pub(super) fn verify_root_lineage(
     version: u32,
@@ -412,7 +456,7 @@ fn accept_inner(
         version: if review.manifest().reservation_roots.is_empty() {
             1
         } else {
-            2
+            3
         },
         source_operation: original.operation().into(),
         source_intent_hash: original.intent_hash()?,
@@ -523,4 +567,84 @@ pub(super) fn accept_database_observed(
         check,
         event,
     )
+}
+
+// Reconstruct real old-format audit evidence in synthetic fixtures only.
+// Unlike production reconfirmation, v1 omitted old siblings and v2 retained
+// only the immediate plan's names. Never rewrite an existing immutable record.
+#[cfg(test)]
+pub(super) fn seed_historical_record_for_test(
+    storage: &Storage,
+    receipt: &removal::Receipt,
+    version: u32,
+    roots: &[String],
+) -> Result<removal::Receipt, String> {
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let census = receipt.current_census(storage, &db, &|| false, roots)?;
+    let observations = Observations::capture(&census)?;
+    let original = receipt.confirmed();
+    let record = Record {
+        version,
+        source_operation: original.operation().into(),
+        source_intent_hash: original.intent_hash()?,
+        previous_progress: receipt.progress.clone(),
+        previous_database_phase: receipt.progress.database_phase,
+        observations: observations.header.clone(),
+    };
+    let json = record.encode()?;
+    let reference = Reference {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        intent_hash: hash(json.as_bytes()),
+        generation: receipt
+            .progress
+            .confirmation
+            .as_ref()
+            .map_or(1, |r| r.generation + 1),
+    };
+    let consent = now_ms()?.max(receipt.progress.consent_at());
+    let next = Progress::renewed(
+        original,
+        census.manifest(),
+        reference.clone(),
+        true,
+        consent,
+        receipt.progress.database_phase,
+    )?;
+    let _writer = super::fence::write_removal(storage, &db, receipt, &|| false)?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    tx.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES(?1,'delete_meeting','prepared',?2,?3,?4,?5,?4,?4)", params![reference.operation_id,json,reference.intent_hash,consent,AUDIT_PROGRESS]).map_err(|e| e.to_string())?;
+    observations.store_paths(&tx, &reference.operation_id, &|| false, &|_| {})?;
+    tx.execute(
+        "UPDATE maintenance_operations SET state='completed' WHERE id=?1",
+        params![reference.operation_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute("UPDATE maintenance_operations SET progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![original.operation(),next.encode()?,consent]).map_err(|e|e.to_string())?;
+    let saved = removal::Receipt::load(&tx, original.operation(), &|| false)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(saved)
+}
+
+#[cfg(test)]
+mod history_bounds_tests {
+    use super::*;
+    #[test]
+    fn historical_root_union_deduplicates_and_rejects_overflow_without_truncating() {
+        let operation = "11111111-1111-4111-8111-111111111111";
+        let roots: Vec<_> = (0..256)
+            .map(|n| format!("meetings/.mon-delete-{operation}-{n}"))
+            .collect();
+        let mut saved = BTreeSet::new();
+        extend_roots(&mut saved, roots.clone()).unwrap();
+        extend_roots(&mut saved, roots).unwrap();
+        assert_eq!(saved.len(), 256);
+        let late = format!("meetings/.mon-delete-{operation}-r1-0");
+        assert!(extend_roots(&mut saved, vec![late.clone()]).is_err());
+        assert!(saved.contains(&late));
+        assert_eq!(saved.len(), 257); // The caller rejects; never forget a name.
+    }
 }

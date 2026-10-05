@@ -266,33 +266,6 @@ impl Finished {
     pub(super) fn progress(&self) -> &Progress {
         &self.0
     }
-    pub(super) fn verify_root_reservation_absent(
-        &self,
-        storage: &Storage,
-        manifest: &Manifest,
-        confirmed: &Prepared,
-    ) -> Result<(), String> {
-        let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? else {
-            return Ok(());
-        };
-        for path in self
-            .0
-            .reconfirmation_roots(manifest, confirmed.operation())?
-        {
-            if meetings
-                .optional_kind(
-                    path.strip_prefix("meetings/")
-                        .ok_or("予約ルートが不正です")?,
-                )?
-                .is_some()
-            {
-                return Err(
-                    "会議フォルダーの削除予約対象が残っています。別の範囲へ移らず保持します".into(),
-                );
-            }
-        }
-        Ok(())
-    }
     pub(super) fn manifest(
         &self,
         db: &Connection,
@@ -322,7 +295,19 @@ impl Finished {
         if meetings.optional_kind(&manifest.meeting_id)?.is_some() {
             return Err("削除済み会議フォルダーが再出現しています。削除せず保持します".into());
         }
-        self.verify_root_reservation_absent(storage, &manifest, confirmed)
+        let roots = super::renewal::reconfirmation_roots(db, confirmed, &self.0, &|| false)?;
+        for path in roots {
+            if meetings
+                .optional_kind(
+                    path.strip_prefix("meetings/")
+                        .ok_or("予約ルートが不正です")?,
+                )?
+                .is_some()
+            {
+                return Err("以前の削除予約対象が再出現しています。削除せず保持します".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -353,22 +338,14 @@ impl Receipt {
     pub(super) fn manifest(&self) -> &Manifest {
         &self.manifest
     }
-    pub(super) fn verify_review_root(&self, storage: &Storage) -> Result<(), String> {
-        Finished(self.progress.clone()).verify_root_reservation_absent(
-            storage,
-            &self.manifest,
-            &self.confirmed,
-        )
-    }
     pub(super) fn review_census(
         &self,
         storage: &Storage,
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<Census, String> {
-        let roots = self
-            .progress
-            .reconfirmation_roots(&self.manifest, self.confirmed.operation())?;
+        let roots =
+            super::renewal::reconfirmation_roots(db, &self.confirmed, &self.progress, check)?;
         self.current_census(storage, db, check, &roots)
     }
     pub(super) fn current_census(
@@ -776,19 +753,16 @@ fn verify_remaining(
                 receipt.reserved()
             )
         });
+    // Old v1/v2 audit plans did not necessarily retain every earlier sibling.
+    // Inspect all names derived from the validated chain before any unlink,
+    // without changing the fixed plan or adopting unexpected contents.
+    let roots = super::renewal::reconfirmation_roots(db, p, &receipt.progress, check)?;
     let current = if receipt
         .progress
         .database_phase
         .is_some_and(|phase| phase.rows_committed())
     {
-        Census::capture_deleted_locked(
-            storage,
-            db,
-            p,
-            check,
-            reserved.as_deref(),
-            &receipt.manifest.reservation_roots,
-        )?
+        Census::capture_deleted_locked(storage, db, p, check, reserved.as_deref(), &roots)?
     } else {
         Census::capture_removal_locked(
             storage,
@@ -797,7 +771,7 @@ fn verify_remaining(
             p.operation(),
             check,
             reserved.as_deref(),
-            &receipt.manifest.reservation_roots,
+            &roots,
         )?
     };
     if current.scope() != p.scope()

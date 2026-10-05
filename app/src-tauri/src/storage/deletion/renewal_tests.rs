@@ -3,6 +3,8 @@ use super::*;
 use crate::analysis_worker::{data_maintenance::DataMaintenanceLease, AnalysisController};
 use crate::storage::deletion::{completion, operations, renewal};
 
+#[path = "historical_renewal_tests.rs"]
+mod historical_renewal_tests;
 #[path = "root_renewal_tests.rs"]
 mod root_renewal_tests;
 

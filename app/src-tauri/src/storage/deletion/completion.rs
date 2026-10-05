@@ -66,11 +66,6 @@ impl Receipt {
     pub(super) fn progress_json(&self) -> Result<String, String> {
         self.progress.encode()
     }
-    pub(super) fn verify_review_root(&self, storage: &Storage) -> Result<(), String> {
-        self.progress
-            .files
-            .verify_root_reservation_absent(storage, &self.manifest, &self.confirmed)
-    }
     pub(super) fn review_census(
         &self,
         storage: &Storage,
@@ -82,9 +77,8 @@ impl Receipt {
         if other {
             return Err("別の未完了保守操作があります。対象を保持します".into());
         }
-        let roots = self
-            .file_progress()
-            .reconfirmation_roots(&self.manifest, self.confirmed.operation())?;
+        let roots =
+            super::renewal::reconfirmation_roots(db, &self.confirmed, self.file_progress(), check)?;
         let census = if self.row_phase_committed() {
             super::files::Census::capture_deleted_locked(
                 storage,
@@ -362,6 +356,16 @@ fn run_locked(
     database::checkpoint(&db)?;
     event("ackCheckpointed");
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn run_observed(
+    storage: &Storage,
+    receipt: &mut Receipt,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    run_inner(storage, receipt, check, event)
 }
 
 #[cfg(test)]
