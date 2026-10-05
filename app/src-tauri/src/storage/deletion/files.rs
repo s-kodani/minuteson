@@ -472,7 +472,7 @@ impl Census {
             return Err("削除済み範囲を確認する保存領域の状態が一致しません".into());
         }
         let scope = prepared.scope();
-        super::database::verify_rows_deleted(db, scope, check)?;
+        super::startup::verify_completed_rows(storage, db, prepared, check)?;
         let (root, database) = storage.managed_anchor.identity()?;
         if (root.clone(), database.clone())
             != (
@@ -503,7 +503,7 @@ impl Census {
         {
             return Err("削除済み範囲の再確認中に対象が変更されました".into());
         }
-        super::database::verify_rows_deleted(db, scope, check)?;
+        super::startup::verify_completed_rows(storage, db, prepared, check)?;
         super::intent::read_database(db, prepared.operation(), check)?.matches_saved(prepared)?;
         if storage.managed_anchor.identity()? != (root.clone(), database.clone()) {
             return Err("再確認中に管理領域・DBが変更されました".into());

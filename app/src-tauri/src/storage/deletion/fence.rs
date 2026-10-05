@@ -10,6 +10,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // is only a conservative read/admission hint; typed receipt validation still
 // precedes every privileged writer and all file/row mutation.
 pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (kind='delete_meeting' AND state='completed' AND json_extract(progress_json,'$.version')=3))";
+// These connection-local hints are not durable consent or a deletion permit.
+// Keep other_pending below restricted to actual unfinished operations: several
+// independent completed receipts can be reviewed one at a time under the real
+// shared lease, while ordinary writes stay blocked until all hints resolve.
+pub(in crate::storage) fn predicate(db: &Connection) -> Result<String, String> {
+    let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema WHERE type='table' AND name='mon_deletion_startup_attention')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    Ok(if exists {
+        format!("({UNFINISHED} OR (kind='delete_meeting' AND state='completed' AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
+    } else {
+        UNFINISHED.into()
+    })
+}
 pub(super) fn other_pending(db: &Connection, operation: Option<&str>) -> Result<bool, String> {
     db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE (?1 IS NULL OR id!=?1) AND {UNFINISHED})"), rusqlite::params![operation], |r| r.get(0)).map_err(|e|e.to_string())
 }
@@ -19,7 +31,8 @@ pub(in crate::storage) fn has_pending(db: &Connection) -> Result<bool, String> {
     if !exists {
         return Ok(false);
     }
-    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND {UNFINISHED})"), [], |r|r.get(0)).map_err(|e|e.to_string())
+    let pending = predicate(db)?;
+    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND {pending})"), [], |r|r.get(0)).map_err(|e|e.to_string())
 }
 fn readonly(context: AuthContext<'_>) -> Authorization {
     match context.action {
@@ -244,5 +257,15 @@ pub(super) fn write_completion<'a>(
     confirmed.verify_saved(db, check)?;
     // A completed acknowledgement retry can checkpoint only after validating
     // its full receipt; it never grants the old raw Scope fixture admission.
-    Writer::begin(storage, db, !confirmed.completed())
+    let discovered = super::startup::contains(db, confirmed.confirmed().operation())?;
+    // A cold continuation can have reached its canonical final wrapper while
+    // independent completed histories still need attention. It may finish its
+    // verified acknowledgement without unlocking those other histories.
+    let cold_pending =
+        storage.deletion_fence.resume_restart_required() && storage.deletion_fence.pending();
+    Writer::begin(
+        storage,
+        db,
+        !confirmed.completed() || discovered || cold_pending,
+    )
 }

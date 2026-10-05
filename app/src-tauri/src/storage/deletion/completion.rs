@@ -129,7 +129,11 @@ impl Receipt {
     pub(super) fn row_phase_committed(&self) -> bool {
         self.progress.database_phase != Phase::RowsPending
     }
-    fn load(db: &Connection, operation: &str, check: &impl Fn() -> bool) -> Result<Self, String> {
+    pub(super) fn load(
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         let confirmed = intent::read_database(db, operation, check)?;
         let (json, state, meeting): (String, String, Option<String>) = db
             .query_row(
@@ -355,6 +359,7 @@ fn run_locked(
     receipt.verify_live(storage, &db, check)?;
     database::checkpoint(&db)?;
     event("ackCheckpointed");
+    super::startup::resolve(storage, db, receipt, check)?;
     Ok(())
 }
 

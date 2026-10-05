@@ -133,6 +133,9 @@ fn expected_schema() -> Result<&'static Vec<(String, String, String, String)>, S
         .map_err(Clone::clone)
 }
 fn trusted_schema(db: &Connection) -> Result<String, String> {
+    #[cfg(unix)]
+    super::startup::verify_temp_schema(db)?;
+    #[cfg(not(unix))]
     if db
         .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema)", [], |r| {
             r.get::<_, bool>(0)
@@ -547,8 +550,17 @@ pub(super) fn verify_rows_deleted(
     expected: &Scope,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    expected.validate_format(db)?;
     stopped(db)?;
+    verify_rows_absent(db, expected, check)
+}
+// Startup observation is not deletion admission. Unrelated stale running rows
+// must not turn a clean completed receipt into an invalid one before recovery.
+pub(super) fn verify_rows_absent(
+    db: &Connection,
+    expected: &Scope,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    expected.validate_format(db)?;
     for (name, predicate) in TARGETS {
         cancel(check)?;
         let exists: bool = db

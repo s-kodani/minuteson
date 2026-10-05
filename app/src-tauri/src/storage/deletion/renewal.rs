@@ -92,7 +92,7 @@ fn active_plan(
     original: &Prepared,
     progress: &Progress,
     check: &impl Fn() -> bool,
-) -> Result<(Manifest, Vec<String>), String> {
+) -> Result<(Manifest, Vec<String>, Vec<Reference>), String> {
     let mut chain = Vec::new();
     let mut current = progress.confirmation.clone();
     let source_hash = original.intent_hash()?;
@@ -143,6 +143,7 @@ fn active_plan(
     let mut latest_consent = None;
     let mut database_phase = None;
     let mut historical = BTreeSet::new();
+    let mut audits = Vec::new();
     for (reference, record, consent) in chain.into_iter().rev() {
         if record.previous_progress.confirmation != previous
             || latest_consent.is_some_and(|c| c != record.previous_progress.consent_at())
@@ -193,6 +194,7 @@ fn active_plan(
             )?;
         }
         manifest = observations.manifest;
+        audits.push(reference.clone());
         previous = Some(reference);
         latest_consent = Some(consent);
     }
@@ -207,7 +209,25 @@ fn active_plan(
         &mut historical,
         progress.reconfirmation_roots(&manifest, original.operation())?,
     )?;
-    Ok((manifest, historical.into_iter().collect()))
+    Ok((manifest, historical.into_iter().collect(), audits))
+}
+pub(super) fn audit_references(
+    db: &Connection,
+    original: &Prepared,
+    progress: &Progress,
+) -> Result<Vec<Reference>, String> {
+    Ok(active_plan(db, original, progress, &|| false)?.2)
+}
+pub(super) fn audit_source(json: &str) -> Result<String, String> {
+    let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if !matches!(record.version, 1 | 2 | 3)
+        || record.encode()? != json
+        || !uuid::Uuid::parse_str(&record.source_operation)
+            .is_ok_and(|id| id.to_string() == record.source_operation)
+    {
+        return Err("再確認履歴の元の操作が不正です".into());
+    }
+    Ok(record.source_operation)
 }
 fn extend_roots(historical: &mut BTreeSet<String>, roots: Vec<String>) -> Result<(), String> {
     historical.extend(roots);

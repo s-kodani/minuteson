@@ -208,8 +208,8 @@ pub(crate) fn listing(storage: &Storage) -> Result<Listing, String> {
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
     storage.managed_anchor.verify()?;
-    let mut q = db.prepare(&format!("SELECT id,state,meeting_id,error_code FROM maintenance_operations WHERE kind='delete_meeting' AND {} ORDER BY created_at,id LIMIT 101", super::fence::UNFINISHED)).map_err(|e| e.to_string())?;
-    let items = q
+    let mut q = db.prepare(&format!("SELECT id,state,meeting_id,error_code FROM maintenance_operations WHERE kind='delete_meeting' AND {} ORDER BY created_at,id LIMIT 101", super::fence::predicate(&db)?)).map_err(|e| e.to_string())?;
+    let mut items = q
         .query_map([], |r| {
             Ok(Item {
                 operation_id: r.get(0)?,
@@ -225,6 +225,11 @@ pub(crate) fn listing(storage: &Storage) -> Result<Listing, String> {
         return Err("未完了削除の件数が安全上限を超えています".into());
     }
     drop(q);
+    for item in &mut items {
+        if item.error_code.is_none() {
+            item.error_code = super::startup::reason(&db, &item.operation_id)?;
+        }
+    }
     drop(db);
     Ok(Listing {
         items,

@@ -84,4 +84,12 @@ export function assertDeletionPathPage(page: DeletionPathPage, confirmation: str
   if (new Set(page.entries.map(e => e.relativePath)).size !== page.entries.length) fail();
 }
 export const isDeletionReconfirmation = (phase: DeletionPreview["phase"] | undefined) => phase === "reconfirmation" || phase === "database_reconfirmation";
+export const deletionAttentionLabel = (code: string | null): string | null => {
+  switch (code) {
+    case "completed_scope_reappeared": return "完了済み削除の対象が再出現しました。自動削除せず保持しています。新しい範囲を確認してください。";
+    case "completed_receipt_invalid": return "完了済み削除の記録を検証できません。対象を保持し、通常書込みを停止しています。";
+    case "completed_scope_uninspectable": return "完了済み削除の対象を安全に確認できません。リンクなどを採用せず保持しています。";
+    default: return null;
+  }
+};
 export const deletionPhaseLabel = (phase: DeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "確認記録を保存済み・ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再同意待ち", database_files: "DB段階を保持した残りファイルの削除", database_reconfirmation: "DB段階を保持した残り範囲への再同意待ち", database: "DB削除・後処理の途中", awaiting_ack: "後処理の完了応答を未確認", retained: "未開始のまま保持して中止", completed: "削除完了を確認済み" })[phase];

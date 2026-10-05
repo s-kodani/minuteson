@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
-import { assertDeletionPathPage, deletionPhaseLabel, isDeletionReconfirmation, type DeletionPathPage, type DeletionReceipt } from "./deletion-state";
+import { assertDeletionPathPage, deletionAttentionLabel, deletionPhaseLabel, isDeletionReconfirmation, type DeletionPathPage, type DeletionReceipt } from "./deletion-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
 
@@ -158,7 +158,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {!operation.connected && <p role="alert">データ操作の状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>削除と書込停止の状態を再読込</button>
       {needed && <p role="alert">未完了削除の確認対象を保護するため、編集・録音・AI処理などの通常書込みを停止しています。既に消したデータは復元していません。{c.listing?.reason}</p>}
-      {c.listing?.items.length ? <ul>{c.listing.items.map(i => <li key={i.operationId}><p>未完了削除 {i.operationId} · 記録状態 {i.state === "completed" ? "完了記録あり・残り処理の確認が必要" : i.state}{i.meetingId && ` · 会議 ${i.meetingId}`}</p><button type="button" className="small-secondary" disabled={!c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了削除の対象を確認</button></li>)}</ul> : null}
+      {c.listing?.items.length ? <ul>{c.listing.items.map(i => <li key={i.operationId}><p>未完了削除 {i.operationId} · 記録状態 {i.state === "completed" ? "完了記録あり・残り処理の確認が必要" : i.state}{i.meetingId && ` · 会議 ${i.meetingId}`}</p>{deletionAttentionLabel(i.errorCode) && <p>{deletionAttentionLabel(i.errorCode)}</p>}<button type="button" className="small-secondary" disabled={!c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了削除の対象を確認</button></li>)}</ul> : null}
       {active && <p role="status">{s.busy ? "削除対象の検査・処理中です。停止要求後も実際の終了を待ちます。" : p ? deletionPhaseLabel(p.phase) : s.phase === "failed" ? "削除対象の確認に失敗しました。" : "削除の確認待ちです。"}</p>}
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button></div>}

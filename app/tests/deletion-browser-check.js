@@ -277,6 +277,45 @@ async (page) => {
     check(await page.getByRole("button", { name: "残す会議を削除" }).count() === 1, "reserved deletion removed neighbor meeting");
     results.push("coexisting reserved root requires fresh unknown consent and retains fixed plan through partial stop");
   }
+  for (const code of ["completed_scope_reappeared", "completed_receipt_invalid", "completed_scope_uninspectable"]) {
+    await boot(); await set({ unknownCount: 1, invalidPendingReview: code === "completed_receipt_invalid" });
+    await page.evaluate(async code => {
+      await window.deletionFixture.pending("awaiting_ack", true);
+      window.deletionFixture.items[0].errorCode = code;
+      if (code === "completed_scope_uninspectable") window.deletionFixture.pendingPreview.reconfirmationAllowed = false;
+    }, code);
+    const text = code === "completed_scope_reappeared" ? "完了済み削除の対象が再出現しました。" : code === "completed_receipt_invalid" ? "完了済み削除の記録を検証できません。" : "完了済み削除の対象を安全に確認できません。";
+    await region().getByText(text, { exact: false }).waitFor();
+    check((await calls("start_data_operation")).length === 0 && await page.getByRole("textbox", { name: "会議名", exact: true }).isDisabled(), "startup hint executed or unlocked normal writes");
+    if (code === "completed_scope_reappeared") {
+      await page.setViewportSize({ width: 1200, height: 850 }); await region().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "output/playwright/deletion-startup-attention-1200.png" });
+      await page.setViewportSize({ width: 900, height: 700 }); await region().scrollIntoViewIfNeeded();
+      check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "startup attention listing overflows");
+      await page.screenshot({ path: "output/playwright/deletion-startup-attention-900.png" });
+    }
+    await region().getByRole("button", { name: "未完了削除の対象を確認", exact: true }).click();
+    if (code === "completed_receipt_invalid") {
+      await region().getByRole("alert").filter({ hasText: "模擬完了記録の検証失敗" }).waitFor();
+      check(await dialog().count() === 0 && (await calls("start_data_operation")).length === 0, "invalid receipt became an executable scope");
+    } else {
+      await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+      check(await dialog().getByRole("button", { name: /照合して残りの削除/u }).isDisabled(), "startup hint allowed stale execution");
+      if (code === "completed_scope_uninspectable") {
+        check(await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).count() === 0, "unsafe scope adopted for reconfirmation");
+        await page.keyboard.press("Escape");
+      } else {
+        await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).click();
+        await renewedDialog().waitFor(); await renewedDialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+        await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).check();
+        check(await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "startup scope inherited unknown consent");
+        await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).check();
+        await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click(); await deleted();
+        check(await page.getByRole("textbox", { name: "会議名", exact: true }).isDisabled(), "startup completion unlocked writes before restart");
+      }
+    }
+    results.push(`startup completed attention ${code} retains data and requires canonical explicit resolution`);
+  }
   await boot(); await review(); await page.setViewportSize({ width: 1200, height: 900 });
   await page.screenshot({ path: "output/playwright/deletion-confirm-1200.png" });
   await page.setViewportSize({ width: 900, height: 650 });

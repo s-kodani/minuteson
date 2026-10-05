@@ -1,9 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertDeletionListing, assertDeletionPathPage, assertDeletionPreview, type DeletionPreview } from "../src/deletion-state.ts";
+import { assertDeletionListing, assertDeletionPathPage, assertDeletionPreview, deletionAttentionLabel, type DeletionPreview } from "../src/deletion-state.ts";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 import { registerPlaybackStop, stopAllPlayback } from "../src/playback-barrier.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
+test("startup attention labels describe retained completed scopes without declaring deletion success", () => {
+  assert.match(deletionAttentionLabel("completed_scope_reappeared")!, /自動削除せず保持/u);
+  assert.match(deletionAttentionLabel("completed_receipt_invalid")!, /記録を検証できません/u);
+  assert.match(deletionAttentionLabel("completed_scope_uninspectable")!, /リンクなどを採用せず/u);
+  assert.equal(deletionAttentionLabel(null), null);
+  assert.equal(deletionAttentionLabel("unknown"), null);
+});
+test("completed startup hints retain null meeting FK and do not substitute for a confirmed preview", () => {
+  for (const errorCode of ["completed_scope_reappeared", "completed_receipt_invalid", "completed_scope_uninspectable"]) {
+    const l = { items: [{ operationId: id(3), state: "completed", meetingId: null, errorCode }], deletingMeetingIds: [], writeBlocked: true, restartRequired: false, reason: "確認待ち" };
+    assert.doesNotThrow(() => assertDeletionListing(l));
+    assert.throws(() => dataRequest({ ...ready(), deletionPreview: null }, "publish"));
+    assert.deepEqual(l.deletingMeetingIds, []);
+  }
+});
 const preview = (): DeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), title: "点検会議", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, pathCount: 3, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: 123, rowCount: 20, rowPhaseCommitted: false });
 const ready = (): DataSnapshot => ({ revision: 1, token: id(1), kind: "deletion", phase: "ready", busy: false, backupPreview: null, restorePreview: null, recoveryPreview: null, relocationPreview: null, backupReceipt: null, restoreReceipt: null, recoveryReceipt: null, relocationReceipt: null, deletionPreview: preview(), deletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 test("deletion requests use only owned IDs and never paths, rows or policy substitutions", () => {

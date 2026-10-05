@@ -178,7 +178,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = db.prepare(&format!("SELECT DISTINCT meeting_id FROM maintenance_operations WHERE kind='delete_meeting' AND {} AND meeting_id IS NOT NULL ORDER BY meeting_id", deletion::fence::UNFINISHED)).map_err(|e|e.to_string())?;
+        let mut query = db.prepare(&format!("SELECT DISTINCT meeting_id FROM maintenance_operations WHERE kind='delete_meeting' AND {} AND meeting_id IS NOT NULL ORDER BY meeting_id", deletion::fence::predicate(&db)?)).map_err(|e|e.to_string())?;
         let result = query
             .query_map([], |r| r.get(0))
             .map_err(|e| e.to_string())?
@@ -201,6 +201,8 @@ impl Storage {
         )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
+        #[cfg(unix)]
+        deletion::startup::inspect(&connection, &managed_anchor)?;
         let pending_deletion = deletion::fence::has_pending(&connection)?;
         if pending_deletion {
             if verify_migration_history(&connection)? != MIGRATIONS.len() {

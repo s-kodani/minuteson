@@ -10,7 +10,7 @@ f.changed = patch => changed(patch.kind && patch.kind !== "deletion" ? { ...patc
 const idle = structuredClone(f.snapshot);
 const d = window.deletionFixture = {
   mode: "success", unknownCount: 0, fileCount: 1, blocked: false, restart: false, cold: false,
-  listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null, reservedMode: false, foreignRootPage: false,
+  listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null, reservedMode: false, foreignRootPage: false, invalidPendingReview: false,
   items: [], deleted: 0, kept: 0, reconfirmed: 0, complete: () => {}, last: null, closes: 0,
   prepareHold: false, closeHold: false, closeFail: false, quitFail: false, liveTokens: new Set(),
   mountPlayback: async () => { const { mountPlaybackHarness } = await import("./deletion-playback-browser-harness.tsx"); d.unmountPlayback = mountPlaybackHarness(f.meetings[0].id); },
@@ -37,6 +37,7 @@ mockIPC(async (command, args) => {
   }
   if (command === "get_data_operation_availability" && d.restart) return { available: false, reason: "保存先の切替後は終了して再起動が必要です" };
   if (command === "review_meeting_deletion" || command === "review_pending_deletion") {
+    if (command === "review_pending_deletion" && d.invalidPendingReview) throw Error("模擬完了記録の検証失敗");
     if (f.blocker || f.snapshot.busy || (command === "review_meeting_deletion" && d.blocked)) throw Error("処理の停止を待ってください");
     d.last = null;
     const p = command === "review_pending_deletion" ? { ...d.pendingPreview, confirmationId: crypto.randomUUID() } : makePreview(args.meetingId);
