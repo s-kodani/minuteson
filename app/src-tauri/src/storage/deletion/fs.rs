@@ -56,6 +56,13 @@ pub(super) struct Proof {
     change_nanos: i64,
 }
 impl Proof {
+    pub(super) fn matches_after_rename(&self, original: &Self) -> bool {
+        self.identity == original.identity
+            && self.size == original.size
+            && self.links == original.links
+            && self.modified_seconds == original.modified_seconds
+            && self.modified_nanos == original.modified_nanos
+    }
     pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
         self.identity.validate(directory)?;
         if self.links == 0
@@ -101,6 +108,74 @@ pub(in crate::storage) struct Directory {
     pub(super) identity: Identity,
 }
 impl Directory {
+    pub(super) fn verify_identity(&self, expected: &Identity) -> Result<(), String> {
+        self.verify()?;
+        if &self.identity != expected {
+            return Err("確認したフォルダーの実体が変更されています".into());
+        }
+        Ok(())
+    }
+    pub(super) fn rename_exclusive(&self, source: &str, target: &str) -> Result<(), String> {
+        self.verify()?;
+        let source = name(source)?;
+        let target = name(target)?;
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::renameatx_np(
+                self.file.as_raw_fd(),
+                source.as_ptr(),
+                self.file.as_raw_fd(),
+                target.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                self.file.as_raw_fd(),
+                source.as_ptr(),
+                self.file.as_raw_fd(),
+                target.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            ) as i32
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let result = -1;
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        self.file.sync_all().map_err(|e| e.to_string())?;
+        self.verify()
+    }
+    // Only the deterministic reserved name of an armed/staged receipt is
+    // removed. Normal target names are NEVER directly passed to unlinkat.
+    pub(super) fn unlink_staged(
+        &self,
+        leaf: &str,
+        directory: bool,
+        expected: &Proof,
+    ) -> Result<(), String> {
+        self.verify()?;
+        if !leaf.starts_with(".mon-delete-") {
+            return Err("削除用予約名ではありません".into());
+        }
+        let current = std::fs::symlink_metadata(self.path.join(leaf)).map_err(|e| e.to_string())?;
+        if Proof::read(&current)? != *expected {
+            return Err("削除直前に予約対象が変更されています".into());
+        }
+        let leaf = name(leaf)?;
+        let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
+        if unsafe { libc::unlinkat(self.file.as_raw_fd(), leaf.as_ptr(), flags) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        self.file.sync_all().map_err(|e| e.to_string())?;
+        self.verify()
+    }
+    pub(super) fn sync(&self) -> Result<(), String> {
+        self.verify()?;
+        self.file.sync_all().map_err(|e| e.to_string())
+    }
     pub(super) fn root(path: &Path) -> Result<Self, String> {
         if !path.is_absolute() || path.canonicalize().map_err(|e| e.to_string())? != path {
             return Err("管理領域の絶対パスまたは親が不正です".into());
@@ -215,6 +290,10 @@ impl Directory {
         Ok(())
     }
     pub(super) fn kind(&self, leaf: &str) -> Result<bool, String> {
+        self.optional_kind(leaf)?
+            .ok_or_else(|| "管理対象が消失しました".into())
+    }
+    pub(super) fn optional_kind(&self, leaf: &str) -> Result<Option<bool>, String> {
         self.verify()?;
         let c = name(leaf)?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -227,12 +306,15 @@ impl Directory {
             )
         } != 0
         {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
             return Err(std::io::Error::last_os_error().to_string());
         }
         let m = unsafe { stat.assume_init() };
         match m.st_mode & libc::S_IFMT {
-            libc::S_IFDIR => Ok(true),
-            libc::S_IFREG => Ok(false),
+            libc::S_IFDIR => Ok(Some(true)),
+            libc::S_IFREG => Ok(Some(false)),
             _ => Err("管理領域にリンクまたは未対応の特殊ファイルがあります".into()),
         }
     }

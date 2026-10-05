@@ -8,6 +8,8 @@ mod files;
 pub(in crate::storage) mod fs;
 #[cfg(unix)]
 mod intent;
+#[cfg(unix)]
+mod removal;
 
 #[cfg(all(test, unix))]
 mod fence_tests;

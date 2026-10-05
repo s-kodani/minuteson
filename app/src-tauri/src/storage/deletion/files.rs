@@ -225,9 +225,13 @@ fn walk(
     entries: &mut BTreeMap<String, Entry>,
     records: &Records,
     check: &impl Fn() -> bool,
+    reserved: Option<&str>,
 ) -> Result<(), String> {
     cancel(check)?;
-    if depth > MAX_DEPTH || entries.len() >= MAX_ENTRIES || path.len() > 256 {
+    if depth > MAX_DEPTH
+        || entries.len() >= MAX_ENTRIES
+        || (path.len() > 256 && Some(path) != reserved)
+    {
         return Err("削除対象の深さ・パス・件数が安全上限を超えています".into());
     }
     let before = dir.proof()?;
@@ -246,14 +250,24 @@ fn walk(
     for name in &names {
         cancel(check)?;
         let child_path = format!("{path}/{name}");
-        if child_path.len() > 256 || entries.len() >= MAX_ENTRIES {
+        if (child_path.len() > 256 && Some(child_path.as_str()) != reserved)
+            || entries.len() >= MAX_ENTRIES
+        {
             return Err("削除対象のパス・件数が安全上限を超えています".into());
         }
         if dir.kind(name)? {
             let child = dir
                 .child(name)?
                 .ok_or("検査中に対象フォルダーが消失しました")?;
-            walk(&child, &child_path, depth + 1, entries, records, check)?;
+            walk(
+                &child,
+                &child_path,
+                depth + 1,
+                entries,
+                records,
+                check,
+                reserved,
+            )?;
         } else {
             let mut file = dir.regular(name)?;
             let before = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
@@ -304,6 +318,7 @@ fn inventory(
     meeting: &str,
     records: &Records,
     check: &impl Fn() -> bool,
+    reserved: Option<&str>,
 ) -> Result<Vec<Entry>, String> {
     root.verify()?;
     let mut entries = BTreeMap::new();
@@ -316,6 +331,7 @@ fn inventory(
                 &mut entries,
                 records,
                 check,
+                reserved,
             )?;
         }
     }
@@ -364,6 +380,21 @@ impl Census {
         omitted_operation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::capture_removal_locked(storage, db, meeting, omitted_operation, check, None)
+    }
+    // The exact reserved sibling from an armed receipt is a read allowance,
+    // not authority to adopt or delete an unregistered object.
+    pub(super) fn capture_removal_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+    ) -> Result<Self, String> {
+        if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
+            return Err("予約パスが安全上限を超えています".into());
+        }
         if storage.restart_required() {
             return Err("旧保存先は停止済みです。再起動してください".into());
         }
@@ -379,8 +410,8 @@ impl Census {
         // Enumerate through the startup descriptor, never reopen a path and
         // temporarily treat its replacement as the original root.
         let root_directory = storage.managed_anchor.directory_ref()?;
-        let entries = inventory(root_directory, meeting, &records, check)?;
-        if inventory(root_directory, meeting, &records, check)? != entries
+        let entries = inventory(root_directory, meeting, &records, check, reserved)?;
+        if inventory(root_directory, meeting, &records, check, reserved)? != entries
             || Scope::capture(db, meeting, omitted_operation, check)? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {

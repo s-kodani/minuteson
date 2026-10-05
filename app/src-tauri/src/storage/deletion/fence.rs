@@ -189,6 +189,17 @@ pub(super) fn write_prepared<'a>(
     Writer::begin(storage, db)
 }
 
+#[cfg(unix)]
+pub(super) fn write_removal<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    confirmed: &super::removal::Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    confirmed.verify_saved(db, check)?;
+    Writer::begin(storage, db)
+}
+
 // Old Scope-only receipts exist only in the row-phase fixtures, not a public
 // deletion format. Tests still exercise the real persistent fence and permit.
 #[cfg(test)]

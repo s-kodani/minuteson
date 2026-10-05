@@ -268,6 +268,21 @@ impl Prepared {
     pub(super) fn consent_at(&self) -> i64 {
         self.consent_at
     }
+    pub(super) fn verify_metadata(&self, db: &Connection, progress: &str) -> Result<(), String> {
+        let (meeting,json,sha,consent,state,saved,created,updated):(Option<String>,String,String,Option<i64>,String,String,i64,i64)=db.query_row("SELECT meeting_id,target_manifest_json,target_hash,consent_at,state,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'",params![self.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?;
+        if meeting.as_deref() != Some(self.manifest.meeting_id.as_str())
+            || json != encode(&self.intent, MAX_INTENT)?
+            || sha != hash(json.as_bytes())
+            || consent != Some(self.consent_at)
+            || created != self.consent_at
+            || updated < created
+            || state != "installing"
+            || saved != progress
+        {
+            return Err("削除の固定記録または進捗が変更されています".into());
+        }
+        Ok(())
+    }
     pub(super) fn verify_saved(
         &self,
         db: &Connection,
@@ -276,7 +291,7 @@ impl Prepared {
         let saved = read_locked(db, &self.operation, check)?;
         self.matches_saved(&saved)
     }
-    fn matches_saved(&self, saved: &Self) -> Result<(), String> {
+    pub(super) fn matches_saved(&self, saved: &Self) -> Result<(), String> {
         if saved.intent != self.intent
             || saved.manifest != self.manifest
             || saved.consent_at != self.consent_at
@@ -299,7 +314,7 @@ impl Prepared {
         self.verify_saved(&db, check)?;
         self.verify_locked(storage, &db, check)
     }
-    fn verify_locked(
+    pub(super) fn verify_locked(
         &self,
         storage: &Storage,
         db: &Connection,
@@ -326,12 +341,24 @@ fn read_locked(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
-    read_state(db, operation, false, check)
+    read_state(db, operation, ReadMode::Prepared, check)
+}
+enum ReadMode {
+    Prepared,
+    Kept,
+    Removing,
+}
+pub(super) fn read_removing(
+    db: &Connection,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
+    read_state(db, operation, ReadMode::Removing, check)
 }
 fn read_state(
     db: &Connection,
     operation: &str,
-    kept_allowed: bool,
+    mode: ReadMode,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
     cancel(check)?;
@@ -345,7 +372,12 @@ fn read_state(
         || hash(json.as_bytes()) != expected_hash
         || consent.is_none_or(|s| s < 0)
         || !((state == "prepared" && progress == INITIAL_PROGRESS)
-            || (kept_allowed && state == "recovered" && progress == KEPT_PROGRESS))
+            || (matches!(mode, ReadMode::Kept)
+                && state == "recovered"
+                && progress == KEPT_PROGRESS)
+            || (matches!(mode, ReadMode::Removing)
+                && state == "installing"
+                && progress.len() <= 4096))
         || created < 0
         || updated < created
         || consent != Some(created)
@@ -519,7 +551,7 @@ fn keep_inner(
         .map_err(|_| "DBロックを取得できません")?;
     #[cfg(unix)]
     storage.managed_anchor.verify()?;
-    let saved = read_state(&db, &confirmed.operation, true, check)?;
+    let saved = read_state(&db, &confirmed.operation, ReadMode::Kept, check)?;
     confirmed.matches_saved(&saved)?;
     let state: String = db
         .query_row(
