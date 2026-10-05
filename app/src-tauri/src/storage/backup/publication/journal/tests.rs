@@ -69,6 +69,17 @@ fn history_install_preserves_restore_keep_receipt_on_destination_startup() {
     p.copy(&native, &|| false).unwrap();
     let control = native.prepare_control_handoff(&|| false).unwrap();
     p.install_history(&control, &|| false).unwrap();
+    assert_eq!(
+        Connection::open(target.join(".mon-scratch.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM relocation_restore_bindings",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
     drop(p);
     drop(control);
     drop(native);

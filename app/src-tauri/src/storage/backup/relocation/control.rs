@@ -43,7 +43,7 @@ impl<'storage> NativeSnapshot<'storage> {
             cancelled,
         )?;
         let bytes = serde_json::to_vec(&Envelope {
-            version: 2,
+            version: 3,
             native_manifest_hash: self.manifest_hash.clone(),
             history: history.clone(),
             excluded_area: self
@@ -98,7 +98,7 @@ impl ControlHandoff<'_, '_> {
             return Err("元の移行確認が安全容量を超えています".into());
         }
         let old: serde_json::Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
-        if old["version"] != 2 || old["native_manifest_hash"] != self.snapshot.manifest_hash() {
+        if old["version"] != 3 || old["native_manifest_hash"] != self.snapshot.manifest_hash() {
             return Err("元の移行確認と会議コピーが一致しません".into());
         }
         let current = serde_json::to_value(&self.history).map_err(|e| e.to_string())?;
@@ -111,6 +111,7 @@ impl ControlHandoff<'_, '_> {
             "restores",
             "remaining_root_objects",
             "origins",
+            "bindings",
         ] {
             if original.get(key) != current.get(key) {
                 return Err("配置完了後に元の保持判断・由来・残存対象が変更されています".into());
@@ -147,9 +148,16 @@ impl ControlHandoff<'_, '_> {
         &self,
         operation: &str,
         target: &Path,
+        placement: &crate::bootstrap::placement::Placement<'_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RegistryImage, String> {
         self.verify(cancelled)?;
+        let bindings = publication::journal::relocation::build(
+            self.snapshot,
+            placement,
+            operation,
+            cancelled,
+        )?;
         let path = self
             .snapshot
             .stage
@@ -168,6 +176,7 @@ impl ControlHandoff<'_, '_> {
             self.snapshot.manifest_hash(),
             &self.hash,
             &self.history,
+            &bindings,
         )?;
         drop(db);
         file.sync_all().map_err(|e| e.to_string())?;
@@ -199,7 +208,7 @@ impl ControlHandoff<'_, '_> {
             cancelled,
         )?;
         let actual = serde_json::to_vec(&Envelope {
-            version: 2,
+            version: 3,
             native_manifest_hash: self.snapshot.manifest_hash.clone(),
             history,
             excluded_area: self

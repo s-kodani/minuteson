@@ -174,6 +174,7 @@ pub(in crate::storage::backup) fn write_image(
     native_hash: &str,
     control_hash: &str,
     history: &transfer::Bundle,
+    bindings: &[binding::Record],
 ) -> Result<(), String> {
     let proof = serde_json::to_string(&Identity::read(&private_directory(target)?)?)
         .map_err(|e| e.to_string())?;
@@ -182,6 +183,8 @@ pub(in crate::storage::backup) fn write_image(
     db.execute_batch(review::SCHEMA)
         .map_err(|e| e.to_string())?;
     db.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    db.execute_batch(binding::SCHEMA)
+        .map_err(|e| e.to_string())?;
     db.execute(
         "INSERT INTO metadata VALUES(1,?1,?2)",
         params![proof, hash(proof.as_bytes())],
@@ -235,7 +238,11 @@ pub(in crate::storage::backup) fn write_image(
             prior_json,
         },
     )?;
-    db.execute_batch("PRAGMA user_version=3; COMMIT;")
+    for r in bindings {
+        binding::insert(db, r)?;
+    }
+    binding::load(db)?;
+    db.execute_batch("PRAGMA user_version=4; COMMIT;")
         .map_err(|e| e.to_string())?;
     load(db)?;
     Ok(())
@@ -261,11 +268,14 @@ pub(in crate::storage::backup) fn verify_image(
         .execute_batch(review::SCHEMA)
         .map_err(|e| e.to_string())?;
     expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    expected
+        .execute_batch(binding::SCHEMA)
+        .map_err(|e| e.to_string())?;
     if schema(&db)? != schema(&expected)?
         || db
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .map_err(|e| e.to_string())?
-            != 3
+            != 4
     {
         return Err("移行先の端末内台帳の形式が不正です".into());
     }
@@ -284,6 +294,7 @@ pub(in crate::storage::backup) fn verify_image(
         return Err("移行先台帳が破損しています".into());
     }
     let rows = load(&db)?;
+    binding::load(&db)?;
     if !rows.iter().any(|o| {
         o.operation_id == operation
             && o.native_hash == native_hash

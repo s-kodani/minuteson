@@ -4,6 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const MAX_PATHS: usize = 200_000;
+#[cfg(target_os = "macos")]
+pub(in crate::storage::backup) mod relocation;
+fn load_effective(root: &Path, db: &Connection, id: &str) -> Result<Saved, String> {
+    let saved = load(db, id)?;
+    #[cfg(target_os = "macos")]
+    return relocation::effective(root, db, id, saved);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = root;
+        Ok(saved)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -290,10 +302,12 @@ impl<'a> Journal<'a> {
             .map_err(|e| e.to_string())?;
         let id = if let Some(id) = old {
             recover_one(root, db, &id)?;
-            let saved = load(db, &id)?;
+            let saved = load_effective(root, db, &id)?;
             if saved.state != "recovered" || saved.manifest != manifest {
                 return Err("前回の復元追加物の確認・回収が必要です".into());
             }
+            #[cfg(target_os = "macos")]
+            relocation::start_local_scope(root, db, &id)?;
             id
         } else {
             let id = Uuid::new_v4().to_string();
@@ -387,7 +401,7 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
     if !db.is_autocommit() {
         return Err("公開結果が未確定のため復元追加物を保持します".into());
     }
-    let saved = match load(db, id) {
+    let saved = match load_effective(root, db, id) {
         Ok(saved) => saved,
         Err(_) => return attention(db, id, "restore_manifest_invalid"),
     };
@@ -623,7 +637,7 @@ pub(in crate::storage::backup) fn source_record_valid(
     db: &Connection,
     id: &str,
 ) -> bool {
-    load(db, id)
+    load_effective(root, db, id)
         .is_ok_and(|s| std::fs::symlink_metadata(root).is_ok_and(|m| s.manifest.root.matches(&m)))
 }
 pub(in crate::storage::backup) fn recover_selected(

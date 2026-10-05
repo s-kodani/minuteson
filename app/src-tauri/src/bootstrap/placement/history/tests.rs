@@ -5,6 +5,47 @@ use std::cell::Cell;
 use std::os::unix::fs::{symlink, DirBuilderExt};
 
 #[test]
+fn restore_rebinding_v3_upgrade_preserves_installed_history_and_meeting_data() {
+    let f = Fixture::new();
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&h, &|| false).unwrap();
+    drop(p);
+    drop(h);
+    drop(s);
+    let db = Connection::open(f.target.join(REGISTRY)).unwrap();
+    let original: String = db
+        .query_row("SELECT local_json FROM relocation_history", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings; PRAGMA user_version=3;").unwrap();
+    drop(db);
+    let target = Storage::open(f.target.clone()).unwrap();
+    assert_eq!(target.previous_storage_history().unwrap().len(), 1);
+    assert!(target.get_meeting(&f.meeting).unwrap().is_some());
+    let db = Connection::open(f.target.join(REGISTRY)).unwrap();
+    assert_eq!(
+        db.query_row("SELECT local_json FROM relocation_history", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        std::fs::read(f.target.join(&f.relative)).unwrap(),
+        b"original audio"
+    );
+}
+
+#[test]
 fn history_install_preserves_rows_and_old_root_and_is_idempotent() {
     let f = Fixture::new();
     let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
@@ -31,7 +72,7 @@ fn history_install_preserves_rows_and_old_root_and_is_idempotent() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM relocation_history", [], |r| r

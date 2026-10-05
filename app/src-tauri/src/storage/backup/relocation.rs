@@ -474,6 +474,21 @@ impl NativeSnapshot<'_> {
     pub(crate) fn source_root(&self) -> &Path {
         &self.maintenance.storage.root
     }
+    pub(crate) fn source_metadata(&self, path: &str) -> Result<Option<Metadata>, String> {
+        let Ok(index) = self
+            .source
+            .binary_search_by(|n| n.entry.relative_path.as_str().cmp(path))
+        else {
+            return Ok(None);
+        };
+        let node = &self.source[index];
+        let metadata =
+            std::fs::symlink_metadata(self.source_root().join(path)).map_err(|e| e.to_string())?;
+        if Proof::read(&metadata)? != node.proof {
+            return Err("元の所有対象の実体・内容が変更されています".into());
+        }
+        Ok(Some(metadata))
+    }
     // The destination owns/records its newly-created FD before calling this.
     // Only a sealed native-image file can supply bytes, never a caller path.
     pub(crate) fn write_placement_file(

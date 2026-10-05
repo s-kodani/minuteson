@@ -531,6 +531,16 @@ impl Placement<'_> {
         self.metadata_matches(node, &m)?;
         Ok(m)
     }
+    pub(crate) fn owned_path(&self, path: &str) -> Result<Option<Metadata>, String> {
+        self.guard()?;
+        let Some(node) = self.nodes.get(path) else {
+            return Ok(None);
+        };
+        if node.state != "copied" {
+            return Err("所有対応前のコピーが未完了です".into());
+        }
+        Ok(Some(self.node_path(node)?))
+    }
     pub(crate) fn progress(&self) -> Result<Progress, String> {
         self.guard()?;
         let state: String = self

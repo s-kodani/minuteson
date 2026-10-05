@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn restore_rebinding_missing_current_binding_table_is_not_adopted_as_v3_or_recreated() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let meeting = s.create_meeting("current registry").unwrap();
+    drop(s);
+    let path = root.path().join(".mon-scratch.sqlite3");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings;").unwrap();
+    drop(db);
+    let before = std::fs::read(&path).unwrap();
+    assert!(Storage::open(root.path().into()).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
+    assert!(db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1)",
+            params![meeting.id],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+}
+
+#[test]
 fn history_install_v2_registry_upgrade_preserves_meetings_and_original_keep_receipt() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
@@ -26,7 +49,7 @@ fn history_install_v2_registry_upgrade_preserves_meetings_and_original_keep_rece
             r.get(0)
         })
         .unwrap();
-    db.execute_batch("DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history; PRAGMA user_version=2;").unwrap();
+    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings; DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history; PRAGMA user_version=2;").unwrap();
     drop(db);
     drop(s);
     let reopened = Storage::open(root.path().into()).unwrap();
@@ -43,7 +66,7 @@ fn history_install_v2_registry_upgrade_preserves_meetings_and_original_keep_rece
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         db.query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
@@ -55,7 +78,7 @@ fn history_install_v2_registry_upgrade_preserves_meetings_and_original_keep_rece
 }
 
 #[test]
-fn history_install_missing_v3_history_is_not_adopted_as_old_schema_or_recreated() {
+fn history_install_missing_current_history_is_not_adopted_as_old_schema_or_recreated() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     s.create_meeting("protected meeting").unwrap();
@@ -71,6 +94,6 @@ fn history_install_missing_v3_history_is_not_adopted_as_old_schema_or_recreated(
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
 }

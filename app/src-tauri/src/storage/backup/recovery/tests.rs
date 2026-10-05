@@ -101,7 +101,7 @@ fn recovery_legacy_ownership_schema_upgrades_atomically_without_adopting_or_losi
     let db = Connection::open(&journal).unwrap();
     // Recreate the exact pre-review schema, not a damaged current schema.
     #[cfg(target_os = "macos")]
-    db.execute_batch("DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history;")
+    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings; DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history;")
         .unwrap();
     db.execute_batch("DROP TABLE recovery_decisions; PRAGMA user_version=0;")
         .unwrap();

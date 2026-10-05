@@ -54,6 +54,7 @@ pub(in crate::storage::backup) struct Bundle {
     pub restores: Vec<Restore>,
     pub remaining_root_objects: Vec<RootObject>,
     pub origins: Vec<history::Origin>,
+    pub bindings: Vec<binding::Record>,
 }
 impl Bundle {
     pub(in crate::storage::backup) fn local_json(&self) -> Result<String, String> {
@@ -374,7 +375,7 @@ impl Registry {
         }
         self.guard()?;
         let bundle = Bundle {
-            version: 2,
+            version: 3,
             source_root: self.root.clone(),
             source_identity: self.root_identity.clone(),
             areas,
@@ -382,6 +383,7 @@ impl Registry {
             restores,
             remaining_root_objects: remaining(&self.root, &excluded_path, check)?,
             origins: self.origins()?,
+            bindings: self.restore_bindings()?,
         };
         if serde_json::to_vec(&bundle)
             .map_err(|e| e.to_string())?

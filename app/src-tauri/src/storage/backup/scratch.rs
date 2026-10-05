@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, Weak};
 
 #[cfg(target_os = "macos")]
+pub(in crate::storage::backup) mod binding;
+#[cfg(target_os = "macos")]
 pub(in crate::storage::backup) mod history;
 pub(super) mod review;
 #[cfg(target_os = "macos")]
@@ -14,7 +16,7 @@ pub(in crate::storage::backup) mod transfer;
 
 fn local_version() -> i64 {
     if cfg!(target_os = "macos") {
-        3
+        4
     } else {
         2
     }
@@ -22,6 +24,9 @@ fn local_version() -> i64 {
 fn history_schema(db: &Connection) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     db.execute_batch(history::SCHEMA)
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    db.execute_batch(binding::SCHEMA)
         .map_err(|e| e.to_string())?;
     #[cfg(not(target_os = "macos"))]
     let _ = db;
@@ -212,7 +217,15 @@ impl Registry {
             .execute_batch(review::SCHEMA)
             .map_err(|e| e.to_string())?;
         let version_two_schema = schema(&expected)?;
-        history_schema(&expected)?;
+        #[cfg(target_os = "macos")]
+        expected
+            .execute_batch(history::SCHEMA)
+            .map_err(|e| e.to_string())?;
+        let version_three_schema = schema(&expected)?;
+        #[cfg(target_os = "macos")]
+        expected
+            .execute_batch(binding::SCHEMA)
+            .map_err(|e| e.to_string())?;
         let expected_schema = schema(&expected)?;
         let mut db = Connection::open(&path).map_err(|e| e.to_string())?;
         let version: i64 = db
@@ -221,7 +234,11 @@ impl Registry {
         let upgrade_old = !new && version == 0 && schema(&db)? == previous_schema;
         let upgrade_two =
             cfg!(target_os = "macos") && !new && version == 2 && schema(&db)? == version_two_schema;
-        let upgrade = upgrade_old || upgrade_two;
+        let upgrade_three = cfg!(target_os = "macos")
+            && !new
+            && version == 3
+            && schema(&db)? == version_three_schema;
+        let upgrade = upgrade_old || upgrade_two || upgrade_three;
         // Inspect existing SQL before changing its journaling settings. Even an
         // empty file without a saved root proof is not adopted as ours.
         if !new && !upgrade && (version != local_version() || schema(&db)? != expected_schema) {
@@ -278,7 +295,13 @@ impl Registry {
                 tx.execute_batch(review::SCHEMA)
                     .map_err(|e| e.to_string())?;
             }
-            history_schema(&tx)?;
+            if upgrade_three {
+                #[cfg(target_os = "macos")]
+                tx.execute_batch(binding::SCHEMA)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                history_schema(&tx)?;
+            }
             tx.pragma_update(None, "user_version", local_version())
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;

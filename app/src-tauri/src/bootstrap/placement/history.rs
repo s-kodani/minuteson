@@ -332,6 +332,7 @@ impl Placement<'_> {
         let image = handoff.build_registry_image(
             &self.pending.operation_id,
             &self.pending.target,
+            self,
             cancelled,
         )?;
         let control = std::str::from_utf8(handoff.bytes()).map_err(|e| e.to_string())?;
