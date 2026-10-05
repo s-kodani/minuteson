@@ -15,6 +15,8 @@ pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
 pub(crate) mod recovery;
+#[cfg(target_os = "macos")]
+pub(crate) mod relocation;
 pub(in crate::storage) mod scratch;
 
 // Only durable restore omission evidence grants the missing-cache exception.
@@ -271,57 +273,7 @@ impl Storage {
             None => self.backup_stage()?,
         };
         let database = stage.path().join("snapshot.sqlite3");
-        // create_new/private permissions before SQLite opens the image.
-        private_file(&database)?
-            .sync_all()
-            .map_err(|e| e.to_string())?;
-        {
-            let db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            let required: i64 = db
-                .query_row(
-                    "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            check_capacity(
-                stage.path(),
-                u64::try_from(required).map_err(|_| "DBサイズが範囲外です")?,
-            )?;
-            let mut target = Connection::open(&database).map_err(|e| e.to_string())?;
-            target
-                .execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
-                .map_err(|e| e.to_string())?;
-            {
-                // Online Backup reads committed WAL frames; never copy the raw
-                // live DB file, checkpoint it, or close/reopen the original.
-                let backup = Backup::new(&db, &mut target).map_err(|e| e.to_string())?;
-                let mut busy = 0;
-                loop {
-                    check_cancelled(cancelled)?;
-                    match backup.step(128).map_err(|e| e.to_string())? {
-                        StepResult::Done => break,
-                        StepResult::More => busy = 0,
-                        StepResult::Busy | StepResult::Locked if busy < 20 => {
-                            busy += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(25));
-                        }
-                        _ => return Err("DBスナップショットを取得できません".into()),
-                    }
-                }
-            }
-            // Consolidate the destination only, giving a single durable image.
-            target
-                .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
-                .map_err(|e| e.to_string())?;
-            target.close().map_err(|(_, e)| e.to_string())?;
-        }
-        File::open(&database)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        snapshot_database(self, &database, cancelled)?;
         let mut db = read_only(&database)?;
         validate_database(&mut db, cancelled)?;
         let meetings = read_meetings(&db)?;
@@ -361,6 +313,67 @@ impl Storage {
         snapshot.verify(cancelled)?;
         Ok(snapshot)
     }
+}
+
+// Shared native image primitive. The caller owns the write fence and staging
+// directory. Neither relocation nor portable backup copies the raw live DB.
+fn snapshot_database(
+    storage: &Storage,
+    database: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    // create_new/private permissions before SQLite opens the image.
+    private_file(database)?
+        .sync_all()
+        .map_err(|e| e.to_string())?;
+    {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let required: i64 = db
+            .query_row(
+                "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        check_capacity(
+            database.parent().ok_or("DB一時領域が不正です")?,
+            u64::try_from(required).map_err(|_| "DBサイズが範囲外です")?,
+        )?;
+        let mut target = Connection::open(database).map_err(|e| e.to_string())?;
+        target
+            .execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
+            .map_err(|e| e.to_string())?;
+        {
+            // Online Backup reads committed WAL frames; never copy the raw
+            // live DB file, checkpoint it, or close/reopen the original.
+            let backup = Backup::new(&db, &mut target).map_err(|e| e.to_string())?;
+            let mut busy = 0;
+            loop {
+                check_cancelled(cancelled)?;
+                match backup.step(128).map_err(|e| e.to_string())? {
+                    StepResult::Done => break,
+                    StepResult::More => busy = 0,
+                    StepResult::Busy | StepResult::Locked if busy < 20 => {
+                        busy += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    _ => return Err("DBスナップショットを取得できません".into()),
+                }
+            }
+        }
+        // Consolidate the destination only, giving a single durable image.
+        target
+            .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
+            .map_err(|e| e.to_string())?;
+        target.close().map_err(|(_, e)| e.to_string())?;
+    }
+    File::open(database)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 impl Snapshot<'_> {
