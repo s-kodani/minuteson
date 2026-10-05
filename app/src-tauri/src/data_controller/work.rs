@@ -357,6 +357,15 @@ impl Work {
                     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
                         match request.action {
                             Action::Refresh => prepared.refresh(storage, cancelled)?,
+                            Action::ReviewRemaining => {
+                                progress("verifying_delete_scope");
+                                prepared.review_remaining(
+                                    storage,
+                                    admission.ok_or("再確認に必要な共有実行排他がありません")?,
+                                    &request.confirmation_id,
+                                    cancelled,
+                                )?;
+                            }
                             Action::Publish | Action::DeleteIncludingUnregistered => {
                                 completion.deletion = Some(prepared.execute(
                                     storage,

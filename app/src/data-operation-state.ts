@@ -26,7 +26,7 @@ export interface DataSnapshot {
   deletionPreview?: DeletionPreview | null; deletionReceipt?: DeletionReceipt | null;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
-export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" | "delete_including_unregistered" }
+export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" | "delete_including_unregistered" | "review_remaining" }
 export interface DataAvailability { available: boolean; reason: string | null }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -111,16 +111,17 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
   if (s.kind === "deletion") {
     const p = s.deletionPreview;
     if (!s.token || !p || s.busy || s.deletionReceipt || (s.restartRequired && !p.pending)) throw Error("削除の現在の状態を再確認してください。");
-    const resolution = action === "refresh" || (action === "keep" && p.keepAllowed);
+    const resolution = action === "refresh" || (action === "keep" && p.keepAllowed) || (action === "review_remaining" && p.reconfirmationAllowed);
     if (s.attentionRequired && !resolution) throw Error("部分完了の状態を再検査してください。");
     if (!s.retryAllowed && !resolution) throw Error("削除確認が失効しています。");
     if (action === "keep" && !p.keepAllowed) throw Error("開始済み削除を保持・中止して復元することはできません。");
-    if (action === "recover" || (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started"].includes(p.phase)))) throw Error("確認した対象と削除の判断が一致しません。");
+    if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再同意はできません。");
+    if (action === "recover" || (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(p.phase)))) throw Error("確認した対象と削除の判断が一致しません。");
     if (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed
-      || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");
+      || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");
     return { token: s.token, confirmationId: p.confirmationId, action };
   }
-  if (action === "delete_including_unregistered") throw Error("削除以外の操作には使用できません。");
+  if (["delete_including_unregistered", "review_remaining"].includes(action)) throw Error("削除以外の操作には使用できません。");
   const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId ?? s.relocationPreview?.confirmationId;
   if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
   const keepingMove = action === "keep" && s.kind === "relocation" && s.relocationPreview?.pending;

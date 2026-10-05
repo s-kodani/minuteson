@@ -4,7 +4,7 @@ use super::{
     completion,
     database::Scope,
     files::{Census, Manifest},
-    intent, removal,
+    intent, removal, renewal,
 };
 use crate::analysis_worker::data_maintenance::DataMaintenanceLease;
 use crate::storage::Storage;
@@ -34,6 +34,9 @@ pub(crate) struct Preview {
     pub bytes: u64,
     pub row_count: u64,
     pub row_phase_committed: bool,
+    pub reconfirmation_allowed: bool,
+    pub previous_processed_paths: Option<usize>,
+    pub previous_path_count: Option<usize>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +89,10 @@ enum Target {
     Fresh(Census),
     Unstarted(intent::Prepared),
     Files(removal::Receipt),
+    Reconfirmation {
+        files: removal::Receipt,
+        review: renewal::Review,
+    },
     Database(completion::Receipt),
     Kept(intent::Prepared),
 }
@@ -95,6 +102,9 @@ impl Target {
             Self::Fresh(c) => (c.manifest(), c.scope()),
             Self::Unstarted(p) | Self::Kept(p) => (p.manifest(), p.scope()),
             Self::Files(r) => (r.manifest(), r.confirmed().scope()),
+            Self::Reconfirmation { files, review } => {
+                (review.manifest(), files.confirmed().scope())
+            }
             Self::Database(r) => (r.manifest(), r.confirmed().scope()),
         }
     }
@@ -103,6 +113,7 @@ impl Target {
             Self::Fresh(c) => c.verify(storage, check),
             Self::Unstarted(p) => p.verify_live(storage, check),
             Self::Files(r) => r.verify_live(storage, check),
+            Self::Reconfirmation { files, review } => review.verify_live(storage, files, check),
             Self::Database(r) => r.verify_resume(storage, check),
             Self::Kept(_) => Err("この削除は未開始のまま保持・中止済みです".into()),
         }
@@ -238,6 +249,9 @@ impl Prepared {
             bytes: 0,
             row_count: scope.tables.iter().map(|t| t.rows).sum(),
             row_phase_committed: false,
+            reconfirmation_allowed: false,
+            previous_processed_paths: None,
+            previous_path_count: None,
         };
         for e in &m.entries {
             if e.directory {
@@ -269,6 +283,11 @@ impl Prepared {
                 preview.processed_paths = r.processed_paths();
                 "files"
             }
+            Target::Reconfirmation { files, .. } => {
+                preview.previous_processed_paths = Some(files.processed_paths());
+                preview.previous_path_count = Some(files.manifest().entries.len());
+                "reconfirmation"
+            }
             Target::Database(r) => {
                 preview.processed_paths = preview.path_count;
                 preview.row_phase_committed = r.row_phase_committed();
@@ -284,6 +303,10 @@ impl Prepared {
         match target.verify_live(storage, check) {
             Ok(()) => preview.execute_allowed = true,
             Err(reason) => preview.resume_reason = Some(reason),
+        }
+        if let Target::Files(files) = &target {
+            preview.reconfirmation_allowed =
+                !preview.execute_allowed && renewal::Review::capture(storage, files, check).is_ok();
         }
         cancelled(check)?;
         Ok(Self { preview, target })
@@ -355,7 +378,19 @@ impl Prepared {
         storage: &Storage,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let next = if matches!(self.target, Target::Fresh(_)) && !storage.data_write_blocked() {
+        let next = if let Target::Reconfirmation { files, .. } = &self.target {
+            let saved = removal::read(storage, files.confirmed().operation(), check)?;
+            let review = renewal::Review::capture(storage, &saved, check)?;
+            Self::build(
+                storage,
+                self.preview.operation_id.clone(),
+                Target::Reconfirmation {
+                    files: saved,
+                    review,
+                },
+                check,
+            )?
+        } else if matches!(self.target, Target::Fresh(_)) && !storage.data_write_blocked() {
             let c = Census::capture(storage, &self.preview.meeting_id, check)?;
             Self::build(
                 storage,
@@ -366,6 +401,36 @@ impl Prepared {
         } else {
             Self::pending(storage, &self.preview.operation_id, check)?
         };
+        *self = next;
+        Ok(())
+    }
+    pub(crate) fn review_remaining(
+        &mut self,
+        storage: &Storage,
+        admission: &DataMaintenanceLease,
+        confirmation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        admission.validate_active()?;
+        let check = || check() || admission.cancelled();
+        self.confirmation(confirmation)?;
+        if !self.preview.reconfirmation_allowed {
+            return Err("この段階の残り範囲は再同意できません。元の記録と対象を保持します".into());
+        }
+        let Target::Files(files) = &self.target else {
+            return Err("ファイル段階の状態を再確認してください".into());
+        };
+        let saved = removal::read(storage, files.confirmed().operation(), &check)?;
+        let review = renewal::Review::capture(storage, &saved, &check)?;
+        let next = Self::build(
+            storage,
+            self.preview.operation_id.clone(),
+            Target::Reconfirmation {
+                files: saved,
+                review,
+            },
+            &check,
+        )?;
         *self = next;
         Ok(())
     }
@@ -395,7 +460,22 @@ impl Prepared {
                 .clone()
                 .unwrap_or("削除対象を再確認してください".into()));
         }
-        let result = self.execute_inner(storage, include_unregistered, &check, progress);
+        let result = (|| {
+            let mut include = include_unregistered;
+            if let Target::Reconfirmation { files, review } = &mut self.target {
+                progress("fixing_delete_scope");
+                renewal::accept(storage, files, review, include, admission, &check)?;
+                *self = Self::build(
+                    storage,
+                    self.preview.operation_id.clone(),
+                    load(storage, &self.preview.operation_id, &|| false)?,
+                    &|| false,
+                )?;
+                progress("delete_scope_fixed");
+                include = false; // The just-recorded policy is fixed, not a new request choice.
+            }
+            self.execute_inner(storage, include, &check, progress)
+        })();
         if result.is_err() {
             // Recover durable progress even if a transition crossed its commit
             // before returning an error. Do not adopt changed observations.
@@ -502,3 +582,13 @@ impl Prepared {
 #[cfg(test)]
 #[path = "operations_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn reconfirmation_count(storage: &Storage) -> Result<i64, String> {
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    storage.managed_anchor.verify()?;
+    db.query_row("SELECT count(*) FROM maintenance_operations WHERE meeting_id IS NULL AND kind='delete_meeting' AND progress_json='{\"confirmationRecorded\":true}'", [], |r| r.get(0)).map_err(|e| e.to_string())
+}

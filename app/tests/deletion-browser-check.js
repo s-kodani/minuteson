@@ -73,6 +73,51 @@ async (page) => {
   check(await dialog().getByRole("button", { name: /照合して残りの削除/u }).isDisabled() && await dialog().getByRole("button", { name: "未開始のまま保持して中止" }).count() === 0, "unknown partial scope adopted or kept");
   check((await calls("start_data_operation")).length === 0, "unknown partial files executed"); results.push("partial unknown contents retained, no scope adoption");
 
+  await boot(); await set({ mode: "unknown" }); await pending("files", true);
+  const previousId = await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.confirmationId);
+  await set({ unknownCount: 1, fileCount: 2 });
+  await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).click();
+  const renewedDialog = () => page.getByRole("dialog", { name: "変更後の残り範囲への再同意", exact: true });
+  await renewedDialog().waitFor(); await renewedDialog().getByText("1〜4 / 4 件", { exact: true }).waitFor();
+  check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.confirmationId) !== previousId, "remaining review reused old ID");
+  check((await calls("start_data_operation")).length === 1 && (await calls("start_data_operation"))[0].args.request.action === "review_remaining", "remaining inspection performed deletion");
+  check((await renewedDialog().innerText()).includes("元の同意と進捗を履歴として保持") && await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "old consent inherited or original progress missing");
+  check((await renewedDialog().innerText()).includes("現在の確認段階") && (await renewedDialog().innerText()).includes("この一覧は再同意前の確認"), "temporary review labelled as durable consent");
+  await page.setViewportSize({ width: 1200, height: 850 });
+  await page.screenshot({ path: "output/playwright/deletion-reconfirmation-1200.png" });
+  await page.setViewportSize({ width: 900, height: 700 });
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "remaining scope dialog causes horizontal overflow");
+  await page.screenshot({ path: "output/playwright/deletion-reconfirmation-900.png" });
+  await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).check();
+  check(await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "new unknown decision inherited");
+  await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録ファイルも削除対象に含める/u }).check();
+  await renewedDialog().getByRole("button", { name: "残りの状態を再検査", exact: true }).click();
+  await renewedDialog().getByText("1〜4 / 4 件", { exact: true }).waitFor();
+  check(!await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).isChecked() && !await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).isChecked(), "reinspection retained renewed consent");
+  await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).check(); await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).check();
+  await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "output/playwright/deletion-reconfirmation-consent-900.png" });
+  await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click(); await deleted();
+  check((await calls("start_data_operation")).at(-1).args.request.action === "delete_including_unregistered", "new unknown decision not explicit");
+  results.push("remaining scope inspection preserves original progress and requires fresh two-part consent after each ID change");
+
+  await boot(); await set({ mode: "unknown" }); await pending("files", true); await set({ mode: "lostNoCommit" });
+  await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).click();
+  await dialog().getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  await set({ mode: "unknown" }); await dialog().getByRole("button", { name: "同じ削除操作の結果を確認", exact: true }).click();
+  await renewedDialog().waitFor(); await renewedDialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  const remainingAttempts = await calls("start_data_operation");
+  check(remainingAttempts.length === 2 && JSON.stringify(remainingAttempts[0].args) === JSON.stringify(remainingAttempts[1].args) && await page.evaluate(() => window.deletionFixture.deleted) === 0, "lost remaining review changed request or deleted");
+  results.push("lost remaining inspection reuses exact request without implicit deletion");
+
+  await boot(); await review(); await understand();
+  await page.evaluate(async () => { const { registerPlaybackStop } = await import("/src/playback-barrier.ts"); registerPlaybackStop(() => new Promise(resolve => { window.deletionFixture.releaseConsentWait = resolve; })); });
+  await publish(); await page.waitForFunction(() => !!window.deletionFixture.releaseConsentWait);
+  await page.evaluate(async () => { await window.dataFixture.changed({ deletionPreview: { ...window.dataFixture.snapshot.deletionPreview, confirmationId: crypto.randomUUID() } }); window.deletionFixture.releaseConsentWait(); });
+  await dialog().getByRole("alert").filter({ hasText: "待機中に削除の確認が変更" }).waitFor();
+  check((await calls("start_data_operation")).length === 0, "awaited playback rebound old consent to a new ID");
+  results.push("playback wait cannot rebind consent to a changed confirmation");
+
   await boot(); await review(); await set({ mode: "lostNoCommit" }); await understand(); await publish();
   await dialog().getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
   check(await page.getByRole("button", { name: "残す会議を削除" }).isDisabled(), "uncertain receipt allowed another deletion");

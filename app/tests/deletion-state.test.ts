@@ -11,6 +11,22 @@ test("deletion requests use only owned IDs and never paths, rows or policy subst
   assert.deepEqual(dataRequest(ready(), "refresh"), { token: id(1), confirmationId: id(2), action: "refresh" });
   assert.throws(() => dataRequest(ready(), "keep")); assert.throws(() => dataRequest(ready(), "recover"));
 });
+test("remaining review is read-only resolution only for the server-advertised file phase", () => {
+  const s = ready(); Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });
+  Object.assign(s.deletionPreview!, { phase: "files", pending: true, executeAllowed: false, resumeReason: "対象が変更", reconfirmationAllowed: true });
+  assert.deepEqual(dataRequest(s, "review_remaining"), { token: id(1), confirmationId: id(2), action: "review_remaining" });
+  assert.throws(() => dataRequest(s, "publish"));
+  assert.throws(() => dataRequest(ready(), "review_remaining"));
+  assert.throws(() => assertDeletionPreview({ ...s.deletionPreview!, executeAllowed: true, resumeReason: null }));
+});
+test("new remaining scope requires complete original progress metadata and new unknown decision", () => {
+  const s = ready(); Object.assign(s.deletionPreview!, { phase: "reconfirmation", pending: true, reconfirmationAllowed: false, previousProcessedPaths: 10, previousPathCount: 12, unregisteredCount: 1 });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.throws(() => dataRequest(s, "publish"));
+  assert.equal(dataRequest(s, "delete_including_unregistered").action, "delete_including_unregistered");
+  assert.throws(() => dataRequest(s, "keep"));
+  for (const patch of [{ previousPathCount: null }, { previousProcessedPaths: 13 }, { processedPaths: 1 }, { rowPhaseCommitted: true }, { reconfirmationAllowed: true }]) assert.throws(() => assertDeletionPreview({ ...s.deletionPreview!, ...patch }));
+});
 test("unregistered contents require separate decision and cannot be used for other kinds", () => {
   const s = ready(); s.deletionPreview!.unregisteredCount = 1;
   assert.throws(() => dataRequest(s, "publish"));

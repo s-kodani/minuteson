@@ -17,7 +17,8 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const [error, setError] = useState(""), [toast, setToast] = useState("");
   const [page, setPage] = useState<DeletionPathPage | null>(null), [pageError, setPageError] = useState("");
   const [pageBusy, setPageBusy] = useState(false), pageEpoch = useRef(0);
-  const [understood, setUnderstood] = useState(false), [includeUnknown, setIncludeUnknown] = useState(false);
+  const [understood, saveUnderstood] = useState(false), [includeUnknown, saveIncludeUnknown] = useState(false);
+  const [understoodId, setUnderstoodId] = useState<string | null>(null), [includeUnknownId, setIncludeUnknownId] = useState<string | null>(null);
   const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
   const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
@@ -25,6 +26,10 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const opener = useRef<HTMLElement | null>(null), focusBack = useRef(false);
   const s = operation.snapshot, preview = s?.kind === "deletion" ? s.deletionPreview : null;
   const receipt = s?.kind === "deletion" ? s.deletionReceipt : null;
+  const currentUnderstood = understood && understoodId === preview?.confirmationId;
+  const currentIncludeUnknown = includeUnknown && includeUnknownId === preview?.confirmationId;
+  const setUnderstood = (value: boolean) => { saveUnderstood(value); setUnderstoodId(preview?.confirmationId ?? null); };
+  const setIncludeUnknown = (value: boolean) => { saveIncludeUnknown(value); setIncludeUnknownId(preview?.confirmationId ?? null); };
   const listing = operation.deletionListing;
   const protectedNow = rpcBusy || unknown;
   const canInspect = isTauri() && operation.deletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
@@ -77,10 +82,13 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   };
   const submit = async (action: DataRequest["action"]) => {
     if (!canResolve) return;
-    if (["publish", "delete_including_unregistered"].includes(action) && (!open || !understood || !page || pageBusy || pageError)) return;
+    const confirmation = preview?.confirmationId;
+    if (!confirmation) return;
+    if (["publish", "delete_including_unregistered"].includes(action) && (!open || !currentUnderstood || !page || pageBusy || pageError || page.confirmationId !== preview?.confirmationId || (action === "delete_including_unregistered" && !currentIncludeUnknown))) return;
     await protect(async () => {
       await stopAllPlayback();
       const now = latest.current.operation.getSnapshot(); if (!now) throw Error("削除状態を再確認してください。");
+      if (now.deletionPreview?.confirmationId !== confirmation) throw Error("待機中に削除の確認が変更されました。新しい一覧を確認してください。");
       await send(dataRequest(now, action), now.revision);
     });
   };
@@ -133,10 +141,10 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
       target?.focus(); focusBack.current = false;
     }
   }, [open, rpcBusy, s?.busy, operation.connected]);
-  const canDelete = canResolve && s?.phase === "ready" && preview?.executeAllowed && understood && !!page && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started"].includes(preview.phase) || includeUnknown);
+  const canDelete = canResolve && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
     rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, setToast, page, pageBusy, pageError, loadPage,
-    understood, setUnderstood, includeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
+    understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
 
 export function MeetingDeletionPanel({ operation, control, visible }: { operation: DataOperation; control: ReturnType<typeof useMeetingDeletion>; visible: boolean }) {
@@ -160,18 +168,20 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">保留した起動時回復を行うため、通常利用にはアプリの再起動が必要です。未確認の完了応答がある場合は、先に残りの状態を再検査できます。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
     </section>}
     <dialog ref={c.dialog} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title" onCancel={event => { event.preventDefault(); void c.dismiss(); }}>
-      <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>会議の完全削除を確認</h2>
-      {p && <><h3>{p.title}</h3><p className="data-path">会議ID: {p.meetingId}</p><p>管理音声、文字起こし、議事録、現在・直前・内部参照版、候補、下書き・手動編集、会議別用語と処理履歴を削除します。アプリ内では復元できません。</p><p>外部の元音声・書き出し・バックアップ、AIモデル・共通用語、旧保存先・保持コピー・会議ツリー外の一時領域は対象外です。媒体上の安全消去は保証しません。</p><dl className="import-info"><dt>確認時のファイル</dt><dd>{p.fileCount} 件 · 実在容量 {bytesLabel(p.bytes)}</dd><dt>欠落・登録時と変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd><dt>確認時のDB行</dt><dd>{p.rowCount} 件</dd><dt>保存済み段階</dt><dd>{deletionPhaseLabel(p.phase)}</dd><dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}（フォルダー・欠落を含み、消したファイル数ではありません）</dd></dl>
-      {p.pending && <p role="alert">途中まで削除している可能性があります。既に消したデータは復元しません。再検査は元の確認範囲を照合し、新しい未知物を自動採用しません。</p>}
+      <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>{p?.phase === "reconfirmation" ? "変更後の残り範囲への再同意" : "会議の完全削除を確認"}</h2>
+      {p && <><h3>{p.title}</h3><p className="data-path">会議ID: {p.meetingId}</p><p>管理音声、文字起こし、議事録、現在・直前・内部参照版、候補、下書き・手動編集、会議別用語と処理履歴を削除します。アプリ内では復元できません。</p><p>外部の元音声・書き出し・バックアップ、AIモデル・共通用語、旧保存先・保持コピー・会議ツリー外の一時領域は対象外です。媒体上の安全消去は保証しません。</p><dl className="import-info"><dt>確認時のファイル</dt><dd>{p.fileCount} 件 · 実在容量 {bytesLabel(p.bytes)}</dd><dt>欠落・登録時と変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd><dt>確認時のDB行</dt><dd>{p.rowCount} 件</dd><dt>{p.phase === "reconfirmation" ? "現在の確認段階" : "保存済み段階"}</dt><dd>{deletionPhaseLabel(p.phase)}</dd><dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}（フォルダー・欠落を含み、消したファイル数ではありません）</dd></dl>
+      {p.pending && <p role="alert">途中まで削除している可能性があります。既に消したデータは復元しません。{p.phase === "reconfirmation" ? "この一覧は再同意前の確認です。再検査で確認IDが変わると、新しい範囲への同意をやり直します。" : "再検査は元の確認範囲を照合し、新しい未知物を自動採用しません。"}</p>}
+      {p.phase === "reconfirmation" && <p role="alert">以前の計画では {p.previousProcessedPaths} / {p.previousPathCount} パスを処理済みです。ここには現在残る新しい範囲を表示しています。元の同意と進捗を履歴として保持し、再同意後に新しい計画で続行します。処理済みデータの復元や未開始への巻き戻しではありません。</p>}
+      {p.reconfirmationAllowed && <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>変更後の残り範囲を確認する（まだ削除しない）</button>}
       {p.rowPhaseCommitted && <p>会議のDB行は削除済みです。残る後処理と完了応答を確認します。</p>}
       {p.resumeReason && <p role="alert">削除を進められません: {p.resumeReason}</p>}
       <h3>確認時の対象パス</h3>{c.pageBusy && <p role="status">一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
       {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {e.directory ? "フォルダー" : e.missing ? "欠落" : `${bytesLabel(e.bytes!)} · ${e.registered ? "登録済み" : "未登録"}${e.changed ? "・登録時と変更" : ""}`}{e.stageHint && ` · 由来候補 ${e.stageHint}（所有証明ではありません）`}</li>)}</ul></>}
       <div className="analysis-actions"><button type="button" className="small-secondary" disabled={c.pageBusy || !c.page || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))}>前の50件</button><button type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)}>次の50件</button>{c.pageError && <button type="button" className="small-secondary" onClick={() => void c.loadPage()}>一覧を再読込</button>}</div>
-      {p.unregisteredCount > 0 && ["review", "not_started"].includes(p.phase) && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={event => c.setIncludeUnknown(event.target.checked)} />確認時の一覧にある未登録ファイルも削除対象に含める。由来候補は所有証明ではないことを確認しました。</label>}
+      {p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation"].includes(p.phase) && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={event => c.setIncludeUnknown(event.target.checked)} />確認時の一覧にある未登録ファイルも削除対象に含める。由来候補は所有証明ではないことを確認しました。</label>}
       <label><input type="checkbox" checked={c.understood} disabled={!c.canResolve || !p.executeAllowed} onChange={event => c.setUnderstood(event.target.checked)} />対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。</label>
       </>}
-      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit(c.includeUnknown && p && ["review", "not_started"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{p?.pending ? "照合して残りの削除を続行" : "会議を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（未完了削除は残る）" : "削除せず閉じる"}</button></div>
+      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit(c.includeUnknown && p && ["review", "not_started", "reconfirmation"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{p?.phase === "reconfirmation" ? "新しい範囲へ再同意して削除を続行" : p?.pending ? "照合して残りの削除を続行" : "会議を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（未完了削除は残る）" : "削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ操作の安全な停止を要求</button></div>}
       {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
     </dialog>

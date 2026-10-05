@@ -187,6 +187,18 @@ impl Review {
     pub(super) fn manifest(&self) -> &Manifest {
         self.census.manifest()
     }
+    pub(super) fn verify_live(
+        &self,
+        storage: &Storage,
+        receipt: &removal::Receipt,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify(storage, &db, receipt, check)
+    }
     fn verify(
         &self,
         storage: &Storage,

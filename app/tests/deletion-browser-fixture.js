@@ -11,13 +11,13 @@ const idle = structuredClone(f.snapshot);
 const d = window.deletionFixture = {
   mode: "success", unknownCount: 0, fileCount: 1, blocked: false, restart: false, cold: false,
   listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null,
-  items: [], deleted: 0, kept: 0, complete: () => {}, last: null, closes: 0,
+  items: [], deleted: 0, kept: 0, reconfirmed: 0, complete: () => {}, last: null, closes: 0,
   prepareHold: false, closeHold: false, closeFail: false, quitFail: false, liveTokens: new Set(),
   mountPlayback: async () => { const { mountPlaybackHarness } = await import("./deletion-playback-browser-harness.tsx"); d.unmountPlayback = mountPlaybackHarness(f.meetings[0].id); },
   pending: async (phase = "not_started", changedContents = false) => {
     d.blocked = true; d.cold = true;
     const p = makePreview(f.meetings[0].id, phase);
-    if (changedContents) Object.assign(p, { executeAllowed: false, resumeReason: "新しい未知物を保持しています" });
+    if (changedContents) Object.assign(p, { executeAllowed: false, resumeReason: "新しい未知物を保持しています", reconfirmationAllowed: phase === "files" });
     d.pendingPreview = p;
     d.items = [{ operationId: p.operationId, state: phase === "database" ? "cleanup" : "prepared", meetingId: phase === "database" ? null : p.meetingId, errorCode: null }];
   },
@@ -26,7 +26,8 @@ const makePreview = (meetingId, phase = "review") => ({ confirmationId: crypto.r
   title: f.meetings.find(m => m.id === meetingId)?.title ?? `会議 ${meetingId}`, phase,
   pending: phase !== "review", executeAllowed: true, resumeReason: null, keepAllowed: phase === "not_started",
   pathCount: d.fileCount + 2, processedPaths: phase === "database" ? d.fileCount + 2 : 0, fileCount: d.fileCount,
-  missingCount: 0, changedCount: 0, unregisteredCount: d.unknownCount, bytes: 1024 * 1024, rowCount: 20, rowPhaseCommitted: false });
+  missingCount: 0, changedCount: 0, unregisteredCount: d.unknownCount, bytes: 1024 * 1024, rowCount: 20, rowPhaseCommitted: false,
+  reconfirmationAllowed: false, previousProcessedPaths: null, previousPathCount: null });
 mockIPC(async (command, args) => {
   if (["get_deletion_items", "review_meeting_deletion", "review_pending_deletion", "get_deletion_paths", "close_playback", "prepare_utterance_playback"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "deletion")) f.calls.push({ command, args: structuredClone(args) });
@@ -60,14 +61,20 @@ mockIPC(async (command, args) => {
   if (command === "start_data_operation" && f.snapshot.kind === "deletion") {
     const r = args.request, p = f.snapshot.deletionPreview;
     if (d.mode === "lostNoCommit") throw Error("模擬受付応答喪失・未受付");
-    if (JSON.stringify(r) === JSON.stringify(d.last) && (f.snapshot.busy || ["completed", "attention"].includes(f.snapshot.phase) || (r.action === "refresh" && f.snapshot.phase === "ready"))) return structuredClone(f.snapshot);
+    if (JSON.stringify(r) === JSON.stringify(d.last) && (f.snapshot.busy || ["completed", "attention"].includes(f.snapshot.phase) || (["refresh", "review_remaining"].includes(r.action) && f.snapshot.phase === "ready"))) return structuredClone(f.snapshot);
     if (!p || r.token !== f.snapshot.token || r.confirmationId !== p.confirmationId || f.snapshot.busy) throw Error("確認が変更されています");
     if (["publish", "delete_including_unregistered"].includes(r.action) && (!p.executeAllowed || f.snapshot.phase !== "ready")) throw Error("再検査が必要");
-    if (r.action === "publish" && p.unregisteredCount && ["review", "not_started"].includes(p.phase)) throw Error("未登録物の別判断が必要");
+    if (r.action === "publish" && p.unregisteredCount && ["review", "not_started", "reconfirmation"].includes(p.phase)) throw Error("未登録物の別判断が必要");
     d.last = structuredClone(r);
+    if (r.action === "review_remaining") {
+      if (!p.reconfirmationAllowed) throw Error("残り範囲を再同意できません");
+      d.reconfirmed++; d.mode = "success";
+      await f.changed({ phase: "ready", busy: false, attentionRequired: false, errorMessage: null, retryAllowed: true, deletionPreview: { ...p, confirmationId: crypto.randomUUID(), phase: "reconfirmation", previousProcessedPaths: p.processedPaths, previousPathCount: p.pathCount, pathCount: d.fileCount + 2, fileCount: d.fileCount, unregisteredCount: d.unknownCount, processedPaths: 0, reconfirmationAllowed: false, executeAllowed: true, resumeReason: null } });
+      return structuredClone(f.snapshot);
+    }
     if (r.action === "refresh") {
       if (d.mode === "stale") d.mode = "success";
-      await f.changed({ phase: "ready", busy: false, attentionRequired: false, errorMessage: null, retryAllowed: true, deletionPreview: { ...p, confirmationId: crypto.randomUUID(), executeAllowed: d.mode !== "unknown", resumeReason: d.mode === "unknown" ? "新しい未知物を保持しています" : null } });
+      await f.changed({ phase: "ready", busy: false, attentionRequired: false, errorMessage: null, retryAllowed: true, deletionPreview: { ...p, confirmationId: crypto.randomUUID(), executeAllowed: d.mode !== "unknown", reconfirmationAllowed: p.phase === "files" && d.mode === "unknown", resumeReason: d.mode === "unknown" ? "新しい未知物を保持しています" : null } });
       return structuredClone(f.snapshot);
     }
     if (d.mode === "forged") return { ...structuredClone(f.snapshot), revision: f.snapshot.revision + 1, phase: "completed", retryAllowed: false, deletionReceipt: { operationId: crypto.randomUUID(), meetingId: p.meetingId, deleted: true, retained: false, restartRequired: false } };
@@ -83,14 +90,14 @@ mockIPC(async (command, args) => {
     await f.changed({ phase: "deleting_files", busy: true, retryAllowed: false });
     d.complete = async () => {
       if (f.snapshot.phase === "cancelling" && d.mode !== "cancelRace" || d.mode === "partial") {
-        const saved = { ...p, phase: "files", pending: true, keepAllowed: false, processedPaths: 1, executeAllowed: false, resumeReason: "停止しました。残りを再検査してください" };
+        const saved = { ...p, phase: "files", pending: true, keepAllowed: false, processedPaths: 1, executeAllowed: false, reconfirmationAllowed: false, previousProcessedPaths: null, previousPathCount: null, resumeReason: "停止しました。残りを再検査してください" };
         d.pendingPreview = saved;
         await f.changed({ phase: "attention", busy: false, attentionRequired: true, deletionPreview: saved, errorMessage: "部分削除を保持します。復元していません" });
         return;
       }
       d.deleted++; d.items = []; d.restart = d.cold; d.blocked = d.restart;
       f.meetings = f.meetings.filter(m => m.id !== p.meetingId);
-      await f.changed({ phase: "completed", busy: false, restartRequired: d.restart, attentionRequired: false, errorMessage: null, deletionPreview: { ...p, phase: "completed", pending: false, executeAllowed: false, keepAllowed: false, processedPaths: p.pathCount, rowPhaseCommitted: true }, deletionReceipt: { operationId: p.operationId, meetingId: p.meetingId, deleted: true, retained: false, restartRequired: d.restart } });
+      await f.changed({ phase: "completed", busy: false, restartRequired: d.restart, attentionRequired: false, errorMessage: null, deletionPreview: { ...p, phase: "completed", pending: false, executeAllowed: false, keepAllowed: false, processedPaths: p.pathCount, rowPhaseCommitted: true, reconfirmationAllowed: false, previousProcessedPaths: null, previousPathCount: null }, deletionReceipt: { operationId: p.operationId, meetingId: p.meetingId, deleted: true, retained: false, restartRequired: d.restart } });
     };
     if (!["delay", "cancelRace"].includes(d.mode)) setTimeout(() => void d.complete(), 40);
     if (d.mode === "lost") throw Error("模擬削除応答喪失");

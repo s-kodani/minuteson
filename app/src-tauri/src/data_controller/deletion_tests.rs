@@ -1,5 +1,284 @@
 use super::*;
 
+fn remaining_fixture() -> (Fixture, Snapshot) {
+    let f = Fixture::new();
+    let ready = f.ready();
+    let (work, _, started) = f
+        .controller
+        .begin_request(f.request(&ready, Action::Publish))
+        .unwrap()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let paused = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+        if phase == "deleting_files" {
+            stop.store(true, Ordering::Release);
+        }
+    });
+    assert!(f.audio.exists());
+    std::fs::write(&f.audio, b"CHANGED REGISTERED AUDIO").unwrap();
+    let inspected = f.run(&paused, Action::Refresh);
+    assert!(
+        inspected
+            .deletion_preview
+            .as_ref()
+            .unwrap()
+            .reconfirmation_allowed
+    );
+    (f, inspected)
+}
+fn renewed_audits(f: &Fixture) -> i64 {
+    deletion::reconfirmation_count(&f.storage).unwrap()
+}
+
+#[test]
+fn deletion_reconfirmation_review_is_read_only_replayable_and_needs_new_unknown_decision() {
+    let (f, old) = remaining_fixture();
+    let unknown = f.audio.parent().unwrap().join("unknown.txt");
+    std::fs::write(&unknown, b"NEW UNREGISTERED FILE").unwrap();
+    let request = f.request(&old, Action::ReviewRemaining);
+    let (work, _, started) = f
+        .controller
+        .begin_request(request.clone())
+        .unwrap()
+        .unwrap();
+    assert!(f
+        .controller
+        .begin_request(request.clone())
+        .unwrap()
+        .is_none());
+    let reviewed = f.finish(work, &started, &|| false, &|_| {});
+    let p = reviewed.deletion_preview.as_ref().unwrap();
+    assert_eq!(p.phase, "reconfirmation");
+    assert!(p.execute_allowed && !p.keep_allowed && !p.reconfirmation_allowed);
+    assert_eq!(p.previous_processed_paths, Some(0));
+    assert_eq!(p.previous_path_count, Some(3));
+    assert_ne!(p.confirmation_id, request.confirmation_id);
+    assert_eq!(p.unregistered_count, 1);
+    assert_eq!(renewed_audits(&f), 0);
+    assert_eq!(std::fs::read(&unknown).unwrap(), b"NEW UNREGISTERED FILE");
+    assert_eq!(
+        std::fs::read(&f.audio).unwrap(),
+        b"CHANGED REGISTERED AUDIO"
+    );
+    assert!(f.controller.begin_request(request).unwrap().is_none());
+    assert!(f
+        .controller
+        .begin_request(f.request(&old, Action::Publish))
+        .is_err());
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Keep))
+        .is_err());
+    let done = f.run(&reviewed, Action::DeleteIncludingUnregistered);
+    assert_eq!(done.phase, "completed");
+    assert!(done.deletion_receipt.unwrap().deleted);
+    assert_eq!(renewed_audits(&f), 1);
+    assert!(!f.audio.exists() && !unknown.exists());
+    assert!(f.storage.get_meeting(&f.other).unwrap().is_some());
+}
+
+#[test]
+fn deletion_reconfirmation_changed_after_review_requires_new_id_and_never_adopts_new_bytes() {
+    let (f, old) = remaining_fixture();
+    let reviewed = f.run(&old, Action::ReviewRemaining);
+    std::fs::write(&f.audio, b"CHANGED AGAIN AFTER REVIEW").unwrap();
+    let failed = f.run(&reviewed, Action::Publish);
+    assert_eq!(failed.phase, "attention");
+    assert!(failed.deletion_receipt.is_none());
+    assert_eq!(renewed_audits(&f), 0);
+    assert_eq!(
+        std::fs::read(&f.audio).unwrap(),
+        b"CHANGED AGAIN AFTER REVIEW"
+    );
+    let next = f.run(&failed, Action::ReviewRemaining);
+    assert_ne!(
+        next.deletion_preview.as_ref().unwrap().confirmation_id,
+        reviewed.deletion_preview.as_ref().unwrap().confirmation_id
+    );
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Publish))
+        .is_err());
+    assert!(
+        f.run(&next, Action::Publish)
+            .deletion_receipt
+            .unwrap()
+            .deleted
+    );
+    assert_eq!(renewed_audits(&f), 1);
+}
+
+#[test]
+fn deletion_reconfirmation_inspection_without_real_lease_or_with_cancel_is_not_a_new_confirmation()
+{
+    for cancel in [false, true] {
+        let (f, old) = remaining_fixture();
+        let request = f.request(&old, Action::ReviewRemaining);
+        let (work, _, started) = f.controller.begin_request(request).unwrap().unwrap();
+        let failed = if cancel {
+            let stop = AtomicBool::new(false);
+            f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+                if phase == "verifying_delete_scope" {
+                    stop.store(true, Ordering::Release);
+                }
+            })
+        } else {
+            let done = work.run(&f.storage, &|| false, &|_| {});
+            f.controller
+                .finish(started.token.as_deref().unwrap(), done)
+                .unwrap()
+        };
+        assert_eq!(failed.phase, "attention");
+        assert_eq!(failed.deletion_preview.unwrap().phase, "files");
+        assert_eq!(renewed_audits(&f), 0);
+        assert_eq!(
+            std::fs::read(&f.audio).unwrap(),
+            b"CHANGED REGISTERED AUDIO"
+        );
+        assert!(f.storage.data_write_blocked());
+    }
+}
+
+#[test]
+fn deletion_reconfirmation_lost_execution_after_consent_does_not_record_consent_twice() {
+    let (f, old) = remaining_fixture();
+    let reviewed = f.run(&old, Action::ReviewRemaining);
+    let request = f.request(&reviewed, Action::Publish);
+    let (work, _, started) = f
+        .controller
+        .begin_request(request.clone())
+        .unwrap()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let paused = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+        if phase == "delete_scope_fixed" {
+            stop.store(true, Ordering::Release);
+        }
+    });
+    assert_eq!(paused.phase, "attention");
+    assert_eq!(paused.deletion_preview.as_ref().unwrap().phase, "files");
+    assert_eq!(renewed_audits(&f), 1);
+    assert!(f.audio.exists());
+    assert!(f.controller.begin_request(request).unwrap().is_none());
+    let refreshed = f.run(&paused, Action::Refresh);
+    assert!(refreshed.deletion_preview.as_ref().unwrap().execute_allowed);
+    assert!(
+        !refreshed
+            .deletion_preview
+            .as_ref()
+            .unwrap()
+            .reconfirmation_allowed
+    );
+    assert!(
+        f.run(&refreshed, Action::Publish)
+            .deletion_receipt
+            .unwrap()
+            .deleted
+    );
+    assert_eq!(renewed_audits(&f), 1);
+}
+
+#[test]
+fn deletion_reconfirmation_cold_resume_recovers_only_durable_consent_and_requires_restart() {
+    for consent_recorded in [false, true] {
+        let (f, old) = remaining_fixture();
+        let reviewed = f.run(&old, Action::ReviewRemaining);
+        let operation = reviewed
+            .deletion_preview
+            .as_ref()
+            .unwrap()
+            .operation_id
+            .clone();
+        if consent_recorded {
+            let (work, _, started) = f
+                .controller
+                .begin_request(f.request(&reviewed, Action::Publish))
+                .unwrap()
+                .unwrap();
+            let stop = AtomicBool::new(false);
+            let partial = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+                if phase == "delete_scope_fixed" {
+                    stop.store(true, Ordering::Release);
+                }
+            });
+            assert_eq!(partial.phase, "attention");
+        }
+        assert_eq!(renewed_audits(&f), i64::from(consent_recorded));
+        assert!(f.audio.exists());
+        drop(f.storage);
+        let storage = Storage::open(f._root.path().into()).unwrap();
+        let analysis = AnalysisController::default();
+        let controller = DataController::default();
+        let (started, _, previous) = controller.begin(Kind::Deletion).unwrap();
+        let lease = analysis
+            .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .unwrap();
+        let done = Work::Deletion(operation.clone(), true, previous).run_admitted(
+            &storage,
+            &|| false,
+            &|_| {},
+            Some(&lease),
+        );
+        let mut snapshot = controller
+            .finish(started.token.as_deref().unwrap(), done)
+            .unwrap();
+        drop(lease);
+        let p = snapshot.deletion_preview.as_ref().unwrap();
+        assert_eq!(p.phase, "files");
+        assert_eq!(p.execute_allowed, consent_recorded);
+        assert_eq!(p.reconfirmation_allowed, !consent_recorded);
+        assert_ne!(
+            p.confirmation_id,
+            reviewed.deletion_preview.as_ref().unwrap().confirmation_id
+        );
+        assert!(storage.data_write_blocked());
+        for action in [
+            if consent_recorded {
+                Action::Refresh
+            } else {
+                Action::ReviewRemaining
+            },
+            Action::Publish,
+        ] {
+            let request = Request {
+                token: snapshot.token.clone().unwrap(),
+                confirmation_id: snapshot
+                    .deletion_preview
+                    .as_ref()
+                    .unwrap()
+                    .confirmation_id
+                    .clone(),
+                action,
+            };
+            let (work, _, started) = controller.begin_request(request.clone()).unwrap().unwrap();
+            let lease = analysis
+                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .unwrap();
+            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            snapshot = controller
+                .finish(started.token.as_deref().unwrap(), done)
+                .unwrap();
+            if storage.restart_required() {
+                analysis.require_storage_restart();
+            }
+            assert!(analysis.begin_export().is_err());
+            assert!(storage.require_data_writable().is_err());
+            drop(lease);
+            assert!(controller.begin_request(request).unwrap().is_none());
+        }
+        let receipt = snapshot.deletion_receipt.unwrap();
+        assert!(receipt.deleted && receipt.restart_required);
+        assert_eq!(deletion::reconfirmation_count(&storage).unwrap(), 1);
+        assert!(!f.audio.exists());
+        assert!(storage.get_meeting(&f.other).unwrap().is_some());
+        drop(storage);
+        let clean = Storage::open(f._root.path().into()).unwrap();
+        assert!(!clean.data_write_blocked());
+        assert!(clean.get_meeting(&f.id).unwrap().is_none());
+        assert!(clean.get_meeting(&f.other).unwrap().is_some());
+    }
+}
+
 #[test]
 fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_ordinary_work_blocked(
 ) {

@@ -67,6 +67,7 @@ pub(crate) enum Action {
     Recover,
     Keep,
     DeleteIncludingUnregistered,
+    ReviewRemaining,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -222,7 +223,8 @@ impl DataController {
                 || s.snapshot.relocation_receipt.is_some()
                 || deletion_completed
                 || s.snapshot.attention_required
-                || (request.action == Action::Refresh && s.snapshot.phase == "ready"))
+                || (matches!(request.action, Action::Refresh | Action::ReviewRemaining)
+                    && s.snapshot.phase == "ready"))
         {
             return Ok(true);
         }
@@ -230,7 +232,8 @@ impl DataController {
         let deletion_resolution = matches!(
             (&s.selection, request.action),
             (Some(Selection::Deletion(_)), Action::Refresh)
-        ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed);
+        ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed)
+            || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
         #[cfg(not(unix))]
         let deletion_resolution = false;
         #[cfg(unix)]
@@ -273,12 +276,18 @@ impl DataController {
         let allowed = allowed
             || match (selection, request.action) {
                 (Selection::Deletion(_), Action::Refresh) => true,
+                (Selection::Deletion(p), Action::ReviewRemaining) => {
+                    p.preview().reconfirmation_allowed
+                }
                 (Selection::Deletion(p), Action::Keep) => p.preview().keep_allowed,
                 (Selection::Deletion(p), Action::Publish) => p.preview().execute_allowed,
                 (Selection::Deletion(p), Action::DeleteIncludingUnregistered) => {
                     let v = p.preview();
                     v.execute_allowed
-                        && matches!(v.phase.as_str(), "review" | "not_started")
+                        && matches!(
+                            v.phase.as_str(),
+                            "review" | "not_started" | "reconfirmation"
+                        )
                         && v.unregistered_count > 0
                 }
                 _ => false,
@@ -325,7 +334,7 @@ impl DataController {
         }
         let selection = s.selection.take().ok_or("確認済みの選択がありません")?;
         s.snapshot.busy = true;
-        s.snapshot.phase = if request.action == Action::Refresh {
+        s.snapshot.phase = if matches!(request.action, Action::Refresh | Action::ReviewRemaining) {
             "verifying"
         } else {
             "publishing"
