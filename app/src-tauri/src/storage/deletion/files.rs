@@ -360,6 +360,60 @@ fn inventory(
 }
 
 impl Census {
+    // A deleted meeting cannot be looked up as a fresh deletion scope. Require
+    // its canonical compound receipt, prove all original rows absent, and keep
+    // that original scope hash. Reappeared files have no resurrected ownership.
+    pub(super) fn capture_deleted_locked(
+        storage: &Storage,
+        db: &Connection,
+        prepared: &super::intent::Prepared,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        cancel(check)?;
+        super::intent::read_database(db, prepared.operation(), check)?.matches_saved(prepared)?;
+        if storage
+            .maintenance
+            .load(std::sync::atomic::Ordering::Acquire)
+            || storage.retired.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("削除済み範囲を確認する保存領域の状態が一致しません".into());
+        }
+        let scope = prepared.scope();
+        super::database::verify_rows_deleted(db, scope, check)?;
+        let (root, database) = storage.managed_anchor.identity()?;
+        if (root.clone(), database.clone())
+            != (
+                prepared.manifest().root.clone(),
+                prepared.manifest().database.clone(),
+            )
+        {
+            return Err("元の管理領域・DBの実体が一致しません".into());
+        }
+        let records = Records::read(db, &scope.meeting_id)?;
+        let directory = storage.managed_anchor.directory_ref()?;
+        let entries = inventory(directory, &scope.meeting_id, &records, check, None)?;
+        if inventory(directory, &scope.meeting_id, &records, check, None)? != entries {
+            return Err("削除済み範囲の再確認中に対象が変更されました".into());
+        }
+        super::database::verify_rows_deleted(db, scope, check)?;
+        super::intent::read_database(db, prepared.operation(), check)?.matches_saved(prepared)?;
+        if storage.managed_anchor.identity()? != (root.clone(), database.clone()) {
+            return Err("再確認中に管理領域・DBが変更されました".into());
+        }
+        let result = Self {
+            scope: scope.clone(),
+            manifest: Manifest {
+                version: 1,
+                database_scope_hash: scope.hash()?,
+                meeting_id: scope.meeting_id.clone(),
+                root,
+                database,
+                entries,
+            },
+        };
+        result.encode()?;
+        Ok(result)
+    }
     pub(super) fn capture(
         storage: &Storage,
         meeting: &str,

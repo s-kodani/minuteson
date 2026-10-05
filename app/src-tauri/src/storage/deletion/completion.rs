@@ -45,6 +45,47 @@ pub(super) struct Receipt {
     manifest: super::files::Manifest,
 }
 impl Receipt {
+    pub(super) fn review_census(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<super::files::Census, String> {
+        self.verify_saved(db, check)?;
+        let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))", params![self.confirmed.operation()], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if other {
+            return Err("別の未完了保守操作があります。対象を保持します".into());
+        }
+        self.progress.files.verify_root_reservation_absent(
+            storage,
+            &self.manifest,
+            &self.confirmed,
+        )?;
+        let census = if self.row_phase_committed() {
+            super::files::Census::capture_deleted_locked(storage, db, &self.confirmed, check)?
+        } else {
+            super::files::Census::capture_locked(
+                storage,
+                db,
+                &self.confirmed.scope().meeting_id,
+                self.confirmed.operation(),
+                check,
+            )?
+        };
+        if census.scope() != self.confirmed.scope()
+            || census.manifest().root != self.manifest.root
+            || census.manifest().database != self.manifest.database
+        {
+            return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
+        }
+        self.verify_saved(db, check)?;
+        self.progress.files.verify_root_reservation_absent(
+            storage,
+            &self.manifest,
+            &self.confirmed,
+        )?;
+        Ok(census)
+    }
     pub(super) fn confirmed(&self) -> &Prepared {
         &self.confirmed
     }
@@ -114,22 +155,16 @@ impl Receipt {
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        self.verify_saved(db, check)?;
-        storage.managed_anchor.verify()?;
-        let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))", params![self.confirmed.operation()], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if other {
-            return Err("別の未完了保守操作があります。DB削除を続行しません".into());
+        let census = self.review_census(storage, db, check)?;
+        if census
+            .manifest()
+            .entries
+            .iter()
+            .any(|entry| entry.proof.is_some())
+        {
+            return Err("削除済み範囲にファイル・フォルダーが再出現しています。削除せず現在の対象を保持します".into());
         }
-        if self.progress.database_phase == Phase::RowsPending {
-            self.progress
-                .files
-                .verify_remaining(storage, db, &self.confirmed, check)
-        } else {
-            self.progress
-                .files
-                .verify_absent(storage, db, &self.confirmed)?;
-            database::verify_rows_deleted(db, self.confirmed.scope(), check)
-        }
+        Ok(())
     }
 }
 pub(super) fn read(

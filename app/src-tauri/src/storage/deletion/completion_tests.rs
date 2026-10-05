@@ -2,6 +2,267 @@ use super::super::{files::Census, tests::Fixture as DatabaseFixture};
 use super::*;
 use std::{cell::Cell, path::PathBuf};
 
+fn at_database_phase(f: &Fixture, phase: Phase) -> Receipt {
+    let mut receipt = f.begin();
+    match phase {
+        Phase::RowsPending => {}
+        Phase::RowsDeleted => {
+            let stop = Cell::new(false);
+            assert!(
+                run_inner(&f.f.storage, &mut receipt, &|| stop.get(), &|event| {
+                    if event == "rowsCommitted" {
+                        stop.set(true);
+                    }
+                })
+                .is_err()
+            );
+            assert_eq!(receipt.progress.database_phase, Phase::RowsDeleted);
+        }
+        Phase::Finished => run(&f.f.storage, &mut receipt, &|| false).unwrap(),
+    }
+    receipt
+}
+
+#[test]
+fn compound_current_census_keeps_original_scope_and_never_resurrects_deleted_asset_ownership() {
+    for phase in [Phase::RowsPending, Phase::RowsDeleted, Phase::Finished] {
+        let f = Fixture::new();
+        let receipt = at_database_phase(&f, phase.clone());
+        std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+        std::fs::write(&f.file, b"REAPPEARED CURRENT AUDIO").unwrap();
+        let db = f.f.storage.connection.lock().unwrap();
+        let saved = || {
+            db.query_row("SELECT target_manifest_json,target_hash,consent_at,progress_json,updated_at FROM maintenance_operations WHERE id=?1", params![f.operation], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?))).unwrap()
+        };
+        let before = saved();
+        let census = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+        assert_eq!(census.scope(), receipt.confirmed.scope());
+        assert_eq!(
+            census.manifest().database_scope_hash,
+            receipt.confirmed.scope().hash().unwrap()
+        );
+        let path = f
+            .file
+            .strip_prefix(f.f.storage.root())
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let entry = census
+            .manifest()
+            .entries
+            .iter()
+            .find(|e| e.path == path)
+            .unwrap();
+        assert!(entry.proof.is_some());
+        assert_eq!(entry.registered.is_some(), phase == Phase::RowsPending);
+        assert_eq!(
+            removal::Reviewed::confirm(&census, false).is_ok(),
+            phase == Phase::RowsPending
+        );
+        removal::Reviewed::confirm(&census, true).unwrap();
+        assert_eq!(saved(), before);
+        assert!(receipt.verify_live(&f.f.storage, &db, &|| false).is_err());
+        drop(db);
+        assert_eq!(std::fs::read(&f.file).unwrap(), b"REAPPEARED CURRENT AUDIO");
+        assert_eq!(
+            f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some(),
+            phase == Phase::RowsPending
+        );
+        f.unaffected();
+    }
+}
+
+#[test]
+fn compound_current_census_rejects_changed_rows_and_recreated_deleted_meeting_without_adoption() {
+    for committed in [false, true] {
+        let f = Fixture::new();
+        let receipt = at_database_phase(
+            &f,
+            if committed {
+                Phase::RowsDeleted
+            } else {
+                Phase::RowsPending
+            },
+        );
+        let db = f.f.storage.connection.lock().unwrap();
+        {
+            let _writer =
+                super::super::fence::write_completion(&f.f.storage, &db, &receipt, &|| false)
+                    .unwrap();
+            if committed {
+                db.execute("INSERT INTO meetings(id,title,lifecycle,source_type,created_at,updated_at,lock_version) VALUES(?1,'RECREATED','draft','recording',0,0,0)", params![f.f.meeting]).unwrap();
+            } else {
+                db.execute(
+                    "UPDATE meetings SET title='CHANGED DB SCOPE' WHERE id=?1",
+                    params![f.f.meeting],
+                )
+                .unwrap();
+            }
+        }
+        assert!(receipt.review_census(&f.f.storage, &db, &|| false).is_err());
+        let title: String = db
+            .query_row(
+                "SELECT title FROM meetings WHERE id=?1",
+                params![f.f.meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            title,
+            if committed {
+                "RECREATED"
+            } else {
+                "CHANGED DB SCOPE"
+            }
+        );
+        drop(db);
+        f.unaffected();
+    }
+}
+
+#[test]
+fn compound_current_census_retains_reserved_root_and_external_symlink_without_following_them() {
+    for reserved in [false, true] {
+        let f = Fixture::new();
+        let receipt = at_database_phase(&f, Phase::RowsDeleted);
+        let target = if reserved {
+            let index = receipt
+                .manifest
+                .entries
+                .iter()
+                .rev()
+                .position(|e| e.path == format!("meetings/{}", f.f.meeting))
+                .unwrap();
+            let path =
+                f.f.storage
+                    .root()
+                    .join(format!("meetings/.mon-delete-{}-{index}", f.operation));
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("unknown"), b"KEEP RESERVED CONTENT").unwrap();
+            path
+        } else {
+            let path = f.f.storage.root().join(format!("meetings/{}", f.f.meeting));
+            std::os::unix::fs::symlink(f.outside.path(), &path).unwrap();
+            path
+        };
+        let db = f.f.storage.connection.lock().unwrap();
+        assert!(receipt.review_census(&f.f.storage, &db, &|| false).is_err());
+        drop(db);
+        assert!(std::fs::symlink_metadata(&target).is_ok());
+        if reserved {
+            assert_eq!(
+                std::fs::read(target.join("unknown")).unwrap(),
+                b"KEEP RESERVED CONTENT"
+            );
+        }
+        f.unaffected();
+    }
+}
+
+#[test]
+fn compound_current_census_rejects_root_reservation_created_during_final_saved_verification() {
+    let f = Fixture::new();
+    let receipt = at_database_phase(&f, Phase::RowsDeleted);
+    let index = receipt
+        .manifest
+        .entries
+        .iter()
+        .rev()
+        .position(|e| e.path == format!("meetings/{}", f.f.meeting))
+        .unwrap();
+    let reserved =
+        f.f.storage
+            .root()
+            .join(format!("meetings/.mon-delete-{}-{index}", f.operation));
+    let db = f.f.storage.connection.lock().unwrap();
+    let calls = Cell::new(0usize);
+    receipt
+        .review_census(&f.f.storage, &db, &|| {
+            calls.set(calls.get() + 1);
+            false
+        })
+        .unwrap();
+    let total = calls.replace(0);
+    assert!(total > 1);
+    assert!(receipt
+        .review_census(&f.f.storage, &db, &|| {
+            calls.set(calls.get() + 1);
+            if calls.get() == total {
+                std::fs::create_dir(&reserved).unwrap();
+                std::fs::write(reserved.join("unknown"), b"KEEP LATE RESERVATION").unwrap();
+            }
+            false
+        })
+        .is_err());
+    assert_eq!(calls.get(), total);
+    drop(db);
+    assert_eq!(
+        std::fs::read(reserved.join("unknown")).unwrap(),
+        b"KEEP LATE RESERVATION"
+    );
+    assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
+    f.unaffected();
+}
+
+#[test]
+fn compound_current_census_cancellation_is_read_only_and_changed_second_inventory_is_not_old_consent(
+) {
+    let f = Fixture::new();
+    let receipt = at_database_phase(&f, Phase::RowsDeleted);
+    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+    std::fs::write(&f.file, b"FIRST CURRENT CONTENT").unwrap();
+    let db = f.f.storage.connection.lock().unwrap();
+    assert!(receipt.review_census(&f.f.storage, &db, &|| true).is_err());
+    let first = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+    std::fs::write(&f.file, b"SECOND CURRENT CONTENT").unwrap();
+    let second = receipt.review_census(&f.f.storage, &db, &|| false).unwrap();
+    assert_ne!(first.manifest(), second.manifest());
+    assert_eq!(first.scope(), second.scope());
+    assert!(receipt.verify_live(&f.f.storage, &db, &|| false).is_err());
+    drop(db);
+    assert_eq!(std::fs::read(&f.file).unwrap(), b"SECOND CURRENT CONTENT");
+    assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
+    f.unaffected();
+}
+
+#[test]
+fn compound_current_census_after_cold_row_commit_keeps_absent_rows_and_original_receipt() {
+    let f = Fixture::new();
+    let original = at_database_phase(&f, Phase::RowsDeleted);
+    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+    std::fs::write(&f.file, b"KEEP COLD CURRENT CONTENT").unwrap();
+    let operation = f.operation.clone();
+    let path = f.f.storage.root().to_path_buf();
+    let meeting = f.f.meeting.clone();
+    let other = f.f.other.clone();
+    drop(f.f.storage);
+    let storage = Storage::open(path).unwrap();
+    assert!(storage.data_write_blocked());
+    let receipt = read(&storage, &operation, &|| false).unwrap();
+    original
+        .confirmed
+        .matches_saved(&receipt.confirmed)
+        .unwrap();
+    assert_eq!(original.progress, receipt.progress);
+    let db = storage.connection.lock().unwrap();
+    let census = receipt.review_census(&storage, &db, &|| false).unwrap();
+    assert!(census
+        .manifest()
+        .entries
+        .iter()
+        .filter(|e| !e.directory)
+        .all(|e| e.registered.is_none()));
+    assert!(receipt.verify_live(&storage, &db, &|| false).is_err());
+    drop(db);
+    assert!(storage.require_data_writable().is_err());
+    assert!(storage.get_meeting(&meeting).unwrap().is_none());
+    assert!(storage.get_meeting(&other).unwrap().is_some());
+    assert_eq!(
+        std::fs::read(&f.file).unwrap(),
+        b"KEEP COLD CURRENT CONTENT"
+    );
+}
+
 fn assert_free_pages_zero(bytes: &[u8]) {
     let read_u32 = |bytes: &[u8]| u32::from_be_bytes(bytes.try_into().unwrap());
     let page_size = match u16::from_be_bytes(bytes[16..18].try_into().unwrap()) {

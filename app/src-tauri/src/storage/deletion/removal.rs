@@ -223,6 +223,32 @@ impl Progress {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Finished(Progress);
 impl Finished {
+    pub(super) fn verify_root_reservation_absent(
+        &self,
+        storage: &Storage,
+        manifest: &Manifest,
+        confirmed: &Prepared,
+    ) -> Result<(), String> {
+        let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? else {
+            return Ok(());
+        };
+        if let Some(index) = manifest
+            .entries
+            .iter()
+            .rev()
+            .position(|e| e.path == format!("meetings/{}", manifest.meeting_id))
+        {
+            if meetings
+                .optional_kind(&self.0.reserved(confirmed.operation(), index))?
+                .is_some()
+            {
+                return Err(
+                    "会議フォルダーの削除予約対象が残っています。別の範囲へ移らず保持します".into(),
+                );
+            }
+        }
+        Ok(())
+    }
     pub(super) fn manifest(
         &self,
         db: &Connection,
@@ -234,25 +260,6 @@ impl Finished {
             return Err("ファイル段階の完了を確認できません".into());
         }
         Ok(manifest)
-    }
-    pub(super) fn verify_remaining(
-        &self,
-        storage: &Storage,
-        db: &Connection,
-        confirmed: &Prepared,
-        check: &impl Fn() -> bool,
-    ) -> Result<(), String> {
-        let manifest = self.manifest(db, confirmed, check)?;
-        verify_remaining(
-            storage,
-            db,
-            &Receipt {
-                confirmed: confirmed.clone(),
-                progress: self.0.clone(),
-                manifest,
-            },
-            check,
-        )
     }
     pub(super) fn verify_absent(
         &self,
