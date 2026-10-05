@@ -273,7 +273,7 @@ function MainWindow() {
             if(!meeting)throw Error("保存した会議が見つかりません。");
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
-          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語とAIモデルの検査・配置・CPU互換性確認を利用できます。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} /><ModelInspectionPanel locked={navigationBusy} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
+          {screen === "settings" ? <><h1>設定</h1><p className="lead">共通用語とAIモデルの検査・配置・CPU互換性確認、標準／高精度へのモデル選択を利用できます。その他の全体設定は今後接続します。</p><VocabularyEditor locked={navigationBusy} /><ModelInspectionPanel locked={navigationBusy} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>会議の記録を、手元で。</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>

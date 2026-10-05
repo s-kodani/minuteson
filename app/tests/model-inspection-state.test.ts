@@ -31,7 +31,7 @@ test("placement is not readiness and its response must bind operation and review
 const entry: ModelPlacementEntry = { packageId: "11111111-1111-4111-8111-111111111111", modelName: "fixture", modelVersion: "1", engine: "llama.cpp", engineVersion: "declared only", totalBytes: 100, placementRecorded: true, ready: false, reviewHash: "a".repeat(64) };
 const summary: ModelCompatibilitySummary = { operationId: "22222222-2222-4222-8222-222222222222", packageId: entry.packageId, reviewHash: entry.reviewHash, adapterRevision: 1, state: "succeeded", errorMessage: null };
 test("a fixed CPU smoke result remains unapplied and all interrupted states require explicit action", () => {
-  assert.match(placementLabel({ ...entry, compatibility: summary }), /CPU互換性確認済み・プロファイル未適用/);
+  assert.match(placementLabel({ ...entry, compatibility: summary }), /CPU互換性確認済み（適用状態は構成記録を参照）/);
   for (const state of ["preparing", "failed", "cancelled", "interrupted"] as const) {
     const compatibility = { ...summary, state, errorMessage: state === "preparing" ? null : "fixture reason" };
     assert.doesNotThrow(() => placementLabel({ ...entry, compatibility }));

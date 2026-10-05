@@ -65,9 +65,9 @@ export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecord
     validateCompatibility(entry.compatibility);
     if (!entry.placementRecorded || entry.compatibility.packageId !== entry.packageId || entry.compatibility.reviewHash !== entry.reviewHash) throw Error("配置と互換性の記録が一致しません。");
     switch (entry.compatibility.state) {
-      case "preparing": return "互換性確認中・プロファイル未適用";
-      case "succeeded": return "CPU互換性確認済み・プロファイル未適用";
-      case "failed": return "互換性確認失敗・プロファイル未適用";
+      case "preparing": return "互換性確認中";
+      case "succeeded": return "CPU互換性確認済み（適用状態は構成記録を参照）";
+      case "failed": return "互換性確認失敗";
       case "cancelled": return "互換性確認取消・明示的な再確認が必要";
       case "interrupted": return "前回の互換性確認が中断・明示的な再確認が必要";
     }
