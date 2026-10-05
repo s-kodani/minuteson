@@ -130,6 +130,10 @@ pub struct Storage {
 }
 
 impl Storage {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.

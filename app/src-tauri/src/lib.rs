@@ -2,6 +2,8 @@ mod analysis_flow;
 mod analysis_worker;
 mod audio;
 mod audio_import;
+#[cfg(target_os = "macos")]
+mod bootstrap;
 mod data_controller;
 mod diarization;
 mod exports;
@@ -382,6 +384,15 @@ fn data_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
 #[tauri::command]
 fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
     data_app(&window)?.state::<DataController>().snapshot()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<bootstrap::Bootstrap>().view())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1524,6 +1535,15 @@ pub fn run() {
         .manage(exports::ExportController::default())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
+            #[cfg(target_os = "macos")]
+            {
+                let selection = bootstrap::Bootstrap::open(&app.path().app_config_dir()?, &root)?;
+                let storage = Storage::open(selection.root().to_path_buf())?;
+                selection.initialize(&storage)?;
+                app.manage(storage);
+                app.manage(selection);
+            }
+            #[cfg(not(target_os = "macos"))]
             app.manage(Storage::open(root)?);
             ImportController::recover(app.handle())?;
             let handle = app.handle().clone();
@@ -1559,6 +1579,8 @@ pub fn run() {
             start_audio_import,
             cancel_audio_import,
             get_data_operation,
+            #[cfg(target_os = "macos")]
+            get_storage_bootstrap,
             get_recovery_items,
             review_recovery_item,
             get_data_operation_availability,
