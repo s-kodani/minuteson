@@ -447,6 +447,19 @@ pub(super) fn read(
     read_locked(&db, operation, check)
 }
 
+pub(super) fn read_keepable(
+    storage: &Storage,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    storage.managed_anchor.verify()?;
+    read_state(&db, operation, ReadMode::Kept, check)
+}
+
 // Only a freshly verified in-memory Census may fix confirmation observations.
 // The eventual controller must establish explicit user consent and exclusive
 // admission before calling this. This helper itself exposes no IPC or unlink.

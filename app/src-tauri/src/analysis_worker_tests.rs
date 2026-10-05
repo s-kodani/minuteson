@@ -2,6 +2,47 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn deletion_lease_proof_requires_current_ownership_and_stays_cancelled_after_aborted_exit() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(lease.validate_active().is_ok());
+    controller.begin_exit().unwrap();
+    assert!(lease.validate_active().is_err());
+    controller.abort_shutdown();
+    assert!(lease.validate_active().is_err());
+    assert!(controller.begin_export().is_err());
+    drop(lease);
+    let next = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(next.validate_active().is_ok());
+}
+
+#[test]
+fn deletion_lease_proof_rejects_lost_ownership_without_clearing_another_owner() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let other = Arc::new(AtomicBool::new(false));
+    controller.state.lock().unwrap().data_maintenance = Some(other.clone());
+    assert!(lease.validate_active().is_err());
+    drop(lease);
+    assert!(Arc::ptr_eq(
+        controller
+            .state
+            .lock()
+            .unwrap()
+            .data_maintenance
+            .as_ref()
+            .unwrap(),
+        &other
+    ));
+}
+
+#[test]
 fn storage_restart_fence_survives_temporary_lease_release_and_aborted_exit() {
     let controller = AnalysisController::default();
     let lease = controller

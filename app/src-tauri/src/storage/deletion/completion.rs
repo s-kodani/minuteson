@@ -44,6 +44,23 @@ pub(super) struct Receipt {
     progress: Progress,
 }
 impl Receipt {
+    pub(super) fn confirmed(&self) -> &Prepared {
+        &self.confirmed
+    }
+    pub(super) fn verify_resume(
+        &self,
+        storage: &Storage,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify_live(storage, &db, check)
+    }
+    pub(super) fn row_phase_committed(&self) -> bool {
+        self.progress.database_phase != Phase::RowsPending
+    }
     fn load(db: &Connection, operation: &str, check: &impl Fn() -> bool) -> Result<Self, String> {
         let confirmed = intent::read_database(db, operation, check)?;
         let (json, state, meeting): (String, String, Option<String>) = db

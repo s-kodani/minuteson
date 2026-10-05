@@ -1,0 +1,401 @@
+use super::*;
+fn lease() -> crate::analysis_worker::data_maintenance::DataMaintenanceLease {
+    crate::analysis_worker::AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap()
+}
+use std::{cell::Cell, path::PathBuf};
+struct Fixture {
+    _root: tempfile::TempDir,
+    storage: Storage,
+    meeting: String,
+    other: String,
+    audio: PathBuf,
+}
+impl Fixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let meeting = storage.create_meeting("削除対象").unwrap().id;
+        let other = storage.create_meeting("保持対象").unwrap().id;
+        let audio = storage
+            .root()
+            .join(format!("meetings/{meeting}/audio/source.flac"));
+        std::fs::create_dir_all(audio.parent().unwrap()).unwrap();
+        std::fs::write(&audio, b"TARGET").unwrap();
+        storage
+            .register_ready_meeting_asset(
+                &meeting,
+                audio.strip_prefix(storage.root()).unwrap(),
+                "audio/flac",
+            )
+            .unwrap();
+        Self {
+            _root: root,
+            storage,
+            meeting,
+            other,
+            audio,
+        }
+    }
+    fn prepared(&self) -> Prepared {
+        Prepared::fresh(&self.storage, &self.meeting, &|| false).unwrap()
+    }
+    fn pending(&self) -> Prepared {
+        let p = self.prepared();
+        let Target::Fresh(c) = &p.target else {
+            unreachable!()
+        };
+        intent::prepare(&self.storage, &p.preview.operation_id, c, &|| false).unwrap();
+        Prepared::pending(&self.storage, &p.preview.operation_id, &|| false).unwrap()
+    }
+    fn unaffected(&self) {
+        assert!(self.storage.get_meeting(&self.other).unwrap().is_some());
+    }
+}
+#[test]
+fn deletion_review_is_read_only_and_wrong_confirmation_never_writes_or_removes() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    assert!(p.preview.execute_allowed);
+    assert_eq!(p.preview.title, "削除対象");
+    assert_eq!(p.preview.file_count, 1);
+    assert_eq!(p.preview.bytes, 6);
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    assert!(p
+        .execute(&f.storage, &lease(), "wrong", false, &|| false, &|_| {})
+        .is_err());
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    assert!(f.audio.exists());
+    f.unaffected();
+}
+#[test]
+fn deletion_confirmed_pipeline_only_acknowledges_after_files_rows_and_wal_complete() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    let r = p
+        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .unwrap();
+    assert!(r.deleted && !r.retained && !r.restart_required);
+    assert!(!f.audio.exists());
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
+    assert!(!f.storage.data_write_blocked());
+    f.unaffected();
+    let mut replay = Prepared::pending(&f.storage, &r.operation_id, &|| false).unwrap();
+    assert_eq!(replay.preview.phase, "awaiting_ack");
+    let id = replay.preview.confirmation_id.clone();
+    assert!(
+        replay
+            .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+            .unwrap()
+            .deleted
+    );
+}
+#[test]
+fn deletion_unregistered_contents_require_separate_explicit_decision_before_any_intent() {
+    let f = Fixture::new();
+    let unknown = f.audio.parent().unwrap().join("unknown.txt");
+    std::fs::write(&unknown, b"UNKNOWN").unwrap();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    assert_eq!(p.preview.unregistered_count, 1);
+    assert!(p
+        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .is_err());
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    assert!(unknown.exists() && f.audio.exists());
+    p.refresh(&f.storage, &|| false).unwrap();
+    let id = p.preview.confirmation_id.clone();
+    p.execute(&f.storage, &lease(), &id, true, &|| false, &|_| {})
+        .unwrap();
+    assert!(!unknown.exists());
+    f.unaffected();
+}
+#[test]
+fn deletion_changed_scope_requires_new_review_and_rejects_old_confirmation() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let old = p.preview.confirmation_id.clone();
+    let op = p.preview.operation_id.clone();
+    let meeting = f.storage.get_meeting(&f.meeting).unwrap().unwrap();
+    f.storage
+        .rename_meeting(&f.meeting, "変更後", meeting.lock_version)
+        .unwrap();
+    assert!(p
+        .execute(&f.storage, &lease(), &old, false, &|| false, &|_| {})
+        .is_err());
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    p.refresh(&f.storage, &|| false).unwrap();
+    assert_eq!(p.preview.operation_id, op);
+    assert_eq!(p.preview.title, "変更後");
+    assert_ne!(p.preview.confirmation_id, old);
+    assert!(p
+        .execute(&f.storage, &lease(), &old, false, &|| false, &|_| {})
+        .is_err());
+    let id = p.preview.confirmation_id.clone();
+    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .unwrap();
+    f.unaffected();
+}
+#[test]
+fn deletion_path_pages_are_bounded_metadata_and_reject_stale_or_unaligned_offsets() {
+    let f = Fixture::new();
+    for n in 0..105 {
+        std::fs::write(
+            f.audio.parent().unwrap().join(format!("unknown-{n:03}")),
+            b"PRIVATE BODY",
+        )
+        .unwrap();
+    }
+    let p = f.prepared();
+    let id = &p.preview.confirmation_id;
+    let first = p.page(id, 0).unwrap();
+    assert_eq!(first.entries.len(), 50);
+    assert_eq!(first.next_offset, Some(50));
+    assert_eq!(p.page(id, 50).unwrap().entries.len(), 50);
+    assert!(p.page(id, 100).unwrap().entries.len() < 50);
+    assert!(p.page("wrong", 0).is_err());
+    assert!(p.page(id, 1).is_err());
+    assert!(p.page(id, 150).is_err());
+    assert!(!serde_json::to_string(&first)
+        .unwrap()
+        .contains("PRIVATE BODY"));
+}
+#[test]
+fn deletion_cancel_before_confirmation_persists_nothing() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    assert!(p
+        .execute(&f.storage, &lease(), &id, false, &|| true, &|_| {})
+        .is_err());
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    assert!(f.audio.exists());
+}
+#[test]
+fn deletion_cancel_after_start_reloads_durable_progress_and_requires_explicit_refresh() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    let stop = Cell::new(false);
+    assert!(p
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "deleting_files" {
+                stop.set(true)
+            }
+        )
+        .is_err());
+    assert!(p.preview.pending && !p.preview.execute_allowed && !p.preview.keep_allowed);
+    assert!(f.audio.exists());
+    assert!(f.storage.data_write_blocked());
+    assert!(p
+        .keep(
+            &f.storage,
+            &lease(),
+            &p.preview.confirmation_id.clone(),
+            &|| false
+        )
+        .is_err());
+    p.refresh(&f.storage, &|| false).unwrap();
+    assert!(p.preview.execute_allowed);
+    let id = p.preview.confirmation_id.clone();
+    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .unwrap();
+    f.unaffected();
+}
+#[test]
+fn deletion_cancel_at_database_handoff_reports_partial_files_and_resumes_original_scope() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    let stop = Cell::new(false);
+    assert!(p
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "deleting_database" {
+                stop.set(true)
+            }
+        )
+        .is_err());
+    assert!(!f.audio.exists());
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
+    assert_eq!(p.preview.phase, "database");
+    assert_eq!(p.preview.processed_paths, p.preview.path_count);
+    assert!(!p.preview.row_phase_committed);
+    p.refresh(&f.storage, &|| false).unwrap();
+    let id = p.preview.confirmation_id.clone();
+    p.execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .unwrap();
+    f.unaffected();
+}
+#[test]
+fn deletion_unstarted_keep_preserves_changed_contents_and_replays_without_claiming_restore() {
+    let f = Fixture::new();
+    let mut p = f.pending();
+    std::fs::write(&f.audio, b"KEEP CHANGED").unwrap();
+    p.refresh(&f.storage, &|| false).unwrap();
+    assert!(!p.preview.execute_allowed && p.preview.keep_allowed);
+    let id = p.preview.confirmation_id.clone();
+    let r = p.keep(&f.storage, &lease(), &id, &|| false).unwrap();
+    assert!(r.retained && !r.deleted);
+    assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP CHANGED");
+    assert!(
+        p.keep(&f.storage, &lease(), &id, &|| false)
+            .unwrap()
+            .retained
+    );
+    assert!(!f.storage.data_write_blocked());
+    f.unaffected();
+}
+#[test]
+fn deletion_cold_pending_review_skips_recovery_and_requires_restart_after_resolution() {
+    let f = Fixture::new();
+    let p = f.pending();
+    let op = p.preview.operation_id;
+    let root = f.storage.root().to_path_buf();
+    let audio = f.audio.clone();
+    drop(f.storage);
+    let storage = Storage::open(root.clone()).unwrap();
+    assert!(storage.data_write_blocked());
+    let mut p = Prepared::pending(&storage, &op, &|| false).unwrap();
+    let id = p.preview.confirmation_id.clone();
+    let r = p.keep(&storage, &lease(), &id, &|| false).unwrap();
+    assert!(r.restart_required);
+    assert!(storage.data_write_blocked());
+    assert!(audio.exists());
+    drop(storage);
+    let storage = Storage::open(root).unwrap();
+    assert!(!storage.data_write_blocked());
+    assert!(audio.exists());
+}
+#[test]
+fn deletion_partial_changed_contents_remain_visible_but_are_never_automatically_adopted() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    let stop = Cell::new(false);
+    assert!(p
+        .execute(
+            &f.storage,
+            &lease(),
+            &id,
+            false,
+            &|| stop.get(),
+            &|phase| if phase == "deleting_database" {
+                stop.set(true)
+            }
+        )
+        .is_err());
+    std::fs::create_dir_all(f.audio.parent().unwrap()).unwrap();
+    std::fs::write(&f.audio, b"KEEP NEW").unwrap();
+    p.refresh(&f.storage, &|| false).unwrap();
+    assert!(!p.preview.execute_allowed && !p.preview.keep_allowed);
+    assert!(p.preview.resume_reason.is_some());
+    let id = p.preview.confirmation_id.clone();
+    assert!(p
+        .execute(&f.storage, &lease(), &id, false, &|| false, &|_| {})
+        .is_err());
+    assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP NEW");
+}
+#[test]
+fn deletion_wrong_kind_corrupt_receipt_and_other_pending_operation_never_grant_admission() {
+    let f = Fixture::new();
+    let p = f.pending();
+    let id = p.preview.operation_id;
+    assert!(authorize_review(&f.storage, None).is_err());
+    assert!(authorize_review(&f.storage, Some("bad")).is_err());
+    assert!(authorize_review(&f.storage, Some(&id)).is_ok());
+    let db = f.storage.connection.lock().unwrap();
+    let Target::Unstarted(ref saved) = p.target else {
+        unreachable!()
+    };
+    let _writer = super::super::fence::write_prepared(&f.storage, &db, saved, &|| false).unwrap();
+    db.execute(
+        "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
+        params![id],
+    )
+    .unwrap();
+    drop(_writer);
+    drop(db);
+    assert!(authorize_review(&f.storage, Some(&id)).is_err());
+    assert!(f.audio.exists());
+}
+
+#[test]
+fn deletion_other_pending_kind_is_not_a_deletion_admission_or_silently_ignored() {
+    let f = Fixture::new();
+    let p = f.pending();
+    let other = Uuid::new_v4().to_string();
+    let db = f.storage.connection.lock().unwrap();
+    let Target::Unstarted(ref saved) = p.target else {
+        unreachable!()
+    };
+    let writer = super::super::fence::write_prepared(&f.storage, &db, saved, &|| false).unwrap();
+    db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![other,f.other,"0".repeat(64)]).unwrap();
+    drop(writer);
+    drop(db);
+    assert!(authorize_review(&f.storage, Some(&other)).is_err());
+    assert!(authorize_review(&f.storage, Some(&p.preview.operation_id)).is_err());
+    assert!(f.audio.exists());
+    f.unaffected();
+}
+
+#[test]
+fn deletion_actual_lease_cancellation_stops_even_when_caller_check_ignores_it() {
+    let f = Fixture::new();
+    let mut p = f.prepared();
+    let id = p.preview.confirmation_id.clone();
+    let analysis = crate::analysis_worker::AnalysisController::default();
+    let lease = analysis
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(p
+        .execute(&f.storage, &lease, &id, false, &|| false, &|phase| if phase
+            == "delete_scope_fixed"
+        {
+            analysis.begin_exit().unwrap()
+        })
+        .is_err());
+    assert!(p.preview.pending && p.preview.keep_allowed);
+    assert_eq!(p.preview.phase, "not_started");
+    assert!(f.audio.exists());
+    assert!(lease.validate_active().is_err());
+    assert!(analysis.begin_export().is_err());
+    f.unaffected();
+}
+
+#[test]
+fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() {
+    let f = Fixture::new();
+    let p = f.pending();
+    let destination = tempfile::tempdir().unwrap();
+    let mut copy = rusqlite::Connection::open(destination.path().join("meetings.sqlite3")).unwrap();
+    {
+        let db = f.storage.connection.lock().unwrap();
+        rusqlite::backup::Backup::new(&db, &mut copy)
+            .unwrap()
+            .run_to_completion(32, std::time::Duration::from_millis(1), None)
+            .unwrap();
+    }
+    drop(copy);
+    let copied = Storage::open(destination.path().into()).unwrap();
+    assert!(copied.data_write_blocked());
+    assert!(authorize_review(&copied, Some(&p.preview.operation_id)).is_err());
+    assert!(Prepared::pending(&copied, &p.preview.operation_id, &|| false).is_err());
+    let mut original = p;
+    let id = original.preview.confirmation_id.clone();
+    assert!(original.keep(&copied, &lease(), &id, &|| false).is_err());
+    assert!(copied.data_write_blocked());
+    assert!(f.audio.exists());
+    f.unaffected();
+}

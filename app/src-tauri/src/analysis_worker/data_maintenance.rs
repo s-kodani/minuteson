@@ -94,6 +94,21 @@ impl AnalysisController {
 }
 
 impl DataMaintenanceLease {
+    pub(crate) fn validate_active(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "共有データ操作の所有を確認できません")?;
+        if self.cancelled()
+            || !state
+                .data_maintenance
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &self.cancel))
+        {
+            return Err("削除に必要な共有実行排他を保持していません。対象を保持します".into());
+        }
+        Ok(())
+    }
     pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst) || self.shutdown.load(Ordering::SeqCst)
     }

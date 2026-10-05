@@ -4,6 +4,8 @@
 use crate::analysis_worker::AnalysisController;
 use crate::storage::backup::recovery;
 use crate::storage::backup::{archive::BackupReceipt, operations::*};
+#[cfg(unix)]
+use crate::storage::deletion::operations as deletion;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -26,6 +28,7 @@ pub(crate) enum Kind {
     Restore,
     Recovery,
     Relocation,
+    Deletion,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -63,6 +66,7 @@ pub(crate) enum Action {
     Publish,
     Recover,
     Keep,
+    DeleteIncludingUnregistered,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -89,6 +93,10 @@ pub(crate) struct Snapshot {
     pub recovery_receipt: Option<recovery::Receipt>,
     pub relocation_preview: Option<MovePreview>,
     pub relocation_receipt: Option<MoveReceipt>,
+    #[cfg(unix)]
+    pub deletion_preview: Option<deletion::Preview>,
+    #[cfg(unix)]
+    pub deletion_receipt: Option<deletion::Receipt>,
     pub restart_required: bool,
     pub error_message: Option<String>,
     pub attention_required: bool,
@@ -111,6 +119,10 @@ impl Default for Snapshot {
             recovery_receipt: None,
             relocation_preview: None,
             relocation_receipt: None,
+            #[cfg(unix)]
+            deletion_preview: None,
+            #[cfg(unix)]
+            deletion_receipt: None,
             restart_required: false,
             error_message: None,
             attention_required: false,
@@ -125,6 +137,8 @@ enum Selection {
     Recovery(recovery::Prepared),
     #[cfg(target_os = "macos")]
     Relocation(crate::bootstrap::movement::Prepared),
+    #[cfg(unix)]
+    Deletion(deletion::Prepared),
 }
 
 impl Selection {
@@ -135,6 +149,8 @@ impl Selection {
             Self::Recovery(p) => p.preview().confirmation_id,
             #[cfg(target_os = "macos")]
             Self::Relocation(p) => p.preview().confirmation_id,
+            #[cfg(unix)]
+            Self::Deletion(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -194,20 +210,32 @@ impl DataController {
         }
         // Check an accepted request BEFORE its old confirmation: refreshing
         // mints a new ID, and a lost refresh response still has to be replayable.
+        #[cfg(unix)]
+        let deletion_completed = s.snapshot.deletion_receipt.is_some();
+        #[cfg(not(unix))]
+        let deletion_completed = false;
         if s.request.as_ref() == Some(request)
             && (s.snapshot.busy
                 || s.snapshot.backup_receipt.is_some()
                 || s.snapshot.restore_receipt.is_some()
                 || s.snapshot.recovery_receipt.is_some()
                 || s.snapshot.relocation_receipt.is_some()
+                || deletion_completed
                 || s.snapshot.attention_required
                 || (request.action == Action::Refresh && s.snapshot.phase == "ready"))
         {
             return Ok(true);
         }
+        #[cfg(unix)]
+        let deletion_resolution = matches!(
+            (&s.selection, request.action),
+            (Some(Selection::Deletion(_)), Action::Refresh)
+        ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed);
+        #[cfg(not(unix))]
+        let deletion_resolution = false;
         if s.closing
             || s.snapshot.busy
-            || s.snapshot.attention_required
+            || (s.snapshot.attention_required && !deletion_resolution)
             || s.snapshot.restart_required
         {
             return Err("別のデータ操作または終了処理が進行中です。結果を確認してください".into());
@@ -236,6 +264,20 @@ impl DataController {
                 (Selection::Relocation(p), Action::Keep) => p.preview().pending,
                 _ => false,
             };
+        #[cfg(unix)]
+        let allowed = allowed
+            || match (selection, request.action) {
+                (Selection::Deletion(_), Action::Refresh) => true,
+                (Selection::Deletion(p), Action::Keep) => p.preview().keep_allowed,
+                (Selection::Deletion(p), Action::Publish) => p.preview().execute_allowed,
+                (Selection::Deletion(p), Action::DeleteIncludingUnregistered) => {
+                    let v = p.preview();
+                    v.execute_allowed
+                        && matches!(v.phase.as_str(), "review" | "not_started")
+                        && v.unregistered_count > 0
+                }
+                _ => false,
+            };
         if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
         }
@@ -245,10 +287,20 @@ impl DataController {
         {
             return Err("保存先変更の確認が失効しています。同じ対象を再確認してください".into());
         }
+        if s.snapshot.kind == Some(Kind::Deletion)
+            && matches!(
+                request.action,
+                Action::Publish | Action::DeleteIncludingUnregistered
+            )
+            && s.snapshot.phase != "ready"
+        {
+            return Err("削除確認が失効しています。残りの状態を再検査してください".into());
+        }
         if s.snapshot.backup_receipt.is_some()
             || s.snapshot.restore_receipt.is_some()
             || s.snapshot.recovery_receipt.is_some()
             || s.snapshot.relocation_receipt.is_some()
+            || deletion_completed
         {
             return Err("この操作は完了済みです。別の操作を明示して選択してください".into());
         }
@@ -312,13 +364,22 @@ impl DataController {
         s.snapshot.restore_receipt = completion.restore;
         s.snapshot.recovery_receipt = completion.recovery;
         s.snapshot.relocation_receipt = completion.relocation;
+        #[cfg(unix)]
+        {
+            s.snapshot.deletion_receipt = completion.deletion;
+        }
         s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
+        #[cfg(unix)]
+        let deletion_completed = s.snapshot.deletion_receipt.is_some();
+        #[cfg(not(unix))]
+        let deletion_completed = false;
         let published = s.snapshot.backup_receipt.is_some()
             || s.snapshot.restore_receipt.is_some()
             || s.snapshot.recovery_receipt.is_some()
-            || s.snapshot.relocation_receipt.is_some();
+            || s.snapshot.relocation_receipt.is_some()
+            || deletion_completed;
         // Publication wins over late cancellation. Never label a committed
         // restore cancelled or destroy its receipt after a successful commit.
         s.snapshot.phase = if published {
@@ -352,6 +413,13 @@ impl DataController {
             Some(Selection::Relocation(p)) => Some(p.preview()),
             _ => None,
         };
+        #[cfg(unix)]
+        {
+            s.snapshot.deletion_preview = match &s.selection {
+                Some(Selection::Deletion(p)) => Some(p.preview()),
+                _ => None,
+            };
+        }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
         s.snapshot.revision += 1;
@@ -364,8 +432,8 @@ impl DataController {
     }
 
     pub(crate) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Snapshot, String> {
-        if kind == Kind::Recovery {
-            return Err("要確認一覧から対象を選択してください".into());
+        if matches!(kind, Kind::Recovery | Kind::Deletion) {
+            return Err("会議または要確認一覧から対象を選択してください".into());
         }
         let app = window.app_handle().clone();
         let lease = work::Admission::acquire(&app)?;
@@ -418,6 +486,8 @@ impl DataController {
     }
 
     pub(crate) fn start(app: &AppHandle, request: Request) -> Result<Snapshot, String> {
+        #[cfg(unix)]
+        let mut deletion_admission = None;
         {
             let controller = app.state::<Self>();
             let s = controller
@@ -427,7 +497,25 @@ impl DataController {
             if Self::request_replay(&s, &request)? {
                 return Ok(s.snapshot.clone());
             }
+            #[cfg(unix)]
+            if let Some(Selection::Deletion(p)) = &s.selection {
+                let v = p.preview();
+                deletion_admission = Some(
+                    if v.pending || app.state::<Storage>().data_write_blocked() {
+                        Some(v.operation_id)
+                    } else {
+                        None
+                    },
+                );
+            }
         }
+        #[cfg(unix)]
+        let lease = if let Some(operation) = deletion_admission {
+            work::Admission::acquire_deletion(app, operation.as_deref())?
+        } else {
+            work::Admission::acquire(app)?
+        };
+        #[cfg(not(unix))]
         let lease = work::Admission::acquire(app)?;
         if let Some((work, cancel, snapshot)) = app.state::<Self>().begin_request(request)? {
             let token = snapshot.token.clone().ok_or("データ操作IDがありません")?;
@@ -436,6 +524,47 @@ impl DataController {
             Ok(snapshot)
         } else {
             app.state::<Self>().snapshot()
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn review_deletion(
+        app: &AppHandle,
+        id: String,
+        pending: bool,
+    ) -> Result<Snapshot, String> {
+        let lease = work::Admission::acquire_deletion(app, pending.then_some(id.as_str()))?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Deletion)?;
+        let token = snapshot
+            .token
+            .clone()
+            .ok_or("削除確認の操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(
+            app,
+            token,
+            cancel,
+            lease,
+            Work::Deletion(id, pending, previous),
+        );
+        Ok(snapshot)
+    }
+    #[cfg(unix)]
+    pub(crate) fn deletion_page(
+        &self,
+        confirmation: &str,
+        offset: usize,
+    ) -> Result<deletion::PathPage, String> {
+        let s = self
+            .state
+            .lock()
+            .map_err(|_| "削除一覧のロックを取得できません")?;
+        if s.snapshot.busy {
+            return Err("削除対象の検査・実行中です".into());
+        }
+        match &s.selection {
+            Some(Selection::Deletion(p)) => p.page(confirmation, offset),
+            _ => Err("確認済みの削除対象がありません".into()),
         }
     }
 
@@ -458,14 +587,20 @@ impl DataController {
                     }
                 };
                 #[cfg(target_os = "macos")]
-                let completion = work.run_with_bootstrap(
+                let completion = work.run_with_bootstrap_admitted(
                     &worker.state::<Storage>(),
                     &worker.state::<crate::bootstrap::Bootstrap>(),
                     &cancelled,
                     &progress,
+                    lease.proof(),
                 );
                 #[cfg(not(target_os = "macos"))]
-                let completion = work.run(&worker.state::<Storage>(), &cancelled, &progress);
+                let completion = work.run_admitted(
+                    &worker.state::<Storage>(),
+                    &cancelled,
+                    &progress,
+                    lease.proof(),
+                );
                 // Set the permanent admission fence before publishing the result
                 // or releasing the temporary lease, including ambiguous cutover.
                 if worker.state::<Storage>().restart_required() {
@@ -511,6 +646,21 @@ impl DataController {
                 && s.snapshot.recovery_receipt.is_none()
                 && s.snapshot.relocation_receipt.is_none()
                 && !s.snapshot.attention_required
+                && {
+                    #[cfg(unix)]
+                    {
+                        s.snapshot.deletion_receipt.is_none()
+                            && !s
+                                .snapshot
+                                .deletion_preview
+                                .as_ref()
+                                .is_some_and(|p| p.pending)
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        true
+                    }
+                }
             {
                 let discarded = s.selection.take();
                 s.snapshot.busy = true;
@@ -578,6 +728,10 @@ impl DataController {
             s.snapshot.backup_preview = None;
             s.snapshot.restore_preview = None;
             s.snapshot.recovery_preview = None;
+            #[cfg(unix)]
+            if s.snapshot.deletion_receipt.is_none() {
+                s.snapshot.deletion_preview = None;
+            }
             if s.snapshot.relocation_receipt.is_none() {
                 s.snapshot.relocation_preview = None;
             }
@@ -590,3 +744,6 @@ impl DataController {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod deletion_tests;

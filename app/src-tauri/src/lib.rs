@@ -376,7 +376,7 @@ fn cancel_audio_import(
 
 fn data_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
     if window.label() != "main" {
-        return Err("Only the main window can manage backups and restores".into());
+        return Err("Only the main window can manage stored data".into());
     }
     Ok(window.app_handle().clone())
 }
@@ -384,6 +384,46 @@ fn data_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
 #[tauri::command]
 fn get_data_operation(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
     data_app(&window)?.state::<DataController>().snapshot()
+}
+
+#[cfg(unix)]
+#[tauri::command]
+async fn get_deletion_items(
+    window: WebviewWindow,
+) -> Result<storage::deletion::operations::Listing, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::deletion::operations::listing(&app.state::<Storage>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_meeting_deletion(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_deletion(&data_app(&window)?, meeting_id, false)
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_pending_deletion(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_deletion(&data_app(&window)?, operation_id, true)
+}
+#[cfg(unix)]
+#[tauri::command]
+fn get_deletion_paths(
+    window: WebviewWindow,
+    confirmation_id: String,
+    offset: usize,
+) -> Result<storage::deletion::operations::PathPage, String> {
+    data_app(&window)?
+        .state::<DataController>()
+        .deletion_page(&confirmation_id, offset)
 }
 
 #[cfg(target_os = "macos")]
@@ -1586,6 +1626,14 @@ pub fn run() {
             start_audio_import,
             cancel_audio_import,
             get_data_operation,
+            #[cfg(unix)]
+            get_deletion_items,
+            #[cfg(unix)]
+            review_meeting_deletion,
+            #[cfg(unix)]
+            review_pending_deletion,
+            #[cfg(unix)]
+            get_deletion_paths,
             #[cfg(target_os = "macos")]
             get_storage_bootstrap,
             review_storage_move,

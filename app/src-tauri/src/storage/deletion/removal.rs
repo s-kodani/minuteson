@@ -56,6 +56,27 @@ impl Reviewed {
             policy,
         })
     }
+    pub(super) fn confirm_saved(
+        storage: &Storage,
+        prepared: &Prepared,
+        include_unregistered: bool,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        prepared.verify_saved(&db, check)?;
+        prepared.verify_locked(storage, &db, check)?;
+        let census = Census::capture_locked(
+            storage,
+            &db,
+            &prepared.scope().meeting_id,
+            prepared.operation(),
+            check,
+        )?;
+        Self::confirm(&census, include_unregistered)
+    }
 }
 fn check_policy(manifest: &Manifest, policy: &Policy) -> Result<(), String> {
     if *policy == Policy::RegisteredOnly
@@ -226,6 +247,20 @@ pub(super) struct Receipt {
     progress: Progress,
 }
 impl Receipt {
+    pub(super) fn verify_live(
+        &self,
+        storage: &Storage,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        preflight(storage, &db, self, check)
+    }
+    pub(super) fn processed_paths(&self) -> usize {
+        self.progress.next
+    }
     pub(super) fn confirmed(&self) -> &Prepared {
         &self.confirmed
     }
