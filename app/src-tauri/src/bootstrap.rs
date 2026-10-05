@@ -18,6 +18,9 @@ const LOCK: &str = ".bootstrap.lock";
 const STAMP: &[u8] = b"MON bootstrap 1\n";
 const LIMIT: u64 = 32 * 1024;
 
+#[allow(dead_code)] // Native coordinator/UI and cutover integration follow.
+pub(crate) mod placement;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Identity {
@@ -627,8 +630,12 @@ impl Bootstrap {
         if r.revision != expected_revision {
             return Err("起動設定の確認が古くなっています".into());
         }
-        if target.starts_with(&self.config) || self.config.starts_with(target) {
-            return Err("起動設定の領域を会議保存先にできません".into());
+        if target.starts_with(&self.config)
+            || self.config.starts_with(target)
+            || target.starts_with(&self.models_root)
+            || self.models_root.starts_with(target)
+        {
+            return Err("起動設定またはモデルの領域を会議保存先にできません".into());
         }
         local(target)?;
         let metadata = directory(target)?;
@@ -675,6 +682,18 @@ impl Bootstrap {
             .is_none_or(|p| p.operation_id != operation)
         {
             return Err("取消対象の保存先移動が一致しません".into());
+        }
+        match std::fs::symlink_metadata(
+            self.config.join(format!(".relocation-{operation}.sqlite3")),
+        ) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+            Ok(_) => {
+                return Err(
+                    "配置台帳がある移動は、途中コピーの保持・解決を確認するまで記録を消せません"
+                        .into(),
+                )
+            }
         }
         r.pending_move = None;
         r.revision = r.revision.checked_add(1).ok_or("起動設定の版が上限です")?;

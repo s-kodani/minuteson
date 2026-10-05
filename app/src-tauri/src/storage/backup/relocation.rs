@@ -469,6 +469,64 @@ impl Storage {
 
 #[allow(dead_code)]
 impl NativeSnapshot<'_> {
+    pub(crate) fn source_root(&self) -> &Path {
+        &self.maintenance.storage.root
+    }
+    // The destination owns/records its newly-created FD before calling this.
+    // Only a sealed native-image file can supply bytes, never a caller path.
+    pub(crate) fn write_placement_file(
+        &self,
+        name: &str,
+        output: &mut File,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let (proof, size, hash) = if name == "meetings.sqlite3" {
+            (
+                &self.database_proof,
+                self.manifest.database_size,
+                &self.manifest.database_hash,
+            )
+        } else {
+            let index = self
+                .copied
+                .binary_search_by(|n| n.entry.relative_path.as_str().cmp(name))
+                .map_err(|_| "未確認の移動ファイルをコピーできません")?;
+            let n = &self.copied[index];
+            if n.entry.directory {
+                return Err("フォルダーを音声としてコピーできません".into());
+            }
+            (
+                &n.proof,
+                n.entry.size,
+                n.entry
+                    .hash
+                    .as_ref()
+                    .ok_or("移動ファイルのSHAがありません")?,
+            )
+        };
+        let source = self.image.join(name);
+        directory(source.parent().ok_or("移動コピーの親がありません")?)?;
+        let mut input = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(&source)
+            .map_err(|e| e.to_string())?;
+        if Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != *proof {
+            return Err("検証済みコピーが配置前に変更されています".into());
+        }
+        check(cancelled)?;
+        output.set_len(0).map_err(|e| e.to_string())?;
+        std::io::Seek::seek(output, std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let (_, actual) = stream(&mut input, Some(output), size, cancelled)?;
+        if actual != *hash
+            || Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != *proof
+            || Proof::read(&std::fs::symlink_metadata(&source).map_err(|e| e.to_string())?)?
+                != *proof
+        {
+            return Err("検証済みコピーの配置中に内容・実体が変更されています".into());
+        }
+        output.sync_all().map_err(|e| e.to_string())
+    }
     pub(crate) fn manifest(&self) -> &Manifest {
         &self.manifest
     }
@@ -563,6 +621,37 @@ impl NativeSnapshot<'_> {
         }
         Ok(())
     }
+}
+
+// Content verification only: placement also needs its durable ownership proofs,
+// bootstrap binding and a held/rechecked source fence. Not a cutover capability.
+pub(crate) fn verify_placed_image(
+    root: &Path,
+    expected: &Manifest,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    directory(root)?;
+    let copied = inventory(root, cancelled)?;
+    if copied.iter().map(|n| &n.entry).ne(expected.entries.iter())
+        || digest_file(&root.join("meetings.sqlite3"), cancelled)?
+            != (expected.database_size, expected.database_hash.clone())
+    {
+        return Err("配置先の件数・相対パス・SHAが一致しません".into());
+    }
+    for name in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+        let name = name.map_err(|e| e.to_string())?.file_name();
+        if name != "meetings.sqlite3" && name != "meetings" && name != "temp" {
+            return Err("配置先に未確認のファイルがあります".into());
+        }
+    }
+    let mut db = read_only(&root.join("meetings.sqlite3"))?;
+    validate_database(&mut db, cancelled)?;
+    if census(&db, cancelled)? != (expected.schema_hash.clone(), expected.tables.clone())
+        || assets(&db, &copied)? != expected.assets
+    {
+        return Err("配置先DBの件数・内容・管理参照が一致しません".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
