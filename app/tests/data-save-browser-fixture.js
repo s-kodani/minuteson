@@ -15,7 +15,7 @@ const f = window.dataFixture = {
 };
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
 window.isTauri = true; mockWindows("main");
-mockIPC(async (command, args) => {
+export const dataSaveIPC = async (command, args) => {
   f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") { const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker; return { available: reason === null, reason }; }
@@ -155,5 +155,6 @@ mockIPC(async (command, args) => {
   if (["get_audio_import"].includes(command)) return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
   if (command === "finish_main_close") return null;
   throw Error(`Unexpected data fixture command: ${command}`);
-}, { shouldMockEvents: true });
-await import("../src/main.tsx");
+};
+mockIPC(dataSaveIPC, { shouldMockEvents: true });
+if (!window.skipDataFixtureMain) await import("../src/main.tsx");

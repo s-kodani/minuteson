@@ -1,4 +1,151 @@
 use super::*;
+
+#[test]
+fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_ordinary_work_blocked(
+) {
+    for keep in [false, true] {
+        let f = Fixture::new();
+        let ready = f.ready();
+        let (work, _, started) = f
+            .controller
+            .begin_request(f.request(&ready, Action::Publish))
+            .unwrap()
+            .unwrap();
+        let stop = AtomicBool::new(false);
+        let partial = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+            if phase
+                == if keep {
+                    "delete_scope_fixed"
+                } else {
+                    "deleting_database"
+                }
+            {
+                stop.store(true, Ordering::Release);
+            }
+        });
+        let operation = partial.deletion_preview.unwrap().operation_id;
+        drop(f.storage);
+        let storage = Storage::open(f._root.path().into()).unwrap();
+        assert!(storage.data_write_blocked());
+        let analysis = AnalysisController::default();
+        assert!(analysis
+            .begin_deletion_maintenance(&storage, "wrong", false, false, &|| false)
+            .is_err());
+        assert!(analysis
+            .begin_deletion_maintenance(&storage, &operation, true, false, &|| false)
+            .is_err());
+        assert!(analysis
+            .begin_deletion_maintenance(&storage, &operation, false, true, &|| false)
+            .is_err());
+        let controller = DataController::default();
+        let (started, _, previous) = controller.begin(Kind::Deletion).unwrap();
+        let lease = analysis
+            .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .unwrap();
+        let reviewed = Work::Deletion(operation.clone(), true, previous).run_admitted(
+            &storage,
+            &|| false,
+            &|_| {},
+            Some(&lease),
+        );
+        let mut snapshot = controller
+            .finish(started.token.as_deref().unwrap(), reviewed)
+            .unwrap();
+        assert!(!snapshot.restart_required && snapshot.retry_allowed);
+        drop(lease);
+        for action in [
+            Action::Refresh,
+            if keep { Action::Keep } else { Action::Publish },
+        ] {
+            let request = Request {
+                token: snapshot.token.clone().unwrap(),
+                confirmation_id: snapshot
+                    .deletion_preview
+                    .as_ref()
+                    .unwrap()
+                    .confirmation_id
+                    .clone(),
+                action,
+            };
+            let (work, _, started) = controller.begin_request(request.clone()).unwrap().unwrap();
+            let lease = analysis
+                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .unwrap();
+            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            snapshot = controller
+                .finish(started.token.as_deref().unwrap(), done)
+                .unwrap();
+            if storage.restart_required() {
+                analysis.require_storage_restart();
+            }
+            assert!(analysis.begin_export().is_err());
+            drop(lease);
+            if storage.restart_required() {
+                assert!(analysis
+                    .begin_data_maintenance(false, false, &|| false)
+                    .is_err());
+            }
+            assert!(storage.require_data_writable().is_err());
+            assert!(controller.begin_request(request).unwrap().is_none());
+        }
+        assert_eq!(snapshot.phase, "completed");
+        let receipt = snapshot.deletion_receipt.unwrap();
+        assert!(receipt.restart_required);
+        assert_eq!(receipt.retained, keep);
+        assert_eq!(receipt.deleted, !keep);
+        assert_eq!(storage.get_meeting(&f.id).unwrap().is_some(), keep);
+        assert!(storage.get_meeting(&f.other).unwrap().is_some());
+        if !keep {
+            // The final reply can be lost while Storage remains open. Rebuild
+            // the server-owned review and replay acknowledgement, not row I/O.
+            let next = DataController::default();
+            let (started, _, previous) = next.begin(Kind::Deletion).unwrap();
+            let lease = analysis
+                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .unwrap();
+            let reviewed = Work::Deletion(operation.clone(), true, previous).run_admitted(
+                &storage,
+                &|| false,
+                &|_| {},
+                Some(&lease),
+            );
+            let reviewed = next
+                .finish(started.token.as_deref().unwrap(), reviewed)
+                .unwrap();
+            assert!(reviewed.restart_required && reviewed.retry_allowed);
+            assert_eq!(
+                reviewed.deletion_preview.as_ref().unwrap().phase,
+                "awaiting_ack"
+            );
+            drop(lease);
+            let req = Request {
+                token: reviewed.token.unwrap(),
+                confirmation_id: reviewed.deletion_preview.unwrap().confirmation_id,
+                action: Action::Publish,
+            };
+            let (work, _, started) = next.begin_request(req).unwrap().unwrap();
+            let lease = analysis
+                .begin_deletion_maintenance(&storage, &operation, false, false, &|| false)
+                .unwrap();
+            let done = work.run_admitted(&storage, &|| false, &|_| {}, Some(&lease));
+            assert!(
+                next.finish(started.token.as_deref().unwrap(), done)
+                    .unwrap()
+                    .deletion_receipt
+                    .unwrap()
+                    .deleted
+            );
+            drop(lease);
+            assert!(analysis
+                .begin_data_maintenance(false, false, &|| false)
+                .is_err());
+        }
+        drop(storage);
+        let clean = Storage::open(f._root.path().into()).unwrap();
+        assert!(!clean.data_write_blocked());
+    }
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     storage: Storage,

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
 import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
 import type { DraftUtteranceAudioRequest } from "./transcript-state";
+import { registerPlaybackStop } from "./playback-barrier";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -41,11 +42,21 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
   const request = useRef(0);
   const token = useRef<string | null>(null);
   const [owner] = useState(() => crypto.randomUUID());
+  const preparations = useRef(new Set<Promise<void>>());
+  const closing = useRef(new Map<string, { job: Promise<void>; active: boolean }>());
+  const closeToken = (id: string): Promise<void> => {
+    const previous = closing.current.get(id);
+    if (previous?.active) return previous.job;
+    const entry = { job: Promise.resolve(), active: true };
+    entry.job = invoke<void>("close_playback", { token: id }).then(() => { closing.current.delete(id); }, cause => { entry.active = false; throw cause; });
+    closing.current.set(id, entry);
+    return entry.job;
+  };
 
   const clear = () => {
     request.current++;
     player.clear();
-    if (token.current) void invoke("close_playback", { token: token.current }).catch(() => {});
+    if (token.current) void closeToken(token.current).catch(() => {});
     token.current = null;
     setSelected(null);
     setPreparing(false);
@@ -53,20 +64,35 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
   };
 
   useEffect(() => {
+    let detached = false;
+    const stop = async () => {
+      if (detached) {
+        request.current++; player.clear();
+        if (token.current) void closeToken(token.current).catch(() => {});
+        token.current = null;
+      } else clear();
+      await Promise.all(preparations.current);
+      await Promise.all(Array.from(closing.current.keys(), closeToken));
+      if (detached) unregister();
+    };
+    const unregister = registerPlaybackStop(stop);
     const otherStarted = (event: Event) => { if ((event as CustomEvent<string>).detail !== owner) clear(); };
     window.addEventListener("mon-audio-start", otherStarted);
     const timer = window.setInterval(() => { if (player.snapshot().playing) refresh((value) => value + 1); }, 100);
     return () => {
+      // Keep failed/in-flight native releases in the global barrier even after
+      // this view disappears. Deletion must not mistake unmount for release.
+      detached = true;
       window.clearInterval(timer);
       window.removeEventListener("mon-audio-start", otherStarted);
       request.current++;
       player.clear();
-      if (token.current) void invoke("close_playback", { token: token.current }).catch(() => {});
+      void stop().catch(() => {});
       clock.dispose();
     };
   }, [clock, player, owner]);
 
-  const start = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest, absoluteStartUs?: number) => {
+  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest, absoluteStartUs?: number) => {
     if (locked) return;
     clear();
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
@@ -87,14 +113,14 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
         ? await invoke<PlaybackInfo>("prepare_minutes_evidence_playback", { request: reference })
         : await invoke<PlaybackInfo>("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
       if (generation !== request.current) {
-        void invoke("close_playback", { token: info.token }).catch(() => {});
+        await closeToken(info.token);
         return;
       }
       token.current = info.token;
       const startUs = split?.expectedStartUs ?? transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
       const endUs = split?.expectedEndUs ?? transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
       if (reference && (info.startUs !== startUs || info.endUs !== endUs)) {
-        void invoke("close_playback", { token: info.token }).catch(() => {});
+        await closeToken(info.token);
         token.current = null;
         throw new Error("確認した発言と再生する音声区間が一致しません");
       }
@@ -105,13 +131,20 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     } catch (cause) {
       if (generation === request.current) {
         player.clear();
-        if(token.current)void invoke("close_playback",{token:token.current}).catch(()=>{});
+        if(token.current)void closeToken(token.current).catch(()=>{});
         token.current=null;
         setError(String(cause));
       }
     } finally {
       if (generation === request.current) setPreparing(false);
     }
+  };
+
+  const start = (...args: Parameters<typeof startInner>) => {
+    const job = startInner(...args);
+    preparations.current.add(job);
+    void job.then(() => preparations.current.delete(job), () => preparations.current.delete(job));
+    return job;
   };
 
   const snapshot = player.snapshot();

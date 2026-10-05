@@ -13,6 +13,7 @@ import { ModelInspectionPanel } from "./model-inspection";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
 import { RecoveryPanel } from "./recovery-panel";
+import { MeetingDeletionPanel, useMeetingDeletion } from "./meeting-deletion";
 import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
@@ -104,7 +105,6 @@ function MainWindow() {
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings">("overview");
-  const writeLocked = navigationBusy || dataPending || recoveryPending || !dataOperation.connected || !!dataOperation.snapshot?.busy || !!dataOperation.snapshot?.restartRequired;
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
@@ -127,6 +127,14 @@ function MainWindow() {
       setNavigationBusy(false);
     }
   };
+  const deletion = useMeetingDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending, withSavedEdits,
+    onDeleted: async receipt => {
+      setSelectedMeeting(current => current?.id === receipt.meetingId ? null : current);
+      setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins();
+    } });
+  const navigationLocked = navigationBusy || dataPending || recoveryPending || deletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending;
+  const writeLocked = navigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -156,8 +164,8 @@ function MainWindow() {
         }
         const data = await invoke<DataSnapshot>("get_data_operation");
         assertDataSnapshot(data);
-        if (data.busy || data.retryAllowed) {
-          if (!window.confirm(data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
+        if (data.busy || data.retryAllowed || data.deletionPreview?.pending) {
+          if (!window.confirm(data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
           if (data.token) await invoke("cancel_data_operation", { token: data.token });
         }
         await invoke("finish_main_close", { quit: event.payload.quit });
@@ -282,9 +290,9 @@ function MainWindow() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">m</span><span>mon</span></div>
         <nav aria-label="メインナビゲーション">
-          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
-          <button type="button" className={`nav-item ${screen === "meetings" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => { setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button>
-          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={writeLocked} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
+          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
+          <button type="button" className={`nav-item ${screen === "meetings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => { setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button>
+          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
         </nav>
         <div className="sidebar-foot">端末内で会議を記録</div>
       </aside>
@@ -298,8 +306,9 @@ function MainWindow() {
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
-          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending || deletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
+          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending || deletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
           {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>
@@ -328,7 +337,7 @@ function MainWindow() {
             {meetingError && <p className="action-error" role="alert">{meetingError}</p>}
             {restoredFilter && <p>今回復元した会議を表示しています。<button type="button" className="small-secondary" disabled={writeLocked} onClick={() => void withSavedEdits(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}
             {originError && <p role="alert">{originError}</p>}
-            {shownMeetings.length === 0 ? <p className="empty-meetings">{restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <ul className="meeting-list">{shownMeetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}<span>{meeting.lifecycle === "imported" ? "取り込み済み" : meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={writeLocked}>開く</button></li>)}</ul>}
+            {shownMeetings.length === 0 ? <p className="empty-meetings">{restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <ul className="meeting-list">{shownMeetings.map((meeting) => <li key={meeting.id}><div><strong>{meeting.title}</strong>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}<span>{meeting.lifecycle === "imported" ? "取り込み済み" : meeting.lifecycle === "recorded" ? "録音済み" : meeting.lifecycle === "recording" ? "録音処理中" : "下書き"} · {new Date(meeting.createdAt).toLocaleString("ja-JP")}</span></div><div className="analysis-actions"><button type="button" className="small-secondary" onClick={() => selectMeeting(meeting.id)} disabled={writeLocked}>開く</button><button type="button" className="small-secondary deletion-trigger" aria-label={`${meeting.title}を削除`} onClick={() => void deletion.reviewMeeting(meeting.id)} disabled={!deletion.canReviewMeeting || meeting.lifecycle === "recording"}>削除</button>{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">削除中・要確認</span>}</div></li>)}</ul>}
             {selectedMeeting && <form className="rename-form" onSubmit={renameMeeting}>
               <h3>会議情報</h3><label htmlFor="rename-title">会議名を変更</label>
               <div className="meeting-form-row"><input id="rename-title" value={renameTitle} maxLength={200} onChange={(event) => setRenameTitle(event.target.value)} disabled={meetingBusy || writeLocked} /><button type="submit" disabled={meetingBusy || writeLocked || !renameTitle.trim()}>保存</button><button type="button" className="small-secondary" onClick={() => void withSavedEdits(() => setSelectedMeeting(null))} disabled={writeLocked}>閉じる</button></div>

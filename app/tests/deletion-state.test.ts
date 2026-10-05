@@ -1,0 +1,93 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { assertDeletionListing, assertDeletionPathPage, assertDeletionPreview, type DeletionPreview } from "../src/deletion-state.ts";
+import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
+import { registerPlaybackStop, stopAllPlayback } from "../src/playback-barrier.ts";
+const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
+const preview = (): DeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), title: "点検会議", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, pathCount: 3, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: 123, rowCount: 20, rowPhaseCommitted: false });
+const ready = (): DataSnapshot => ({ revision: 1, token: id(1), kind: "deletion", phase: "ready", busy: false, backupPreview: null, restorePreview: null, recoveryPreview: null, relocationPreview: null, backupReceipt: null, restoreReceipt: null, recoveryReceipt: null, relocationReceipt: null, deletionPreview: preview(), deletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
+test("deletion requests use only owned IDs and never paths, rows or policy substitutions", () => {
+  assert.deepEqual(dataRequest(ready(), "publish"), { token: id(1), confirmationId: id(2), action: "publish" });
+  assert.deepEqual(dataRequest(ready(), "refresh"), { token: id(1), confirmationId: id(2), action: "refresh" });
+  assert.throws(() => dataRequest(ready(), "keep")); assert.throws(() => dataRequest(ready(), "recover"));
+});
+test("unregistered contents require separate decision and cannot be used for other kinds", () => {
+  const s = ready(); s.deletionPreview!.unregisteredCount = 1;
+  assert.throws(() => dataRequest(s, "publish"));
+  assert.equal(dataRequest(s, "delete_including_unregistered").action, "delete_including_unregistered");
+  assert.throws(() => dataRequest(ready(), "delete_including_unregistered"));
+  const backup: DataSnapshot = { ...ready(), kind: "backup", deletionPreview: null, backupPreview: { confirmationId: id(2), destination: "/safe/file.monbackup", replacesExisting: true } };
+  assert.throws(() => dataRequest(backup, "delete_including_unregistered"));
+});
+test("failed or cancelled deletion requires explicit refreshed confirmation", () => {
+  for (const phase of ["failed", "cancelled"]) {
+    const s = { ...ready(), phase };
+    assert.throws(() => dataRequest(s, "publish")); assert.doesNotThrow(() => dataRequest(s, "refresh"));
+  }
+});
+test("attention permits reinspection and unstarted keep but never destructive replay", () => {
+  const s = ready(); Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });
+  Object.assign(s.deletionPreview!, { phase: "not_started", pending: true, keepAllowed: true, executeAllowed: false, resumeReason: "変更を保持" });
+  assert.doesNotThrow(() => dataRequest(s, "keep")); assert.doesNotThrow(() => dataRequest(s, "refresh"));
+  assert.throws(() => dataRequest(s, "publish"));
+  Object.assign(s.deletionPreview!, { phase: "files", keepAllowed: false, processedPaths: 1 });
+  assert.throws(() => dataRequest(s, "keep"));
+});
+test("original unregistered count does not change already-fixed resume policy", () => {
+  const s = ready(); Object.assign(s.deletionPreview!, { phase: "files", pending: true, unregisteredCount: 1, processedPaths: 1 });
+  assert.doesNotThrow(() => dataRequest(s, "publish"));
+  assert.throws(() => dataRequest(s, "delete_including_unregistered"));
+});
+test("completed marker without acknowledgement never becomes success and restart only allows pending deletion", () => {
+  const s = ready(); Object.assign(s, { restartRequired: true });
+  Object.assign(s.deletionPreview!, { phase: "awaiting_ack", pending: true, processedPaths: 3, rowPhaseCommitted: true });
+  assert.doesNotThrow(() => dataRequest(s, "refresh")); assert.doesNotThrow(() => dataRequest(s, "publish"));
+  assert.throws(() => assertDataSnapshot({ ...s, phase: "completed", retryAllowed: false }));
+  const done = { ...s, phase: "completed", retryAllowed: false, deletionPreview: { ...s.deletionPreview!, phase: "completed" as const, pending: false, executeAllowed: false }, deletionReceipt: { operationId: id(3), meetingId: id(4), deleted: true, retained: false, restartRequired: true } };
+  assert.doesNotThrow(() => assertDataSnapshot(done)); assert.throws(() => dataRequest(done, "publish"));
+  assert.throws(() => assertDataSnapshot({ ...done, deletionReceipt: { ...done.deletionReceipt, meetingId: id(5) } }));
+  assert.throws(() => assertDataSnapshot({ ...done, restartRequired: false }));
+});
+test("retained receipt is not restoration or deletion and preserves kept phase", () => {
+  const s = ready(); Object.assign(s, { phase: "completed", retryAllowed: false, deletionReceipt: { operationId: id(3), meetingId: id(4), deleted: false, retained: true, restartRequired: false } });
+  Object.assign(s.deletionPreview!, { phase: "retained", keepAllowed: true, executeAllowed: false, resumeReason: "保持済み" });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.throws(() => assertDataSnapshot({ ...s, deletionReceipt: { ...s.deletionReceipt!, deleted: true } }));
+});
+test("deletion counts and phases reject unsafe integers, false row commitment and partial completion", () => {
+  for (const patch of [{ bytes: Number.MAX_SAFE_INTEGER + 1 }, { processedPaths: 4 }, { rowPhaseCommitted: true }, { missingCount: 2 }, { keepAllowed: true }, { pending: true }]) assert.throws(() => assertDeletionPreview({ ...preview(), ...patch }));
+});
+test("path pages bind exact confirmation, meeting and bounded metadata offsets", () => {
+  const root = `meetings/${id(4)}`;
+  const page = { confirmationId: id(2), offset: 0, total: 1, nextOffset: null, entries: [{ relativePath: root + "/audio/input.flac", directory: false, registered: true, missing: false, changed: false, stageHint: null, bytes: 123 }] };
+  assert.doesNotThrow(() => assertDeletionPathPage(page, id(2), 0, 1, id(4)));
+  assert.throws(() => assertDeletionPathPage(page, id(5), 0, 1, id(4)));
+  assert.throws(() => assertDeletionPathPage(page, id(2), 0, 1, id(5)));
+  assert.throws(() => assertDeletionPathPage({ ...page, nextOffset: 1 }, id(2), 0, 1, id(4)));
+  for (const relativePath of ["/outside", root + "/../outside", root + "/a\\b", root + "/" + "x".repeat(260)]) assert.throws(() => assertDeletionPathPage({ ...page, entries: [{ ...page.entries[0], relativePath }] }, id(2), 0, 1, id(4)));
+});
+test("listing distinguishes write fence and restart, rejects duplicates and unsupported evidence", () => {
+  const l = { items: [{ operationId: id(3), state: "cleanup", meetingId: null, errorCode: null }], deletingMeetingIds: [], writeBlocked: true, restartRequired: false, reason: "未完了削除" };
+  assert.doesNotThrow(() => assertDeletionListing(l));
+  assert.throws(() => assertDeletionListing({ ...l, reason: null }));
+  assert.throws(() => assertDeletionListing({ ...l, items: [l.items[0], l.items[0]] }));
+});
+test("stale deletion snapshots do not restore old confirmation and same revision conflicts fail", () => {
+  const old = ready(), newer = { ...old, revision: 2, deletionPreview: { ...old.deletionPreview!, confirmationId: id(5) } };
+  assert.equal(acceptDataSnapshot(newer, old), newer);
+  assert.throws(() => acceptDataSnapshot(old, { ...newer, revision: 1 }));
+});
+test("playback barrier invokes all owners and waits for native release before continuation", async () => {
+  const events: string[] = []; let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const a = registerPlaybackStop(async () => { events.push("a-stop"); await waiting; events.push("a-closed"); });
+  const b = registerPlaybackStop(async () => { events.push("b-stop"); });
+  try { const done = stopAllPlayback().then(() => events.push("delete")); assert.deepEqual(events, ["a-stop", "b-stop"]); release(); await done; assert.equal(events.at(-1), "delete"); }
+  finally { a(); b(); }
+});
+test("playback release failure refuses continuation but still stops other owners", async () => {
+  let stopped = false;
+  const a = registerPlaybackStop(() => { throw Error("close refused"); });
+  const b = registerPlaybackStop(async () => { stopped = true; });
+  try { await assert.rejects(stopAllPlayback(), /close refused/u); assert.equal(stopped, true); } finally { a(); b(); }
+});

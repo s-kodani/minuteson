@@ -9,6 +9,7 @@ async (page) => {
   const dialog = () => page.getByRole("dialog");
   const boot = async (source = "scratch", options = {}) => {
     await page.reload();
+    await page.waitForFunction(() => !!window.dataFixture);
     await page.evaluate(({ source, options }) => {
       window.confirm = () => true;
       const id = crypto.randomUUID();

@@ -233,10 +233,15 @@ impl DataController {
         ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed);
         #[cfg(not(unix))]
         let deletion_resolution = false;
+        #[cfg(unix)]
+        let deletion_resume = matches!(&s.selection, Some(Selection::Deletion(p)) if p.preview().pending)
+            && !deletion_completed;
+        #[cfg(not(unix))]
+        let deletion_resume = false;
         if s.closing
             || s.snapshot.busy
             || (s.snapshot.attention_required && !deletion_resolution)
-            || s.snapshot.restart_required
+            || (s.snapshot.restart_required && !deletion_resume)
         {
             return Err("別のデータ操作または終了処理が進行中です。結果を確認してください".into());
         }

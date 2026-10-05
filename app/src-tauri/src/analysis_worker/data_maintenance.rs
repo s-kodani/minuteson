@@ -52,6 +52,34 @@ impl AnalysisController {
         import_blocked: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<DataMaintenanceLease, String> {
+        self.begin_data_maintenance_inner(recording_active, import_blocked, cancelled, false)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn begin_deletion_maintenance(
+        &self,
+        storage: &Storage,
+        operation: &str,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DataMaintenanceLease, String> {
+        crate::storage::deletion::operations::authorize_review(storage, Some(operation))?;
+        self.begin_data_maintenance_inner(
+            recording_active,
+            import_blocked,
+            cancelled,
+            storage.deletion_resume_restart_required(),
+        )
+    }
+
+    fn begin_data_maintenance_inner(
+        &self,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+        deletion_resume: bool,
+    ) -> Result<DataMaintenanceLease, String> {
         let mut state = self
             .state
             .lock()
@@ -61,7 +89,11 @@ impl AnalysisController {
             || import_blocked
             || self.shutdown.load(Ordering::SeqCst)
             || state.busy
-            || state.blocks_worker()
+            || (state.storage_restart_required && !deletion_resume)
+            || state.recording_intent
+            || state.import_intent
+            || state.model_preparation.is_some()
+            || state.data_maintenance.is_some()
             || state.export_intent
         {
             return Err("AI処理・録音・取り込み・モデル準備・書き出し・終了処理が停止してからバックアップ／復元してください".into());

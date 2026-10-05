@@ -146,6 +146,11 @@ impl Storage {
             || self.deletion_fence.restart_required()
     }
 
+    #[cfg(unix)]
+    pub(crate) fn deletion_resume_restart_required(&self) -> bool {
+        self.deletion_fence.restart_required()
+    }
+
     pub(crate) fn data_write_blocked(&self) -> bool {
         self.retired.load(std::sync::atomic::Ordering::Acquire) || self.deletion_fence.blocked()
     }

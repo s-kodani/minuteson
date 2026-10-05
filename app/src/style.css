@@ -107,3 +107,9 @@
 .model-application-changes th small { display:block; color:#64748b; font-weight:400; }
 .model-application-dialog .analysis-actions { position:sticky; bottom:-24px; background:#fff; padding:12px 0; border-top:1px solid #e2e8f0; }
 @media(max-width:760px) { .model-application-dialog { padding:16px; width:calc(100vw - 32px); } .model-application-changes th,.model-application-changes td { padding:6px; } .model-application-dialog .analysis-actions { bottom:-16px; } }
+.deletion-paths { max-height: 13rem; overflow-y: auto; padding-left: 1.5rem; font-size: .82rem; }
+.deletion-dialog label { display: flex; gap: .6rem; align-items: flex-start; margin: .75rem 0; }
+.deletion-dialog input[type="checkbox"] { flex: 0 0 auto; margin-top: .25rem; }
+.deletion-dialog .analysis-actions { position: static; }
+.deletion-trigger { color: #991b1b; }
+.deletion-dialog h3, .deletion-panel li { overflow-wrap: anywhere; }

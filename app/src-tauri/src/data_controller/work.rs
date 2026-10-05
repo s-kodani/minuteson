@@ -9,7 +9,7 @@ pub(super) struct Admission {
 impl Admission {
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
         app.state::<Storage>().require_data_writable()?;
-        Self::acquire_worker(app)
+        Self::acquire_worker(app, None)
     }
     #[cfg(unix)]
     pub(super) fn acquire_deletion(
@@ -17,19 +17,35 @@ impl Admission {
         operation: Option<&str>,
     ) -> Result<Self, String> {
         deletion::authorize_review(&app.state::<Storage>(), operation)?;
-        Self::acquire_worker(app)
+        Self::acquire_worker(app, operation)
     }
-    fn acquire_worker(app: &AppHandle) -> Result<Self, String> {
+    fn acquire_worker(app: &AppHandle, deletion_operation: Option<&str>) -> Result<Self, String> {
         let importing = app
             .state::<crate::import_controller::ImportController>()
             .snapshot()?;
-        let lease = app.state::<AnalysisController>().begin_data_maintenance(
-            app.state::<crate::session::SessionStore>()
-                .snapshot()
-                .is_active(),
-            importing.busy || importing.recording_blocked,
-            &|| false,
-        )?;
+        let recording = app
+            .state::<crate::session::SessionStore>()
+            .snapshot()
+            .is_active();
+        let import_blocked = importing.busy || importing.recording_blocked;
+        let analysis = app.state::<AnalysisController>();
+        #[cfg(unix)]
+        let lease = if let Some(operation) = deletion_operation {
+            analysis.begin_deletion_maintenance(
+                &app.state::<Storage>(),
+                operation,
+                recording,
+                import_blocked,
+                &|| false,
+            )?
+        } else {
+            analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
+        };
+        #[cfg(not(unix))]
+        let lease = {
+            let _ = deletion_operation;
+            analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
+        };
         Ok(Self {
             app: app.clone(),
             lease: Some(lease),
@@ -252,6 +268,7 @@ impl Work {
                 match result {
                     Ok(selection) => Completion {
                         selection: Some(selection),
+                        restart_required: storage.restart_required(),
                         ..Completion::default()
                     },
                     Err(error) => Completion {

@@ -1,5 +1,6 @@
 import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, type RecoveryReceipt } from "./recovery-state.ts";
-export type DataKind = "backup" | "restore" | "recovery" | "relocation";
+import { assertDeletionPreview, assertDeletionReceipt, type DeletionPreview, type DeletionReceipt } from "./deletion-state.ts";
+export type DataKind = "backup" | "restore" | "recovery" | "relocation" | "deletion";
 export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number | null; requiredBytes: number; availableBytes: number; pending: boolean; resumeAllowed: boolean; resumeReason: string | null; copiedPaths: number | null; expectedPaths: number | null }
 export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean; retained: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
@@ -22,9 +23,10 @@ export interface DataSnapshot {
   backupReceipt: BackupReceipt | null; restoreReceipt: RestoreReceipt | null;
   recoveryPreview: RecoveryPreview | null; recoveryReceipt: RecoveryReceipt | null;
   relocationPreview: MovePreview | null; relocationReceipt: MoveReceipt | null; restartRequired: boolean;
+  deletionPreview?: DeletionPreview | null; deletionReceipt?: DeletionReceipt | null;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
-export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" }
+export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" | "delete_including_unregistered" }
 export interface DataAvailability { available: boolean; reason: string | null }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -32,11 +34,12 @@ const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as nu
 const texts = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 65536 && values.every(v => typeof v === "string" && !v.includes("\0"));
 export function assertDataSnapshot(s: DataSnapshot): void {
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
-  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention"].includes(s.phase)
+  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"
     || typeof s.restartRequired !== "boolean"
-    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation"].includes(s.kind)
+    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation", "deletion"].includes(s.kind)
     || (s.errorMessage !== null && typeof s.errorMessage !== "string")) fail();
+  if (["verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database"].includes(s.phase) && (s.kind !== "deletion" || !s.busy)) fail();
   if (s.backupPreview !== null) {
     const p = s.backupPreview;
     if (!p || s.kind !== "backup" || !uuid.test(p.confirmationId) || typeof p.destination !== "string" || !p.destination || p.destination.includes("\0") || typeof p.replacesExisting !== "boolean") fail();
@@ -82,10 +85,16 @@ export function assertDataSnapshot(s: DataSnapshot): void {
       || typeof r.retained !== "boolean" || r.restartRequired !== !r.retained || s.restartRequired !== r.restartRequired
       || !p || (r.retained && !p.pending) || p.operationId !== r.operationId || p.source !== r.source || p.destination !== r.destination) fail();
   }
-  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt);
+  if (s.deletionPreview != null) { assertDeletionPreview(s.deletionPreview); if (s.kind !== "deletion") fail(); }
+  if (s.deletionReceipt != null) {
+    assertDeletionReceipt(s.deletionReceipt, s.deletionPreview);
+    if (s.kind !== "deletion" || s.restartRequired !== s.deletionReceipt.restartRequired) fail();
+  }
+  const pendingDeletion = s.kind === "deletion" && !!s.deletionPreview?.pending;
+  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt || s.deletionReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
-    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview)))
-    || (s.restartRequired && (s.busy || s.retryAllowed || s.kind !== "relocation" || (!s.relocationReceipt && !s.attentionRequired)))
+    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview || s.deletionPreview)))
+    || (s.restartRequired && !pendingDeletion && (s.busy || s.retryAllowed || !["relocation", "deletion"].includes(s.kind!) || (!s.relocationReceipt && !s.deletionReceipt && !s.attentionRequired)))
     || ((s.busy || s.retryAllowed || hasResult || s.attentionRequired) && (!s.token || !s.kind))) fail();
 }
 export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnapshot): DataSnapshot {
@@ -99,6 +108,19 @@ export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnaps
 }
 export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): DataRequest {
   assertDataSnapshot(s);
+  if (s.kind === "deletion") {
+    const p = s.deletionPreview;
+    if (!s.token || !p || s.busy || s.deletionReceipt || (s.restartRequired && !p.pending)) throw Error("削除の現在の状態を再確認してください。");
+    const resolution = action === "refresh" || (action === "keep" && p.keepAllowed);
+    if (s.attentionRequired && !resolution) throw Error("部分完了の状態を再検査してください。");
+    if (!s.retryAllowed && !resolution) throw Error("削除確認が失効しています。");
+    if (action === "keep" && !p.keepAllowed) throw Error("開始済み削除を保持・中止して復元することはできません。");
+    if (action === "recover" || (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started"].includes(p.phase)))) throw Error("確認した対象と削除の判断が一致しません。");
+    if (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed
+      || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");
+    return { token: s.token, confirmationId: p.confirmationId, action };
+  }
+  if (action === "delete_including_unregistered") throw Error("削除以外の操作には使用できません。");
   const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId ?? s.relocationPreview?.confirmationId;
   if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
   const keepingMove = action === "keep" && s.kind === "relocation" && s.relocationPreview?.pending;
