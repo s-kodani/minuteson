@@ -16,6 +16,27 @@ pub(in crate::storage) fn publication_fixture() -> (
     jobs::publication_fixture()
 }
 
+pub(in crate::storage) fn catalog_fixture(
+    full: bool,
+) -> (tempfile::TempDir, tempfile::TempDir, Storage, String) {
+    let mut f = Fixture::new();
+    if full {
+        for engine in [Engine::Whisper, Engine::Sherpa, Engine::Llama] {
+            let index = f.add(engine, true, false);
+            f.apply(index, ProfileName::Standard);
+            f.apply(index, ProfileName::HighAccuracy);
+        }
+        f.add(Engine::Whisper, false, false);
+    } else {
+        let index = f.add(Engine::Llama, true, false);
+        f.apply(index, ProfileName::Standard);
+        let mut preferences = f.storage.analysis_preferences().unwrap().payload;
+        preferences.standard.threads = 14;
+        f.storage.save_analysis_preferences(1, preferences).unwrap();
+    }
+    (f.root, f.app_data, f.storage, f.meeting)
+}
+
 struct Package {
     id: String,
     check: String,
@@ -795,7 +816,8 @@ fn profile_application_corrupted_heads_and_rehashed_invalid_component_are_not_si
 }
 
 #[test]
-fn profile_application_v24_migration_and_backup_keep_models_and_configuration_local() {
+fn profile_application_v24_migration_and_backup_keep_host_binding_local_but_retain_profile_origin()
+{
     let mut f = Fixture::new();
     let index = f.add(Engine::Llama, true, false);
     let before = f.storage.list_meetings().unwrap();
@@ -834,8 +856,13 @@ fn profile_application_v24_migration_and_backup_keep_models_and_configuration_lo
     let archive = output.path().join("profiles.monbackup");
     storage.create_backup_archive(&archive, &|| false).unwrap();
     let bytes = std::fs::read(archive).unwrap();
+    // The profile's operation ID is also its source profile ID. Preserve it
+    // only as origin metadata; CPU trial operations and host bindings stay out.
+    assert!(bytes
+        .windows(operation.len())
+        .any(|b| b == operation.as_bytes()));
     for local in [
-        operation.as_bytes(),
+        check.as_bytes(),
         b"managed_profile_heads",
         b"model-checks",
         models.to_str().unwrap().as_bytes(),

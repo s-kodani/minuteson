@@ -98,6 +98,8 @@ fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstructi
     assert_eq!(manifest.tables.last().unwrap().row_count, 0);
     manifest.tables.pop();
     manifest.schema_version = 20;
+    manifest.format_version = 1;
+    manifest.model_catalog = None;
     let legacy = output.path().join("legacy.monbackup");
     pack(&legacy, &manifest, &payloads(&source));
     let source = verified(&legacy, output.path());
@@ -140,6 +142,8 @@ fn restore_journal_reader_publishes_v21_archives_with_current_local_recovery_led
     let source = verified(&path, output.path());
     let mut manifest = source.manifest.clone();
     manifest.schema_version = 21;
+    manifest.format_version = 1;
+    manifest.model_catalog = None;
     let legacy = output.path().join("legacy-21.monbackup");
     pack(&legacy, &manifest, &payloads(&source));
     let source = verified(&legacy, output.path());
@@ -568,7 +572,7 @@ fn reader_rejects_rehashed_manifest_path_version_duplicate_type_size_and_unknown
     for kind in ["format", "schema", "duplicate", "size", "table", "type"] {
         let mut m = archive.manifest.clone();
         match kind {
-            "format" => m.format_version = 2,
+            "format" => m.format_version = 3,
             "schema" => m.schema_version = usize::MAX,
             "duplicate" => m.entries[2].path = m.entries[1].path.clone(),
             "size" => m.entries[1].size = u64::MAX,

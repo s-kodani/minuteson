@@ -227,6 +227,12 @@ impl<'a> RestoreIds<'a> {
         };
         plan.reserve(&plan.batch_id)?;
         plan.reserve(&plan.archive_id)?;
+        if let Some(catalog) = &archive.manifest.model_catalog {
+            for id in catalog.origin_ids() {
+                check_cancelled(cancelled)?;
+                plan.reserve(&id)?;
+            }
+        }
         plan.verify_draft_history(cancelled)?;
         plan.order_dependencies(cancelled)?;
         // Reserve every relational identifier before minting any new one. IDs

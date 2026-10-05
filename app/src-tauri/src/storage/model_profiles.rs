@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) mod jobs;
 pub(in crate::storage) mod portable;
+pub(crate) use portable::history::HistoryEntry as ModelCatalogHistoryEntry;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -779,6 +780,7 @@ impl Storage {
 
 #[cfg(test)]
 pub(crate) fn remove_schema_for_test(db: &Connection) {
+    portable::history::remove_schema_for_test(db);
     super::jobs::remove_rebinding_schema_for_test(db);
     if db
         .query_row(

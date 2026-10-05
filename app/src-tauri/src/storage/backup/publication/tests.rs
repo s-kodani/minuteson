@@ -114,7 +114,7 @@ pub(in crate::storage::backup) fn all_rows(db: &Connection) -> Vec<Vec<Vec<Value
         .iter()
         .chain(["app_settings", "restore_batches", "restore_identity_maps"].iter())
         .chain(crate::storage::model_metadata::TABLES.iter())
-        .chain(["restore_omitted_assets"].iter())
+        .chain(["restore_omitted_assets", "model_catalog_history"].iter())
         .map(|table| dump(db, table))
         .collect()
 }

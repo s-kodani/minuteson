@@ -226,6 +226,7 @@ impl FixedWorkspace {
             "model_files",
             "model_profiles",
             "profile_components",
+            "model_catalog_history",
             "maintenance_operations",
             "maintenance_paths",
         ] {

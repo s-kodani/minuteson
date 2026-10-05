@@ -175,10 +175,12 @@ impl Storage {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
+        let metadata_required = metadata_bytes(ids)?;
         let required = u64::try_from(live_size)
             .map_err(|_| "保存先DB容量が不正です")?
             .checked_mul(2)
             .and_then(|n| n.checked_add(sealed.required_bytes()))
+            .and_then(|n| n.checked_add(metadata_required))
             .ok_or("追加復元容量が範囲外です")?;
         check_capacity(&self.root, required)?;
         let meetings = read_meetings(sealed.connection())?.len();
@@ -236,6 +238,10 @@ impl Storage {
                 check,
                 &|id| ids.unused_identity(id),
             )?;
+            if let Some(catalog) = &ids.source().manifest.model_catalog {
+                catalog.retain(&tx, check, &|id| ids.unused_identity(id))?;
+            }
+            check_cancelled(check)?;
             Ok(vocabulary)
         })();
         let vocabulary = match operation {
@@ -286,8 +292,25 @@ impl Storage {
     }
 }
 
+// Include JSON overflow pages, indexes and commit/WAL copies conservatively.
+// Model metadata capacity is not included in the meeting-only sealed image.
+fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
+    let manifest = &ids.source().manifest;
+    let json = serde_json::to_vec(&(&manifest.model_catalog, &manifest.file_references))
+        .map_err(|e| e.to_string())?;
+    (json.len() as u64)
+        .checked_mul(8)
+        .and_then(|n| {
+            n.checked_add((manifest.file_references.len() as u64).checked_mul(16 * 1024)?)
+        })
+        .ok_or("追加モデル履歴の容量が範囲外です".into())
+}
+
 #[cfg(test)]
 pub(super) mod tests;
 
 #[cfg(test)]
 mod model_tests;
+
+#[cfg(all(test, unix))]
+mod catalog_tests;

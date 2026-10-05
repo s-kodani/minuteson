@@ -3,6 +3,8 @@
 //! No model bytes, installed state, CPU probe, device, or current-head mutation.
 use super::*;
 
+pub(in crate::storage) mod history;
+
 const MAX_RECORDS: i64 = 65_536;
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -146,6 +148,34 @@ pub(in crate::storage) struct Catalog {
     preferences: Vec<Preferences>,
 }
 impl Catalog {
+    pub(in crate::storage) fn file_references(
+        &self,
+    ) -> Result<Vec<super::super::model_metadata::ModelFileMetadata>, String> {
+        self.packages
+            .iter()
+            .flat_map(|p| &p.files)
+            .map(|file| {
+                let reference = super::super::model_metadata::ModelFileMetadata {
+                    name: Path::new(&file.relative_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .ok_or("モデルの履歴名が不正です")?
+                        .into(),
+                    size: file.actual_size,
+                    sha256: file.actual_hash.clone(),
+                    role: match file.role {
+                        Role::Executable => "executable",
+                        Role::Asr | Role::Llm => "model",
+                        Role::Vad => "vadModel",
+                        _ => "artifact",
+                    }
+                    .into(),
+                };
+                reference.validate()?;
+                Ok(reference)
+            })
+            .collect()
+    }
     pub(in crate::storage) fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1
             || self.packages.len() > MAX_RECORDS as usize

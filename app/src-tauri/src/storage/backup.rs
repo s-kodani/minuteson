@@ -409,10 +409,8 @@ fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Resu
     if verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
         return Err("未対応のDBスナップショット形式です".into());
     }
-    // A consistent image must validate unused models and superseded profiles
-    // too. This path-free catalog is a construction prerequisite, not yet a
-    // claim that the archive transports the complete catalog.
-    super::model_profiles::portable::export(db, cancelled)?;
+    // Validate native selections and imported, unavailable catalog history.
+    super::model_profiles::portable::history::Bundle::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;
     let result: String = db
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))

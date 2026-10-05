@@ -187,6 +187,20 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
                 &[]
             },
         )
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=27)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                ["model_catalog_history"].as_slice()
+            } else {
+                &[]
+            },
+        )
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {

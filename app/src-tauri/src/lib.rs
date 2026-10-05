@@ -74,6 +74,19 @@ fn get_model_placements(
 }
 
 #[tauri::command]
+async fn get_model_catalog_history(
+    window: WebviewWindow,
+) -> Result<Vec<storage::model_profiles::ModelCatalogHistoryEntry>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read portable model history".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().model_catalog_history())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn get_model_profiles(
     window: WebviewWindow,
 ) -> Result<Vec<storage::model_profiles::ProfileView>, String> {
@@ -1423,6 +1436,7 @@ pub fn run() {
             cancel_model_inspection,
             get_model_placements,
             get_model_profiles,
+            get_model_catalog_history,
             preview_model_profile_application,
             apply_model_profile_application,
             preview_job_model_rebinding,

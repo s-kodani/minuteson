@@ -71,6 +71,8 @@ pub(crate) struct Manifest {
     pub(super) entries: Vec<Entry>,
     pub(super) omitted_assets: Vec<OmittedAsset>,
     pub(super) file_references: Vec<FileReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) model_catalog: Option<crate::storage::model_profiles::portable::history::Bundle>,
 }
 
 pub(crate) struct VerifiedArchive {
@@ -140,7 +142,9 @@ impl Snapshot<'_> {
         let stage = private_stage(self.stage.path())?;
         let db = read_only(&self.database)?;
         let known = crate::storage::model_metadata::historical(&db)?;
-        let mut references = BTreeSet::new();
+        let model_catalog =
+            crate::storage::model_profiles::portable::history::Bundle::export(&db, cancelled)?;
+        let mut references = model_catalog.file_references()?;
         let mut lookup = BTreeMap::new();
         let mut sources = Vec::new();
         let mut entries = Vec::new();
@@ -241,7 +245,7 @@ impl Snapshot<'_> {
         );
         sources.insert(0, data);
         let manifest = Manifest {
-            format_version: 1,
+            format_version: 2,
             schema_version: MIGRATIONS.len(),
             archive_id: Uuid::new_v4().to_string(),
             created_at: now_ms()?,
@@ -252,6 +256,7 @@ impl Snapshot<'_> {
             entries,
             omitted_assets: omitted,
             file_references: references.into_iter().collect(),
+            model_catalog: Some(model_catalog),
         };
         validate_manifest(&manifest)?;
         let bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
@@ -359,7 +364,7 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if m.format_version != 1
+    if !matches!(m.format_version, 1 | 2)
         || m.schema_version < 20
         || m.schema_version > MIGRATIONS.len()
         || !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
@@ -368,6 +373,17 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
         || m.entries.len() + m.omitted_assets.len() > MAX_ENTRIES
     {
         return Err("バックアップの形式版・件数が不正です".into());
+    }
+    match (m.format_version, &m.model_catalog) {
+        (1, None) if m.schema_version <= 26 => {}
+        (2, Some(catalog)) if m.schema_version >= 27 => {
+            catalog.validate()?;
+            let references: BTreeSet<_> = m.file_references.iter().cloned().collect();
+            if !catalog.file_references()?.is_subset(&references) {
+                return Err("モデル構成履歴の全ファイル情報がmanifestにありません".into());
+            }
+        }
+        _ => return Err("バックアップの形式版とモデル構成履歴が一致しません".into()),
     }
     let mut meetings = BTreeSet::new();
     for meeting in &m.meetings {

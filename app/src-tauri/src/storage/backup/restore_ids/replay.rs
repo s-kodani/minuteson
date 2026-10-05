@@ -175,6 +175,7 @@ impl<'a> RestoreIds<'a> {
             "SELECT id FROM model_packages",
             "SELECT id FROM model_files",
             "SELECT id FROM model_profiles",
+            "SELECT id FROM model_catalog_history",
         ] {
             let mut query = db.prepare(sql).map_err(|e| e.to_string())?;
             let mut rows = if sql.contains("?1") {
@@ -186,6 +187,13 @@ impl<'a> RestoreIds<'a> {
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 check_cancelled(cancelled)?;
                 self.reserve(&row.get::<_, String>(0).map_err(|e| e.to_string())?)?;
+            }
+        }
+        for entry in crate::storage::model_profiles::portable::history::read(db, cancelled)? {
+            // Imported origin identities never become a new entity's PK.
+            for id in entry.origin_ids() {
+                check_cancelled(cancelled)?;
+                self.reserve(&id)?;
             }
         }
         check_cancelled(cancelled)
