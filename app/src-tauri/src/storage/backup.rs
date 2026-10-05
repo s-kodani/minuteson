@@ -13,6 +13,14 @@ pub(crate) mod archive;
 mod exclusions;
 pub(in crate::storage) mod ledger;
 mod portable;
+
+#[cfg(test)]
+pub(in crate::storage) fn portable_json_for_model_test(
+    bytes: &[u8],
+    references: &mut std::collections::BTreeSet<super::model_metadata::ModelFileMetadata>,
+) -> Result<Vec<u8>, String> {
+    portable::portable_json(bytes, false, references)
+}
 pub(in crate::storage::backup) mod publication;
 pub(crate) mod restore_fixed;
 pub(crate) mod restore_ids;

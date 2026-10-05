@@ -5,6 +5,8 @@ use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::transcription::whisper::WhisperConfig;
 use serde_json::json;
 
+mod rebinding;
+
 fn whisper(f: &Fixture) -> WhisperConfig {
     let p = f.storage.analysis_preferences().unwrap().payload.standard;
     let capture = |s: &str| Fingerprint::capture(Path::new(s), &|| false).unwrap();

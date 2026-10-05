@@ -8,6 +8,8 @@ use crate::model_compatibility::ProbeReport;
 use crate::transcription::whisper::WhisperConfig;
 use serde_json::{json, Value};
 
+pub(crate) mod rebinding;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Snapshot {
@@ -345,6 +347,9 @@ pub(crate) fn validate(profile: &Value, execution: Execution<'_>) -> Result<(), 
             &execution,
         )?;
     }
+    if let Some(binding) = rebinding::read(profile)? {
+        binding.validate(profile, execution)?;
+    }
     Ok(())
 }
 pub(crate) fn verify(
@@ -570,6 +575,11 @@ impl Storage {
 }
 
 pub(in crate::storage) fn gate(db: &Connection, spec: &JobSpec) -> Result<(), String> {
+    // A relocation proof belongs only to a separately reviewed retry. A new
+    // job must use the ordinary profile selection, never supplied retry paths.
+    if spec.profile_snapshot.get("runtimeModel").is_some() {
+        return Err("モデルの再結合は確認付きの新しい再試行として行ってください".into());
+    }
     let native = matches!(
         spec.profile_snapshot["profile"].as_str(),
         Some("standard" | "high_accuracy")

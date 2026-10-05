@@ -325,6 +325,11 @@ fn redact_json(
                     "managedModel" | "whisperManaged" | "sherpaManaged"
                 ) {
                     references.extend(crate::storage::model_profiles::jobs::portable_files(item)?);
+                } else if key == "runtimeModel" {
+                    let (portable, files) =
+                        crate::storage::model_profiles::jobs::rebinding::portable(item)?;
+                    *item = portable;
+                    references.extend(files);
                 } else {
                     redact_json(
                         item,

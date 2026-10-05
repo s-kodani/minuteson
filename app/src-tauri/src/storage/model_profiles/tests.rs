@@ -113,16 +113,29 @@ impl Fixture {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(file, b"synthetic fixture only, not real model weights").unwrap();
         }
-        let body = if fail {
+        let body: String = if fail {
             "exit 42".into()
         } else {
             match engine {
             Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
             Engine::Llama=>"printf '{\"ok\":true}'".into(),
             Engine::Sherpa=> {
-                let proof=|name:&str|{let mut p=Fingerprint::capture(&source.path().join(name),&||false).unwrap();p.path=models.join(&id).join(name);p};
-                let c=crate::diarization::sherpa::SherpaConfig{executable:proof("seg.onnx"),segmentation_model:proof("seg.onnx"),embedding_model:proof("embed.onnx"),runtime_libraries:vec![proof("lib/runtime.dylib")],threads:1,cluster_threshold_milli:500,window_shift_milli:500,min_duration_on_ms:300,min_duration_off_ms:500};
-                format!("printf '%s\\nStarted\\n' '{}'",c.expected_header(None))
+                // Echo actual CLI arguments rather than embedding an install
+                // UUID or CPU defaults. Identical fixture bytes can relocate.
+                r#"for arg do
+case "$arg" in
+--segmentation.pyannote-model=*) seg=${arg#*=};;
+--embedding.model=*) embed=${arg#*=};;
+--segmentation.num-threads=*) threads=${arg#*=};;
+--clustering.num-clusters=*) clusters=${arg#*=};;
+--clustering.cluster-threshold=*) threshold=${arg#*=};;
+--segmentation.pyannote-window-shift-ratio=*) shift_ratio=${arg#*=};;
+--min-duration-on=*) duration_on=${arg#*=};;
+--min-duration-off=*) duration_off=${arg#*=};;
+esac
+done
+printf 'OfflineSpeakerDiarizationConfig(segmentation=OfflineSpeakerSegmentationModelConfig(pyannote=OfflineSpeakerSegmentationPyannoteModelConfig(model="%s", window_shift_ratio=%s), num_threads=%s, debug=False, provider="cpu"), embedding=SpeakerEmbeddingExtractorConfig(model="%s", num_threads=%s, debug=False, provider="cpu"), clustering=FastClusteringConfig(num_clusters=%s, threshold=%s, compute_confidence=False), min_duration_on=%s, min_duration_off=%s)\nStarted\n' "$seg" "$shift_ratio" "$threads" "$embed" "$threads" "$clusters" "$threshold" "$duration_on" "$duration_off"
+"#.into()
             },
         }
         };
