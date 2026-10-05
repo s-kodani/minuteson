@@ -72,29 +72,43 @@ impl RetryRequest {
             return Err("議事録再試行の試行数上限に達しています。新たに生成してください".into());
         }
         let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
-        let input = storage.load_minutes_input(&original.id)?;
-        let initial_operation = storage.fixed_job_initial_operation(&original.id)?;
-        let p = checked_parameters(&spec, &input, &initial_operation)?;
-        let decoded = checked_checkpoint(&original, &p, checkpoint.clone())?;
-        p.engine.verify(&|| false)?;
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Llama(&p.engine, p.prompt_budget),
-            &|| false,
-        )?;
-        verify_saved_outputs(storage, &spec, &input, &p, &decoded, &|| false)?
-            .ok_or("議事録再試行の検証が中断されました")?;
-        p.engine.verify(&|| false)?;
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Llama(&p.engine, p.prompt_budget),
-            &|| false,
-        )?;
-        if storage.load_minutes_input(&original.id)? != input {
-            return Err("検証中に議事録の固定入力が変更されました".into());
-        }
+        retry_preflight(storage, &original, &spec, checkpoint.as_ref(), &|| false)?;
         storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
     }
+}
+pub(crate) fn retry_preflight(
+    storage: &Storage,
+    original: &JobSnapshot,
+    spec: &JobSpec,
+    checkpoint: Option<&Value>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let input = storage.load_minutes_input(&original.id)?;
+    let initial_operation = storage.fixed_job_initial_operation(&original.id)?;
+    let p = checked_parameters(spec, &input, &initial_operation)?;
+    let decoded = checked_checkpoint(original, &p, checkpoint.cloned())?;
+    let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+    runtime.verify(cancelled)?;
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Llama(&p.engine, p.prompt_budget),
+        cancelled,
+    )?;
+    verify_saved_outputs(storage, spec, &input, &p, &decoded, cancelled)?
+        .ok_or("議事録再試行の検証が中断されました")?;
+    runtime.verify(cancelled)?;
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Llama(&p.engine, p.prompt_budget),
+        cancelled,
+    )?;
+    if storage.load_minutes_input(&original.id)? != input {
+        return Err("検証中に議事録の固定入力が変更されました".into());
+    }
+    if cancelled() {
+        return Err("議事録再試行の照合を中断しました".into());
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -317,7 +331,7 @@ fn checked_parameters(
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
-        || spec.profile_snapshot
+        || managed::rebinding::base_profile(&spec.profile_snapshot)?
             != managed::attach(
                 profile(&p.engine, name),
                 managed::read(&spec.profile_snapshot)?,
@@ -684,7 +698,7 @@ fn run_task(
             cancelled,
         )?;
         let Some(raw) = llama::run_unit(
-            &p.engine,
+            &managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?,
             &directory,
             &task.system,
             &task.prompt,
@@ -842,7 +856,9 @@ pub(crate) fn process(
                 .map_or(true, |j| j.state != "running")
     };
     let attempt = (|| {
-        p.engine.verify(&cancelled)?;
+        let runtime =
+            managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+        runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
             Execution::Llama(&p.engine, p.prompt_budget),
@@ -946,7 +962,7 @@ pub(crate) fn process(
                 return Ok(None);
             }
         }
-        p.engine.verify(&cancelled)?;
+        runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
             Execution::Llama(&p.engine, p.prompt_budget),

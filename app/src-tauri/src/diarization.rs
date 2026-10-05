@@ -89,14 +89,32 @@ impl RetryRequest {
             return Err("確認した失敗・取消済みの話者分離と固定条件が一致しません".into());
         }
         let (spec, raw) = storage.fixed_job_input(&job.id)?;
-        let parameters = checked_parameters(storage, &spec, &job.id)?;
-        let checkpoint = checked_checkpoint(&job, raw.clone())?;
-        preflight(storage, &spec, &parameters, &|| false)?;
-        for output in &checkpoint.outputs {
-            load_output(storage, &spec, &parameters, output, &|| false)?;
-        }
+        retry_preflight(storage, &job, &spec, raw.as_ref(), &|| false)?;
         storage.enqueue_retry_job(&job, &spec, raw.as_ref(), &self.operation_id)
     }
+}
+
+pub(crate) fn retry_preflight(
+    storage: &Storage,
+    job: &JobSnapshot,
+    spec: &JobSpec,
+    raw: Option<&serde_json::Value>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let parameters = checked_parameters(storage, spec, &job.id)?;
+    let checkpoint = checked_checkpoint(job, raw.cloned())?;
+    preflight(storage, spec, &parameters, cancelled)?;
+    for output in &checkpoint.outputs {
+        load_output(storage, spec, &parameters, output, cancelled)?;
+    }
+    if cancelled() {
+        return Err("話者分離再試行の照合を中断しました".into());
+    }
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Sherpa(&parameters.engine),
+        cancelled,
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -238,22 +256,7 @@ pub(crate) fn restore_result(
     {
         return Err("保存済みの話者分離結果の由来・固定設定が一致しません".into());
     }
-    if result.segments.len() > sherpa::MAX_SEGMENTS {
-        return Err("保存済み話者区間数が上限を超えています".into());
-    }
-    let mut previous = 0;
-    for segment in &result.segments {
-        if segment.start_us < previous
-            || segment.start_us < 0
-            || segment.end_us <= segment.start_us
-            || segment.end_us > native_duration
-            || segment.speaker >= MAX_SPEAKERS
-            || result.num_speakers.is_some_and(|n| segment.speaker >= n)
-        {
-            return Err("保存済み話者区間の時刻が不正です".into());
-        }
-        previous = segment.start_us;
-    }
+    sherpa::validate_saved_segments(&result.segments, result.num_speakers, native_duration)?;
     result.origin_operation_id = new_envelope.request.operation_id;
     result.input_analysis_id = new
         .input_analysis_id
@@ -434,7 +437,7 @@ fn preflight(
     parameters: &Parameters,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<crate::playback::PreparedAudio>, String> {
-    parameters.engine.verify(cancelled)?;
+    managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
         Execution::Sherpa(&parameters.engine),
@@ -482,7 +485,23 @@ fn load_output(
         .tracks
         .get(output.index)
         .ok_or("再開トラックの位置が不正です")?;
-    storage.verify_meeting_asset(&spec.meeting_id, &output.wav_asset_id, &output.wav_hash)?;
+    crate::restored_processing::verify_pcm(
+        storage,
+        &spec.meeting_id,
+        &output.wav_asset_id,
+        &output.wav_hash,
+        cancelled,
+        |path| {
+            let mut audio = storage.prepare_track_audio_cancellable(
+                &spec.meeting_id,
+                &track.id,
+                track.start_us,
+                track.end_us,
+                cancelled,
+            )?;
+            crate::transcription::wave::write_track(&mut audio, path, cancelled).map(|_| ())
+        },
+    )?;
     let bytes = storage.read_analysis_result(
         &spec.meeting_id,
         &output.result_asset_id,
@@ -502,6 +521,21 @@ fn load_output(
         || result.num_speakers != parameters.tracks[output.index].num_speakers
     {
         return Err("保存済みの話者分離結果の由来・固定設定が一致しません".into());
+    }
+    sherpa::validate_saved_segments(&result.segments, result.num_speakers, native_duration)?;
+    if crate::storage::backup::omitted_processing_asset(
+        storage,
+        &spec.meeting_id,
+        &output.stdout_asset_id,
+        &output.stdout_hash,
+        crate::saved_artifact::Role::DiarizationLog,
+    )?
+    .is_some()
+    {
+        // This canonical result was validated by additive restore. The raw
+        // native log was deliberately omitted; never fabricate it or mark it
+        // available. Validate the durable result's provenance and semantics.
+        return Ok(result.segments);
     }
     let stdout = storage.read_inference_artifact(
         &spec.meeting_id,
@@ -539,6 +573,7 @@ pub(crate) fn process(
                 .map_or(true, |j| j.state != "running")
     };
     let attempt = (|| {
+        let runtime = managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?;
         let mut prepared = preflight(storage, &spec, &parameters, &cancelled)?;
         let mut segments = Vec::new();
         // Parse every saved result before running any new native inference.
@@ -572,7 +607,7 @@ pub(crate) fn process(
                 &cancelled,
             )?;
             let Some(parsed) = sherpa::run_track(
-                &parameters.engine,
+                &runtime,
                 parameters.tracks[index].num_speakers,
                 &directory,
                 native_duration,
@@ -627,11 +662,25 @@ pub(crate) fn process(
                 &directory.join("input.wav"),
                 "audio/wav",
             )?;
-            let stdout = storage.register_analysis_artifact(
-                &spec.meeting_id,
-                &directory.join("stdout.log"),
-                "text/plain",
-            )?;
+            let mut stdout_path = directory.join("stdout.log");
+            if runtime != parameters.engine {
+                let bytes = crate::restored_processing::read_local(
+                    &stdout_path,
+                    16 * 1024 * 1024,
+                    &cancelled,
+                )?;
+                let normalized = sherpa::logical_output(
+                    &bytes,
+                    &runtime,
+                    &parameters.engine,
+                    parameters.tracks[index].num_speakers,
+                    native_duration,
+                )?;
+                stdout_path = directory.join("logical-stdout.log");
+                crate::restored_processing::write_new(&stdout_path, &normalized)?;
+            }
+            let stdout =
+                storage.register_analysis_artifact(&spec.meeting_id, &stdout_path, "text/plain")?;
             let json = storage.register_analysis_artifact(
                 &spec.meeting_id,
                 &directory.join("result.json"),
@@ -671,7 +720,7 @@ pub(crate) fn process(
         if cancelled() {
             return Ok(None);
         }
-        parameters.engine.verify(&cancelled)?;
+        runtime.verify(&cancelled)?;
         preflight(storage, &spec, &parameters, &cancelled)?;
         // Recheck files at the publication boundary as well as at resume.
         for (index, output) in checkpoint.outputs.iter().enumerate() {

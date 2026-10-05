@@ -479,7 +479,12 @@ pub(super) fn native_log(db: &Connection, asset: &FileAsset) -> Result<bool, Str
     if asset.media_type == "text/plain" && super::exclusions::matches(db, asset, "native_log")? {
         return Ok(true);
     }
-    private_job_artifact(db, asset, "text/plain", &["stdout.log", "stderr.log"])
+    private_job_artifact(
+        db,
+        asset,
+        "text/plain",
+        &["stdout.log", "stderr.log", "logical-stdout.log"],
+    )
 }
 
 fn private_job_artifact(

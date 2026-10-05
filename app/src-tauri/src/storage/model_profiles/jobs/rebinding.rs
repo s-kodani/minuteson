@@ -23,6 +23,7 @@ pub(crate) enum Resolved {
     Llama(LlamaConfig, usize),
 }
 impl Resolved {
+    #[cfg(test)]
     pub(crate) fn execution(&self) -> Execution<'_> {
         match self {
             Self::Whisper(e) => Execution::Whisper(e),
@@ -33,6 +34,53 @@ impl Resolved {
 }
 
 impl Binding {
+    pub(crate) fn recheck(
+        &self,
+        storage: &Storage,
+        models_root: &Path,
+        spec: &JobSpec,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let again = prepare(
+            storage,
+            models_root,
+            spec,
+            &self.package.package_id,
+            &self.package.review_hash,
+            &self.compatibility.operation_id,
+            cancelled,
+        )?;
+        if &again != self {
+            return Err("確認後に再結合するモデルの証拠が変わっています".into());
+        }
+        Ok(())
+    }
+
+    // No filesystem work under the retry transaction. Admission has already
+    // checked physical bytes and trial artifacts; recheck the exact current
+    // device-local records, not the destination's unrelated profile heads.
+    pub(in crate::storage) fn gate(&self, db: &Connection, spec: &JobSpec) -> Result<(), String> {
+        with_execution(spec, |e| self.validate(&spec.profile_snapshot, e))?;
+        self.package.validate()?;
+        if self.validate_provenance()?.is_none() {
+            return Err("再結合先のモデルは未配置です".into());
+        }
+        let (record, placed) =
+            crate::storage::model_placements::load(db, &self.package.package_id)?
+                .ok_or("再結合先の配置記録がありません")?;
+        let saved = crate::storage::model_checks::latest(db, &self.package.package_id)?
+            .ok_or("再結合先の互換性記録がありません")?;
+        if !placed
+            || record != self.package
+            || saved.summary.state != CheckState::Succeeded
+            || saved.summary.operation_id != self.compatibility.operation_id
+            || saved.report.as_ref() != Some(&self.compatibility)
+        {
+            return Err("再試行の確定前に配置・互換性の証拠が変わっています".into());
+        }
+        Ok(())
+    }
+
     // Pure structural validation is also used when transporting unavailable
     // history. It must not read native paths, query a local catalog, or execute.
     fn validate_provenance(&self) -> Result<Option<PathBuf>, String> {
@@ -240,6 +288,86 @@ pub(crate) fn read(profile: &Value) -> Result<Option<Binding>, String> {
         .map(serde_json::from_value)
         .transpose()
         .map_err(|e| e.to_string())
+}
+
+pub(crate) fn base_profile(profile: &Value) -> Result<Value, String> {
+    read(profile)?; // Reject null, unknown fields and malformed typed proofs.
+    let mut base = profile.clone();
+    base.as_object_mut()
+        .ok_or("固定プロファイルが不正です")?
+        .remove("runtimeModel");
+    Ok(base)
+}
+
+pub(in crate::storage) fn validate_spec(spec: &JobSpec) -> Result<(), String> {
+    with_execution(spec, |e| super::validate(&spec.profile_snapshot, e))
+}
+
+// Path-free review data. Never include the vocabulary text or transcript.
+pub(crate) fn conditions(spec: &JobSpec) -> Result<Value, String> {
+    with_execution(spec, |e| {
+        e.validate_settings()?;
+        super::validate(&spec.profile_snapshot, e)?;
+        let hint = match e {
+            Execution::Whisper(w) => {
+                json!({"characters":w.prompt.chars().count(),"sha256":format!("{:x}",Sha256::digest(w.prompt.as_bytes()))})
+            }
+            _ => Value::Null,
+        };
+        Ok(
+            json!({"profile":spec.profile_snapshot["profile"],"engine":e.engine(),"configuration":e.configuration(),"vocabularyHint":hint,"trackSettings":if spec.kind == JobKind::Diarization { spec.parameters["diarization"]["tracks"].clone() } else { Value::Null }}),
+        )
+    })
+}
+
+pub(in crate::storage) fn same_profile(left: &JobSpec, right: &JobSpec) -> Result<bool, String> {
+    if left.profile_snapshot.get("runtimeModel").is_none()
+        && right.profile_snapshot.get("runtimeModel").is_none()
+    {
+        return Ok(left.profile_snapshot == right.profile_snapshot);
+    }
+    for spec in [left, right] {
+        with_execution(spec, |e| super::validate(&spec.profile_snapshot, e))?;
+    }
+    Ok(base_profile(&left.profile_snapshot)? == base_profile(&right.profile_snapshot)?)
+}
+
+pub(crate) fn runtime(profile: &Value, execution: Execution<'_>) -> Result<Resolved, String> {
+    super::validate(profile, execution)?;
+    if let Some(binding) = read(profile)? {
+        return binding.resolve(profile, execution);
+    }
+    Ok(match execution {
+        Execution::Whisper(e) => Resolved::Whisper(e.clone()),
+        Execution::Sherpa(e) => Resolved::Sherpa(e.clone()),
+        Execution::Llama(e, budget) => Resolved::Llama(e.clone(), budget),
+    })
+}
+pub(crate) fn whisper(profile: &Value, engine: &WhisperConfig) -> Result<WhisperConfig, String> {
+    let Resolved::Whisper(e) = runtime(profile, Execution::Whisper(engine))? else {
+        unreachable!()
+    };
+    Ok(e)
+}
+pub(crate) fn sherpa(profile: &Value, engine: &SherpaConfig) -> Result<SherpaConfig, String> {
+    let Resolved::Sherpa(e) = runtime(profile, Execution::Sherpa(engine))? else {
+        unreachable!()
+    };
+    Ok(e)
+}
+pub(crate) fn llama(
+    profile: &Value,
+    engine: &LlamaConfig,
+    budget: usize,
+) -> Result<LlamaConfig, String> {
+    let Resolved::Llama(e, resolved_budget) = runtime(profile, Execution::Llama(engine, budget))?
+    else {
+        unreachable!()
+    };
+    if resolved_budget != budget {
+        return Err("再結合で固定した入力予算が変更されています".into());
+    }
+    Ok(e)
 }
 
 /// Existing explicit CPU success is required for the destination, but never

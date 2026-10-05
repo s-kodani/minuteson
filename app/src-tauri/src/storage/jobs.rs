@@ -37,8 +37,8 @@ pub struct JobSpec {
     pub total_units: Option<i64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct JobSnapshot {
     pub id: String,
     pub meeting_id: String,
@@ -262,6 +262,16 @@ impl Storage {
         if !matches!(state.as_str(), "paused" | "interrupted") {
             return Err("再開可能な処理状態ではありません".into());
         }
+        let has_retry: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE retry_of_job_id = ?1)",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if has_retry {
+            return Err("再試行先があるため元ジョブは再開できません".into());
+        }
         validate_job_input(
             &transaction,
             &meeting_id,
@@ -319,6 +329,47 @@ impl Storage {
         verified_checkpoint: Option<&Value>,
         operation_id: &str,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_retry_inner(
+            source,
+            verified_spec,
+            verified_checkpoint,
+            operation_id,
+            None,
+            &|| false,
+        )
+    }
+
+    // The facade verifies native inputs/outputs, current model bytes and trial
+    // artifacts off the transaction, then commits this separately reviewed
+    // attempt. Original logical parameters and historical assets stay fixed.
+    pub(crate) fn enqueue_rebound_retry_job(
+        &self,
+        source: &JobSnapshot,
+        verified_spec: &JobSpec,
+        checkpoint: Option<&Value>,
+        operation: &str,
+        binding: &super::model_profiles::jobs::rebinding::Binding,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<JobSnapshot, String> {
+        self.enqueue_retry_inner(
+            source,
+            verified_spec,
+            checkpoint,
+            operation,
+            Some(binding),
+            cancelled,
+        )
+    }
+
+    fn enqueue_retry_inner(
+        &self,
+        source: &JobSnapshot,
+        verified_spec: &JobSpec,
+        verified_checkpoint: Option<&Value>,
+        operation_id: &str,
+        binding: Option<&super::model_profiles::jobs::rebinding::Binding>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<JobSnapshot, String> {
         if operation_id.trim().is_empty() || operation_id.len() > 128 {
             return Err("再試行の操作IDが不正です".into());
         }
@@ -337,7 +388,7 @@ impl Storage {
         {
             return Err("検証後に元ジョブまたは再開情報が変化しています".into());
         }
-        if !matches!(original.state.as_str(), "failed" | "cancelled") {
+        if !retry_source_permitted(&original, binding.is_some()) || original.attempt >= 1000 {
             return Err(
                 "失敗・取消済みの処理だけ再試行できます。一時停止・中断には再開を使ってください"
                     .into(),
@@ -347,6 +398,9 @@ impl Storage {
             .attempt
             .checked_add(1)
             .ok_or("再試行番号が範囲外です")?;
+        if let Some(binding) = binding {
+            spec.profile_snapshot = binding.attach(&spec)?;
+        }
         spec.operation_id = operation_id.into();
         let hash = retry_spec_hash(&spec, &original.id, attempt)?;
         if let Some(existing) = transaction
@@ -368,6 +422,12 @@ impl Storage {
             }
             return Ok(existing);
         }
+        if let Some(binding) = binding {
+            binding.gate(&transaction, &spec)?;
+        }
+        if cancelled() {
+            return Err("再試行の登録を取り消しました".into());
+        }
         let unfinished: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE retry_of_job_id = ?1 AND state IN ('queued', 'running', 'pausing', 'paused', 'interrupted'))", params![original.id], |row| row.get(0)).map_err(|e| e.to_string())?;
         if unfinished {
             return Err(
@@ -384,6 +444,11 @@ impl Storage {
         let now = now_ms()?;
         let profile = serde_json::to_string(&spec.profile_snapshot).map_err(|e| e.to_string())?;
         let parameters = serde_json::to_string(&spec.parameters).map_err(|e| e.to_string())?;
+        // A bound profile includes two complete provenance records and native
+        // paths; keep it bounded without shrinking the original 64KiB record.
+        if profile.len() > 256 * 1024 || parameters.len() > MAX_CHECKPOINT_BYTES {
+            return Err("再試行の固定条件が保存サイズ上限を超えています".into());
+        }
         transaction.execute("INSERT INTO processing_jobs (id, meeting_id, kind, state, operation_id, retry_of_job_id, attempt, input_analysis_id, input_hash, profile_snapshot_json, parameters_json, spec_hash, total_units, created_at, updated_at) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)", params![id, spec.meeting_id, spec.kind.as_str(), operation_id, original.id, attempt, spec.input_analysis_id, spec.input_hash, profile, parameters, hash, spec.total_units, now]).map_err(|e| e.to_string())?;
         if let Some(checkpoint) = checkpoint {
             let json = serde_json::to_string(&checkpoint).map_err(|e| e.to_string())?;
@@ -397,8 +462,61 @@ impl Storage {
         }
         let next = load_job(&transaction, &id)?.ok_or("再試行を読み込めません")?;
         verify_latest_checkpoint(&transaction, &id)?;
+        if cancelled() {
+            return Err("再試行の登録を取り消しました".into());
+        }
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(next)
+    }
+
+    // Lost-response lookup is read-only and never rechecks today's profile or
+    // filesystem. It cannot enqueue, change source state or dispatch inference.
+    pub(crate) fn rebound_retry_result(
+        &self,
+        source: &JobSnapshot,
+        verified_spec: &JobSpec,
+        checkpoint: Option<&Value>,
+        operation: &str,
+        binding: &super::model_profiles::jobs::rebinding::Binding,
+    ) -> Result<Option<JobSnapshot>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let id: Option<String> = db
+            .query_row(
+                "SELECT id FROM processing_jobs WHERE operation_id=?1",
+                params![operation],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let current = load_job(&db, &source.id)?.ok_or("再試行元がありません")?;
+        let (mut spec, cp) = read_fixed_input(&db, &source.id)?;
+        if current.spec_hash != source.spec_hash
+            || &spec != verified_spec
+            || cp.as_ref() != checkpoint
+        {
+            return Err("確認した再試行元の固定条件・完了結果が一致しません".into());
+        }
+        spec.profile_snapshot = binding.attach(&spec)?;
+        spec.operation_id = operation.into();
+        let attempt = source
+            .attempt
+            .checked_add(1)
+            .ok_or("再試行番号が不正です")?;
+        let result = load_job(&db, &id)?.ok_or("再試行がありません")?;
+        read_fixed_input(&db, &id)?;
+        if result.spec_hash != retry_spec_hash(&spec, &source.id, attempt)?
+            || result.retry_of_job_id.as_deref() != Some(source.id.as_str())
+            || result.attempt != attempt
+        {
+            return Err("同じ操作IDで別の再試行が指定されました".into());
+        }
+        Ok(Some(result))
     }
 
     // Retry parameters remain byte-for-byte fixed, including the original
@@ -612,6 +730,7 @@ pub(super) fn initial_operation(
     fixed: &JobSpec,
     mut read: impl FnMut(&str) -> Result<(JobSnapshot, JobSpec), String>,
 ) -> Result<String, String> {
+    let mut child_spec = fixed.clone();
     let mut seen = std::collections::HashSet::new();
     loop {
         if !seen.insert(current.id.clone()) || seen.len() > 1000 {
@@ -627,19 +746,53 @@ pub(super) fn initial_operation(
         if parent.id != parent_id
             || parent.meeting_id != fixed.meeting_id
             || parent.attempt.checked_add(1) != Some(current.attempt)
-            || !matches!(parent.state.as_str(), "failed" | "cancelled")
+            || !retry_source_permitted(
+                &parent,
+                child_spec.profile_snapshot.get("runtimeModel").is_some(),
+            )
             || spec.meeting_id != fixed.meeting_id
             || spec.kind != fixed.kind
             || spec.input_analysis_id != fixed.input_analysis_id
             || spec.input_hash != fixed.input_hash
-            || spec.profile_snapshot != fixed.profile_snapshot
+            || !super::model_profiles::jobs::rebinding::same_profile(&spec, fixed)?
             || spec.parameters != fixed.parameters
             || spec.total_units != fixed.total_units
         {
             return Err("再試行の固定条件または由来が一致しません".into());
         }
         current = parent;
+        child_spec = spec;
     }
+}
+
+pub(crate) fn retry_source_permitted(source: &JobSnapshot, rebinding: bool) -> bool {
+    matches!(source.state.as_str(), "failed" | "cancelled")
+        || (rebinding
+            && source.state == "interrupted"
+            && source.error_code.as_deref() == Some("restored_preparation_required"))
+}
+
+#[cfg(test)]
+pub(in crate::storage) fn remove_rebinding_schema_for_test(db: &Connection) {
+    let present: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=26)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if !present {
+        return;
+    }
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM processing_jobs WHERE json_type(profile_snapshot_json,'$.runtimeModel') IS NOT NULL", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    db.execute_batch("DROP TRIGGER job_retry_valid; DROP TRIGGER job_parent_retry_no_resume; DELETE FROM schema_migrations WHERE version=26;").unwrap();
+    db.execute_batch(
+        super::MIGRATION_12
+            .split("\nCREATE TRIGGER job_attempt_fixed")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
 }
 
 pub(super) fn load_job(connection: &Connection, id: &str) -> Result<Option<JobSnapshot>, String> {
@@ -664,6 +817,9 @@ pub(super) fn read_fixed_input(
     let hash = fixed_spec_hash(&spec, job.retry_of_job_id.as_deref(), job.attempt)?;
     if hash != job.spec_hash {
         return Err("処理の固定設定または再試行情報が変更されています".into());
+    }
+    if spec.profile_snapshot.get("runtimeModel").is_some() {
+        super::model_profiles::jobs::rebinding::validate_spec(&spec)?;
     }
     verify_latest_checkpoint(connection, job_id)?;
     let checkpoint: Option<String> = connection.query_row("SELECT checkpoint_json FROM job_checkpoints WHERE job_id = ?1 ORDER BY sequence DESC LIMIT 1", params![job_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;

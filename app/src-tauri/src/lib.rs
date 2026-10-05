@@ -12,8 +12,10 @@ mod model_application;
 mod model_compatibility;
 mod model_inspection;
 mod model_placement;
+mod model_rebinding;
 mod playback;
 mod recorder;
+mod restored_processing;
 mod saved_artifact;
 mod session;
 mod storage;
@@ -141,6 +143,83 @@ async fn apply_model_profile_application(
                 &|| guard.cancelled() || lease.cancelled(),
             )
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn preview_job_model_rebinding(
+    window: WebviewWindow,
+    token: String,
+    meeting_id: String,
+    job_id: String,
+    expected_spec_hash: String,
+    package_id: String,
+    expected_review_hash: String,
+    check_operation_id: String,
+) -> Result<model_rebinding::Preview, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can review job model rebinding".into());
+    }
+    let app = window.app_handle().clone();
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+            model_rebinding::preview(
+                &app.state::<Storage>(),
+                &models_root,
+                &meeting_id,
+                &job_id,
+                &expected_spec_hash,
+                &package_id,
+                &expected_review_hash,
+                &check_operation_id,
+                &|| guard.cancelled() || lease.cancelled(),
+            )
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn apply_job_model_rebinding(
+    window: WebviewWindow,
+    token: String,
+    preview: model_rebinding::Preview,
+) -> Result<storage::JobSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can apply job model rebinding".into());
+    }
+    let app = window.app_handle().clone();
+    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
+    let models_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(job) = model_rebinding::result(&app.state::<Storage>(), &token, &preview)? {
+            return Ok(job);
+        }
+        let job =
+            AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
+                model_rebinding::apply(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &token,
+                    &preview,
+                    &|| guard.cancelled() || lease.cancelled(),
+                )
+            })?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1322,6 +1401,8 @@ pub fn run() {
             get_model_profiles,
             preview_model_profile_application,
             apply_model_profile_application,
+            preview_job_model_rebinding,
+            apply_job_model_rebinding,
             check_model_compatibility,
             place_model_package,
             get_audio_import,

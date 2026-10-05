@@ -14,12 +14,97 @@ mod exclusions;
 pub(in crate::storage) mod ledger;
 mod portable;
 
+// Only durable restore omission evidence grants the missing-cache exception.
+// Neither a broken ready file nor an original input can be adopted as a cache.
+pub(crate) fn omitted_processing_asset(
+    storage: &Storage,
+    meeting: &str,
+    id: &str,
+    hash: &str,
+    role: crate::saved_artifact::Role,
+) -> Result<Option<FileAsset>, String> {
+    let (reason, media) = match role {
+        crate::saved_artifact::Role::TemporaryPcm => ("recreatable_pcm", "audio/wav"),
+        crate::saved_artifact::Role::DiarizationLog => ("native_log", "text/plain"),
+        _ => return Err("除外された処理成果物の役割が不正です".into()),
+    };
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let asset = db.query_row(
+        "SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1 AND meeting_id=?2 AND content_hash=?3 AND media_type=?4",
+        params![id, meeting, hash, media], |r| Ok(FileAsset {
+            id:r.get(0)?, meeting_id:r.get(1)?, relative_path:r.get(2)?, media_type:r.get(3)?,
+            size_bytes:r.get(4)?, content_hash:r.get(5)?, state:r.get(6)?,
+        }),
+    ).optional().map_err(|e| e.to_string())?;
+    let omitted = asset
+        .map(|a| exclusions::matches(&db, &a, reason).map(|yes| yes.then_some(a)))
+        .transpose()
+        .map(Option::flatten)?;
+    drop(db);
+    if let Some(asset) = &omitted {
+        let path = storage.managed_path(Path::new(&asset.relative_path))?;
+        let parent = path.parent().ok_or("除外ファイルの配置先が不正です")?;
+        let root = storage.root.canonicalize().map_err(|e| e.to_string())?;
+        if parent.canonicalize().map_err(|e| e.to_string())?
+            != root.join(
+                Path::new(&asset.relative_path)
+                    .parent()
+                    .ok_or("除外ファイルの配置先が不正です")?,
+            )
+        {
+            return Err("除外ファイルの配置先が差し替えられています".into());
+        }
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+            Ok(_) => return Err("未配置の除外ファイルの場所に予期しない実体があります".into()),
+        }
+    }
+    Ok(omitted)
+}
+
 #[cfg(test)]
 pub(in crate::storage) fn portable_json_for_model_test(
     bytes: &[u8],
     references: &mut std::collections::BTreeSet<super::model_metadata::ModelFileMetadata>,
 ) -> Result<Vec<u8>, String> {
     portable::portable_json(bytes, false, references)
+}
+
+#[cfg(test)]
+pub(in crate::storage) fn published_restore_for_rebinding_test(
+    source: &Storage,
+    target_root: &Path,
+    meeting: &str,
+    jobs: &[String],
+) -> (Storage, String, Vec<String>) {
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("model-rebinding.monbackup");
+    source.create_backup_archive(&path, &|| false).unwrap();
+    let archive = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+    let ids = restore_ids::RestoreIds::prepare(
+        &archive,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &|| false,
+    )
+    .unwrap();
+    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let sealed =
+        restore_fixed::workspace::seal::SealedWorkspace::prepare(&fixed, output.path(), &|| false)
+            .unwrap();
+    let target = Storage::open(target_root.to_owned()).unwrap();
+    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    (
+        target,
+        ids.get("meetings", "", meeting).unwrap(),
+        jobs.iter()
+            .map(|id| ids.get("processing_jobs", meeting, id).unwrap())
+            .collect(),
+    )
 }
 pub(in crate::storage::backup) mod publication;
 pub(crate) mod restore_fixed;

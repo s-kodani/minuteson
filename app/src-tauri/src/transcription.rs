@@ -77,63 +77,120 @@ impl RetryRequest {
             return Err("再試行は1000回以内です。新しい解析として開始してください".into());
         }
         let (spec, checkpoint) = storage.fixed_job_input(&original.id)?;
-        let parameters = checked_parameters(storage, &spec, &original.id)?;
-        let decoded = checked_checkpoint(&original, checkpoint.clone())?;
-        parameters.engine.verify(&|| false)?;
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Whisper(&parameters.engine),
-            &|| false,
+        retry_preflight(storage, &original, &spec, checkpoint.as_ref(), &|| false)?;
+        storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
+    }
+}
+
+pub(crate) fn retry_preflight(
+    storage: &Storage,
+    original: &JobSnapshot,
+    spec: &JobSpec,
+    checkpoint: Option<&serde_json::Value>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let parameters = checked_parameters(storage, spec, &original.id)?;
+    let decoded = checked_checkpoint(original, checkpoint.cloned())?;
+    let runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+    runtime.verify(cancelled)?;
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Whisper(&parameters.engine),
+        cancelled,
+    )?;
+    if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
+        return Err("固定した録音入力が変更されています".into());
+    }
+    storage.verify_meeting_asset(
+        &spec.meeting_id,
+        &parameters.source.manifest_asset_id,
+        &spec.input_hash,
+    )?;
+    for track in &parameters.source.tracks {
+        // Verify every chunk, its format and interval, not merely the manifest.
+        let audio = storage.prepare_track_audio_cancellable(
+            &spec.meeting_id,
+            &track.id,
+            track.start_us,
+            track.end_us,
+            cancelled,
         )?;
-        if storage.recorded_audio_plan(&self.meeting_id)? != parameters.source {
-            return Err("固定した録音入力が変更されています".into());
+        if audio.total_frames()
+            != track
+                .chunks
+                .iter()
+                .map(|chunk| chunk.frames as u64)
+                .sum::<u64>()
+        {
+            return Err("固定した入力フレーム数が変更されています".into());
         }
-        storage.verify_meeting_asset(
-            &self.meeting_id,
-            &parameters.source.manifest_asset_id,
-            &spec.input_hash,
+    }
+    for output in &decoded.outputs {
+        verify_saved_pcm(storage, spec, &parameters, output, cancelled)?;
+        let bytes = storage.read_analysis_result(
+            &spec.meeting_id,
+            &output.json_asset_id,
+            &output.json_hash,
         )?;
-        for track in &parameters.source.tracks {
-            // Verify every chunk, its format and interval, not merely the manifest.
-            let audio = storage.prepare_track_audio_cancellable(
-                &self.meeting_id,
-                &track.id,
-                track.start_us,
-                track.end_us,
-                &|| false,
-            )?;
-            if audio.total_frames()
-                != track
-                    .chunks
-                    .iter()
-                    .map(|chunk| chunk.frames as u64)
-                    .sum::<u64>()
-            {
-                return Err("固定した入力フレーム数が変更されています".into());
-            }
-        }
-        for output in &decoded.outputs {
-            storage.verify_meeting_asset(
-                &self.meeting_id,
-                &output.wav_asset_id,
-                &output.wav_hash,
-            )?;
-            let bytes = storage.read_analysis_result(
-                &self.meeting_id,
-                &output.json_asset_id,
-                &output.json_hash,
-            )?;
+        let unit = parameters
+            .units
+            .get(output.index)
+            .ok_or("再試行区間が範囲外です")?;
+        let rate = parameters.source.tracks[unit.track_index].sample_rate;
+        let duration = ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
+        whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
+    }
+    if cancelled() {
+        return Err("文字起こし再試行の照合を中断しました".into());
+    }
+    runtime.verify(cancelled)?;
+    managed::verify(
+        &spec.profile_snapshot,
+        Execution::Whisper(&parameters.engine),
+        cancelled,
+    )
+}
+
+fn verify_saved_pcm(
+    storage: &Storage,
+    spec: &JobSpec,
+    parameters: &Parameters,
+    output: &UnitOutput,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    crate::restored_processing::verify_pcm(
+        storage,
+        &spec.meeting_id,
+        &output.wav_asset_id,
+        &output.wav_hash,
+        cancelled,
+        |path| {
             let unit = parameters
                 .units
                 .get(output.index)
-                .ok_or("再試行区間が範囲外です")?;
-            let rate = parameters.source.tracks[unit.track_index].sample_rate;
-            let duration =
-                ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
-            whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
-        }
-        storage.enqueue_retry_job(&original, &spec, checkpoint.as_ref(), &self.operation_id)
-    }
+                .ok_or("完了PCMの区間が範囲外です")?;
+            let track = parameters
+                .source
+                .tracks
+                .get(unit.track_index)
+                .ok_or("完了PCMのトラックがありません")?;
+            let mut audio = storage.prepare_track_audio_cancellable(
+                &spec.meeting_id,
+                &track.id,
+                track.start_us,
+                track.end_us,
+                cancelled,
+            )?;
+            wave::write_window(
+                &mut audio,
+                unit.window_first,
+                unit.window_end - unit.window_first,
+                path,
+                cancelled,
+            )
+            .map(|_| ())
+        },
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -350,7 +407,8 @@ pub(crate) fn process(
                 .map_or(true, |job| job.state != "running")
     };
     let attempt = (|| {
-        parameters.engine.verify(&cancelled)?;
+        let runtime = managed::rebinding::whisper(&spec.profile_snapshot, &parameters.engine)?;
+        runtime.verify(&cancelled)?;
         managed::verify(
             &spec.profile_snapshot,
             Execution::Whisper(&parameters.engine),
@@ -368,16 +426,20 @@ pub(crate) fn process(
             if output.index != index {
                 return Err("再開情報の区間順が不正です".into());
             }
-            storage.verify_meeting_asset(
-                &spec.meeting_id,
-                &output.wav_asset_id,
-                &output.wav_hash,
-            )?;
-            storage.verify_meeting_asset(
+            verify_saved_pcm(storage, &spec, &parameters, output, &cancelled)?;
+            let bytes = storage.read_analysis_result(
                 &spec.meeting_id,
                 &output.json_asset_id,
                 &output.json_hash,
             )?;
+            let unit = parameters
+                .units
+                .get(index)
+                .ok_or("再試行区間が範囲外です")?;
+            let rate = parameters.source.tracks[unit.track_index].sample_rate;
+            let duration =
+                ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
+            whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
         }
         let mut prepared = Vec::new();
         for track in &parameters.source.tracks {
@@ -423,7 +485,7 @@ pub(crate) fn process(
                 &cancelled,
             )?;
             if whisper::run_unit(
-                &parameters.engine,
+                &runtime,
                 &directory,
                 duration,
                 Duration::from_secs(1800),
@@ -446,9 +508,25 @@ pub(crate) fn process(
                 &directory.join("input.wav"),
                 "audio/wav",
             )?;
+            let mut result_path = directory.join("result.json");
+            if runtime.model.path != parameters.engine.model.path {
+                let bytes = crate::restored_processing::read_local(
+                    &result_path,
+                    8 * 1024 * 1024,
+                    &cancelled,
+                )?;
+                let normalized = whisper::logical_output(
+                    &bytes,
+                    &runtime.model.path,
+                    &parameters.engine.model.path,
+                    duration,
+                )?;
+                result_path = directory.join("logical-result.json");
+                crate::restored_processing::write_new(&result_path, &normalized)?;
+            }
             let json = storage.register_analysis_artifact(
                 &spec.meeting_id,
-                &directory.join("result.json"),
+                &result_path,
                 "application/json",
             )?;
             checkpoint.outputs.push(UnitOutput {
@@ -477,7 +555,7 @@ pub(crate) fn process(
                 return Ok(None);
             }
         }
-        parameters.engine.verify(&cancelled)?;
+        runtime.verify(&cancelled)?;
         let mut utterances = Vec::new();
         managed::verify(
             &spec.profile_snapshot,

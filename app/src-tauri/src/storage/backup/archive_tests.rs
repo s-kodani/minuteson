@@ -358,7 +358,7 @@ fn native_logs_are_omitted_without_dropping_prompts_or_reusing_the_pcm_reason() 
     let directory = storage.analysis_unit_directory(&id, &job.id, 0).unwrap();
     let secret = b"private-native-log /Users/source-machine/private-model.bin";
     let mut logs = vec![];
-    for name in ["stdout.log", "stderr.log"] {
+    for name in ["stdout.log", "stderr.log", "logical-stdout.log"] {
         let path = directory.join(name);
         std::fs::write(&path, secret).unwrap();
         logs.push(
@@ -374,7 +374,7 @@ fn native_logs_are_omitted_without_dropping_prompts_or_reusing_the_pcm_reason() 
         .register_analysis_artifact(&id, &prompt, "text/plain")
         .unwrap();
     let (path, receipt) = write(&storage, output.path());
-    assert_eq!(receipt.omitted_log_count, 2);
+    assert_eq!(receipt.omitted_log_count, 3);
     assert_eq!(receipt.omitted_pcm_count, 0);
     let mut archive = verified(&path, output.path());
     for id in &logs {

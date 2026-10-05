@@ -51,7 +51,7 @@ pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPref
 pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::{ExportRecord, ExportRequest};
-pub(crate) use jobs::{JobKind, JobSnapshot, JobSpec};
+pub(crate) use jobs::{retry_source_permitted, JobKind, JobSnapshot, JobSpec};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
 pub(crate) use minutes_evidence::{
@@ -95,6 +95,7 @@ const MIGRATION_22: &str = include_str!("migrations/0022_maintenance_operations.
 const MIGRATION_23: &str = include_str!("migrations/0023_model_metadata.sql");
 const MIGRATION_24: &str = include_str!("migrations/0024_model_compatibility.sql");
 const MIGRATION_25: &str = include_str!("migrations/0025_model_profile_applications.sql");
+const MIGRATION_26: &str = include_str!("migrations/0026_job_model_rebinding.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -442,6 +443,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (23, MIGRATION_23),
     (24, MIGRATION_24),
     (25, MIGRATION_25),
+    (26, MIGRATION_26),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

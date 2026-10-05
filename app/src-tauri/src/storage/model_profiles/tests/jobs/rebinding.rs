@@ -1,6 +1,515 @@
 use super::*;
 use managed::rebinding::{self, Binding};
 
+fn retry_preview(
+    f: &Fixture,
+    job: &JobSnapshot,
+    target: usize,
+) -> Result<crate::model_rebinding::Preview, String> {
+    let p = &f.packages[target];
+    crate::model_rebinding::preview(
+        &f.storage,
+        &f.models(),
+        &f.meeting,
+        &job.id,
+        &job.spec_hash,
+        &p.id,
+        &p.record.review_hash,
+        &p.check,
+        &|| false,
+    )
+}
+fn calls_in(path: &Path) -> usize {
+    std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                calls_in(&entry.path())
+            } else if entry.file_name() == "executed.marker" {
+                std::fs::read(entry.path()).unwrap().len() / 4
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+#[test]
+fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_recheck_missing_models(
+) {
+    let mut f = Fixture::new();
+    ready(&mut f);
+    let jobs = enqueue_all(&f)
+        .into_iter()
+        .map(|j| {
+            f.storage
+                .finish_job(&j.id, j.completed_units, "cancelled", None)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let preferences = (
+        f.storage.analysis_preferences().unwrap().payload,
+        f.storage.diarization_preferences().unwrap().payload,
+        f.storage.minutes_preferences().unwrap().payload,
+    );
+    for (source, engine) in jobs
+        .iter()
+        .zip([Engine::Whisper, Engine::Sherpa, Engine::Llama])
+    {
+        let original = f.storage.fixed_job_input(&source.id).unwrap();
+        let target = f.add(engine, true, false);
+        std::fs::remove_dir_all(f.models().join(&f.packages[target - 3].id)).unwrap();
+        let calls = calls_in(f.root.path()) + calls_in(f.app_data.path());
+        let preview = retry_preview(&f, source, target).unwrap();
+        assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
+        let op = Uuid::new_v4().to_string();
+        let next = crate::model_rebinding::apply(&f.storage, &f.models(), &op, &preview, &|| false)
+            .unwrap();
+        let (spec, cp) = f.storage.fixed_job_input(&next.id).unwrap();
+        assert_eq!(spec.parameters, original.0.parameters);
+        assert_eq!(
+            rebinding::base_profile(&spec.profile_snapshot).unwrap(),
+            original.0.profile_snapshot
+        );
+        assert_eq!(cp, original.1);
+        assert_eq!(next.retry_of_job_id.as_deref(), Some(source.id.as_str()));
+        assert_eq!(next.attempt, 2);
+        assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
+        assert_eq!(
+            f.storage.acquire_local_inference_job().unwrap().unwrap().id,
+            next.id
+        );
+        let candidate = match engine {
+            Engine::Whisper => {
+                crate::transcription::process(&f.storage, &next.id, &|| false, &|_| {})
+            }
+            Engine::Sherpa => crate::diarization::process(&f.storage, &next.id, &|| false, &|_| {}),
+            Engine::Llama => crate::generation::process(&f.storage, &next.id, &|| false, &|_| {}),
+        }
+        .unwrap();
+        assert!(candidate.is_some());
+        let completed = f.storage.get_job(&next.id).unwrap();
+        assert_eq!(completed.state, "succeeded");
+        assert!(calls_in(f.root.path()) + calls_in(f.app_data.path()) > calls);
+        assert_eq!(
+            f.storage.fixed_job_initial_operation(&next.id).unwrap(),
+            source.operation_id
+        );
+        assert_eq!(f.storage.get_job(&source.id).unwrap(), *source);
+        assert_eq!(f.storage.fixed_job_input(&source.id).unwrap(), original);
+        // Resolving a lost reply is independent of native files and cannot
+        // start a new attempt, even after the destination has disappeared.
+        std::fs::remove_dir_all(f.models().join(&f.packages[target].id)).unwrap();
+        let counts = (f.count("processing_jobs"), f.count("job_checkpoints"));
+        assert_eq!(
+            crate::model_rebinding::result(&f.storage, &op, &preview).unwrap(),
+            Some(completed.clone())
+        );
+        assert_eq!(
+            crate::model_rebinding::apply(&f.storage, &f.models(), &op, &preview, &|| true)
+                .unwrap(),
+            completed
+        );
+        assert_eq!(
+            (f.count("processing_jobs"), f.count("job_checkpoints")),
+            counts
+        );
+        assert!(crate::model_rebinding::apply(
+            &f.storage,
+            &f.models(),
+            &Uuid::new_v4().to_string(),
+            &preview,
+            &|| false
+        )
+        .is_err());
+    }
+    assert_eq!(
+        (
+            f.storage.analysis_preferences().unwrap().payload,
+            f.storage.diarization_preferences().unwrap().payload,
+            f.storage.minutes_preferences().unwrap().payload
+        ),
+        preferences
+    );
+}
+
+#[test]
+fn model_rebinding_rejects_changed_review_state_cancelled_or_stale_trial_without_enqueuing() {
+    for mutation in ["review", "state", "cancel", "trial", "model", "audio"] {
+        let mut f = Fixture::new();
+        ready(&mut f);
+        let job = enqueue_all(&f).remove(0);
+        let source = f
+            .storage
+            .finish_job(&job.id, job.completed_units, "cancelled", None)
+            .unwrap();
+        let target = f.add(Engine::Whisper, true, false);
+        let mut preview = retry_preview(&f, &source, target).unwrap();
+        match mutation {
+            "review" => {
+                let mut v = serde_json::to_value(&preview).unwrap();
+                v["source"]["completedUnits"] = json!(1);
+                preview = serde_json::from_value(v).unwrap();
+            }
+            "state" => {
+                f.storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE processing_jobs SET updated_at=updated_at+1 WHERE id=?1",
+                        params![source.id],
+                    )
+                    .unwrap();
+            }
+            "trial" => {
+                crate::model_compatibility::check(
+                    &f.storage,
+                    &f.models(),
+                    &Uuid::new_v4().to_string(),
+                    &f.packages[target].id,
+                    &f.packages[target].record.review_hash,
+                    &|| false,
+                )
+                .unwrap();
+            }
+            "model" => {
+                std::fs::write(
+                    f.models().join(&f.packages[target].id).join("model.bin"),
+                    b"changed",
+                )
+                .unwrap();
+            }
+            "audio" => {
+                std::fs::remove_file(
+                    f.root
+                        .path()
+                        .join("meetings")
+                        .join(&f.meeting)
+                        .join("audio/mic.caf"),
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        let jobs = f.count("processing_jobs");
+        let cps = f.count("job_checkpoints");
+        let calls = calls_in(f.root.path()) + calls_in(f.app_data.path());
+        assert!(
+            crate::model_rebinding::apply(
+                &f.storage,
+                &f.models(),
+                &Uuid::new_v4().to_string(),
+                &preview,
+                &|| mutation == "cancel"
+            )
+            .is_err(),
+            "{mutation}"
+        );
+        assert_eq!(
+            (
+                f.count("processing_jobs"),
+                f.count("job_checkpoints"),
+                calls_in(f.root.path()) + calls_in(f.app_data.path())
+            ),
+            (jobs, cps, calls)
+        );
+    }
+}
+
+#[test]
+fn model_rebinding_atomic_admission_rolls_back_when_cancelled_after_inserting_retry_and_checkpoint()
+{
+    let mut f = Fixture::new();
+    ready(&mut f);
+    let job = enqueue_all(&f).remove(0);
+    assert_eq!(
+        f.storage.acquire_local_inference_job().unwrap().unwrap().id,
+        job.id
+    );
+    let empty = json!({"outputs":[]});
+    f.storage
+        .save_job_checkpoint(&job.id, 0, 0, empty.clone())
+        .unwrap();
+    f.storage.request_job_pause(&job.id, "user").unwrap();
+    f.storage.save_job_checkpoint(&job.id, 0, 0, empty).unwrap();
+    let source = f.storage.finish_job(&job.id, 0, "cancelled", None).unwrap();
+    let (spec, cp) = f.storage.fixed_job_input(&job.id).unwrap();
+    let destination = f.add(Engine::Whisper, true, false);
+    let binding = prepare(&f, &spec, destination).unwrap();
+    let counts = (f.count("processing_jobs"), f.count("job_checkpoints"));
+    let checks = std::cell::Cell::new(0usize);
+    let op = Uuid::new_v4().to_string();
+    assert!(f
+        .storage
+        .enqueue_rebound_retry_job(&source, &spec, cp.as_ref(), &op, &binding, &|| {
+            let count = checks.get();
+            checks.set(count + 1);
+            count > 0
+        })
+        .is_err());
+    assert_eq!(checks.get(), 2);
+    assert_eq!(
+        (f.count("processing_jobs"), f.count("job_checkpoints")),
+        counts
+    );
+    assert!(f
+        .storage
+        .rebound_retry_result(&source, &spec, cp.as_ref(), &op, &binding)
+        .unwrap()
+        .is_none());
+    assert_eq!(f.storage.get_job(&source.id).unwrap(), source);
+}
+
+#[test]
+fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_runs_only_unfinished_units(
+) {
+    let mut f = Fixture::with_tracks(124, true);
+    ready(&mut f);
+    let jobs = enqueue_all(&f);
+    for (job, engine) in jobs
+        .iter()
+        .zip([Engine::Whisper, Engine::Sherpa, Engine::Llama])
+    {
+        assert_eq!(
+            f.storage.acquire_local_inference_job().unwrap().unwrap().id,
+            job.id
+        );
+        let progress = |j: JobSnapshot| {
+            if j.completed_units == 1 && j.state == "running" {
+                f.storage.request_job_pause(&j.id, "user").unwrap();
+            }
+        };
+        let candidate = match engine {
+            Engine::Whisper => {
+                crate::transcription::process(&f.storage, &job.id, &|| false, &progress)
+            }
+            Engine::Sherpa => {
+                crate::diarization::process(&f.storage, &job.id, &|| false, &progress)
+            }
+            Engine::Llama => crate::generation::process(&f.storage, &job.id, &|| false, &progress),
+        }
+        .unwrap();
+        assert!(candidate.is_none());
+        assert_eq!(f.storage.get_job(&job.id).unwrap().completed_units, 1);
+    }
+    let new_root = tempfile::tempdir().unwrap();
+    let ids = jobs.iter().map(|j| j.id.clone()).collect::<Vec<_>>();
+    let (target_storage, target_meeting, target_jobs) =
+        crate::storage::backup::published_restore_for_rebinding_test(
+            &f.storage,
+            new_root.path(),
+            &f.meeting,
+            &ids,
+        );
+    f.storage = target_storage;
+    f.meeting = target_meeting;
+    f.root = new_root;
+    for p in &f.packages {
+        std::fs::remove_dir_all(f.models().join(&p.id)).unwrap();
+    }
+    assert!(f.storage.acquire_local_inference_job().unwrap().is_none());
+    assert!(f
+        .storage
+        .model_profiles()
+        .unwrap()
+        .iter()
+        .all(|p| p.id.is_none()));
+    for (id, engine) in target_jobs
+        .iter()
+        .zip([Engine::Whisper, Engine::Sherpa, Engine::Llama])
+    {
+        let source = f.storage.get_job(id).unwrap();
+        assert_eq!(source.state, "interrupted");
+        assert_eq!(
+            source.error_code.as_deref(),
+            Some("restored_preparation_required")
+        );
+        let original = f.storage.fixed_job_input(id).unwrap();
+        assert_eq!(source.completed_units, 1);
+        let cp = original.1.as_ref().unwrap();
+        let omitted_count: i64 = f
+            .storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM restore_omitted_assets WHERE meeting_id=?1",
+                params![f.meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(omitted_count >= 3);
+        let destination = f.add(engine, true, false);
+        let calls = calls_in(f.root.path()) + calls_in(f.app_data.path());
+        if engine != Engine::Llama {
+            let wav = cp["outputs"][0]["wavAssetId"].as_str().unwrap();
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "DELETE FROM restore_omitted_assets WHERE asset_id=?1",
+                    params![wav],
+                )
+                .unwrap();
+            assert!(
+                retry_preview(&f, &source, destination).is_err(),
+                "an unproved missing PCM cannot be skipped"
+            );
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO restore_omitted_assets SELECT id,meeting_id,'recreatable_pcm',size_bytes,content_hash FROM file_assets WHERE id=?1",
+                    params![wav],
+                )
+                .unwrap();
+            let relative: String = f
+                .storage
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT relative_path FROM file_assets WHERE id=?1",
+                    params![wav],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let path = f.storage.managed_path(Path::new(&relative)).unwrap();
+            std::fs::write(&path, b"unexpected cache occupant").unwrap();
+            assert!(retry_preview(&f, &source, destination).is_err());
+            std::fs::remove_file(path).unwrap();
+        }
+        if engine == Engine::Sherpa {
+            let log = cp["outputs"][0]["stdoutAssetId"].as_str().unwrap();
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "DELETE FROM restore_omitted_assets WHERE asset_id=?1",
+                    params![log],
+                )
+                .unwrap();
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO restore_omitted_assets SELECT id,meeting_id,'recreatable_pcm',size_bytes,content_hash FROM file_assets WHERE id=?1",
+                    params![log],
+                )
+                .unwrap();
+            assert!(
+                retry_preview(&f, &source, destination).is_err(),
+                "a missing log requires its own typed omission proof"
+            );
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "DELETE FROM restore_omitted_assets WHERE asset_id=?1",
+                    params![log],
+                )
+                .unwrap();
+            f.storage
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO restore_omitted_assets SELECT id,meeting_id,'native_log',size_bytes,content_hash FROM file_assets WHERE id=?1",
+                    params![log],
+                )
+                .unwrap();
+        }
+        assert_eq!(f.storage.get_job(id).unwrap(), source);
+        assert_eq!(f.storage.fixed_job_input(id).unwrap(), original);
+        assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
+        let preview = retry_preview(&f, &source, destination).unwrap();
+        let next = crate::model_rebinding::apply(
+            &f.storage,
+            &f.models(),
+            &Uuid::new_v4().to_string(),
+            &preview,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(next.completed_units, 1);
+        assert_eq!(
+            f.storage.fixed_job_input(&next.id).unwrap().1.as_ref(),
+            Some(cp)
+        );
+        assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
+        assert!(f.storage.resume_job(id).is_err());
+        assert_eq!(
+            f.storage.acquire_local_inference_job().unwrap().unwrap().id,
+            next.id
+        );
+        let candidate = match engine {
+            Engine::Whisper => {
+                crate::transcription::process(&f.storage, &next.id, &|| false, &|_| {})
+            }
+            Engine::Sherpa => crate::diarization::process(&f.storage, &next.id, &|| false, &|_| {}),
+            Engine::Llama => crate::generation::process(&f.storage, &next.id, &|| false, &|_| {}),
+        }
+        .unwrap();
+        assert!(candidate.is_some());
+        let after = f.storage.get_job(&next.id).unwrap();
+        assert_eq!(after.state, "succeeded");
+        let expected = (source.total_units.unwrap() - 1) as usize;
+        // Empty generated items require no additional local merge CLI. The
+        // first extract was durable before restore, and is not executed again.
+        assert_eq!(
+            calls_in(f.root.path()) + calls_in(f.app_data.path()) - calls,
+            expected,
+            "{engine:?}"
+        );
+        assert_eq!(f.storage.fixed_job_input(id).unwrap(), original);
+        assert_eq!(f.storage.get_job(id).unwrap(), source);
+        let after_omitted: i64 = f
+            .storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM restore_omitted_assets WHERE meeting_id=?1",
+                params![f.meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after_omitted, omitted_count);
+    }
+    // The entire retry lineage and all transported runtime proofs must also
+    // survive a second real archive/publication, not just JSON redaction.
+    let again = tempfile::tempdir().unwrap();
+    let all = f
+        .storage
+        .list_jobs(&f.meeting)
+        .unwrap()
+        .into_iter()
+        .map(|j| j.id)
+        .collect::<Vec<_>>();
+    let (restored, meeting, ids) = crate::storage::backup::published_restore_for_rebinding_test(
+        &f.storage,
+        again.path(),
+        &f.meeting,
+        &all,
+    );
+    assert!(restored.acquire_local_inference_job().unwrap().is_none());
+    for id in ids {
+        restored.fixed_job_initial_operation(&id).unwrap();
+        let (spec, _) = restored.fixed_job_input(&id).unwrap();
+        assert!(!serde_json::to_string(&spec.profile_snapshot)
+            .unwrap()
+            .contains("/models/"));
+        assert_eq!(spec.meeting_id, meeting);
+    }
+}
+
 fn prepare(f: &Fixture, spec: &JobSpec, target: usize) -> Result<Binding, String> {
     let p = &f.packages[target];
     rebinding::prepare(

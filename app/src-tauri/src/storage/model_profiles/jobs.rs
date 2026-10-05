@@ -357,6 +357,10 @@ pub(crate) fn verify(
     execution: Execution<'_>,
     cancel: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    validate(profile, execution)?;
+    if let Some(binding) = rebinding::read(profile)? {
+        return binding.verify(profile, execution, cancel);
+    }
     if let Some(snapshot) = read(profile)? {
         snapshot.verify(
             profile["profile"]

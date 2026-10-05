@@ -31,10 +31,30 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_seconds(4)
+    }
+    fn with_seconds(seconds: i64) -> Self {
+        Self::with_tracks(seconds, false)
+    }
+    fn with_tracks(seconds: i64, two: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let app_data = tempfile::tempdir().unwrap();
         let (storage, meeting, engine) =
-            super::super::transcription::tests::fixture(root.path(), 4);
+            super::super::transcription::tests::fixture(root.path(), seconds);
+        if two {
+            let relative = PathBuf::from("meetings")
+                .join(&meeting)
+                .join("audio")
+                .join("system.caf");
+            let path = storage.managed_path(&relative).unwrap();
+            std::fs::copy(path.parent().unwrap().join("mic.caf"), &path).unwrap();
+            let audio = storage
+                .register_ready_meeting_asset(&meeting, &relative, "audio/x-caf")
+                .unwrap();
+            let db = storage.connection.lock().unwrap();
+            db.execute("INSERT INTO audio_tracks (id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES ('track2',?1,'session','system','caf',16000,1,'ready',0,0)",params![meeting]).unwrap();
+            db.execute("INSERT INTO audio_chunks (id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'chunk2',meeting_id,'track2',?1,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE id='chunk'", params![audio.id]).unwrap();
+        }
         let baseline = crate::transcription::enqueue(
             &storage,
             &meeting,
@@ -118,7 +138,9 @@ impl Fixture {
         } else {
             match engine {
             Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
-            Engine::Llama=>"printf '{\"ok\":true}'".into(),
+            Engine::Llama=>r#"predict=
+while [ "$#" -gt 0 ]; do case "$1" in --predict) predict="$2"; shift;; esac; shift; done
+if [ "$predict" = 64 ]; then printf '{"ok":true}'; else printf '{"schemaVersion":1,"items":[]}'; fi"#.into(),
             Engine::Sherpa=> {
                 // Echo actual CLI arguments rather than embedding an install
                 // UUID or CPU defaults. Identical fixture bytes can relocate.

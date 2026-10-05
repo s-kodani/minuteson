@@ -131,6 +131,25 @@ pub fn parse_output(bytes: &[u8], model: &Path, duration_us: i64) -> Result<Vec<
 
 // A unique, task-owned unit directory is required. Existing artifacts are never
 // overwritten. None means pause: the unfinished unit must not be checkpointed.
+// Normalize only machine-generated model-path metadata after the physical
+// output has passed the native parser. Save a separate logical result file;
+// the original native JSON remains intact for inspection.
+pub(crate) fn logical_output(
+    bytes: &[u8],
+    runtime: &Path,
+    logical: &Path,
+    duration: i64,
+) -> Result<Vec<u8>, String> {
+    let segments = parse_output(bytes, runtime, duration)?;
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    value["params"]["model"] = serde_json::to_value(logical).map_err(|e| e.to_string())?;
+    let normalized = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+    if parse_output(&normalized, logical, duration)? != segments {
+        return Err("モデルパスの再結合で認識本文・時刻が変化しました".into());
+    }
+    Ok(normalized)
+}
+
 pub fn run_unit(
     config: &WhisperConfig,
     directory: &Path,
@@ -260,6 +279,33 @@ mod tests {
 
     fn output() -> serde_json::Value {
         json!({"model":{"multilingual":true}, "params":{"model":"/model.bin","language":"ja","translate":false},"transcription":[{"offsets":{"from":125,"to":1000},"text":" 点検日 "}]})
+    }
+
+    #[test]
+    fn model_rebinding_normalizes_only_the_verified_model_path_and_retains_raw_content() {
+        let mut original = output();
+        original["extra"] = json!({"retained":"原文"});
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let unavailable = std::path::PathBuf::from(format!("mon-unavailable:{}", "a".repeat(64)));
+        let normalized =
+            logical_output(&bytes, Path::new("/model.bin"), &unavailable, 1_000_000).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&normalized).unwrap();
+        assert_eq!(value["transcription"], original["transcription"]);
+        assert_eq!(value["extra"], original["extra"]);
+        assert_eq!(value["params"]["model"], json!(unavailable));
+        assert_eq!(
+            parse_output(&normalized, &unavailable, 1_000_000).unwrap(),
+            parse_output(&bytes, Path::new("/model.bin"), 1_000_000).unwrap()
+        );
+        assert!(logical_output(&bytes, Path::new("/wrong.bin"), &unavailable, 1_000_000).is_err());
+        original["params"]["translate"] = json!(true);
+        assert!(logical_output(
+            &serde_json::to_vec(&original).unwrap(),
+            Path::new("/model.bin"),
+            &unavailable,
+            1_000_000
+        )
+        .is_err());
     }
 
     #[test]

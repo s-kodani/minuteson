@@ -3,6 +3,7 @@ use crate::audio::{tests::caf_fixture, VerifiedAudio};
 use crate::playback::{AudioSpan, PreparedAudio};
 use sha2::{Digest, Sha256};
 use std::io::Write;
+use std::path::PathBuf;
 
 fn config(directory: &Path) -> SherpaConfig {
     let files: Vec<_> = ["fake-cli", "segmentation ; safe.onnx", "embedding.onnx"]
@@ -28,6 +29,51 @@ fn config(directory: &Path) -> SherpaConfig {
 
 fn output(config: &SherpaConfig, count: Option<u32>, rows: &str) -> Vec<u8> {
     format!("{}\nStarted\n{rows}", config.expected_header(count)).into_bytes()
+}
+
+#[test]
+fn model_rebinding_log_normalization_keeps_overlaps_labels_and_timing_but_cannot_execute_unavailable_paths(
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = config(directory.path());
+    let mut logical = runtime.clone();
+    for proof in [
+        &mut logical.executable,
+        &mut logical.segmentation_model,
+        &mut logical.embedding_model,
+    ] {
+        proof.path = PathBuf::from(format!("mon-unavailable:{}", proof.sha256));
+    }
+    let bytes = output(
+        &runtime,
+        Some(3),
+        "0.000 -- 0.700 speaker_00\n0.400 -- 0.900 speaker_02\n",
+    );
+    let normalized = logical_output(&bytes, &runtime, &logical, Some(3), 1_000_000).unwrap();
+    assert_eq!(
+        parse_output(&normalized, &logical, Some(3), 1_000_000).unwrap(),
+        parse_output(&bytes, &runtime, Some(3), 1_000_000).unwrap()
+    );
+    assert_eq!(
+        std::str::from_utf8(&normalized)
+            .unwrap()
+            .split_once('\n')
+            .unwrap()
+            .1,
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .split_once('\n')
+            .unwrap()
+            .1
+    );
+    assert!(logical.verify(&|| false).is_err());
+    assert!(logical_output(&bytes, &logical, &runtime, Some(3), 1_000_000).is_err());
+    let duplicates_after_clamping = output(
+        &runtime,
+        Some(3),
+        "0.000 -- 1.001 speaker_00\n0.000 -- 1.002 speaker_00\n",
+    );
+    assert!(parse_output(&duplicates_after_clamping, &runtime, Some(3), 1_000_000).is_err());
 }
 
 fn wav(directory: &Path) {

@@ -771,6 +771,7 @@ impl Storage {
 
 #[cfg(test)]
 pub(crate) fn remove_schema_for_test(db: &Connection) {
+    super::jobs::remove_rebinding_schema_for_test(db);
     if db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=25)",

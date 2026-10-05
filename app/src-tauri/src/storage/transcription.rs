@@ -198,6 +198,38 @@ impl Storage {
         Ok(())
     }
 
+    pub(crate) fn verify_meeting_asset_cancellable(
+        &self,
+        meeting_id: &str,
+        asset_id: &str,
+        hash: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let read = || -> Result<(String, i64), String> {
+            self.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row(
+                "SELECT relative_path,size_bytes FROM file_assets WHERE id=?1 AND meeting_id=?2 AND content_hash=?3 AND state='ready'",
+                params![asset_id, meeting_id, hash], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).map_err(|e| e.to_string())
+        };
+        let expected = read()?;
+        let path = self.managed_path(Path::new(&expected.0))?;
+        let proof = crate::local_engine::Fingerprint::capture(&path, cancelled)?;
+        if proof.path
+            != self
+                .root
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .join(&expected.0)
+            || u64::try_from(expected.1).ok() != Some(proof.size)
+            || proof.sha256 != hash
+            || read()? != expected
+            || cancelled()
+        {
+            return Err("解析入力・結果ファイルの参照またはハッシュが一致しません".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_analysis_result(
         &self,
         meeting_id: &str,

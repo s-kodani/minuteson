@@ -135,7 +135,29 @@ pub(crate) fn parse_output(
     num_speakers: Option<u32>,
     duration_us: i64,
 ) -> Result<Vec<Segment>, String> {
-    config.validate(num_speakers)?;
+    config.validate_settings(num_speakers)?;
+    // Fixed logical conditions can be unavailable after restore. Accept only
+    // exact fingerprint placeholders in this pure parser, never at execution.
+    for proof in config.files() {
+        if !proof.path.is_absolute()
+            && proof.path.to_str() != Some(format!("mon-unavailable:{}", proof.sha256).as_str())
+        {
+            return Err("話者分離の固定参照が不正です".into());
+        }
+        if proof
+            .path
+            .to_str()
+            .is_none_or(|p| p.contains(['\0', '\n', '\r']) || p.len() > 4096)
+            || proof.size == 0
+            || proof.sha256.len() != 64
+            || !proof
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("話者分離の固定指紋が不正です".into());
+        }
+    }
     if bytes.len() as u64 > MAX_OUTPUT_BYTES || duration_us <= 0 {
         return Err("話者分離出力のサイズまたは音声時間が不正です".into());
     }
@@ -191,7 +213,58 @@ pub(crate) fn parse_output(
     }
     // A filtered cluster need not appear in the final segments. Keep the
     // native labels, including gaps; empty output may legitimately be silence.
+    validate_saved_segments(&result, num_speakers, duration_us)?;
     Ok(result)
+}
+
+pub(crate) fn validate_saved_segments(
+    segments: &[Segment],
+    num_speakers: Option<u32>,
+    duration: i64,
+) -> Result<(), String> {
+    if duration <= 0
+        || segments.len() > MAX_SEGMENTS
+        || num_speakers.is_some_and(|n| !(1..=MAX_SPEAKERS).contains(&n))
+    {
+        return Err("保存済み話者区間の人数・時間・個数が不正です".into());
+    }
+    let mut previous = None;
+    let mut seen = HashSet::new();
+    for s in segments {
+        if s.start_us < 0
+            || s.start_us >= duration
+            || s.end_us <= s.start_us
+            || s.end_us > duration
+            || s.speaker >= MAX_SPEAKERS
+            || num_speakers.is_some_and(|n| s.speaker >= n)
+            || previous.is_some_and(|p| s.start_us < p)
+            || !seen.insert((s.start_us, s.end_us, s.speaker))
+        {
+            return Err("保存済み話者区間の時刻・順序・人数・重複が不正です".into());
+        }
+        previous = Some(s.start_us);
+    }
+    Ok(())
+}
+
+pub(crate) fn logical_output(
+    bytes: &[u8],
+    runtime: &SherpaConfig,
+    logical: &SherpaConfig,
+    speakers: Option<u32>,
+    duration: i64,
+) -> Result<Vec<u8>, String> {
+    let segments = parse_output(bytes, runtime, speakers, duration)?;
+    let header = runtime.expected_header(speakers);
+    let tail = std::str::from_utf8(bytes)
+        .map_err(|e| e.to_string())?
+        .strip_prefix(&header)
+        .ok_or("実行条件のヘッダーがありません")?;
+    let normalized = format!("{}{tail}", logical.expected_header(speakers)).into_bytes();
+    if parse_output(&normalized, logical, speakers, duration)? != segments {
+        return Err("再結合で保存済み話者区間が変化しました".into());
+    }
+    Ok(normalized)
 }
 
 // Whole-track unit; an unfinished inference is killed and never checkpointed.
