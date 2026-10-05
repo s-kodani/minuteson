@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, Weak};
 
 pub(super) mod review;
+#[cfg(target_os = "macos")]
+pub(in crate::storage::backup) mod transfer;
 
 const LIMIT: usize = 200_000;
 const SCHEMA: &str = "

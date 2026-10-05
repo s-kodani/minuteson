@@ -18,6 +18,28 @@ struct Decision {
     confirmation_id: String,
     consent_at: i64,
 }
+pub(super) fn validate_decision(
+    source: &str,
+    id: &str,
+    intent: &str,
+    json: &str,
+    sha: &str,
+) -> Result<(), String> {
+    if json.len() > 4096 || hash(json.as_bytes()) != sha {
+        return Err("保持の確認記録が変更されています。対象を保持します".into());
+    }
+    let d: Decision = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if d.source != source
+        || d.operation_id != id
+        || d.intent_hash != intent
+        || !portable::valid_hash(&d.observation_hash)
+        || !Uuid::parse_str(&d.confirmation_id).is_ok_and(|u| u.to_string() == d.confirmation_id)
+        || d.consent_at < 0
+    {
+        return Err("保持の確認記録を検証できません。対象を保持します".into());
+    }
+    Ok(())
+}
 impl Registry {
     pub(in crate::storage::backup) fn known(root: &Path) -> Result<Option<Arc<Self>>, String> {
         let all = REGISTRIES
@@ -164,20 +186,10 @@ impl Registry {
         let Some((saved, json, sha)) = row else {
             return Ok(false);
         };
-        if saved != intent || json.len() > 4096 || hash(json.as_bytes()) != sha {
+        if saved != intent {
             return Err("保持の確認記録が変更されています。対象を保持します".into());
         }
-        let d: Decision = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if d.source != source
-            || d.operation_id != id
-            || d.intent_hash != intent
-            || !portable::valid_hash(&d.observation_hash)
-            || !Uuid::parse_str(&d.confirmation_id)
-                .is_ok_and(|u| u.to_string() == d.confirmation_id)
-            || d.consent_at < 0
-        {
-            return Err("保持の確認記録を検証できません。対象を保持します".into());
-        }
+        validate_decision(source, id, intent, &json, &sha)?;
         Ok(true)
     }
     pub(in crate::storage::backup) fn keep(

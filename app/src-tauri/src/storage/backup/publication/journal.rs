@@ -615,6 +615,17 @@ pub(in crate::storage::backup) fn recovery_evidence(
         live: batch_state == "published",
     })
 }
+// A transfer preserves even an invalid/explicitly kept operation, but must not
+// turn its historical proof into ownership of a newly copied inode.
+#[cfg(target_os = "macos")]
+pub(in crate::storage::backup) fn source_record_valid(
+    root: &Path,
+    db: &Connection,
+    id: &str,
+) -> bool {
+    load(db, id)
+        .is_ok_and(|s| std::fs::symlink_metadata(root).is_ok_and(|m| s.manifest.root.matches(&m)))
+}
 pub(in crate::storage::backup) fn recover_selected(
     root: &Path,
     db: &Connection,

@@ -8,6 +8,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
+pub(crate) mod control;
+
 const MAX_ENTRIES: usize = 200_000;
 const MAX_ROWS: usize = 2_000_000;
 const MAX_MANIFEST: usize = 64 * 1024 * 1024;

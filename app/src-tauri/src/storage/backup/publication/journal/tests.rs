@@ -1,6 +1,81 @@
 use super::super::tests::{all_rows, fixture, ids, sealed};
 use super::*;
 
+#[cfg(target_os = "macos")]
+#[test]
+fn control_handoff_keeps_restore_consent_and_historical_root_proofs_without_rewriting_native_db() {
+    let f = fixture();
+    let batch = Uuid::new_v4().to_string();
+    let ids = ids(&f, &batch);
+    let sealed = sealed(&f, &ids);
+    let first = paths(&sealed, &f.target.root)[0].clone();
+    {
+        let db = f.target.connection.lock().unwrap();
+        let install = recorded(&f, &db, &sealed, &ids);
+        std::fs::write(first.join("unknown"), b"kept restoration").unwrap();
+        drop(install);
+    }
+    let item = f
+        .target
+        .recovery_listing()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.source == recovery::Source::RestoreAddition)
+        .unwrap();
+    let mut review = f
+        .target
+        .prepare_recovery(
+            recovery::Source::RestoreAddition,
+            &item.operation_id,
+            &|| false,
+        )
+        .unwrap();
+    assert_eq!(
+        review
+            .resolve(&f.target, &review.preview().confirmation_id, true, &|| {
+                false
+            })
+            .unwrap()
+            .outcome,
+        recovery::Outcome::Retained
+    );
+    drop(review);
+    drop(sealed);
+    drop(ids);
+    let before = all_rows(&f.target.connection.lock().unwrap());
+    let saved = f.target.prepare_relocation_snapshot(&|| false).unwrap();
+    let handoff = saved.prepare_control_handoff(&|| false).unwrap();
+    handoff.verify(&|| false).unwrap();
+    // Inspect the sealed bytes for this test only; production cannot construct
+    // a ControlHandoff from deserialized history or consent supplied by a UI.
+    let path = saved
+        .image()
+        .parent()
+        .unwrap()
+        .join("relocation-control.json");
+    let data: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let history = &data["history"];
+    assert!(history["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["source"] == "restore_addition" && d["operation_id"] == item.operation_id));
+    assert!(history["restores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["operation_id"] == item.operation_id
+            && r["record_valid"] == true
+            && r["state"] == "attention"
+            && r["published"] == false));
+    assert_eq!(all_rows(&f.target.connection.lock().unwrap()), before);
+    assert_eq!(
+        std::fs::read(first.join("unknown")).unwrap(),
+        b"kept restoration"
+    );
+}
+
 #[test]
 fn restore_attention_keep_preserves_files_on_restart_and_disables_old_batch_publication_without_live_edits(
 ) {
