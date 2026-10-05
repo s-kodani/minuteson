@@ -1,7 +1,7 @@
 import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, type RecoveryReceipt } from "./recovery-state.ts";
 export type DataKind = "backup" | "restore" | "recovery" | "relocation";
-export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number; requiredBytes: number; availableBytes: number }
-export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean }
+export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number | null; requiredBytes: number; availableBytes: number; pending: boolean; resumeAllowed: boolean; resumeReason: string | null; copiedPaths: number | null; expectedPaths: number | null }
+export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean; retained: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
 export interface RestorePreview {
   confirmationId: string; batchId: string; archiveId: string; meetingTitles: string[];
@@ -68,12 +68,19 @@ export function assertDataSnapshot(s: DataSnapshot): void {
     const p = s.relocationPreview;
     if (!p || s.kind !== "relocation" || !uuid.test(p.confirmationId) || !uuid.test(p.operationId)
       || !path(p.source) || !path(p.destination) || p.source === p.destination
-      || ![p.meetingCount, p.fileCount, p.requiredBytes, p.availableBytes].every(integer)) fail();
+      || ![p.meetingCount, p.requiredBytes, p.availableBytes].every(integer) || (p.fileCount !== null && !integer(p.fileCount))
+      || typeof p.pending !== "boolean" || typeof p.resumeAllowed !== "boolean" || (p.resumeReason !== null && (typeof p.resumeReason !== "string" || !p.resumeReason))
+      || (p.resumeAllowed !== (p.resumeReason === null))
+      || ((p.copiedPaths === null) !== (p.expectedPaths === null))
+      || (p.copiedPaths !== null && (!integer(p.copiedPaths) || !integer(p.expectedPaths) || p.copiedPaths > p.expectedPaths!))
+      || (!p.pending && (!p.resumeAllowed || p.fileCount === null || p.copiedPaths !== null))
+      || (p.pending && p.resumeAllowed && (p.fileCount === null || p.copiedPaths === null))) fail();
   }
   if (s.relocationReceipt !== null) {
     const r = s.relocationReceipt, p = s.relocationPreview;
     if (!r || s.kind !== "relocation" || !uuid.test(r.operationId) || !path(r.source) || !path(r.destination) || r.source === r.destination
-      || r.restartRequired !== true || !s.restartRequired || !p || p.operationId !== r.operationId || p.source !== r.source || p.destination !== r.destination) fail();
+      || typeof r.retained !== "boolean" || r.restartRequired !== !r.retained || s.restartRequired !== r.restartRequired
+      || !p || (r.retained && !p.pending) || p.operationId !== r.operationId || p.source !== r.source || p.destination !== r.destination) fail();
   }
   const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
@@ -94,10 +101,11 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
   assertDataSnapshot(s);
   const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId ?? s.relocationPreview?.confirmationId;
   if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
-  if ((s.kind === "recovery") !== ["recover", "keep"].includes(action) && action !== "refresh") throw Error("対象と実行する操作が一致しません。");
-  if (["recover", "keep"].includes(action) && (s.kind !== "recovery" || s.phase !== "ready" || !s.recoveryPreview)) throw Error("最新の回収内容を再確認してください。");
+  const keepingMove = action === "keep" && s.kind === "relocation" && s.relocationPreview?.pending;
+  if (!keepingMove && (s.kind === "recovery") !== ["recover", "keep"].includes(action) && action !== "refresh") throw Error("対象と実行する操作が一致しません。");
+  if (["recover", "keep"].includes(action) && (s.phase !== "ready" || (!keepingMove && (s.kind !== "recovery" || !s.recoveryPreview)))) throw Error("最新の確認内容を再確認してください。");
   if (action === "publish" && s.kind === "restore" && (s.phase !== "ready" || !s.restorePreview || s.restorePreview.availableBytes < s.restorePreview.requiredBytes)) throw Error("復元内容と容量を再確認してください。");
-  if (action === "publish" && s.kind === "relocation" && (s.phase !== "ready" || !s.relocationPreview || s.relocationPreview.availableBytes < s.relocationPreview.requiredBytes)) throw Error("保存先と容量を再確認してください。");
+  if (action === "publish" && s.kind === "relocation" && (s.phase !== "ready" || !s.relocationPreview?.resumeAllowed || s.relocationPreview.availableBytes < s.relocationPreview.requiredBytes)) throw Error("保存先と容量を再確認してください。");
   return { token: s.token, confirmationId: id, action };
 }
 export const dataPhaseLabel = (phase: string) => ({ idle: "操作を選択", choosing: "ファイル・フォルダー選択中", reading: "バックアップを読み込み中", verifying: "内容と容量を検証中", reconstructing: "追加する会議を検証中", copying: "会議DBと管理音声をコピー中", handoff: "回復履歴と所有台帳を検証中", switching: "保存先を切替中", ready: "確認待ち", publishing: "保存を確定中", completed: "完了", failed: "要対応", cancelling: "安全に取消中", cancelled: "取消済み", discarding: "確認用コピーを整理中", attention: "保存結果の確認が必要" } as Record<string, string>)[phase] ?? phase;

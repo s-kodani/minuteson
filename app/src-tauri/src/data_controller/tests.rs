@@ -158,6 +158,69 @@ fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operatio
 
 #[cfg(target_os = "macos")]
 #[test]
+fn pending_move_controller_keeps_changed_source_and_replays_receipt_without_restart_fence() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap();
+    let bootstrap =
+        crate::bootstrap::Bootstrap::open(&parent.join("config"), &parent.join("data")).unwrap();
+    let storage = Storage::open(bootstrap.root().into()).unwrap();
+    bootstrap.initialize(&storage).unwrap();
+    storage.create_meeting("original").unwrap();
+    let controller = DataController::default();
+    let (choosing, _, previous) = controller.begin(Kind::Relocation).unwrap();
+    let done = Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &|| false,
+        &|_| {},
+    );
+    let ready = controller
+        .finish(choosing.token.as_deref().unwrap(), done)
+        .unwrap();
+    assert!(controller
+        .begin_request(request(&ready, Action::Keep))
+        .is_err());
+    let (work, _, running) = controller
+        .begin_request(request(&ready, Action::Publish))
+        .unwrap()
+        .unwrap();
+    let cancel = std::cell::Cell::new(false);
+    let done = work.run_with_bootstrap(&storage, &bootstrap, &|| cancel.get(), &|phase| {
+        if phase == "copying" {
+            cancel.set(true);
+        }
+    });
+    let attention = controller
+        .finish(running.token.as_deref().unwrap(), done)
+        .unwrap();
+    assert!(attention.attention_required && !attention.restart_required);
+    storage.create_meeting("newer edits").unwrap();
+    let (reviewing, _, previous) = controller.begin(Kind::Relocation).unwrap();
+    let done =
+        Work::PendingMove(previous).run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    let ready = controller
+        .finish(reviewing.token.as_deref().unwrap(), done)
+        .unwrap();
+    assert!(!ready.relocation_preview.as_ref().unwrap().resume_allowed);
+    assert!(controller
+        .begin_request(request(&ready, Action::Publish))
+        .is_err());
+    let keep = request(&ready, Action::Keep);
+    let (work, _, running) = controller.begin_request(keep.clone()).unwrap().unwrap();
+    let done = work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    let kept = controller
+        .finish(running.token.as_deref().unwrap(), done)
+        .unwrap();
+    assert_eq!(kept.phase, "completed");
+    assert!(kept.relocation_receipt.unwrap().retained);
+    assert!(!kept.restart_required);
+    assert!(controller.begin_request(keep).unwrap().is_none());
+    assert!(controller.begin(Kind::Relocation).is_ok());
+    assert!(storage.create_meeting("still writable").is_ok());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn relocation_controller_refresh_loss_keeps_selection_and_cancelled_copy_requires_attention() {
     let root = tempfile::tempdir().unwrap();
     let parent = root.path().canonicalize().unwrap();

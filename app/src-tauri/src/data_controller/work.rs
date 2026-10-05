@@ -41,6 +41,8 @@ pub(super) enum Work {
     Select(Kind, Result<Option<PathBuf>, String>, Option<Selection>),
     Request(Selection, Request),
     Recovery(recovery::Source, String, Option<Selection>),
+    #[cfg(target_os = "macos")]
+    PendingMove(Option<Selection>),
 }
 
 #[derive(Default)]
@@ -75,6 +77,32 @@ impl Work {
         progress: &impl Fn(&str),
     ) -> Completion {
         match self {
+            Self::PendingMove(previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    bootstrap
+                        .prepare_pending_move(storage, cancelled, progress)
+                        .map(|p| {
+                            Selection::Relocation(crate::bootstrap::movement::Prepared::Pending(
+                                Box::new(p),
+                            ))
+                        })
+                }))
+                .unwrap_or_else(|_| {
+                    Err("未完了移動の確認が予期せず停止しました。ファイルを保持します".into())
+                });
+                match result {
+                    Ok(selection) => Completion {
+                        selection: Some(selection),
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        cancelled: cancelled(),
+                        ..Completion::default()
+                    },
+                }
+            }
             Self::Select(Kind::Relocation, path, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -121,6 +149,14 @@ impl Work {
                                 progress,
                             )?)
                         }
+                        Action::Keep => {
+                            completion.relocation = Some(prepared.keep(
+                                bootstrap,
+                                storage,
+                                &request.confirmation_id,
+                                cancelled,
+                            )?)
+                        }
                         _ => return Err("確認対象と保存先変更の操作が一致しません".into()),
                     }
                     Ok(())
@@ -157,6 +193,10 @@ impl Work {
         progress: &impl Fn(&str),
     ) -> Completion {
         match self {
+            #[cfg(target_os = "macos")]
+            Self::PendingMove(_) => {
+                Completion::failed("起動設定から未完了移動を確認してください".into())
+            }
             Self::Recovery(source, id, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);

@@ -34,7 +34,7 @@ fn move_confirmation_creates_no_target_and_preserves_same_meeting_and_original_o
     let mut prepared = f.prepared();
     let preview = prepared.preview();
     assert_eq!(preview.meeting_count, 1);
-    assert_eq!(preview.file_count, 1);
+    assert_eq!(preview.file_count, Some(1));
     assert!(preview.required_bytes > 0);
     assert!(!preview.destination.exists());
     assert!(f.bootstrap.view().unwrap().pending_operation_id.is_none());

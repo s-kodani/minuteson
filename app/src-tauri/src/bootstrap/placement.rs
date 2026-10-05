@@ -139,7 +139,7 @@ impl Bootstrap {
     }
     // None loads ONLY an existing owned journal for cold activation. It never
     // creates a journal/lock, adopts a target, or requires the old source root.
-    fn open_placement<'a>(
+    pub(super) fn open_placement<'a>(
         &'a self,
         pending: PendingMove,
         snapshot_manifest: Option<&Manifest>,
@@ -428,6 +428,61 @@ impl Bootstrap {
 }
 
 impl Placement<'_> {
+    pub(super) fn inspect_partial(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Progress, String> {
+        self.require_pending()?;
+        let controls = history::allowed(self)?;
+        let mut paths = vec![String::new()];
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(relative) = paths.pop() {
+            check(cancelled)?;
+            let path = self.pending.target.join(&relative);
+            for child in std::fs::read_dir(&path).map_err(|e| e.to_string())? {
+                check(cancelled)?;
+                let child = child.map_err(|e| e.to_string())?;
+                let name = child
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| "配置名が不正です")?;
+                let name = if relative.is_empty() {
+                    name
+                } else {
+                    format!("{relative}/{name}")
+                };
+                if relative.is_empty() && controls.contains(&name.as_str()) {
+                    continue;
+                }
+                let node = self
+                    .nodes
+                    .get(&name)
+                    .ok_or("移動先に所有不明の対象があります。上書きしません")?;
+                if node.state == "pending" {
+                    return Err("所有記録前の対象を採用しません".into());
+                }
+                self.node_path(node)?;
+                if node.state == "copied" && !node.entry.directory {
+                    self.check_file(node, cancelled)?;
+                }
+                if node.entry.directory {
+                    paths.push(name.clone());
+                }
+                if !seen.insert(name) || seen.len() > self.nodes.len() {
+                    return Err("配置件数が不正です".into());
+                }
+            }
+        }
+        if self
+            .nodes
+            .iter()
+            .any(|(name, node)| node.state != "pending" && !seen.contains(name))
+        {
+            return Err("配置した対象が欠落しています。再作成しません".into());
+        }
+        self.guard()?;
+        self.progress()
+    }
     fn guard(&self) -> Result<(), String> {
         if self.uncertain {
             return Err("配置台帳の同期が未確定です。旧保存先を保持します".into());

@@ -395,6 +395,12 @@ async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View,
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
+    DataController::review_move(&data_app(&window)?)
+}
+
 #[tauri::command]
 async fn get_recovery_items(
     window: WebviewWindow,
@@ -1581,6 +1587,7 @@ pub fn run() {
             get_data_operation,
             #[cfg(target_os = "macos")]
             get_storage_bootstrap,
+            review_storage_move,
             get_recovery_items,
             review_recovery_item,
             get_data_operation_availability,

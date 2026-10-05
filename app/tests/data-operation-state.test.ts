@@ -57,7 +57,7 @@ test("valid receipt is terminal, not a busy partial publication", () => {
 });
 
 const relocation = (): DataSnapshot => ({ ...ready(), kind: "relocation", restorePreview: null,
-  relocationPreview: { confirmationId: id(2), operationId: id(3), source: "/old", destination: "/new", meetingCount: 3, fileCount: 8, requiredBytes: 64, availableBytes: 128 } });
+  relocationPreview: { confirmationId: id(2), operationId: id(3), source: "/old", destination: "/new", meetingCount: 3, fileCount: 8, requiredBytes: 64, availableBytes: 128, pending: false, resumeAllowed: true, resumeReason: null, copiedPaths: null, expectedPaths: null } });
 test("relocation uses only server confirmation, never source or target paths in requests", () => {
   assert.deepEqual(dataRequest(relocation(), "publish"), { token: id(1), confirmationId: id(2), action: "publish" });
   assert.doesNotThrow(() => dataRequest(relocation(), "refresh"));
@@ -73,7 +73,7 @@ test("relocation requires current confirmation and capacity, not a failed previe
 });
 test("relocation receipt binds both roots and restart, and cannot be retried or forged", () => {
   const s: DataSnapshot = { ...relocation(), phase: "completed", retryAllowed: false, restartRequired: true,
-    relocationReceipt: { operationId: id(3), source: "/old", destination: "/new", restartRequired: true } };
+    relocationReceipt: { operationId: id(3), source: "/old", destination: "/new", restartRequired: true, retained: false } };
   assert.doesNotThrow(() => assertDataSnapshot(s));
   assert.throws(() => dataRequest(s, "publish"));
   for (const change of [{ operationId: id(5) }, { source: "/foreign" }, { destination: "/foreign" }, { restartRequired: false }]) assert.throws(() => assertDataSnapshot({ ...s, relocationReceipt: { ...s.relocationReceipt!, ...change } }));
@@ -86,4 +86,21 @@ test("ambiguous cutover requires restart without pretending a partial copy is co
   assert.throws(() => dataRequest(s, "publish"));
   assert.throws(() => assertDataSnapshot({ ...s, phase: "completed" }));
   assert.throws(() => assertDataSnapshot({ ...s, attentionRequired: false }));
+});
+
+test("pending move with changed source permits keep, never publish or invented file counts", () => {
+  const s = relocation(); Object.assign(s.relocationPreview!, { pending: true, resumeAllowed: false, resumeReason: "source changed", fileCount: null });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.deepEqual(dataRequest(s, "keep"), { token: id(1), confirmationId: id(2), action: "keep" });
+  assert.throws(() => dataRequest(s, "publish"));
+  assert.throws(() => dataRequest({ ...s, phase: "failed" }, "keep"));
+  assert.throws(() => assertDataSnapshot({ ...s, relocationPreview: { ...s.relocationPreview!, resumeAllowed: true } }));
+});
+test("retained move receipt keeps old root writable without claiming cutover", () => {
+  const s = relocation(); Object.assign(s.relocationPreview!, { pending: true, copiedPaths: 1, expectedPaths: 8 });
+  Object.assign(s, { phase: "completed", retryAllowed: false, relocationReceipt: { operationId: id(3), source: "/old", destination: "/new", restartRequired: false, retained: true } });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.throws(() => dataRequest(s, "keep"));
+  assert.throws(() => assertDataSnapshot({ ...s, restartRequired: true }));
+  assert.throws(() => assertDataSnapshot({ ...s, relocationReceipt: { ...s.relocationReceipt!, retained: false } }));
 });

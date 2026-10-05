@@ -36,9 +36,14 @@ pub(crate) struct MovePreview {
     pub source: PathBuf,
     pub destination: PathBuf,
     pub meeting_count: usize,
-    pub file_count: usize,
+    pub file_count: Option<usize>,
     pub required_bytes: u64,
     pub available_bytes: u64,
+    pub pending: bool,
+    pub resume_allowed: bool,
+    pub resume_reason: Option<String>,
+    pub copied_paths: Option<usize>,
+    pub expected_paths: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -48,6 +53,7 @@ pub(crate) struct MoveReceipt {
     pub source: PathBuf,
     pub destination: PathBuf,
     pub restart_required: bool,
+    pub retained: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -224,15 +230,17 @@ impl DataController {
         );
         #[cfg(target_os = "macos")]
         let allowed = allowed
-            || matches!(
-                (selection, request.action),
-                (Selection::Relocation(_), Action::Refresh | Action::Publish)
-            );
+            || match (selection, request.action) {
+                (Selection::Relocation(_), Action::Refresh) => true,
+                (Selection::Relocation(p), Action::Publish) => p.preview().resume_allowed,
+                (Selection::Relocation(p), Action::Keep) => p.preview().pending,
+                _ => false,
+            };
         if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
         }
         if s.snapshot.kind == Some(Kind::Relocation)
-            && request.action == Action::Publish
+            && matches!(request.action, Action::Publish | Action::Keep)
             && s.snapshot.phase != "ready"
         {
             return Err("保存先変更の確認が失効しています。同じ対象を再確認してください".into());
@@ -396,6 +404,16 @@ impl DataController {
             lease,
             Work::Recovery(source, id, previous),
         );
+        Ok(snapshot)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn review_move(app: &AppHandle) -> Result<Snapshot, String> {
+        let lease = work::Admission::acquire(app)?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::Relocation)?;
+        let token = snapshot.token.clone().ok_or("確認操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(app, token, cancel, lease, Work::PendingMove(previous));
         Ok(snapshot)
     }
 

@@ -3,7 +3,59 @@
 use super::*;
 use crate::data_controller::{MovePreview, MoveReceipt};
 
-pub(crate) struct Prepared {
+pub(crate) enum Prepared {
+    New(NewMove),
+    Pending(Box<super::move_recovery::Review>),
+}
+impl Prepared {
+    pub(crate) fn preview(&self) -> MovePreview {
+        match self {
+            Self::New(p) => p.preview(),
+            Self::Pending(p) => p.preview(),
+        }
+    }
+    pub(crate) fn refresh(
+        &mut self,
+        b: &Bootstrap,
+        s: &Storage,
+        cancelled: &impl Fn() -> bool,
+        progress: &impl Fn(&str),
+    ) -> Result<(), String> {
+        match self {
+            Self::New(p) => p.refresh(b, s, cancelled, progress),
+            Self::Pending(p) => {
+                *p = Box::new(b.prepare_pending_move(s, cancelled, progress)?);
+                Ok(())
+            }
+        }
+    }
+    pub(crate) fn publish(
+        &mut self,
+        b: &Bootstrap,
+        s: &Storage,
+        confirmation: &str,
+        cancelled: &impl Fn() -> bool,
+        progress: &impl Fn(&str),
+    ) -> Result<MoveReceipt, String> {
+        match self {
+            Self::New(p) => p.publish(b, s, confirmation, cancelled, progress),
+            Self::Pending(p) => p.resume(b, s, confirmation, cancelled, progress),
+        }
+    }
+    pub(crate) fn keep(
+        &mut self,
+        b: &Bootstrap,
+        s: &Storage,
+        confirmation: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<MoveReceipt, String> {
+        match self {
+            Self::Pending(p) => p.keep(b, s, confirmation, cancelled),
+            Self::New(_) => Err("未完了移動の保持確認ではありません".into()),
+        }
+    }
+}
+pub(crate) struct NewMove {
     preview: MovePreview,
     parent: PathBuf,
     parent_file: File,
@@ -58,16 +110,21 @@ impl Bootstrap {
         }
         let operation_id = Uuid::new_v4().to_string();
         let target = parent.join(format!("MON-meetings-{operation_id}"));
-        let mut prepared = Prepared {
+        let mut prepared = NewMove {
             preview: MovePreview {
                 confirmation_id: String::new(),
                 operation_id,
                 source: storage.root().into(),
                 destination: target,
                 meeting_count: 0,
-                file_count: 0,
+                file_count: None,
                 required_bytes: 0,
                 available_bytes: 0,
+                pending: false,
+                resume_allowed: true,
+                resume_reason: None,
+                copied_paths: None,
+                expected_paths: None,
             },
             parent,
             parent_file,
@@ -77,11 +134,11 @@ impl Bootstrap {
             manifest_hash: String::new(),
         };
         prepared.refresh(self, storage, cancelled, progress)?;
-        Ok(prepared)
+        Ok(Prepared::New(prepared))
     }
 }
 
-impl Prepared {
+impl NewMove {
     pub(crate) fn preview(&self) -> MovePreview {
         self.preview.clone()
     }
@@ -168,7 +225,7 @@ impl Prepared {
             .find(|t| t.name == "meetings")
             .ok_or("会議の件数がありません")?
             .rows;
-        preview.file_count = manifest.entries.iter().filter(|e| !e.directory).count() + 1;
+        preview.file_count = Some(manifest.entries.iter().filter(|e| !e.directory).count() + 1);
         preview.required_bytes = required;
         preview.available_bytes = available;
         self.manifest_hash = snapshot.manifest_hash().into();
@@ -246,6 +303,7 @@ impl Prepared {
             source: self.preview.source.clone(),
             destination: selected.meeting_root,
             restart_required: selected.restart_required,
+            retained: false,
         })
     }
 }

@@ -74,5 +74,52 @@ async (page) => {
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "forged receipt unlocked writes");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "forged receipt published");
   results.push("foreign receipt rejected, unknown IPC state locks writes");
+
+  const pendingReview = async options => {
+    await boot();
+    await page.evaluate(async values => {
+      Object.assign(window.dataFixture, values);
+      window.dataFixture.pendingMove = { operationId: crypto.randomUUID(), confirmationId: crypto.randomUUID(), source: "/safe/root", destination: "/safe/chosen/retained-copy", meetingCount: 3, requiredBytes: 67108864, availableBytes: 1073741824 };
+      await window.dataFixture.changed({});
+    }, options);
+    await region().getByRole("button", { name: "未完了移動を確認", exact: true }).click();
+    await dialog().waitFor();
+  };
+  await pendingReview({});
+  check((await dialog().innerText()).includes("2 / 8"), "partial verified progress not displayed");
+  check(await count() === 0, "review automatically resumed");
+  await dialog().getByRole("button", { name: "照合して移動を続行", exact: true }).click(); await finished();
+  check(await page.evaluate(() => window.dataFixture.published) === 1, "pending resume duplicated or did not select");
+  results.push("pending review requires explicit resume and shows actual verified progress");
+
+  await pendingReview({ resumeAllowed: false });
+  check(await dialog().getByRole("button", { name: "照合して移動を続行", exact: true }).isDisabled(), "changed source permits resume");
+  check((await dialog().innerText()).includes("ファイル 確認不可 件"), "unknown file count fabricated");
+  check(!await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).isDisabled(), "non-destructive keep blocked by unknown source");
+  await page.screenshot({ path: "output/playwright/storage-move-pending-review.png" });
+  await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
+  await region().getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
+  check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "keep did not release pending move");
+  check(!await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "keep incorrectly retires old root");
+  await region().getByText("保持した途中コピー（1 件）", { exact: true }).click();
+  check((await region().innerText()).includes("/safe/chosen/retained-copy") && (await region().innerText()).includes("保持して中止済み"), "kept copy history lost");
+  check(await page.evaluate(() => window.dataFixture.published) === 0, "keep selected old partial copy");
+  await page.screenshot({ path: "output/playwright/storage-move-retained.png" });
+  results.push("changed source blocks resume; keep preserves old root writes and copy history");
+
+  await pendingReview({});
+  const oldId = await page.evaluate(() => window.dataFixture.snapshot.relocationPreview.confirmationId);
+  await dialog().getByRole("button", { name: "同じ保存先を再確認", exact: true }).click(); await dialog().waitFor();
+  check(await page.evaluate(() => window.dataFixture.snapshot.relocationPreview.confirmationId) !== oldId, "pending refresh retained stale confirmation");
+  await page.keyboard.press("Escape"); await dialog().waitFor({ state: "hidden" });
+  check(await count() === 1 && await page.evaluate(() => window.dataFixture.pendingMove !== null), "dismiss cleared durable pending intent");
+  results.push("pending refresh issues fresh confirmation; Escape discards review only");
+
+  await pendingReview({ reviewLost: true, suppressEvents: true, resumeAllowed: false, mode: "lost" });
+  await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
+  await region().getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
+  check(await count() === 1 && await page.evaluate(() => window.dataFixture.keptMoves.length) === 1, "lost keep result duplicated durable decision");
+  check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "lost keep acknowledgement remains locked after verified read");
+  results.push("lost pending review and keep replies recover via read without duplicate");
   return results;
 }

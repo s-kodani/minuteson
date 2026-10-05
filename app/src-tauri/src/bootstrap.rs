@@ -18,6 +18,7 @@ const LOCK: &str = ".bootstrap.lock";
 const STAMP: &[u8] = b"MON bootstrap 1\n";
 const LIMIT: u64 = 32 * 1024;
 
+pub(crate) mod move_recovery;
 pub(crate) mod movement;
 #[allow(dead_code)] // Native coordinator/UI and cutover integration follow.
 pub(crate) mod placement;
@@ -269,6 +270,7 @@ pub(crate) struct View {
     pub origin: String,
     pub pending_operation_id: Option<String>,
     pub pending_target: Option<PathBuf>,
+    pub kept_moves: Vec<move_recovery::KeptMove>,
 }
 pub(crate) struct Bootstrap {
     directory: File,
@@ -645,6 +647,7 @@ impl Bootstrap {
             .into(),
             pending_operation_id: r.pending_move.as_ref().map(|p| p.operation_id.clone()),
             pending_target: r.pending_move.as_ref().map(|p| p.target.clone()),
+            kept_moves: self.kept_moves(r)?,
         })
     }
     // Internal intent lifecycle for relocation. No command accepts these paths;
