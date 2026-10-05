@@ -1,6 +1,6 @@
 export interface DeletionPreview {
   confirmationId: string; operationId: string; meetingId: string; title: string;
-  phase: "review" | "not_started" | "files" | "reconfirmation" | "database" | "awaiting_ack" | "retained" | "completed";
+  phase: "review" | "not_started" | "files" | "reconfirmation" | "database_files" | "database_reconfirmation" | "database" | "awaiting_ack" | "retained" | "completed";
   pending: boolean; executeAllowed: boolean; resumeReason: string | null; keepAllowed: boolean;
   pathCount: number; processedPaths: number; fileCount: number; missingCount: number;
   changedCount: number; unregisteredCount: number; bytes: number; rowCount: number; rowPhaseCommitted: boolean;
@@ -17,20 +17,20 @@ const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 
 const fail = (): never => { throw Error("削除の状態が不正です。対象を再確認してください。"); };
 export function assertDeletionPreview(p: DeletionPreview): void {
   if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(uuid) || !text(p.title)
-    || !["review", "not_started", "files", "reconfirmation", "database", "awaiting_ack", "retained", "completed"].includes(p.phase)
+    || !["review", "not_started", "files", "reconfirmation", "database_files", "database_reconfirmation", "database", "awaiting_ack", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.rowPhaseCommitted].every(v => typeof v === "boolean")
     || (p.resumeReason !== null && !text(p.resumeReason))
     || (p.executeAllowed && p.resumeReason !== null)
     || ![p.pathCount, p.processedPaths, p.fileCount, p.missingCount, p.changedCount, p.unregisteredCount, p.bytes, p.rowCount].every(count)
     || p.pathCount > 200000 || p.processedPaths > p.pathCount || p.fileCount > p.pathCount
     || p.missingCount + p.changedCount + p.unregisteredCount > p.fileCount
-    || (p.pending !== ["not_started", "files", "reconfirmation", "database", "awaiting_ack"].includes(p.phase))
+    || (p.pending !== ["not_started", "files", "reconfirmation", "database_files", "database_reconfirmation", "database", "awaiting_ack"].includes(p.phase))
     || (p.keepAllowed !== ["not_started", "retained"].includes(p.phase))
     || (["review", "not_started", "retained"].includes(p.phase) && (p.processedPaths !== 0 || p.rowPhaseCommitted))
     || (["files", "reconfirmation"].includes(p.phase) && p.rowPhaseCommitted)
     || (p.reconfirmationAllowed !== undefined && typeof p.reconfirmationAllowed !== "boolean")
-    || (p.reconfirmationAllowed && (p.phase !== "files" || p.executeAllowed))
-    || (p.phase === "reconfirmation" ? (!count(p.previousProcessedPaths) || !count(p.previousPathCount) || p.previousPathCount > 200000 || p.previousProcessedPaths > p.previousPathCount || p.processedPaths !== 0 || p.reconfirmationAllowed !== false) : (p.previousProcessedPaths != null || p.previousPathCount != null))
+    || (p.reconfirmationAllowed && (!["files", "database_files", "database", "awaiting_ack"].includes(p.phase) || p.executeAllowed))
+    || (isDeletionReconfirmation(p.phase) ? (!count(p.previousProcessedPaths) || !count(p.previousPathCount) || p.previousPathCount > 200000 || p.previousProcessedPaths > p.previousPathCount || p.processedPaths !== 0 || p.reconfirmationAllowed !== false) : (p.previousProcessedPaths != null || p.previousPathCount != null))
     || (["database", "awaiting_ack", "completed"].includes(p.phase) && p.processedPaths !== p.pathCount)
     || (["awaiting_ack", "completed"].includes(p.phase) && !p.rowPhaseCommitted)
     || (["retained", "completed"].includes(p.phase) && p.executeAllowed)) fail();
@@ -68,4 +68,5 @@ export function assertDeletionPathPage(page: DeletionPathPage, confirmation: str
   }
   if (new Set(page.entries.map(e => e.relativePath)).size !== page.entries.length) fail();
 }
-export const deletionPhaseLabel = (phase: DeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "確認記録を保存済み・ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再同意待ち", database: "DB削除・後処理の途中", awaiting_ack: "後処理の完了応答を未確認", retained: "未開始のまま保持して中止", completed: "削除完了を確認済み" })[phase];
+export const isDeletionReconfirmation = (phase: DeletionPreview["phase"] | undefined) => phase === "reconfirmation" || phase === "database_reconfirmation";
+export const deletionPhaseLabel = (phase: DeletionPreview["phase"]) => ({ review: "削除前の確認", not_started: "確認記録を保存済み・ファイル削除は未開始", files: "ファイル削除の途中", reconfirmation: "変更後の残り範囲への再同意待ち", database_files: "DB段階を保持した残りファイルの削除", database_reconfirmation: "DB段階を保持した残り範囲への再同意待ち", database: "DB削除・後処理の途中", awaiting_ack: "後処理の完了応答を未確認", retained: "未開始のまま保持して中止", completed: "削除完了を確認済み" })[phase];

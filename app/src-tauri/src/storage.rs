@@ -148,7 +148,7 @@ impl Storage {
 
     #[cfg(unix)]
     pub(crate) fn deletion_resume_restart_required(&self) -> bool {
-        self.deletion_fence.restart_required()
+        self.deletion_fence.resume_restart_required()
     }
 
     pub(crate) fn data_write_blocked(&self) -> bool {
@@ -178,7 +178,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let mut query = db.prepare("SELECT DISTINCT meeting_id FROM maintenance_operations WHERE kind='delete_meeting' AND state NOT IN ('completed','recovered') AND meeting_id IS NOT NULL ORDER BY meeting_id").map_err(|e|e.to_string())?;
+        let mut query = db.prepare(&format!("SELECT DISTINCT meeting_id FROM maintenance_operations WHERE kind='delete_meeting' AND {} AND meeting_id IS NOT NULL ORDER BY meeting_id", deletion::fence::UNFINISHED)).map_err(|e|e.to_string())?;
         let result = query
             .query_map([], |r| r.get(0))
             .map_err(|e| e.to_string())?

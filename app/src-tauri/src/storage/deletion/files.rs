@@ -368,12 +368,14 @@ impl Census {
         db: &Connection,
         prepared: &super::intent::Prepared,
         check: &impl Fn() -> bool,
+        reserved: Option<&str>,
     ) -> Result<Self, String> {
         cancel(check)?;
         super::intent::read_database(db, prepared.operation(), check)?.matches_saved(prepared)?;
-        if storage
-            .maintenance
-            .load(std::sync::atomic::Ordering::Acquire)
+        if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0']))
+            || storage
+                .maintenance
+                .load(std::sync::atomic::Ordering::Acquire)
             || storage.retired.load(std::sync::atomic::Ordering::Acquire)
         {
             return Err("削除済み範囲を確認する保存領域の状態が一致しません".into());
@@ -391,8 +393,8 @@ impl Census {
         }
         let records = Records::read(db, &scope.meeting_id)?;
         let directory = storage.managed_anchor.directory_ref()?;
-        let entries = inventory(directory, &scope.meeting_id, &records, check, None)?;
-        if inventory(directory, &scope.meeting_id, &records, check, None)? != entries {
+        let entries = inventory(directory, &scope.meeting_id, &records, check, reserved)?;
+        if inventory(directory, &scope.meeting_id, &records, check, reserved)? != entries {
             return Err("削除済み範囲の再確認中に対象が変更されました".into());
         }
         super::database::verify_rows_deleted(db, scope, check)?;

@@ -35,6 +35,36 @@ test("unregistered contents require separate decision and cannot be used for oth
   const backup: DataSnapshot = { ...ready(), kind: "backup", deletionPreview: null, backupPreview: { confirmationId: id(2), destination: "/safe/file.monbackup", replacesExisting: true } };
   assert.throws(() => dataRequest(backup, "delete_including_unregistered"));
 });
+test("database remaining review preserves committed rows and demands new unknown consent", () => {
+  for (const rowPhaseCommitted of [false, true]) {
+    const s = ready();
+    Object.assign(s.deletionPreview!, { phase: "database_reconfirmation", pending: true, rowPhaseCommitted, unregisteredCount: 1, reconfirmationAllowed: false, previousProcessedPaths: 3, previousPathCount: 3 });
+    assert.doesNotThrow(() => assertDataSnapshot(s));
+    assert.throws(() => dataRequest(s, "publish"));
+    assert.equal(dataRequest(s, "delete_including_unregistered").action, "delete_including_unregistered");
+    assert.throws(() => dataRequest(s, "keep"));
+    for (const patch of [{ previousProcessedPaths: 4 }, { processedPaths: 1 }, { keepAllowed: true }, { reconfirmationAllowed: true }]) assert.throws(() => assertDeletionPreview({ ...s.deletionPreview!, ...patch }));
+  }
+});
+test("database and acknowledgement phases may inspect a changed scope only when server-advertised", () => {
+  for (const phase of ["database", "awaiting_ack", "database_files"] as const) {
+    const s = ready();
+    Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });
+    Object.assign(s.deletionPreview!, { phase, pending: true, rowPhaseCommitted: true, processedPaths: phase === "database_files" ? 1 : 3, executeAllowed: false, resumeReason: "現在の範囲が変更", reconfirmationAllowed: true });
+    assert.equal(dataRequest(s, "review_remaining").action, "review_remaining");
+    assert.throws(() => dataRequest(s, "publish"));
+    assert.throws(() => dataRequest(s, "keep"));
+    s.deletionPreview!.reconfirmationAllowed = false;
+    assert.throws(() => dataRequest(s, "review_remaining"));
+  }
+});
+test("fixed database residual files retain old unknown policy rather than accepting a second choice", () => {
+  const s = ready();
+  Object.assign(s.deletionPreview!, { phase: "database_files", pending: true, rowPhaseCommitted: true, unregisteredCount: 1, processedPaths: 1 });
+  assert.doesNotThrow(() => dataRequest(s, "publish"));
+  assert.throws(() => dataRequest(s, "delete_including_unregistered"));
+  assert.throws(() => dataRequest(s, "keep"));
+});
 test("failed or cancelled deletion requires explicit refreshed confirmation", () => {
   for (const phase of ["failed", "cancelled"]) {
     const s = { ...ready(), phase };

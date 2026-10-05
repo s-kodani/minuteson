@@ -1,5 +1,77 @@
 use super::*;
 
+#[test]
+fn deletion_database_reconfirmation_controller_replays_inspection_requires_unknown_choice_and_resumes_fixed_stage(
+) {
+    let f = Fixture::new();
+    let ready = f.ready();
+    let (work, _, started) = f
+        .controller
+        .begin_request(f.request(&ready, Action::Publish))
+        .unwrap()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let paused = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+        if phase == "deleting_database" {
+            stop.store(true, Ordering::Release);
+        }
+    });
+    assert!(!f.audio.exists());
+    std::fs::create_dir_all(f.audio.parent().unwrap()).unwrap();
+    let unknown = f.audio.parent().unwrap().join("new-unknown.txt");
+    std::fs::write(&unknown, b"NEW DB STAGE FILE").unwrap();
+    let pending = f.run(&paused, Action::Refresh);
+    let old = pending.deletion_preview.as_ref().unwrap();
+    assert_eq!(old.phase, "database");
+    assert!(!old.execute_allowed && old.reconfirmation_allowed);
+    let request = f.request(&pending, Action::ReviewRemaining);
+    let (work, _, started) = f
+        .controller
+        .begin_request(request.clone())
+        .unwrap()
+        .unwrap();
+    let reviewed = f.finish(work, &started, &|| false, &|_| {});
+    let p = reviewed.deletion_preview.as_ref().unwrap();
+    assert_eq!(p.phase, "database_reconfirmation");
+    assert!(!p.row_phase_committed && !p.keep_allowed);
+    assert!(p.execute_allowed && p.unregistered_count == 1);
+    assert_eq!(renewed_audits(&f), 0);
+    assert!(f.controller.begin_request(request).unwrap().is_none());
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Publish))
+        .is_err());
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Keep))
+        .is_err());
+    let (work, _, started) = f
+        .controller
+        .begin_request(f.request(&reviewed, Action::DeleteIncludingUnregistered))
+        .unwrap()
+        .unwrap();
+    let stop = AtomicBool::new(false);
+    let stopped = f.finish(work, &started, &|| stop.load(Ordering::Acquire), &|phase| {
+        if phase == "delete_scope_fixed" {
+            stop.store(true, Ordering::Release);
+        }
+    });
+    assert_eq!(
+        stopped.deletion_preview.as_ref().unwrap().phase,
+        "database_files"
+    );
+    assert_eq!(renewed_audits(&f), 1);
+    assert_eq!(std::fs::read(&unknown).unwrap(), b"NEW DB STAGE FILE");
+    assert!(f.storage.get_meeting(&f.id).unwrap().is_some());
+    let checked = f.run(&stopped, Action::Refresh);
+    let done = f.run(&checked, Action::Publish);
+    assert!(done.deletion_receipt.unwrap().deleted);
+    assert_eq!(renewed_audits(&f), 1);
+    assert!(!unknown.exists());
+    assert!(f.storage.get_meeting(&f.id).unwrap().is_none());
+    assert!(f.storage.get_meeting(&f.other).unwrap().is_some());
+}
+
 fn remaining_fixture() -> (Fixture, Snapshot) {
     let f = Fixture::new();
     let ready = f.ready();
@@ -56,6 +128,10 @@ fn deletion_reconfirmation_review_is_read_only_replayable_and_needs_new_unknown_
     assert_eq!(p.unregistered_count, 1);
     assert_eq!(renewed_audits(&f), 0);
     assert_eq!(std::fs::read(&unknown).unwrap(), b"NEW UNREGISTERED FILE");
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Publish))
+        .is_err());
     assert_eq!(
         std::fs::read(&f.audio).unwrap(),
         b"CHANGED REGISTERED AUDIO"
@@ -601,11 +677,13 @@ fn deletion_controller_unregistered_decision_is_separate_and_cannot_apply_to_bac
         ready.deletion_preview.as_ref().unwrap().unregistered_count,
         1
     );
-    let failed = f.run(&ready, Action::Publish);
-    assert_eq!(failed.phase, "failed");
+    assert!(f
+        .controller
+        .begin_request(f.request(&ready, Action::Publish))
+        .is_err());
     assert!(unknown.exists());
     assert!(deletion::listing(&f.storage).unwrap().items.is_empty());
-    let refreshed = f.run(&failed, Action::Refresh);
+    let refreshed = f.run(&ready, Action::Refresh);
     assert_ne!(
         ready.deletion_preview.unwrap().confirmation_id,
         refreshed.deletion_preview.as_ref().unwrap().confirmation_id

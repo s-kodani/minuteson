@@ -329,15 +329,25 @@ impl Prepared {
     pub(super) fn consent_at(&self) -> i64 {
         self.consent_at
     }
-    pub(super) fn verify_metadata(&self, db: &Connection, progress: &str) -> Result<(), String> {
+    pub(super) fn verify_metadata(
+        &self,
+        db: &Connection,
+        progress: &str,
+        database_phase: Option<super::completion::Phase>,
+    ) -> Result<(), String> {
         let (meeting,json,sha,consent,state,saved,created,updated):(Option<String>,String,String,Option<i64>,String,String,i64,i64)=db.query_row("SELECT meeting_id,target_manifest_json,target_hash,consent_at,state,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'",params![self.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e|e.to_string())?;
-        if meeting.as_deref() != Some(self.manifest.meeting_id.as_str())
+        let expected_meeting = if database_phase.is_some_and(|phase| phase.rows_committed()) {
+            None
+        } else {
+            Some(self.manifest.meeting_id.as_str())
+        };
+        if meeting.as_deref() != expected_meeting
             || json != encode(&self.intent, MAX_INTENT)?
             || sha != hash(json.as_bytes())
             || consent != Some(self.consent_at)
             || created != self.consent_at
             || updated < created
-            || state != "installing"
+            || state != database_phase.map_or("installing", |phase| phase.state())
             || saved != progress
         {
             return Err("削除の固定記録または進捗が変更されています".into());
@@ -382,7 +392,7 @@ impl Prepared {
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        if db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))", params![self.operation], |r| r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
+        if super::fence::other_pending(db, Some(&self.operation))? {
             return Err("別の未完了保存領域操作があります".into());
         }
         let current = Census::capture_locked(
@@ -589,7 +599,7 @@ fn prepare_inner(
         storage.deletion_fence.arm(&db)?;
         return Ok(saved);
     }
-    let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention'))",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    let pending = super::fence::other_pending(&tx, None)?;
     if pending {
         return Err("未完了の保存領域操作を確認・解決してから削除を確認してください".into());
     }

@@ -198,6 +198,47 @@ async (page) => {
   await region().getByRole("button", { name: "終了する（再起動は手動）" }).click();
   await region().getByRole("alert").filter({ hasText: "模擬終了失敗" }).waitFor();
   results.push("manual restart exit failure remains visible");
+  for (const phase of ["database", "awaiting_ack", "database_files"]) {
+    await boot(); await set({ mode: "unknown", unknownCount: 1 }); await pending(phase, true);
+    check(await dialog().getByRole("button", { name: "未開始のまま保持して中止" }).count() === 0, "DB phase can falsely retain or restore deletion");
+    const committed = phase !== "database";
+    if (committed) check((await region().innerText()).includes("完了記録あり・残り処理の確認が必要"), "completed residual SQL marker shown as resolved");
+    await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).click();
+    await renewedDialog().waitFor(); await renewedDialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+    check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.phase) === "database_reconfirmation", "DB reconfirmation lost source stage");
+    const text = await renewedDialog().innerText();
+    check(text.includes("DB段階を保持した残り範囲への再同意待ち") && text.includes("元の確認時のDB行（削除済み）") === committed, "DB row commitment mislabelled");
+    check(await page.evaluate(() => window.deletionFixture.deleted) === 0, "DB inspection deleted files");
+    await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).check();
+    check(await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "DB unknown decision inherited");
+    await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).check();
+    if (phase === "awaiting_ack") {
+      await page.setViewportSize({ width: 1200, height: 850 });
+      await renewedDialog().evaluate(el => { el.scrollTop = 0; });
+      await page.screenshot({ path: "output/playwright/deletion-database-reconfirmation-1200.png" });
+      await page.setViewportSize({ width: 900, height: 700 });
+      await renewedDialog().evaluate(el => { el.scrollTop = 0; });
+      check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "DB reconfirmation causes horizontal overflow");
+      await page.screenshot({ path: "output/playwright/deletion-database-reconfirmation-900.png" });
+      await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "output/playwright/deletion-database-reconfirmation-consent-900.png" });
+      await set({ mode: "partial" });
+    }
+    await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click();
+    if (phase === "awaiting_ack") {
+      await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+      check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.phase === "database_files" && window.dataFixture.snapshot.deletionPreview.rowPhaseCommitted), "partial DB files forgot committed rows");
+      await set({ mode: "success" }); await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click();
+      await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+      check(await dialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).count() === 0, "fixed DB files silently asks a new policy");
+      await understand(); await publish();
+    }
+    await deleted();
+    const started = (await calls("start_data_operation")).filter(c => ["publish", "delete_including_unregistered"].includes(c.args.request.action));
+    check(started[0].args.request.action === "delete_including_unregistered", "DB current scope lacked explicit unknown decision");
+    if (phase === "awaiting_ack") check(started[1].args.request.action === "publish", "DB fixed plan did not resume existing policy");
+    results.push(`DB remaining scope ${phase} preserves row phase, explicit unknown consent and fixed-plan continuation`);
+  }
   await boot(); await review(); await page.setViewportSize({ width: 1200, height: 900 });
   await page.screenshot({ path: "output/playwright/deletion-confirm-1200.png" });
   await page.setViewportSize({ width: 900, height: 650 });

@@ -2,6 +2,9 @@ use super::super::{files::Census, tests::Fixture as DatabaseFixture};
 use super::*;
 use std::{cell::Cell, path::PathBuf};
 
+#[path = "database_renewal_tests.rs"]
+mod database_renewal_tests;
+
 fn at_database_phase(f: &Fixture, phase: Phase) -> Receipt {
     let mut receipt = f.begin();
     match phase {

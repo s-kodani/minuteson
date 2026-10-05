@@ -6,12 +6,20 @@ use rusqlite::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// A v3 residual plan keeps the completed SQL state immutable. This predicate
+// is only a conservative read/admission hint; typed receipt validation still
+// precedes every privileged writer and all file/row mutation.
+pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (kind='delete_meeting' AND state='completed' AND json_extract(progress_json,'$.version')=3))";
+pub(super) fn other_pending(db: &Connection, operation: Option<&str>) -> Result<bool, String> {
+    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE (?1 IS NULL OR id!=?1) AND {UNFINISHED})"), rusqlite::params![operation], |r| r.get(0)).map_err(|e|e.to_string())
+}
+
 pub(in crate::storage) fn has_pending(db: &Connection) -> Result<bool, String> {
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')", [], |r|r.get(0)).map_err(|e|e.to_string())?;
     if !exists {
         return Ok(false);
     }
-    db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND state NOT IN ('completed','recovered'))", [], |r|r.get(0)).map_err(|e|e.to_string())
+    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND {UNFINISHED})"), [], |r|r.get(0)).map_err(|e|e.to_string())
 }
 fn readonly(context: AuthContext<'_>) -> Authorization {
     match context.action {
@@ -85,6 +93,9 @@ impl Fence {
     }
     pub(in crate::storage) fn restart_required(&self) -> bool {
         self.startup_deferred && !self.pending()
+    }
+    pub(in crate::storage) fn resume_restart_required(&self) -> bool {
+        self.startup_deferred
     }
     fn install(&self, db: &Connection) -> Result<(), String> {
         db.flush_prepared_statement_cache();

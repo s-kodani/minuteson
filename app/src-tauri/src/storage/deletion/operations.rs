@@ -93,6 +93,10 @@ enum Target {
         files: removal::Receipt,
         review: renewal::Review,
     },
+    DatabaseReconfirmation {
+        database: completion::Receipt,
+        review: renewal::Review,
+    },
     Database(completion::Receipt),
     Kept(intent::Prepared),
 }
@@ -106,6 +110,9 @@ impl Target {
                 (review.manifest(), files.confirmed().scope())
             }
             Self::Database(r) => (r.manifest(), r.confirmed().scope()),
+            Self::DatabaseReconfirmation { database, review } => {
+                (review.manifest(), database.confirmed().scope())
+            }
         }
     }
     fn verify_live(&self, storage: &Storage, check: &impl Fn() -> bool) -> Result<(), String> {
@@ -115,6 +122,9 @@ impl Target {
             Self::Files(r) => r.verify_live(storage, check),
             Self::Reconfirmation { files, review } => review.verify_live(storage, files, check),
             Self::Database(r) => r.verify_resume(storage, check),
+            Self::DatabaseReconfirmation { database, review } => {
+                review.verify_database_live(storage, database, check)
+            }
             Self::Kept(_) => Err("この削除は未開始のまま保持・中止済みです".into()),
         }
     }
@@ -151,7 +161,13 @@ fn load(storage: &Storage, operation: &str, check: &impl Fn() -> bool) -> Result
     let target = match operation_state(storage, operation)?.as_str() {
         "prepared" => Target::Unstarted(intent::read(storage, operation, check)?),
         "installing" => Target::Files(removal::read(storage, operation, check)?),
-        "cleanup" | "completed" => Target::Database(completion::read(storage, operation, check)?),
+        "cleanup" | "completed" => {
+            if removal::is_database_files(storage, operation)? {
+                Target::Files(removal::read(storage, operation, check)?)
+            } else {
+                Target::Database(completion::read(storage, operation, check)?)
+            }
+        }
         "recovered" => Target::Kept(intent::read_keepable(storage, operation, check)?),
         _ => return Err("この削除記録は自動採用できません。対象を保持します".into()),
     };
@@ -178,7 +194,7 @@ pub(crate) fn authorize_review(storage: &Storage, operation: Option<&str>) -> Re
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
     storage.managed_anchor.verify()?;
-    let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE (?1 IS NULL OR id!=?1) AND state IN ('prepared','installing','cleanup','attention'))", params![operation], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let other = super::fence::other_pending(&db, operation)?;
     if other {
         Err("別の未完了保守操作があります。対象を保持します".into())
     } else {
@@ -191,7 +207,7 @@ pub(crate) fn listing(storage: &Storage) -> Result<Listing, String> {
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
     storage.managed_anchor.verify()?;
-    let mut q = db.prepare("SELECT id,state,meeting_id,error_code FROM maintenance_operations WHERE kind='delete_meeting' AND state NOT IN ('completed','recovered') ORDER BY created_at,id LIMIT 101").map_err(|e| e.to_string())?;
+    let mut q = db.prepare(&format!("SELECT id,state,meeting_id,error_code FROM maintenance_operations WHERE kind='delete_meeting' AND {} ORDER BY created_at,id LIMIT 101", super::fence::UNFINISHED)).map_err(|e| e.to_string())?;
     let items = q
         .query_map([], |r| {
             Ok(Item {
@@ -281,12 +297,28 @@ impl Prepared {
             Target::Unstarted(_) => "not_started",
             Target::Files(r) => {
                 preview.processed_paths = r.processed_paths();
-                "files"
+                if let Some(phase) = r.progress.database_phase {
+                    preview.row_phase_committed = phase.rows_committed();
+                    "database_files"
+                } else {
+                    "files"
+                }
             }
             Target::Reconfirmation { files, .. } => {
                 preview.previous_processed_paths = Some(files.processed_paths());
                 preview.previous_path_count = Some(files.manifest().entries.len());
-                "reconfirmation"
+                if let Some(phase) = files.progress.database_phase {
+                    preview.row_phase_committed = phase.rows_committed();
+                    "database_reconfirmation"
+                } else {
+                    "reconfirmation"
+                }
+            }
+            Target::DatabaseReconfirmation { database, .. } => {
+                preview.previous_processed_paths = Some(database.manifest().entries.len());
+                preview.previous_path_count = Some(database.manifest().entries.len());
+                preview.row_phase_committed = database.row_phase_committed();
+                "database_reconfirmation"
             }
             Target::Database(r) => {
                 preview.processed_paths = preview.path_count;
@@ -307,6 +339,10 @@ impl Prepared {
         if let Target::Files(files) = &target {
             preview.reconfirmation_allowed =
                 !preview.execute_allowed && renewal::Review::capture(storage, files, check).is_ok();
+        }
+        if let Target::Database(database) = &target {
+            preview.reconfirmation_allowed = !preview.execute_allowed
+                && renewal::Review::capture_database(storage, database, check).is_ok();
         }
         cancelled(check)?;
         Ok(Self { preview, target })
@@ -390,6 +426,18 @@ impl Prepared {
                 },
                 check,
             )?
+        } else if let Target::DatabaseReconfirmation { database, .. } = &self.target {
+            let saved = completion::read(storage, database.confirmed().operation(), check)?;
+            let review = renewal::Review::capture_database(storage, &saved, check)?;
+            Self::build(
+                storage,
+                self.preview.operation_id.clone(),
+                Target::DatabaseReconfirmation {
+                    database: saved,
+                    review,
+                },
+                check,
+            )?
         } else if matches!(self.target, Target::Fresh(_)) && !storage.data_write_blocked() {
             let c = Census::capture(storage, &self.preview.meeting_id, check)?;
             Self::build(
@@ -417,20 +465,26 @@ impl Prepared {
         if !self.preview.reconfirmation_allowed {
             return Err("この段階の残り範囲は再同意できません。元の記録と対象を保持します".into());
         }
-        let Target::Files(files) = &self.target else {
-            return Err("ファイル段階の状態を再確認してください".into());
+        let target = match &self.target {
+            Target::Files(files) => {
+                let saved = removal::read(storage, files.confirmed().operation(), &check)?;
+                let review = renewal::Review::capture(storage, &saved, &check)?;
+                Target::Reconfirmation {
+                    files: saved,
+                    review,
+                }
+            }
+            Target::Database(database) => {
+                let saved = completion::read(storage, database.confirmed().operation(), &check)?;
+                let review = renewal::Review::capture_database(storage, &saved, &check)?;
+                Target::DatabaseReconfirmation {
+                    database: saved,
+                    review,
+                }
+            }
+            _ => return Err("保存済み段階の状態を再確認してください".into()),
         };
-        let saved = removal::read(storage, files.confirmed().operation(), &check)?;
-        let review = renewal::Review::capture(storage, &saved, &check)?;
-        let next = Self::build(
-            storage,
-            self.preview.operation_id.clone(),
-            Target::Reconfirmation {
-                files: saved,
-                review,
-            },
-            &check,
-        )?;
+        let next = Self::build(storage, self.preview.operation_id.clone(), target, &check)?;
         *self = next;
         Ok(())
     }
@@ -462,9 +516,22 @@ impl Prepared {
         }
         let result = (|| {
             let mut include = include_unregistered;
-            if let Target::Reconfirmation { files, review } = &mut self.target {
-                progress("fixing_delete_scope");
-                renewal::accept(storage, files, review, include, admission, &check)?;
+            let renewed = match &mut self.target {
+                Target::Reconfirmation { files, review } => {
+                    progress("fixing_delete_scope");
+                    renewal::accept(storage, files, review, include, admission, &check)?;
+                    true
+                }
+                Target::DatabaseReconfirmation { database, review } => {
+                    progress("fixing_delete_scope");
+                    renewal::accept_database(
+                        storage, database, review, include, admission, &check,
+                    )?;
+                    true
+                }
+                _ => false,
+            };
+            if renewed {
                 *self = Self::build(
                     storage,
                     self.preview.operation_id.clone(),

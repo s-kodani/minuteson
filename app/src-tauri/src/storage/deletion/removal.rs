@@ -127,6 +127,8 @@ pub(super) struct Progress {
     pending: Option<Pending>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) confirmation: Option<super::renewal::Reference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) database_phase: Option<super::completion::Phase>,
 }
 impl Progress {
     pub(super) fn encode(&self) -> Result<String, String> {
@@ -141,8 +143,16 @@ impl Progress {
         self.consent_at
     }
     pub(super) fn validate(&self, p: &Prepared, manifest: &Manifest) -> Result<(), String> {
-        if !((self.version == 1 && self.confirmation.is_none() && manifest == p.manifest())
-            || (self.version == 2 && self.confirmation.as_ref().is_some_and(|r| r.valid())))
+        if !((self.version == 1
+            && self.confirmation.is_none()
+            && self.database_phase.is_none()
+            && manifest == p.manifest())
+            || (self.version == 2
+                && self.database_phase.is_none()
+                && self.confirmation.as_ref().is_some_and(|r| r.valid()))
+            || (self.version == 3
+                && self.database_phase.is_some()
+                && self.confirmation.as_ref().is_some_and(|r| r.valid())))
             || self.manifest_hash != manifest_hash(manifest)?
             || self.plan_hash != plan_hash(manifest, &self.policy)?
             || self.consent_at < p.consent_at()
@@ -190,6 +200,7 @@ impl Progress {
         confirmation: super::renewal::Reference,
         include_unregistered: bool,
         consent_at: i64,
+        database_phase: Option<super::completion::Phase>,
     ) -> Result<Self, String> {
         let policy = if include_unregistered {
             Policy::ExplicitUnregistered
@@ -197,7 +208,7 @@ impl Progress {
             Policy::RegisteredOnly
         };
         let next = Self {
-            version: 2,
+            version: if database_phase.is_some() { 3 } else { 2 },
             file_phase: Phase::Removing,
             manifest_hash: manifest_hash(manifest)?,
             plan_hash: plan_hash(manifest, &policy)?,
@@ -206,9 +217,17 @@ impl Progress {
             next: 0,
             pending: None,
             confirmation: Some(confirmation),
+            database_phase,
         };
         next.validate(p, manifest)?;
         Ok(next)
+    }
+    pub(super) fn state(&self) -> &'static str {
+        self.database_phase
+            .map_or("installing", |phase| phase.state())
+    }
+    pub(super) fn removed(&self) -> bool {
+        self.file_phase == Phase::Removed
     }
     fn reserved(&self, operation: &str, index: usize) -> String {
         if let Some(c) = &self.confirmation {
@@ -223,6 +242,9 @@ impl Progress {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Finished(Progress);
 impl Finished {
+    pub(super) fn progress(&self) -> &Progress {
+        &self.0
+    }
     pub(super) fn verify_root_reservation_absent(
         &self,
         storage: &Storage,
@@ -320,6 +342,13 @@ impl Receipt {
     pub(super) fn manifest(&self) -> &Manifest {
         &self.manifest
     }
+    pub(super) fn verify_review_root(&self, storage: &Storage) -> Result<(), String> {
+        Finished(self.progress.clone()).verify_root_reservation_absent(
+            storage,
+            &self.manifest,
+            &self.confirmed,
+        )
+    }
     pub(super) fn review_census(
         &self,
         storage: &Storage,
@@ -327,10 +356,11 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<Census, String> {
         let p = &self.confirmed;
-        let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))",params![p.operation()],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let other = super::fence::other_pending(db, Some(p.operation()))?;
         if other {
             return Err("別の未完了保守操作があります。再確認を進めません".into());
         }
+        self.verify_review_root(storage)?;
         // A reserved empty meeting root is outside this meeting's logical tree.
         // Never forget it or include arbitrary sibling meetings in a new plan.
         if self.progress.pending.is_some()
@@ -346,8 +376,15 @@ impl Receipt {
                 }
             }
         }
-        let census =
-            Census::capture_locked(storage, db, &p.scope().meeting_id, p.operation(), check)?;
+        let census = if self
+            .progress
+            .database_phase
+            .is_some_and(|phase| phase.rows_committed())
+        {
+            Census::capture_deleted_locked(storage, db, p, check, None)?
+        } else {
+            Census::capture_locked(storage, db, &p.scope().meeting_id, p.operation(), check)?
+        };
         if census.scope() != p.scope()
             || census.manifest().root != p.manifest().root
             || census.manifest().database != p.manifest().database
@@ -355,24 +392,6 @@ impl Receipt {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
         Ok(census)
-    }
-    pub(super) fn verify_reservation_names(
-        &self,
-        manifest: &Manifest,
-        progress: &Progress,
-    ) -> Result<(), String> {
-        let observed: BTreeSet<_> = manifest.entries.iter().map(|e| e.path.as_str()).collect();
-        for (index, target) in manifest.entries.iter().rev().enumerate() {
-            let parent = target.path.rsplit_once('/').ok_or("対象パスが不正です")?.0;
-            let reserved = format!(
-                "{parent}/{}",
-                progress.reserved(self.confirmed.operation(), index)
-            );
-            if observed.contains(reserved.as_str()) {
-                return Err("再確認の削除予約名が既に存在します".into());
-            }
-        }
-        Ok(())
     }
     pub(super) fn matches_completion(
         &self,
@@ -400,8 +419,11 @@ impl Receipt {
         preflight(storage, db, self, check)?;
         Ok(Finished(self.progress.clone()))
     }
-    fn load(db: &Connection, operation: &str, check: &impl Fn() -> bool) -> Result<Self, String> {
-        let confirmed = intent::read_removing(db, operation, check)?;
+    pub(super) fn load(
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         let json: String = db
             .query_row(
                 "SELECT progress_json FROM maintenance_operations WHERE id=?1",
@@ -410,6 +432,12 @@ impl Receipt {
             )
             .map_err(|e| e.to_string())?;
         let progress: Progress = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let confirmed = if progress.database_phase.is_some() {
+            intent::read_database(db, operation, check)?
+        } else {
+            intent::read_removing(db, operation, check)?
+        };
+        confirmed.verify_metadata(db, &json, progress.database_phase)?;
         let manifest = super::renewal::active_manifest(db, &confirmed, &progress, check)?;
         if progress.encode()? != json {
             return Err("削除進捗が標準形式と一致しません".into());
@@ -457,14 +485,18 @@ impl Receipt {
         storage.managed_anchor.verify()?;
         // Immutable path observations were fully validated before acquiring
         // the writer. This entire run owns Storage's mutex and SQL guards.
-        self.confirmed
-            .verify_metadata(db, &self.progress.encode()?)?;
+        self.confirmed.verify_metadata(
+            db,
+            &self.progress.encode()?,
+            self.progress.database_phase,
+        )?;
         if next.version != self.progress.version
             || next.manifest_hash != self.progress.manifest_hash
             || next.plan_hash != self.progress.plan_hash
             || next.policy != self.progress.policy
             || next.consent_at != self.progress.consent_at
             || next.confirmation != self.progress.confirmation
+            || next.database_phase != self.progress.database_phase
         {
             return Err("削除進捗の固定条件は変更できません".into());
         }
@@ -500,12 +532,34 @@ impl Receipt {
         let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let old = self.progress.encode()?;
-        if tx.execute("UPDATE maintenance_operations SET progress_json=?2,error_code=NULL,updated_at=max(updated_at,?3) WHERE id=?1 AND kind='delete_meeting' AND state='installing' AND progress_json=?4",params![self.confirmed.operation(),next.encode()?,now_ms()?,old]).map_err(|e|e.to_string())?!=1 { return Err("削除進捗の確定対象が変更されています".into()); }
+        if tx.execute("UPDATE maintenance_operations SET progress_json=?2,error_code=NULL,updated_at=max(updated_at,?3) WHERE id=?1 AND kind='delete_meeting' AND state=?5 AND progress_json=?4",params![self.confirmed.operation(),next.encode()?,now_ms()?,old,self.progress.state()]).map_err(|e|e.to_string())?!=1 { return Err("削除進捗の確定対象が変更されています".into()); }
         cancel(check)?;
         tx.commit().map_err(|e| e.to_string())?;
         self.progress = next;
         Ok(())
     }
+}
+pub(super) fn verify_reservation_names(
+    operation: &str,
+    manifest: &Manifest,
+    progress: &Progress,
+) -> Result<(), String> {
+    let observed: BTreeSet<_> = manifest.entries.iter().map(|e| e.path.as_str()).collect();
+    for (index, target) in manifest.entries.iter().rev().enumerate() {
+        let parent = target.path.rsplit_once('/').ok_or("対象パスが不正です")?.0;
+        let reserved = format!("{parent}/{}", progress.reserved(operation, index));
+        if observed.contains(reserved.as_str()) {
+            return Err("再確認の削除予約名が既に存在します".into());
+        }
+    }
+    Ok(())
+}
+pub(super) fn is_database_files(storage: &Storage, operation: &str) -> Result<bool, String> {
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    db.query_row("SELECT json_extract(progress_json,'$.version')=3 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
 }
 pub(super) fn read(
     storage: &Storage,
@@ -545,6 +599,7 @@ pub(super) fn start(
         next: 0,
         pending: None,
         confirmation: None,
+        database_phase: None,
     };
     progress.validate(confirmed, confirmed.manifest())?;
     // Reserve names must be absent even when the user explicitly included
@@ -689,13 +744,7 @@ fn verify_remaining(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let p = &receipt.confirmed;
-    let other_pending: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))",
-            params![p.operation()],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let other_pending = super::fence::other_pending(db, Some(p.operation()))?;
     if other_pending {
         return Err("別の未完了保守操作があります。ファイル削除を再開しません".into());
     }
@@ -709,14 +758,22 @@ fn verify_remaining(
                 receipt.reserved()
             )
         });
-    let current = Census::capture_removal_locked(
-        storage,
-        db,
-        &receipt.manifest.meeting_id,
-        p.operation(),
-        check,
-        reserved.as_deref(),
-    )?;
+    let current = if receipt
+        .progress
+        .database_phase
+        .is_some_and(|phase| phase.rows_committed())
+    {
+        Census::capture_deleted_locked(storage, db, p, check, reserved.as_deref())?
+    } else {
+        Census::capture_removal_locked(
+            storage,
+            db,
+            &receipt.manifest.meeting_id,
+            p.operation(),
+            check,
+            reserved.as_deref(),
+        )?
+    };
     if current.scope() != p.scope()
         || current.manifest().root != receipt.manifest.root
         || current.manifest().database != receipt.manifest.database

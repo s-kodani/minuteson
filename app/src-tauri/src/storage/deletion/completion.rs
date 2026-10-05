@@ -16,12 +16,24 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
         Ok(())
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-enum Phase {
+pub(super) enum Phase {
     RowsPending,
     RowsDeleted,
     Finished,
+}
+impl Phase {
+    pub(super) fn state(self) -> &'static str {
+        if self == Self::Finished {
+            "completed"
+        } else {
+            "cleanup"
+        }
+    }
+    pub(super) fn rows_committed(self) -> bool {
+        self != Self::RowsPending
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -45,6 +57,20 @@ pub(super) struct Receipt {
     manifest: super::files::Manifest,
 }
 impl Receipt {
+    pub(super) fn database_phase(&self) -> Phase {
+        self.progress.database_phase
+    }
+    pub(super) fn file_progress(&self) -> &removal::Progress {
+        self.progress.files.progress()
+    }
+    pub(super) fn progress_json(&self) -> Result<String, String> {
+        self.progress.encode()
+    }
+    pub(super) fn verify_review_root(&self, storage: &Storage) -> Result<(), String> {
+        self.progress
+            .files
+            .verify_root_reservation_absent(storage, &self.manifest, &self.confirmed)
+    }
     pub(super) fn review_census(
         &self,
         storage: &Storage,
@@ -52,7 +78,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<super::files::Census, String> {
         self.verify_saved(db, check)?;
-        let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))", params![self.confirmed.operation()], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let other = super::fence::other_pending(db, Some(self.confirmed.operation()))?;
         if other {
             return Err("別の未完了保守操作があります。対象を保持します".into());
         }
@@ -62,7 +88,7 @@ impl Receipt {
             &self.confirmed,
         )?;
         let census = if self.row_phase_committed() {
-            super::files::Census::capture_deleted_locked(storage, db, &self.confirmed, check)?
+            super::files::Census::capture_deleted_locked(storage, db, &self.confirmed, check, None)?
         } else {
             super::files::Census::capture_locked(
                 storage,
@@ -125,7 +151,15 @@ impl Receipt {
             Phase::RowsDeleted => state == "cleanup" && meeting.is_none(),
             Phase::Finished => state == "completed" && meeting.is_none(),
         };
-        if progress.version != 1 || !state_matches || progress.encode()? != json {
+        if progress.version != 1
+            || !state_matches
+            || progress.encode()? != json
+            || progress
+                .files
+                .progress()
+                .database_phase
+                .is_some_and(|phase| phase > progress.database_phase)
+        {
             return Err("複合削除の進捗と会議参照を検証できません".into());
         }
         Ok(Self {
@@ -197,7 +231,8 @@ pub(super) fn start(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if matches!(state.as_str(), "cleanup" | "completed") {
+    let file_form: Option<bool> = db.query_row("SELECT json_extract(progress_json,'$.version')=3 FROM maintenance_operations WHERE id=?1", params![files.confirmed().operation()], |r|r.get(0)).map_err(|e|e.to_string())?;
+    if matches!(state.as_str(), "cleanup" | "completed") && file_form != Some(true) {
         let current = Receipt::load(&db, files.confirmed().operation(), check)?;
         files.matches_completion(&current.confirmed, &current.progress.files)?;
         current.verify_live(storage, &db, check)?;
@@ -208,14 +243,14 @@ pub(super) fn start(
     let progress = Progress {
         version: 1,
         files: finished,
-        database_phase: Phase::RowsPending,
+        database_phase: files.progress.database_phase.unwrap_or(Phase::RowsPending),
     };
     let p = files.confirmed();
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     files.verify_saved(&tx, check)?;
     storage.managed_anchor.verify()?;
-    if tx.execute("UPDATE maintenance_operations SET state='cleanup',progress_json=?2,error_code=NULL,updated_at=max(updated_at,?3) WHERE id=?1 AND kind='delete_meeting' AND state='installing' AND progress_json=?4", params![p.operation(), progress.encode()?, now_ms()?, files.progress_json()?]).map_err(|e| e.to_string())? != 1 {
+    if tx.execute("UPDATE maintenance_operations SET state=?2,progress_json=?3,error_code=NULL,updated_at=max(updated_at,?4) WHERE id=?1 AND kind='delete_meeting' AND state=?5 AND progress_json=?6", params![p.operation(), progress.database_phase.state(), progress.encode()?, now_ms()?, files.progress.state(), files.progress_json()?]).map_err(|e| e.to_string())? != 1 {
         return Err("DB削除開始の対象記録が変更されています".into());
     }
     cancel(check)?;

@@ -280,13 +280,26 @@ impl DataController {
                     p.preview().reconfirmation_allowed
                 }
                 (Selection::Deletion(p), Action::Keep) => p.preview().keep_allowed,
-                (Selection::Deletion(p), Action::Publish) => p.preview().execute_allowed,
+                (Selection::Deletion(p), Action::Publish) => {
+                    let v = p.preview();
+                    // A newly observed scope needs its own explicit choice;
+                    // fixed file plans already retain that recorded policy.
+                    v.execute_allowed
+                        && !(v.unregistered_count > 0
+                            && matches!(
+                                v.phase.as_str(),
+                                "review"
+                                    | "not_started"
+                                    | "reconfirmation"
+                                    | "database_reconfirmation"
+                            ))
+                }
                 (Selection::Deletion(p), Action::DeleteIncludingUnregistered) => {
                     let v = p.preview();
                     v.execute_allowed
                         && matches!(
                             v.phase.as_str(),
-                            "review" | "not_started" | "reconfirmation"
+                            "review" | "not_started" | "reconfirmation" | "database_reconfirmation"
                         )
                         && v.unregistered_count > 0
                 }
