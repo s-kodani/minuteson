@@ -131,6 +131,7 @@ pub struct Storage {
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
+    deletion_fence: deletion::fence::Fence,
     #[cfg(unix)]
     managed_anchor: deletion::fs::RootAnchor,
 }
@@ -142,6 +143,43 @@ impl Storage {
 
     pub(crate) fn restart_required(&self) -> bool {
         self.retired.load(std::sync::atomic::Ordering::Acquire)
+            || self.deletion_fence.restart_required()
+    }
+
+    pub(crate) fn data_write_blocked(&self) -> bool {
+        self.retired.load(std::sync::atomic::Ordering::Acquire) || self.deletion_fence.blocked()
+    }
+
+    pub(crate) fn require_data_writable(&self) -> Result<(), String> {
+        if self.deletion_fence.pending() {
+            Err("未完了の会議削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
+        } else if self.deletion_fence.restart_required() {
+            Err(
+                "会議削除の確認記録を解決しました。保留した起動時回復を行うため再起動してください"
+                    .into(),
+            )
+        } else if self.restart_required() {
+            Err("旧保存先の書込みは停止済みです。再起動してください".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    // Relational deleting state; do not rewrite the immutable confirmed meeting
+    // cells or change Meeting's portable fingerprints just to display a gate.
+    #[allow(dead_code)] // Deletion confirmation/recovery UI integration follows.
+    pub(crate) fn deleting_meeting_ids(&self) -> Result<Vec<String>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = db.prepare("SELECT DISTINCT meeting_id FROM maintenance_operations WHERE kind='delete_meeting' AND state NOT IN ('completed','recovered') AND meeting_id IS NOT NULL ORDER BY meeting_id").map_err(|e|e.to_string())?;
+        let result = query
+            .query_map([], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string());
+        result
     }
 
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
@@ -158,27 +196,47 @@ impl Storage {
         )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
-        apply_migrations(&mut connection)?;
-        connection.execute(
+        let pending_deletion = deletion::fence::has_pending(&connection)?;
+        if pending_deletion {
+            if verify_migration_history(&connection)? != MIGRATIONS.len() {
+                return Err(
+                    "未完了の会議削除があるDBは移行せず保持します。元の対応版で確認してください"
+                        .into(),
+                );
+            }
+        } else {
+            apply_migrations(&mut connection)?;
+        }
+        let deletion_fence = deletion::fence::Fence::open(&connection)?;
+        let scratch;
+        if !pending_deletion {
+            connection.execute(
             "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
             params![now_ms()?],
         )?;
-        connection.execute(
+            connection.execute(
             "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
             params![now_ms()?],
         )?;
-        connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
-        connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
-        #[cfg(unix)]
-        let scratch = Some(backup::scratch::Registry::open(&root)?);
-        #[cfg(not(unix))]
-        let scratch = None;
-        backup::recover_restore_operations(&root, &connection, scratch.as_deref())?;
-        connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
-        // A copy or compatibility check is never resumed or executed on startup.
-        // Retain intent/fingerprints and partial files for explicit inspection.
-        connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
-        connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type='manual_import' AND state='preparing'", [])?;
+            connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
+            connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
+            #[cfg(unix)]
+            {
+                scratch = Some(backup::scratch::Registry::open(&root)?);
+            }
+            #[cfg(not(unix))]
+            {
+                scratch = None;
+            }
+            backup::recover_restore_operations(&root, &connection, scratch.as_deref())?;
+            connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
+            // A copy or compatibility check is never resumed or executed on startup.
+            // Retain intent/fingerprints and partial files for explicit inspection.
+            connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
+            connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type='manual_import' AND state='preparing'", [])?;
+        } else {
+            scratch = None;
+        }
         #[cfg(unix)]
         managed_anchor.seal_controls()?;
         Ok(Self {
@@ -187,6 +245,7 @@ impl Storage {
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
+            deletion_fence,
             #[cfg(unix)]
             managed_anchor,
         })
@@ -199,6 +258,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        self.require_data_writable()?;
         if self.retired.load(std::sync::atomic::Ordering::Acquire) {
             return Err("旧保存先の書込みは停止済みです。再起動してください".into());
         }

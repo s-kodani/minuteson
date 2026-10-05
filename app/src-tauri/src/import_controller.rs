@@ -220,6 +220,7 @@ impl ImportController {
         let _ = AnalysisController::kick(app);
     }
     pub(crate) fn start(app: &AppHandle, request: StartRequest) -> Result<Snapshot, String> {
+        app.state::<Storage>().require_data_writable()?;
         request.options.validate()?;
         if app.state::<SessionStore>().snapshot().is_active() {
             return Err("録音中は取り込みを開始できません".into());
@@ -425,6 +426,9 @@ impl ImportController {
         });
     }
     pub(crate) fn recover(app: &AppHandle) -> Result<(), String> {
+        if app.state::<Storage>().data_write_blocked() {
+            return Ok(());
+        }
         let snapshot = app.state::<Self>().begin("recovering")?;
         Self::emit(app, snapshot);
         let app = app.clone();

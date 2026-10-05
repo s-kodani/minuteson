@@ -100,6 +100,9 @@ pub struct RecordingSession {
 
 impl Storage {
     pub(crate) fn recover_completed_recordings(&self) -> Result<Vec<String>, String> {
+        if self.data_write_blocked() {
+            return Ok(vec![]);
+        }
         let interrupted = {
             let connection = self
                 .connection

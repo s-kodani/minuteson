@@ -25,6 +25,7 @@ impl AnalysisController {
         cancelled: &impl Fn() -> bool,
         work: impl FnOnce(&ModelPreparationLease<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
+        app.state::<Storage>().require_data_writable()?;
         let _wake = WakeWorker(app);
         let controller = app.state::<Self>();
         let importing = app

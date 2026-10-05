@@ -15,6 +15,7 @@ fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabula
     let database =
         portable::initialize(Connection::open(root.join("meetings.sqlite3")).unwrap(), 20).unwrap();
     let storage = Storage {
+        deletion_fence: crate::storage::deletion::fence::Fence::open(&database).unwrap(),
         #[cfg(unix)]
         managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
             &root,

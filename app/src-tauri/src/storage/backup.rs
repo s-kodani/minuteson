@@ -193,6 +193,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        self.require_data_writable()?;
         if self.retired.load(Ordering::Acquire) {
             return Err("旧保存先の書込みは停止済みです。再起動してください".into());
         }

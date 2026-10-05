@@ -8,6 +8,7 @@ pub(super) struct Admission {
 
 impl Admission {
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
+        app.state::<Storage>().require_data_writable()?;
         let importing = app
             .state::<crate::import_controller::ImportController>()
             .snapshot()?;

@@ -291,6 +291,7 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
             .unwrap();
     }
     let storage = Storage {
+        deletion_fence: crate::storage::deletion::fence::Fence::open(&connection).unwrap(),
         #[cfg(unix)]
         managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
             root.path(),

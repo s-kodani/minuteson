@@ -50,6 +50,9 @@ pub struct AnalysisController {
 
 impl AnalysisController {
     pub fn kick(app: &AppHandle) -> Result<(), String> {
+        if app.state::<Storage>().data_write_blocked() {
+            return Ok(());
+        }
         let importing = app
             .state::<crate::import_controller::ImportController>()
             .snapshot()?;
@@ -98,7 +101,8 @@ impl AnalysisController {
         loop {
             let controller = app.state::<Self>();
             let stopping = || {
-                controller.shutdown.load(Ordering::SeqCst)
+                app.state::<Storage>().data_write_blocked()
+                    || controller.shutdown.load(Ordering::SeqCst)
                     || controller
                         .state
                         .lock()
@@ -195,6 +199,7 @@ impl AnalysisController {
     }
 
     pub fn prepare_recording(app: &AppHandle) -> Result<(), String> {
+        app.state::<Storage>().require_data_writable()?;
         let controller = app.state::<Self>();
         {
             let mut state = controller
@@ -236,6 +241,7 @@ impl AnalysisController {
         app: &AppHandle,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
+        app.state::<Storage>().require_data_writable()?;
         let c = app.state::<Self>();
         {
             let mut state = c.state.lock().map_err(|_| "解析ロックを取得できません")?;
@@ -286,7 +292,9 @@ impl AnalysisController {
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
-            app.state::<Storage>().pause_for_exit()?;
+            if !app.state::<Storage>().data_write_blocked() {
+                app.state::<Storage>().pause_for_exit()?;
+            }
             controller.shutdown.store(true, Ordering::SeqCst);
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {

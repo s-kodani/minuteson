@@ -24,6 +24,7 @@ impl RecorderController {
     }
 
     pub fn start(app: &AppHandle, meeting_id: &str) -> Result<RecordingSnapshot, String> {
+        app.state::<Storage>().require_data_writable()?;
         let binary = probe_path(app)?;
         let controller = app.state::<RecorderController>();
         let mut active = controller

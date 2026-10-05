@@ -708,6 +708,7 @@ async fn export_minutes_markdown(
     request: storage::ExportRequest,
 ) -> Result<Option<storage::ExportRecord>, String> {
     let app = minutes_app(&window)?;
+    app.state::<Storage>().require_data_writable()?;
     let admission = app.state::<AnalysisController>().begin_export()?;
     let lease = app.state::<exports::ExportController>().begin()?;
     // Own both guards in a detached task: losing the command receiver must not

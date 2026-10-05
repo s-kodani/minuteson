@@ -129,7 +129,9 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         .unwrap();
     let first = ids.get("meetings", "", &old).unwrap();
     // Test-only access to the owned image: this is not a publication path.
+    let owned_connection = Connection::open(work.stage.path().join("fixed.sqlite3")).unwrap();
     let owned = Storage {
+        deletion_fence: crate::storage::deletion::fence::Fence::open(&owned_connection).unwrap(),
         #[cfg(unix)]
         managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
             work.stage.path(),
@@ -138,7 +140,7 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         .unwrap(),
         scratch: None,
         root: work.stage.path().canonicalize().unwrap(),
-        connection: Mutex::new(Connection::open(work.stage.path().join("fixed.sqlite3")).unwrap()),
+        connection: Mutex::new(owned_connection),
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
     };

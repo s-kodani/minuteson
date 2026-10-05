@@ -464,6 +464,7 @@ fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
     let db = storage.connection.lock().unwrap();
+    let _writer = super::fence::write_scope_fixture(&storage, &db, &operation, &scope).unwrap();
     assert_eq!(operation_state(&db, &operation), "cleanup");
     assert_eq!(
         db.query_row(
@@ -476,6 +477,7 @@ fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
     );
     finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
     assert_eq!(operation_state(&db, &operation), "completed");
+    drop(_writer);
     drop(db);
     assert!(storage.get_meeting(&other).unwrap().is_some());
 }
@@ -716,6 +718,11 @@ fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_r
             .starts_with(base.path().canonicalize().unwrap()));
         let storage = Storage::open(path).unwrap();
         let db = storage.connection.lock().unwrap();
+        let _writer = if storage.deletion_fence.pending() {
+            Some(super::fence::write_scope_fixture(&storage, &db, &operation, &scope).unwrap())
+        } else {
+            None
+        };
         assert!(db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .unwrap());
@@ -739,6 +746,7 @@ fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_r
         finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
         assert_eq!(operation_state(&db, &operation), "completed");
         assert_eq!(count(&db, "meetings"), 1);
+        drop(_writer);
         drop(db);
         assert!(storage.get_meeting(&other).unwrap().is_some());
         assert!(storage.get_meeting(&scope.meeting_id).unwrap().is_none());

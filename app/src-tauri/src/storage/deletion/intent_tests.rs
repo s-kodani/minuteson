@@ -56,7 +56,9 @@ impl Fixture {
         assert_eq!(self.storage.list_meetings().unwrap().len(), 2);
     }
     fn tamper(&self, sql: &str) {
+        let saved = read(&self.storage, &self.operation, &|| false).unwrap();
         let db = self.storage.connection.lock().unwrap();
+        let _writer = super::fence::write_prepared(&self.storage, &db, &saved, &|| false).unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         db.execute(sql, params![self.operation]).unwrap();
@@ -434,31 +436,23 @@ fn deletion_intent_read_rejects_unknown_schema_disabled_guards_and_other_pending
     let p = f.prepare();
     {
         let db = f.storage.connection.lock().unwrap();
+        let _writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
         db.execute_batch("CREATE TEMP TABLE untrusted(id TEXT)")
             .unwrap();
+        assert!(p.verify_saved(&db, &|| false).is_err());
+        db.execute_batch("DROP TABLE temp.untrusted").unwrap();
+        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+            .unwrap();
+        assert!(p.verify_saved(&db, &|| false).is_err());
+        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+            .unwrap();
     }
-    assert!(read(&f.storage, &f.operation, &|| false).is_err());
-    f.storage
-        .connection
-        .lock()
-        .unwrap()
-        .execute_batch("DROP TABLE temp.untrusted")
-        .unwrap();
-    f.storage
-        .connection
-        .lock()
-        .unwrap()
-        .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
-        .unwrap();
-    assert!(read(&f.storage, &f.operation, &|| false).is_err());
-    f.storage
-        .connection
-        .lock()
-        .unwrap()
-        .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-        .unwrap();
     p.verify_live(&f.storage, &|| false).unwrap();
-    f.storage.connection.lock().unwrap().execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES('other-pending',?1,'delete_assets','attention','{}',?2,NULL,'{}',1,1)", params![f.other, "a".repeat(64)]).unwrap();
+    {
+        let db = f.storage.connection.lock().unwrap();
+        let _writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
+        db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES('other-pending',?1,'delete_assets','attention','{}',?2,NULL,'{}',1,1)", params![f.other, "a".repeat(64)]).unwrap();
+    }
     // Reading an unchanged receipt remains possible, but it cannot be admitted
     // while a different meeting's maintenance operation remains unresolved.
     read(&f.storage, &f.operation, &|| false).unwrap();
@@ -476,8 +470,9 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
         ("unknownField", serde_json::json!(true)),
     ] {
         let f = Fixture::new();
-        f.prepare();
+        let p = f.prepare();
         let db = f.storage.connection.lock().unwrap();
+        let writer = super::fence::write_prepared(&f.storage, &db, &p, &|| false).unwrap();
         let json: String = db
             .query_row(
                 "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
@@ -502,6 +497,7 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
         .unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .unwrap();
+        drop(writer);
         drop(db);
         assert!(
             read(&f.storage, &f.operation, &|| false).is_err(),

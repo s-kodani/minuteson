@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 const MAX_INTENT: usize = 65_536;
 const MAX_OBSERVATION: usize = 1024;
 const INITIAL_PROGRESS: &str = "{\"filePhase\":\"notStarted\"}";
+const KEPT_PROGRESS: &str = "{\"filePhase\":\"notStarted\",\"kept\":true}";
 
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -267,6 +268,24 @@ impl Prepared {
     pub(super) fn consent_at(&self) -> i64 {
         self.consent_at
     }
+    pub(super) fn verify_saved(
+        &self,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let saved = read_locked(db, &self.operation, check)?;
+        self.matches_saved(&saved)
+    }
+    fn matches_saved(&self, saved: &Self) -> Result<(), String> {
+        if saved.intent != self.intent
+            || saved.manifest != self.manifest
+            || saved.consent_at != self.consent_at
+        {
+            Err("削除の確認記録が変更されています".into())
+        } else {
+            Ok(())
+        }
+    }
     pub(super) fn verify_live(
         &self,
         storage: &Storage,
@@ -277,13 +296,7 @@ impl Prepared {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let saved = read_locked(&db, &self.operation, check)?;
-        if saved.intent != self.intent
-            || saved.manifest != self.manifest
-            || saved.consent_at != self.consent_at
-        {
-            return Err("削除の確認記録が変更されています".into());
-        }
+        self.verify_saved(&db, check)?;
         self.verify_locked(storage, &db, check)
     }
     fn verify_locked(
@@ -313,6 +326,14 @@ fn read_locked(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
+    read_state(db, operation, false, check)
+}
+fn read_state(
+    db: &Connection,
+    operation: &str,
+    kept_allowed: bool,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
     cancel(check)?;
     if !uuid(operation) {
         return Err("削除操作の識別子が不正です".into());
@@ -323,8 +344,8 @@ fn read_locked(
     if json.len() > MAX_INTENT
         || hash(json.as_bytes()) != expected_hash
         || consent.is_none_or(|s| s < 0)
-        || state != "prepared"
-        || progress != INITIAL_PROGRESS
+        || !((state == "prepared" && progress == INITIAL_PROGRESS)
+            || (kept_allowed && state == "recovered" && progress == KEPT_PROGRESS))
         || created < 0
         || updated < created
         || consent != Some(created)
@@ -438,6 +459,7 @@ fn prepare_inner(
         saved.verify_locked(storage, &tx, check)?;
         cancel(check)?;
         tx.commit().map_err(|e| e.to_string())?;
+        storage.deletion_fence.arm(&db)?;
         return Ok(saved);
     }
     let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention'))",[],|r|r.get(0)).map_err(|e|e.to_string())?;
@@ -470,8 +492,71 @@ fn prepare_inner(
     event("beforeCommit");
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
+    storage.deletion_fence.arm(&db)?;
     event("committed");
     Ok(saved)
+}
+
+// Non-destructive resolution only while the durable receipt proves no file
+// phase began. Stale live files need not be adopted or restored to keep them.
+pub(super) fn keep_unstarted(
+    storage: &Storage,
+    confirmed: &Prepared,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    keep_inner(storage, confirmed, check, &|_| {})
+}
+fn keep_inner(
+    storage: &Storage,
+    confirmed: &Prepared,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    cancel(check)?;
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    #[cfg(unix)]
+    storage.managed_anchor.verify()?;
+    let saved = read_state(&db, &confirmed.operation, true, check)?;
+    confirmed.matches_saved(&saved)?;
+    let state: String = db
+        .query_row(
+            "SELECT state FROM maintenance_operations WHERE id=?1",
+            params![confirmed.operation],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if state == "recovered" {
+        cancel(check)?;
+        return Ok(());
+    }
+    let writer = super::fence::write_prepared(storage, &db, confirmed, check)?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    confirmed.verify_saved(&tx, check)?;
+    cancel(check)?;
+    if tx.execute("UPDATE maintenance_operations SET state='recovered',progress_json=?2,error_code=NULL,updated_at=?3 WHERE id=?1 AND kind='delete_meeting' AND state='prepared' AND progress_json=?4", params![confirmed.operation,KEPT_PROGRESS,now_ms()?.max(confirmed.consent_at),INITIAL_PROGRESS]).map_err(|e|e.to_string())? != 1 {
+        return Err("未開始の削除記録を保持・中止できません".into());
+    }
+    event("updated");
+    cancel(check)?;
+    event("beforeCommit");
+    cancel(check)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    event("committed");
+    drop(writer);
+    Ok(())
+}
+#[cfg(test)]
+pub(super) fn keep_observed(
+    storage: &Storage,
+    confirmed: &Prepared,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    keep_inner(storage, confirmed, check, event)
 }
 #[cfg(test)]
 pub(super) fn prepare_observed(

@@ -478,6 +478,9 @@ impl Storage {
         &self,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Vec<ImportSnapshot>, String> {
+        if self.data_write_blocked() {
+            return Ok(vec![]);
+        }
         let ids = {
             let db = self
                 .connection
