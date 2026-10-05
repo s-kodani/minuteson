@@ -134,6 +134,7 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         root: work.stage.path().canonicalize().unwrap(),
         connection: Mutex::new(Connection::open(work.stage.path().join("fixed.sqlite3")).unwrap()),
         maintenance: std::sync::atomic::AtomicBool::new(false),
+        retired: std::sync::atomic::AtomicBool::new(false),
     };
     let plan = super::super::super::super::ledger::BatchPlan::new(&ids, &|| false).unwrap();
     {

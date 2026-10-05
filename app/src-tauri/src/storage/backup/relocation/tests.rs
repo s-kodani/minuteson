@@ -3,6 +3,8 @@ use crate::storage::minutes_ui::tests as minutes_fixture;
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
+mod retirement;
+
 struct Fixture {
     _root: tempfile::TempDir,
     storage: Storage,

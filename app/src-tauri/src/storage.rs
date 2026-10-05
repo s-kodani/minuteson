@@ -126,6 +126,8 @@ pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
     maintenance: std::sync::atomic::AtomicBool,
+    // Process-local, irreversible. Bootstrap decides which root to open next.
+    retired: std::sync::atomic::AtomicBool,
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
 }
 
@@ -169,11 +171,21 @@ impl Storage {
             root,
             connection: Mutex::new(connection),
             maintenance: std::sync::atomic::AtomicBool::new(false),
+            retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
         })
     }
 
     fn backup_stage(&self) -> Result<backup::scratch::Stage, String> {
+        // Serialize allocation with source retirement, including its registry
+        // write. Existing snapshot cleanup remains limited to its owned stage.
+        let _db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        if self.retired.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("旧保存先の書込みは停止済みです。再起動してください".into());
+        }
         match &self.scratch {
             Some(registry) => registry.stage(),
             None => backup::scratch::Stage::create(&self.root),

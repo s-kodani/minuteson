@@ -80,7 +80,18 @@ impl Storage {
     }
 
     pub(crate) fn pause_for_exit(&self) -> Result<(), String> {
-        self.connection.lock().map_err(|_| "DBロックを取得できません")?.execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'exit', updated_at = ?1 WHERE state = 'running'", params![now_ms()?]).map_err(|e| e.to_string())?;
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        if self.retired.load(std::sync::atomic::Ordering::Acquire) {
+            let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing'))", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            if active {
+                return Err("旧保存先に停止未完了の処理があります。書込停止を維持します".into());
+            }
+            return Ok(());
+        }
+        db.execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'exit', updated_at = ?1 WHERE state = 'running'", params![now_ms()?]).map_err(|e| e.to_string())?;
         Ok(())
     }
     #[allow(dead_code)]

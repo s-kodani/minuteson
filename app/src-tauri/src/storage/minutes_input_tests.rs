@@ -293,6 +293,7 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
     let storage = Storage {
         scratch: None,
         maintenance: std::sync::atomic::AtomicBool::new(false),
+        retired: std::sync::atomic::AtomicBool::new(false),
         root: root.path().to_owned(),
         connection: Mutex::new(connection),
     };

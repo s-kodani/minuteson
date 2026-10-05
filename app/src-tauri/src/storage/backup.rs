@@ -139,12 +139,16 @@ impl Maintenance<'_> {
 
 impl Drop for Maintenance<'_> {
     fn drop(&mut self) {
-        // Even unwinding must remove the authorizer and release the operation.
+        // Normal cancellation/unwinding releases the operation; retirement
+        // retains the existing read-only authorizer until this Storage closes.
         let db = self
             .storage
             .connection
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if self.storage.retired.load(Ordering::Acquire) && !self.unresolved.get() {
+            return;
+        }
         if !self.unresolved.get()
             && db.is_autocommit()
             && db
@@ -189,6 +193,9 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        if self.retired.load(Ordering::Acquire) {
+            return Err("旧保存先の書込みは停止済みです。再起動してください".into());
+        }
         if self.maintenance.load(Ordering::Acquire) {
             return Err("保存領域の操作が既に進行中です".into());
         }

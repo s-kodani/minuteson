@@ -471,6 +471,32 @@ impl Storage {
 
 #[allow(dead_code)]
 impl NativeSnapshot<'_> {
+    // The future cutover coordinator must call this BEFORE attempting bootstrap
+    // publication, after verifying destination ownership/history. This is only
+    // a source fence, not proof that a target can be activated. No undo method:
+    // publication errors can be ambiguous, so only restart can restore writes.
+    pub(crate) fn retire_source_for_restart(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        self.verify(cancelled)?;
+        self.verify_source(cancelled)?;
+        let storage = self.maintenance.storage;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        check(cancelled)?;
+        if self.maintenance.unresolved.get()
+            || !storage.maintenance.load(Ordering::Acquire)
+            || !db.is_autocommit()
+        {
+            return Err("旧保存先の検証済み書込停止を確認できません".into());
+        }
+        db.flush_prepared_statement_cache();
+        storage.retired.store(true, Ordering::Release);
+        Ok(())
+    }
     pub(crate) fn source_root(&self) -> &Path {
         &self.maintenance.storage.root
     }

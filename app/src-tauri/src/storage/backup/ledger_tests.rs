@@ -19,6 +19,7 @@ fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabula
         root: root.clone(),
         connection: Mutex::new(database),
         maintenance: std::sync::atomic::AtomicBool::new(false),
+        retired: std::sync::atomic::AtomicBool::new(false),
     };
     let meeting = fixture(&storage, "v20");
     let original = storage.get_meeting(&meeting).unwrap();
