@@ -131,6 +131,8 @@ pub struct Storage {
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
+    #[cfg(unix)]
+    managed_anchor: deletion::fs::RootAnchor,
 }
 
 impl Storage {
@@ -147,11 +149,15 @@ impl Storage {
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
         // Managed children still must match this canonical root exactly.
         let root = root.canonicalize()?;
+        #[cfg(unix)]
+        let root_directory = deletion::fs::RootAnchor::directory(&root)?;
         let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA main.locking_mode = EXCLUSIVE; BEGIN IMMEDIATE; COMMIT;",
         )?;
+        #[cfg(unix)]
+        let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
         apply_migrations(&mut connection)?;
         connection.execute(
             "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
@@ -173,12 +179,16 @@ impl Storage {
         // Retain intent/fingerprints and partial files for explicit inspection.
         connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
         connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type='manual_import' AND state='preparing'", [])?;
+        #[cfg(unix)]
+        managed_anchor.seal_controls()?;
         Ok(Self {
             root,
             connection: Mutex::new(connection),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
+            #[cfg(unix)]
+            managed_anchor,
         })
     }
 

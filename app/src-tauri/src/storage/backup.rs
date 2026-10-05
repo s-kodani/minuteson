@@ -199,6 +199,16 @@ impl Storage {
         if self.maintenance.load(Ordering::Acquire) {
             return Err("保存領域の操作が既に進行中です".into());
         }
+        #[cfg(unix)]
+        if let Err(error) = self.managed_anchor.verify() {
+            // Never preview or copy a replacement root/DB, then unlock the
+            // cached old connection as if that replacement were trusted.
+            let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+            self.maintenance.store(true, Ordering::Release);
+            return Err(format!(
+                "起動時の保存領域を検証できません。書込みを停止しました: {error}"
+            ));
+        }
         let active: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing'))
              OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping'))

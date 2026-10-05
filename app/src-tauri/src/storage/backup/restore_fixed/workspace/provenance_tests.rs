@@ -130,6 +130,12 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
     let first = ids.get("meetings", "", &old).unwrap();
     // Test-only access to the owned image: this is not a publication path.
     let owned = Storage {
+        #[cfg(unix)]
+        managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
+            work.stage.path(),
+            "fixed.sqlite3",
+        )
+        .unwrap(),
         scratch: None,
         root: work.stage.path().canonicalize().unwrap(),
         connection: Mutex::new(Connection::open(work.stage.path().join("fixed.sqlite3")).unwrap()),

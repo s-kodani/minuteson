@@ -291,6 +291,12 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
             .unwrap();
     }
     let storage = Storage {
+        #[cfg(unix)]
+        managed_anchor: crate::storage::deletion::fs::RootAnchor::owned_image(
+            root.path(),
+            "meetings.sqlite3",
+        )
+        .unwrap(),
         scratch: None,
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
