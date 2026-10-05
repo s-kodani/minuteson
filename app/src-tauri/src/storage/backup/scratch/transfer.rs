@@ -53,6 +53,17 @@ pub(in crate::storage::backup) struct Bundle {
     pub decisions: Vec<Keep>,
     pub restores: Vec<Restore>,
     pub remaining_root_objects: Vec<RootObject>,
+    pub origins: Vec<history::Origin>,
+}
+impl Bundle {
+    pub(in crate::storage::backup) fn local_json(&self) -> Result<String, String> {
+        let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        value
+            .as_object_mut()
+            .ok_or("移行履歴の形式が不正です")?
+            .remove("origins");
+        serde_json::to_string(&value).map_err(|e| e.to_string())
+    }
 }
 
 // Shallow observations only. These names remain at the source and are never a
@@ -363,13 +374,14 @@ impl Registry {
         }
         self.guard()?;
         let bundle = Bundle {
-            version: 1,
+            version: 2,
             source_root: self.root.clone(),
             source_identity: self.root_identity.clone(),
             areas,
             decisions,
             restores,
             remaining_root_objects: remaining(&self.root, &excluded_path, check)?,
+            origins: self.origins()?,
         };
         if serde_json::to_vec(&bundle)
             .map_err(|e| e.to_string())?

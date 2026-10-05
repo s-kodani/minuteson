@@ -1,9 +1,13 @@
 //! Durable native-copy ownership, separate from source DB and destination data.
 //! No cutover, old-data deletion, automatic cleanup, or adoption of existing files.
 use super::*;
-use crate::storage::backup::relocation::{verify_placed_image, Entry, Manifest, NativeSnapshot};
+use crate::storage::backup::relocation::{
+    verify_placed_image_with_controls, Entry, Manifest, NativeSnapshot,
+};
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::BTreeMap;
+
+mod history;
 
 const SCHEMA: &str = "
 CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),intent TEXT NOT NULL CHECK(length(CAST(intent AS BLOB))<=65536),intent_hash TEXT NOT NULL CHECK(length(intent_hash)=64),manifest TEXT NOT NULL CHECK(length(CAST(manifest AS BLOB))<=67108864),manifest_hash TEXT NOT NULL CHECK(length(manifest_hash)=64),path_count INTEGER NOT NULL CHECK(path_count BETWEEN 1 AND 200001),state TEXT NOT NULL CHECK(state IN ('copying','ready')));
@@ -699,6 +703,15 @@ impl Placement<'_> {
         snapshot: &NativeSnapshot<'_>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
+        let controls = history::allowed(self)?;
+        self.verify_native(snapshot, cancelled, &controls)
+    }
+    fn verify_native(
+        &self,
+        snapshot: &NativeSnapshot<'_>,
+        cancelled: &impl Fn() -> bool,
+        controls: &[&str],
+    ) -> Result<(), String> {
         check(cancelled)?;
         if snapshot.source_root() != self.pending.source.path
             || snapshot.manifest_hash() != self.pending.manifest_hash
@@ -714,7 +727,12 @@ impl Placement<'_> {
             }
             self.node_path(node)?;
         }
-        verify_placed_image(&self.pending.target, &self.manifest, cancelled)?;
+        verify_placed_image_with_controls(
+            &self.pending.target,
+            &self.manifest,
+            cancelled,
+            controls,
+        )?;
         snapshot.verify(cancelled)?;
         snapshot.verify_source(cancelled)?;
         self.guard()

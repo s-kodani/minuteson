@@ -98,10 +98,14 @@ fn recovery_legacy_ownership_schema_upgrades_atomically_without_adopting_or_losi
     let (root, storage, id, path) = fixture();
     drop(storage);
     let journal = root.path().join(".mon-scratch.sqlite3");
-    Connection::open(&journal)
-        .unwrap()
-        .execute_batch("DROP TABLE recovery_decisions; PRAGMA user_version=0;")
+    let db = Connection::open(&journal).unwrap();
+    // Recreate the exact pre-review schema, not a damaged current schema.
+    #[cfg(target_os = "macos")]
+    db.execute_batch("DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history;")
         .unwrap();
+    db.execute_batch("DROP TABLE recovery_decisions; PRAGMA user_version=0;")
+        .unwrap();
+    drop(db);
     let reopened = Storage::open(root.path().into()).unwrap();
     assert_eq!(std::fs::read(path.join("unknown")).unwrap(), b"unknown");
     assert_eq!(

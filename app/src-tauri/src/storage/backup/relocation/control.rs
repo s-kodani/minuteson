@@ -8,6 +8,7 @@ struct Envelope {
     version: u32,
     native_manifest_hash: String,
     history: scratch::transfer::Bundle,
+    excluded_area: String,
 }
 
 #[allow(dead_code)] // Destination handoff and cutover coordinator follow.
@@ -18,6 +19,7 @@ pub(crate) struct ControlHandoff<'a, 'storage> {
     proof: Proof,
     bytes: Vec<u8>,
     hash: String,
+    history: scratch::transfer::Bundle,
 }
 
 #[allow(dead_code)]
@@ -41,9 +43,16 @@ impl<'storage> NativeSnapshot<'storage> {
             cancelled,
         )?;
         let bytes = serde_json::to_vec(&Envelope {
-            version: 1,
+            version: 2,
             native_manifest_hash: self.manifest_hash.clone(),
-            history,
+            history: history.clone(),
+            excluded_area: self
+                .stage
+                .path()
+                .file_name()
+                .ok_or("構築領域名がありません")?
+                .to_string_lossy()
+                .into_owned(),
         })
         .map_err(|e| e.to_string())?;
         if bytes.len() > 64 * 1024 * 1024 {
@@ -64,6 +73,7 @@ impl<'storage> NativeSnapshot<'storage> {
             proof,
             hash: digest(&bytes),
             bytes,
+            history,
         };
         result.verify(cancelled)?;
         Ok(result)
@@ -73,6 +83,106 @@ impl<'storage> NativeSnapshot<'storage> {
 impl ControlHandoff<'_, '_> {
     pub(crate) fn hash(&self) -> &str {
         &self.hash
+    }
+    pub(crate) fn snapshot(&self) -> &NativeSnapshot<'_> {
+        self.snapshot
+    }
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub(crate) fn check_compatible(&self, saved: &[u8]) -> Result<(), String> {
+        if saved == self.bytes {
+            return Ok(());
+        }
+        if saved.len() > 64 * 1024 * 1024 {
+            return Err("元の移行確認が安全容量を超えています".into());
+        }
+        let old: serde_json::Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
+        if old["version"] != 2 || old["native_manifest_hash"] != self.snapshot.manifest_hash() {
+            return Err("元の移行確認と会議コピーが一致しません".into());
+        }
+        let current = serde_json::to_value(&self.history).map_err(|e| e.to_string())?;
+        let original = &old["history"];
+        for key in [
+            "version",
+            "source_root",
+            "source_identity",
+            "decisions",
+            "restores",
+            "remaining_root_objects",
+            "origins",
+        ] {
+            if original.get(key) != current.get(key) {
+                return Err("配置完了後に元の保持判断・由来・残存対象が変更されています".into());
+            }
+        }
+        let before = original["areas"]
+            .as_array()
+            .ok_or("元の構築履歴が不正です")?;
+        let after = current["areas"]
+            .as_array()
+            .ok_or("現在の構築履歴が不正です")?;
+        for area in before {
+            let id = area["id"].as_str().ok_or("元の構築履歴IDが不正です")?;
+            if !after.iter().any(|a| a["id"] == id && a == area) {
+                return Err("配置完了後に元の構築履歴が変更されています".into());
+            }
+        }
+        for area in after {
+            if !before.iter().any(|a| a["id"] == area["id"])
+                && !(area["state"] == "recovered"
+                    && area["record_valid"] == true
+                    && area["entries"]
+                        .as_array()
+                        .is_some_and(|entries| entries.iter().all(|e| e["removed"] == true)))
+            {
+                return Err(
+                    "新たな未解決の構築領域があります。移行確認をやり直してください".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn build_registry_image(
+        &self,
+        operation: &str,
+        target: &Path,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<RegistryImage, String> {
+        self.verify(cancelled)?;
+        let path = self
+            .snapshot
+            .stage
+            .path()
+            .join(format!("registry-{}.sqlite3", Uuid::new_v4()));
+        let file = private_file(&path)?;
+        let db = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|e| e.to_string())?;
+        scratch::history::write_image(
+            &db,
+            target,
+            operation,
+            self.snapshot.manifest_hash(),
+            &self.hash,
+            &self.history,
+        )?;
+        drop(db);
+        file.sync_all().map_err(|e| e.to_string())?;
+        File::open(self.snapshot.stage.path())
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())?;
+        let proof = Proof::read(&file.metadata().map_err(|e| e.to_string())?)?;
+        let (size, hash) = digest_file(&path, cancelled)?;
+        self.verify(cancelled)?;
+        Ok(RegistryImage {
+            path,
+            proof,
+            size,
+            hash,
+        })
     }
     pub(crate) fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         self.snapshot.verify(cancelled)?;
@@ -89,9 +199,17 @@ impl ControlHandoff<'_, '_> {
             cancelled,
         )?;
         let actual = serde_json::to_vec(&Envelope {
-            version: 1,
+            version: 2,
             native_manifest_hash: self.snapshot.manifest_hash.clone(),
             history,
+            excluded_area: self
+                .snapshot
+                .stage
+                .path()
+                .file_name()
+                .ok_or("構築領域名がありません")?
+                .to_string_lossy()
+                .into_owned(),
         })
         .map_err(|e| e.to_string())?;
         if actual != self.bytes {
@@ -104,6 +222,54 @@ impl ControlHandoff<'_, '_> {
             return Err("元の台帳を再照合する間に移行用制御記録が変更されています".into());
         }
         Ok(())
+    }
+}
+
+pub(crate) fn verify_registry_image(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+    native_hash: &str,
+    control_hash: &str,
+) -> Result<(), String> {
+    scratch::history::verify_image(root, path, operation, native_hash, control_hash)
+}
+pub(crate) fn registry_digest(path: &Path) -> Result<(u64, String), String> {
+    digest_file(path, &|| false)
+}
+
+pub(crate) struct RegistryImage {
+    path: PathBuf,
+    proof: Proof,
+    pub(crate) size: u64,
+    pub(crate) hash: String,
+}
+impl RegistryImage {
+    pub(crate) fn write_owned(
+        &self,
+        output: &mut File,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let mut input = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(&self.path)
+            .map_err(|e| e.to_string())?;
+        if Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != self.proof {
+            return Err("移行用台帳の一時コピーが変更されています".into());
+        }
+        check(cancelled)?;
+        output.set_len(0).map_err(|e| e.to_string())?;
+        std::io::Seek::seek(output, std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let (_, hash) = stream(&mut input, Some(output), self.size, cancelled)?;
+        if hash != self.hash
+            || Proof::read(&input.metadata().map_err(|e| e.to_string())?)? != self.proof
+            || Proof::read(&std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?)?
+                != self.proof
+        {
+            return Err("移行用台帳のコピー中に内容・実体が変更されています".into());
+        }
+        output.sync_all().map_err(|e| e.to_string())
     }
 }
 

@@ -704,4 +704,13 @@ impl Bootstrap {
 }
 
 #[cfg(test)]
+pub(crate) fn set_test_root(config: &Path, data: &Path, root: &Path) {
+    let b = Bootstrap::open(config, data).unwrap();
+    let mut state = b.state.lock().unwrap();
+    let mut record = state.loaded.as_ref().unwrap().record.clone();
+    record.current = Root::inspect(root).unwrap();
+    b.write(&mut state, record).unwrap();
+}
+
+#[cfg(test)]
 mod tests;

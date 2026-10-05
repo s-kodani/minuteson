@@ -3,6 +3,110 @@ use super::*;
 
 #[cfg(target_os = "macos")]
 #[test]
+fn history_install_preserves_restore_keep_receipt_on_destination_startup() {
+    use crate::bootstrap::Bootstrap;
+    use std::os::unix::fs::DirBuilderExt;
+    let f = fixture();
+    let batch = Uuid::new_v4().to_string();
+    let ids = ids(&f, &batch);
+    let sealed = sealed(&f, &ids);
+    let first = paths(&sealed, &f.target.root)[0].clone();
+    {
+        let db = f.target.connection.lock().unwrap();
+        let install = recorded(&f, &db, &sealed, &ids);
+        std::fs::write(first.join("unknown"), b"retained restore body").unwrap();
+        drop(install);
+    }
+    let item = f
+        .target
+        .recovery_listing()
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.source == recovery::Source::RestoreAddition)
+        .unwrap();
+    let mut keep = f
+        .target
+        .prepare_recovery(
+            recovery::Source::RestoreAddition,
+            &item.operation_id,
+            &|| false,
+        )
+        .unwrap();
+    keep.resolve(&f.target, &keep.preview().confirmation_id, true, &|| false)
+        .unwrap();
+    drop(keep);
+    drop(sealed);
+    drop(ids);
+    let area = tempfile::tempdir().unwrap();
+    let base = area.path().canonicalize().unwrap();
+    let config = base.join("config");
+    let data = base.join("data");
+    let b = Bootstrap::open(&config, &data).unwrap();
+    let seed = Storage::open(b.root().into()).unwrap();
+    b.initialize(&seed).unwrap();
+    drop(seed);
+    drop(b);
+    // The test prepares a source bootstrap record, not a production cutover.
+    crate::bootstrap::set_test_root(&config, &data, &f.target.root);
+    let b = Bootstrap::open(&config, &data).unwrap();
+    let target = base.join("destination");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&target)
+        .unwrap();
+    let native = f.target.prepare_relocation_snapshot(&|| false).unwrap();
+    let op = Uuid::new_v4().to_string();
+    b.begin_move(
+        &op,
+        &Uuid::new_v4().to_string(),
+        &target,
+        native.manifest_hash(),
+        0,
+    )
+    .unwrap();
+    let mut p = b.pending_placement(&op, &native).unwrap();
+    p.copy(&native, &|| false).unwrap();
+    let control = native.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&control, &|| false).unwrap();
+    drop(p);
+    drop(control);
+    drop(native);
+    let reopened = Storage::open(target.clone()).unwrap();
+    assert!(reopened
+        .recovery_listing()
+        .unwrap()
+        .items
+        .iter()
+        .any(|i| i.operation_id == item.operation_id && i.retained));
+    assert_eq!(
+        std::fs::read(first.join("unknown")).unwrap(),
+        b"retained restore body"
+    );
+    assert_eq!(
+        std::fs::read(
+            target
+                .join(first.strip_prefix(&f.target.root).unwrap())
+                .join("unknown")
+        )
+        .unwrap(),
+        b"retained restore body"
+    );
+    let old = Connection::open(f.target.root.join(".mon-scratch.sqlite3")).unwrap();
+    let new = Connection::open(target.join(".mon-scratch.sqlite3")).unwrap();
+    let read = |db: &Connection| -> String {
+        db.query_row(
+            "SELECT receipt_json FROM recovery_decisions WHERE operation_id=?1",
+            params![item.operation_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(read(&old), read(&new));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn control_handoff_keeps_restore_consent_and_historical_root_proofs_without_rewriting_native_db() {
     let f = fixture();
     let batch = Uuid::new_v4().to_string();

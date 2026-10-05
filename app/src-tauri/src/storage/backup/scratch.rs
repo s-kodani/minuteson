@@ -6,9 +6,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, Weak};
 
+#[cfg(target_os = "macos")]
+pub(in crate::storage::backup) mod history;
 pub(super) mod review;
 #[cfg(target_os = "macos")]
 pub(in crate::storage::backup) mod transfer;
+
+fn local_version() -> i64 {
+    if cfg!(target_os = "macos") {
+        3
+    } else {
+        2
+    }
+}
+fn history_schema(db: &Connection) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    db.execute_batch(history::SCHEMA)
+        .map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = db;
+    Ok(())
+}
 
 const LIMIT: usize = 200_000;
 const SCHEMA: &str = "
@@ -193,15 +211,20 @@ impl Registry {
         expected
             .execute_batch(review::SCHEMA)
             .map_err(|e| e.to_string())?;
+        let version_two_schema = schema(&expected)?;
+        history_schema(&expected)?;
         let expected_schema = schema(&expected)?;
         let mut db = Connection::open(&path).map_err(|e| e.to_string())?;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        let upgrade = !new && version == 0 && schema(&db)? == previous_schema;
+        let upgrade_old = !new && version == 0 && schema(&db)? == previous_schema;
+        let upgrade_two =
+            cfg!(target_os = "macos") && !new && version == 2 && schema(&db)? == version_two_schema;
+        let upgrade = upgrade_old || upgrade_two;
         // Inspect existing SQL before changing its journaling settings. Even an
         // empty file without a saved root proof is not adopted as ours.
-        if !new && !upgrade && (version != 2 || schema(&db)? != expected_schema) {
+        if !new && !upgrade && (version != local_version() || schema(&db)? != expected_schema) {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
         db.busy_timeout(std::time::Duration::from_secs(5))
@@ -216,12 +239,13 @@ impl Registry {
             tx.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
             tx.execute_batch(review::SCHEMA)
                 .map_err(|e| e.to_string())?;
+            history_schema(&tx)?;
             tx.execute(
                 "INSERT INTO metadata VALUES(1,?1,?2)",
                 params![proof, hash(proof.as_bytes())],
             )
             .map_err(|e| e.to_string())?;
-            tx.execute_batch("PRAGMA user_version=2;")
+            tx.pragma_update(None, "user_version", local_version())
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
@@ -250,9 +274,12 @@ impl Registry {
                 return Err("台帳の移行前に保存先が変更されています".into());
             }
             let tx = db.transaction().map_err(|e| e.to_string())?;
-            tx.execute_batch(review::SCHEMA)
-                .map_err(|e| e.to_string())?;
-            tx.execute_batch("PRAGMA user_version=2;")
+            if upgrade_old {
+                tx.execute_batch(review::SCHEMA)
+                    .map_err(|e| e.to_string())?;
+            }
+            history_schema(&tx)?;
+            tx.pragma_update(None, "user_version", local_version())
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
@@ -351,7 +378,7 @@ impl Registry {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if version != 2 || schema(db)? != self.expected_schema {
+        if version != local_version() || schema(db)? != self.expected_schema {
             return Err("一時領域台帳のSQL定義が変更されています。コピーを保持します".into());
         }
         Ok(())

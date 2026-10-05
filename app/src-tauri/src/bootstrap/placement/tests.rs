@@ -2,17 +2,17 @@ use super::*;
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, DirBuilderExt, PermissionsExt};
 
-struct Fixture {
-    _base: tempfile::TempDir,
-    bootstrap: Bootstrap,
-    storage: Storage,
-    target: PathBuf,
-    operation: String,
-    relative: String,
-    meeting: String,
+pub(super) struct Fixture {
+    pub(super) _base: tempfile::TempDir,
+    pub(super) bootstrap: Bootstrap,
+    pub(super) storage: Storage,
+    pub(super) target: PathBuf,
+    pub(super) operation: String,
+    pub(super) relative: String,
+    pub(super) meeting: String,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let base = tempfile::tempdir().unwrap();
         let parent = base.path().canonicalize().unwrap();
         let b = Bootstrap::open(&parent.join("config"), &parent.join("app-data")).unwrap();
@@ -41,7 +41,7 @@ impl Fixture {
             meeting,
         }
     }
-    fn intent(&self, snapshot: &NativeSnapshot<'_>) {
+    pub(super) fn intent(&self, snapshot: &NativeSnapshot<'_>) {
         self.bootstrap
             .begin_move(
                 &self.operation,

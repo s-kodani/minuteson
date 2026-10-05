@@ -632,6 +632,14 @@ pub(crate) fn verify_placed_image(
     expected: &Manifest,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    verify_placed_image_with_controls(root, expected, cancelled, &[])
+}
+pub(crate) fn verify_placed_image_with_controls(
+    root: &Path,
+    expected: &Manifest,
+    cancelled: &impl Fn() -> bool,
+    controls: &[&str],
+) -> Result<(), String> {
     directory(root)?;
     let copied = inventory(root, cancelled)?;
     if copied.iter().map(|n| &n.entry).ne(expected.entries.iter())
@@ -642,7 +650,11 @@ pub(crate) fn verify_placed_image(
     }
     for name in std::fs::read_dir(root).map_err(|e| e.to_string())? {
         let name = name.map_err(|e| e.to_string())?.file_name();
-        if name != "meetings.sqlite3" && name != "meetings" && name != "temp" {
+        if name != "meetings.sqlite3"
+            && name != "meetings"
+            && name != "temp"
+            && !controls.iter().any(|s| name == *s)
+        {
             return Err("配置先に未確認のファイルがあります".into());
         }
     }
