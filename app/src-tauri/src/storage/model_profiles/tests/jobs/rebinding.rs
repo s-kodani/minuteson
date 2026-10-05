@@ -64,6 +64,19 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
         let preview = retry_preview(&f, source, target).unwrap();
         assert_eq!(calls_in(f.root.path()) + calls_in(f.app_data.path()), calls);
         let op = Uuid::new_v4().to_string();
+        let inspector = crate::model_inspection::Inspector::default();
+        let cancelled_op = Uuid::new_v4().to_string();
+        let guard = inspector.begin(&cancelled_op).unwrap();
+        inspector.cancel(&cancelled_op).unwrap();
+        let pending =
+            crate::model_rebinding::receipt(&f.storage, &inspector, &cancelled_op, &preview)
+                .unwrap();
+        assert!(pending.active && pending.cancelled && pending.job.is_none());
+        drop(guard);
+        let ended =
+            crate::model_rebinding::receipt(&f.storage, &inspector, &cancelled_op, &preview)
+                .unwrap();
+        assert!(!ended.active && ended.cancelled && ended.job.is_none());
         let next = crate::model_rebinding::apply(&f.storage, &f.models(), &op, &preview, &|| false)
             .unwrap();
         let (spec, cp) = f.storage.fixed_job_input(&next.id).unwrap();
@@ -102,6 +115,11 @@ fn model_rebinding_reviewed_retries_run_all_three_workers_and_receipts_do_not_re
         // start a new attempt, even after the destination has disappeared.
         std::fs::remove_dir_all(f.models().join(&f.packages[target].id)).unwrap();
         let counts = (f.count("processing_jobs"), f.count("job_checkpoints"));
+        inspector.cancel(&op).unwrap();
+        let receipt =
+            crate::model_rebinding::receipt(&f.storage, &inspector, &op, &preview).unwrap();
+        assert!(!receipt.active && receipt.cancelled);
+        assert_eq!(receipt.job, Some(completed.clone()));
         assert_eq!(
             crate::model_rebinding::result(&f.storage, &op, &preview).unwrap(),
             Some(completed.clone())

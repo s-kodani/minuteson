@@ -284,17 +284,22 @@ fn cancelled_read_has_no_success_report_and_single_operation_lifetime_is_guarded
     .unwrap_err()
     .contains("取り消し"));
     let inspector = Inspector::default();
+    assert!(inspector.status("invalid").is_err());
     assert!(inspector.begin("invalid").is_err());
     let token = uuid::Uuid::new_v4().to_string();
     let other = uuid::Uuid::new_v4().to_string();
     let guard = inspector.begin(&token).unwrap();
+    assert_eq!(inspector.status(&token).unwrap(), (true, false));
     assert!(inspector.begin(&other).is_err());
     inspector.cancel(&other).unwrap();
+    assert_eq!(inspector.status(&other).unwrap(), (false, true));
     assert!(!guard.cancelled());
     inspector.cancel(&token).unwrap();
+    assert_eq!(inspector.status(&token).unwrap(), (true, true));
     assert!(guard.cancelled());
     assert!(inspector.begin(&other).is_err());
     drop(guard);
+    assert_eq!(inspector.status(&token).unwrap(), (false, true));
     assert!(inspector.begin(&other).is_err()); // cancellation arrived before begin
     let third = uuid::Uuid::new_v4().to_string();
     let next = inspector.begin(&third).unwrap();

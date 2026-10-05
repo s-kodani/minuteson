@@ -226,6 +226,30 @@ async fn apply_job_model_rebinding(
 }
 
 #[tauri::command]
+async fn get_job_model_rebinding_result(
+    window: WebviewWindow,
+    operation_id: String,
+    preview: model_rebinding::Preview,
+) -> Result<model_rebinding::Receipt, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read job model rebinding results".into());
+    }
+    let app = window.app_handle().clone();
+    // Receipt lookup must not acquire a preparation lease, run inference,
+    // enqueue work, or reject a token previously used for cancellation.
+    tauri::async_runtime::spawn_blocking(move || {
+        model_rebinding::receipt(
+            &app.state::<Storage>(),
+            &app.state::<model_inspection::Inspector>(),
+            &operation_id,
+            &preview,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn check_model_compatibility(
     window: WebviewWindow,
     token: String,
@@ -1403,6 +1427,7 @@ pub fn run() {
             apply_model_profile_application,
             preview_job_model_rebinding,
             apply_job_model_rebinding,
+            get_job_model_rebinding_result,
             check_model_compatibility,
             place_model_package,
             get_audio_import,

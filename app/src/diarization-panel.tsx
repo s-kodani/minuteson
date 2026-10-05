@@ -2,6 +2,7 @@ import { invoke,isTauri } from "@tauri-apps/api/core";
 import { useEffect,useRef,useState } from "react";
 import { DraftSaveQueue,registerPendingEdits,type VersionedDraft } from "./draft-save";
 import { canRetryJob,jobLabel,type AnalysisJob,type VersionState } from "./analysis-state";
+import { JobModelRebinding } from "./model-rebinding";
 import { diarizationConfigured,fixedDiarizationInput,fixedTracks,trackLabel,type DiarizationEngine,type DiarizationPreferences,type DiarizationTrack } from "./diarization-state";
 type Preferences = VersionedDraft<DiarizationPreferences>;
 export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs,versions,withSavedEdits,refresh}: {
@@ -95,6 +96,7 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
       {["paused","interrupted"].includes(j.state)&&<button type="button" disabled={disabled||recordingActive||pending} onClick={()=>void jobAction("resume_analysis_job",j.id)}>話者分離を再開</button>}
       {["queued","running","paused","interrupted"].includes(j.state)&&<button type="button" disabled={disabled} onClick={()=>{if(window.confirm("話者分離を取り消しますか？ 録音・現在版・編集は削除しません。"))void jobAction("cancel_analysis_job",j.id);}}>話者分離を取消</button>}
       {canRetryJob(j,jobs,"diarization")&&<button type="button" disabled={disabled||recordingActive||pending} onClick={()=>retry(j)}>話者分離を同じ条件で再試行</button>}
+      <JobModelRebinding meetingId={meetingId} job={j} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={refresh} />
     </div></li>)}</ul>
     {error&&<p className="action-error" role="alert">{error}</p>}
   </section>;

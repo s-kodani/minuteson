@@ -7,6 +7,7 @@ import { timeLabel, type Analysis, type Draft } from "./transcript";
 import { VocabularyEditor } from "./vocabulary";
 import type { VocabularyStamp } from "./vocabulary-state";
 import { DiarizationPanel } from "./diarization-panel";
+import { JobModelRebinding } from "./model-rebinding";
 import { AnalysisFlowStatus } from "./analysis-flow";
 import type { AnalysisFlow } from "./analysis-flow-state";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
@@ -225,6 +226,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       {["paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", job.id)}>再開</button>}
       {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("解析ジョブを取り消しますか？ 録音と現在版は削除しません。")) void jobAction("cancel_analysis_job", job.id); }}>取消</button>}
       {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
+      <JobModelRebinding meetingId={meetingId} job={job} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
     <DiarizationPanel meetingId={meetingId} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>

@@ -19,6 +19,14 @@ pub(crate) struct Preview {
     review_hash: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Receipt {
+    pub job: Option<JobSnapshot>,
+    pub active: bool,
+    pub cancelled: bool,
+}
+
 fn digest(domain: &[u8], value: &impl Serialize) -> Result<String, String> {
     let mut hash = Sha256::new();
     hash.update(domain);
@@ -162,6 +170,23 @@ pub(crate) fn result(
         operation,
         &preview.binding,
     )
+}
+
+pub(crate) fn receipt(
+    storage: &Storage,
+    inspector: &crate::model_inspection::Inspector,
+    operation: &str,
+    preview: &Preview,
+) -> Result<Receipt, String> {
+    // Lifetime must be observed before the receipt. Otherwise a commit could
+    // occur after an absent receipt read but before an inactive status read.
+    let (active, cancelled) = inspector.status(operation)?;
+    let job = result(storage, operation, preview)?;
+    Ok(Receipt {
+        job,
+        active,
+        cancelled,
+    })
 }
 
 pub(crate) fn apply(

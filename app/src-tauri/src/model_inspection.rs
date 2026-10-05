@@ -416,6 +416,20 @@ pub(crate) struct InspectionGuard {
     cancel: Arc<AtomicBool>,
 }
 impl Inspector {
+    pub(crate) fn status(&self, token: &str) -> Result<(bool, bool), String> {
+        if !uuid::Uuid::parse_str(token).is_ok_and(|id| id.to_string() == token) {
+            return Err("モデル操作のIDが不正です".into());
+        }
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| "モデル検査ロックを取得できません")?;
+        Ok((
+            state.active.as_ref().is_some_and(|(id, _)| id == token),
+            state.cancelled_tokens.iter().any(|id| id == token),
+        ))
+    }
+
     pub(crate) fn begin(&self, token: &str) -> Result<InspectionGuard, String> {
         if !uuid::Uuid::parse_str(token).is_ok_and(|id| id.to_string() == token) {
             return Err("モデル検査の操作IDが不正です".into());
