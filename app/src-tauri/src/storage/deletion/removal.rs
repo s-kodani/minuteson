@@ -236,6 +236,27 @@ impl Progress {
             format!(".mon-delete-{operation}-{index}")
         }
     }
+    pub(super) fn reconfirmation_roots(
+        &self,
+        manifest: &Manifest,
+        operation: &str,
+    ) -> Result<Vec<String>, String> {
+        manifest.validate_roots()?;
+        let mut roots: BTreeSet<String> = manifest.reservation_roots.iter().cloned().collect();
+        for (index, entry) in manifest.entries.iter().rev().enumerate() {
+            if manifest.is_tree_root(&entry.path) {
+                roots.insert(format!("meetings/{}", self.reserved(operation, index)));
+            }
+        }
+        if roots.len() > super::files::MAX_RESERVATION_ROOTS
+            || roots
+                .iter()
+                .any(|p| !super::files::valid_reservation_root(p))
+        {
+            return Err("削除予約ルートの確認範囲が安全上限を超えています".into());
+        }
+        Ok(roots.into_iter().collect())
+    }
 }
 // A stored file-completion proof retains the exact policy, plan and cursor.
 // Only the compound DB receipt may parse it, and must revalidate all fields.
@@ -254,14 +275,15 @@ impl Finished {
         let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? else {
             return Ok(());
         };
-        if let Some(index) = manifest
-            .entries
-            .iter()
-            .rev()
-            .position(|e| e.path == format!("meetings/{}", manifest.meeting_id))
+        for path in self
+            .0
+            .reconfirmation_roots(manifest, confirmed.operation())?
         {
             if meetings
-                .optional_kind(&self.0.reserved(confirmed.operation(), index))?
+                .optional_kind(
+                    path.strip_prefix("meetings/")
+                        .ok_or("予約ルートが不正です")?,
+                )?
                 .is_some()
             {
                 return Err(
@@ -300,18 +322,7 @@ impl Finished {
         if meetings.optional_kind(&manifest.meeting_id)?.is_some() {
             return Err("削除済み会議フォルダーが再出現しています。削除せず保持します".into());
         }
-        if let Some(index) = manifest
-            .entries
-            .iter()
-            .rev()
-            .position(|e| e.path == format!("meetings/{}", manifest.meeting_id))
-        {
-            let reserved = self.0.reserved(confirmed.operation(), index);
-            if meetings.optional_kind(&reserved)?.is_some() {
-                return Err("会議フォルダーの削除予約対象が残っています".into());
-            }
-        }
-        Ok(())
+        self.verify_root_reservation_absent(storage, &manifest, confirmed)
     }
 }
 
@@ -355,35 +366,40 @@ impl Receipt {
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<Census, String> {
+        let roots = self
+            .progress
+            .reconfirmation_roots(&self.manifest, self.confirmed.operation())?;
+        self.current_census(storage, db, check, &roots)
+    }
+    pub(super) fn current_census(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+        roots: &[String],
+    ) -> Result<Census, String> {
+        self.verify_saved(db, check)?;
         let p = &self.confirmed;
         let other = super::fence::other_pending(db, Some(p.operation()))?;
         if other {
             return Err("別の未完了保守操作があります。再確認を進めません".into());
-        }
-        self.verify_review_root(storage)?;
-        // A reserved empty meeting root is outside this meeting's logical tree.
-        // Never forget it or include arbitrary sibling meetings in a new plan.
-        if self.progress.pending.is_some()
-            && self
-                .target()
-                .is_some_and(|e| e.path == format!("meetings/{}", self.manifest.meeting_id))
-        {
-            if let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? {
-                if meetings.optional_kind(&self.reserved())?.is_some() {
-                    return Err(
-                        "移動済み会議ルートの解決が必要です。元の予約対象を保持します".into(),
-                    );
-                }
-            }
         }
         let census = if self
             .progress
             .database_phase
             .is_some_and(|phase| phase.rows_committed())
         {
-            Census::capture_deleted_locked(storage, db, p, check, None)?
+            Census::capture_deleted_locked(storage, db, p, check, None, roots)?
         } else {
-            Census::capture_locked(storage, db, &p.scope().meeting_id, p.operation(), check)?
+            Census::capture_removal_locked(
+                storage,
+                db,
+                &p.scope().meeting_id,
+                p.operation(),
+                check,
+                None,
+                roots,
+            )?
         };
         if census.scope() != p.scope()
             || census.manifest().root != p.manifest().root
@@ -391,6 +407,8 @@ impl Receipt {
         {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
+        self.verify_saved(db, check)?;
+        census.verify_tree_roots(storage)?;
         Ok(census)
     }
     pub(super) fn matches_completion(
@@ -763,7 +781,14 @@ fn verify_remaining(
         .database_phase
         .is_some_and(|phase| phase.rows_committed())
     {
-        Census::capture_deleted_locked(storage, db, p, check, reserved.as_deref())?
+        Census::capture_deleted_locked(
+            storage,
+            db,
+            p,
+            check,
+            reserved.as_deref(),
+            &receipt.manifest.reservation_roots,
+        )?
     } else {
         Census::capture_removal_locked(
             storage,
@@ -772,6 +797,7 @@ fn verify_remaining(
             p.operation(),
             check,
             reserved.as_deref(),
+            &receipt.manifest.reservation_roots,
         )?
     };
     if current.scope() != p.scope()
@@ -788,10 +814,10 @@ fn verify_remaining(
         .collect();
     // A reserved meeting root is outside the original meeting subtree. Read
     // just that exact empty sibling; never inventory another meeting.
-    if let Some(target) = receipt.target().filter(|e| {
-        e.path == format!("meetings/{}", p.manifest().meeting_id)
-            && receipt.progress.pending.is_some()
-    }) {
+    if let Some(target) = receipt
+        .target()
+        .filter(|e| receipt.manifest.is_tree_root(&e.path) && receipt.progress.pending.is_some())
+    {
         let dir =
             parent(storage, &receipt.manifest, &target.path)?.ok_or("確認した親がありません")?;
         let leaf = receipt.reserved();

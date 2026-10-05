@@ -5,6 +5,7 @@ export interface DeletionPreview {
   pathCount: number; processedPaths: number; fileCount: number; missingCount: number;
   changedCount: number; unregisteredCount: number; bytes: number; rowCount: number; rowPhaseCommitted: boolean;
   reconfirmationAllowed?: boolean; previousProcessedPaths?: number | null; previousPathCount?: number | null;
+  reservationRoots?: string[];
 }
 export interface DeletionReceipt { operationId: string; meetingId: string; deleted: boolean; retained: boolean; restartRequired: boolean }
 export interface DeletionItem { operationId: string; state: string; meetingId: string | null; errorCode: string | null }
@@ -15,12 +16,24 @@ const uuid = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !v.includes("\0");
 const fail = (): never => { throw Error("削除の状態が不正です。対象を再確認してください。"); };
+const validReservationRoot = (path: string, operationId: string) => {
+  const prefix = `meetings/.mon-delete-${operationId}-`;
+  if (!path.startsWith(prefix)) return false;
+  const suffix = path.slice(prefix.length);
+  if (!/^(?:r[1-9][0-9]*-)?(?:0|[1-9][0-9]*)$/u.test(suffix)) return false;
+  const parts = suffix.split("-");
+  return (parts.length === 1 || Number(parts[0].slice(1)) <= 32) && Number(parts.at(-1)) < 200000;
+};
+const validReservationRoots = (roots: unknown, operationId: string): roots is string[] => Array.isArray(roots) && roots.length <= 256
+  && roots.every((p, i) => typeof p === "string" && validReservationRoot(p, operationId) && (i === 0 || roots[i - 1] < p));
 export function assertDeletionPreview(p: DeletionPreview): void {
   if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(uuid) || !text(p.title)
     || !["review", "not_started", "files", "reconfirmation", "database_files", "database_reconfirmation", "database", "awaiting_ack", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.rowPhaseCommitted].every(v => typeof v === "boolean")
     || (p.resumeReason !== null && !text(p.resumeReason))
     || (p.executeAllowed && p.resumeReason !== null)
+    || (p.reservationRoots !== undefined && !validReservationRoots(p.reservationRoots, p.operationId))
+    || (["review", "not_started", "retained"].includes(p.phase) && !!p.reservationRoots?.length)
     || ![p.pathCount, p.processedPaths, p.fileCount, p.missingCount, p.changedCount, p.unregisteredCount, p.bytes, p.rowCount].every(count)
     || p.pathCount > 200000 || p.processedPaths > p.pathCount || p.fileCount > p.pathCount
     || p.missingCount + p.changedCount + p.unregisteredCount > p.fileCount
@@ -51,20 +64,22 @@ export function assertDeletionListing(l: DeletionListing): void {
     || (i.meetingId !== null && !uuid(i.meetingId)) || (i.errorCode !== null && !text(i.errorCode))) fail();
   if (new Set(l.items.map(i => i.operationId)).size !== l.items.length) fail();
 }
-export function assertDeletionPathPage(page: DeletionPathPage, confirmation: string, offset: number, total: number, meetingId: string): void {
+export function assertDeletionPathPage(page: DeletionPathPage, confirmation: string, offset: number, total: number, meetingId: string, reservationRoots: string[] = [], operationId?: string): void {
   if (!page || page.confirmationId !== confirmation || !uuid(confirmation) || page.offset !== offset || page.total !== total
     || !count(offset) || offset % 50 !== 0 || !count(total) || total > 200000 || offset > total
     || !Array.isArray(page.entries) || page.entries.length !== Math.min(50, total - offset)
     || page.nextOffset !== (offset + page.entries.length < total ? offset + page.entries.length : null)) fail();
-  if (!uuid(meetingId)) fail();
+  if (!uuid(meetingId) || !Array.isArray(reservationRoots) || (reservationRoots.length > 0 && (!uuid(operationId) || !validReservationRoots(reservationRoots, operationId)))) fail();
   const prefix = `meetings/${meetingId}`;
   for (const e of page.entries) {
-    if (!e || !text(e.relativePath) || !(e.relativePath === prefix || e.relativePath.startsWith(prefix + "/")) || new TextEncoder().encode(e.relativePath).length > 256
+    const reserved = e && typeof e.relativePath === "string" && reservationRoots.some(r => e.relativePath === r || e.relativePath.startsWith(r + "/"));
+    if (!e || !text(e.relativePath) || !(e.relativePath === prefix || e.relativePath.startsWith(prefix + "/") || reserved) || new TextEncoder().encode(e.relativePath).length > 256
       || e.relativePath.includes("\\") || e.relativePath.split("/").some(p => !p || p === "." || p === "..")
       || ![e.directory, e.registered, e.missing, e.changed].every(v => typeof v === "boolean")
       || (e.stageHint !== null && !text(e.stageHint)) || (e.bytes !== null && !count(e.bytes))
       || (e.directory && (e.registered || e.changed || e.bytes !== null))
       || (!e.directory && e.missing !== (e.bytes === null)) || (e.changed && (!e.registered || e.missing))) fail();
+    if (reserved && (e.registered || e.changed || e.stageHint !== null || (!e.directory && reservationRoots.includes(e.relativePath)))) fail();
   }
   if (new Set(page.entries.map(e => e.relativePath)).size !== page.entries.length) fail();
 }

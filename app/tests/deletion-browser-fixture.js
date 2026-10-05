@@ -10,7 +10,7 @@ f.changed = patch => changed(patch.kind && patch.kind !== "deletion" ? { ...patc
 const idle = structuredClone(f.snapshot);
 const d = window.deletionFixture = {
   mode: "success", unknownCount: 0, fileCount: 1, blocked: false, restart: false, cold: false,
-  listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null,
+  listFail: false, pageFail: false, reviewLost: false, pathsDelay: false, releasePage: null, reservedMode: false, foreignRootPage: false,
   items: [], deleted: 0, kept: 0, reconfirmed: 0, complete: () => {}, last: null, closes: 0,
   prepareHold: false, closeHold: false, closeFail: false, quitFail: false, liveTokens: new Set(),
   mountPlayback: async () => { const { mountPlaybackHarness } = await import("./deletion-playback-browser-harness.tsx"); d.unmountPlayback = mountPlaybackHarness(f.meetings[0].id); },
@@ -53,6 +53,11 @@ mockIPC(async (command, args) => {
     const page = { confirmationId: args.confirmationId, offset: args.offset, total: p.pathCount, nextOffset: args.offset + 50 < p.pathCount ? args.offset + 50 : null,
       entries: Array.from({ length: Math.min(50, p.pathCount - args.offset) }, (_, index) => {
         const n = args.offset + index, directory = n < 2;
+        if (p.reservationRoots?.length && n >= 3) {
+          const root = d.foreignRootPage ? `meetings/.mon-delete-${crypto.randomUUID()}-2` : p.reservationRoots[0];
+          return { relativePath: root + (n === 3 ? "" : "/unknown.txt"), directory: n === 3, registered: false, missing: false, changed: false, stageHint: null, bytes: n === 3 ? null : 1024 };
+        }
+        if (p.reservationRoots?.length && n === 2) return { relativePath: `meetings/${p.meetingId}/audio/input.flac`, directory: false, registered: !p.rowPhaseCommitted, missing: false, changed: false, stageHint: null, bytes: 1024 };
         return { relativePath: `meetings/${p.meetingId}${n === 0 ? "" : n === 1 ? "/audio" : `/audio/file-${n}.flac`}`, directory, registered: !directory && n >= 2 + d.unknownCount, missing: false, changed: false, stageHint: null, bytes: directory ? null : 1024 };
       }) };
     if (d.pathsDelay) { d.pathsDelay = false; await new Promise(resolve => { d.releasePage = resolve; }); }
@@ -69,7 +74,7 @@ mockIPC(async (command, args) => {
     if (r.action === "review_remaining") {
       if (!p.reconfirmationAllowed) throw Error("残り範囲を再同意できません");
       d.reconfirmed++; d.mode = "success";
-      await f.changed({ phase: "ready", busy: false, attentionRequired: false, errorMessage: null, retryAllowed: true, deletionPreview: { ...p, confirmationId: crypto.randomUUID(), phase: p.phase === "files" ? "reconfirmation" : "database_reconfirmation", previousProcessedPaths: p.processedPaths, previousPathCount: p.pathCount, pathCount: d.fileCount + 2, fileCount: d.fileCount, unregisteredCount: d.unknownCount, processedPaths: 0, reconfirmationAllowed: false, executeAllowed: true, resumeReason: null } });
+      await f.changed({ phase: "ready", busy: false, attentionRequired: false, errorMessage: null, retryAllowed: true, deletionPreview: { ...p, confirmationId: crypto.randomUUID(), phase: p.phase === "files" ? "reconfirmation" : "database_reconfirmation", previousProcessedPaths: p.processedPaths, previousPathCount: p.pathCount, pathCount: d.reservedMode ? 5 : d.fileCount + 2, fileCount: d.reservedMode ? 2 : d.fileCount, unregisteredCount: d.reservedMode ? p.rowPhaseCommitted ? 2 : 1 : d.unknownCount, reservationRoots: d.reservedMode ? [`meetings/.mon-delete-${p.operationId}-2`] : p.reservationRoots, processedPaths: 0, reconfirmationAllowed: false, executeAllowed: true, resumeReason: null } });
       return structuredClone(f.snapshot);
     }
     if (r.action === "refresh") {

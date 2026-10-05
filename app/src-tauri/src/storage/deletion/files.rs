@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
 pub(super) const MAX_ENTRIES: usize = 200_000;
+pub(super) const MAX_RESERVATION_ROOTS: usize = 256;
 const MAX_DEPTH: usize = 32;
 const MAX_MANIFEST: usize = 64 * 1024 * 1024;
 
@@ -43,6 +44,68 @@ pub(super) struct Manifest {
     pub root: Identity,
     pub database: Identity,
     pub entries: Vec<Entry>,
+    // Exact siblings derived from the preceding canonical removal plan only.
+    // Their presence in serialized observations is not deletion authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reservation_roots: Vec<String>,
+}
+impl Manifest {
+    pub(super) fn validate_roots(&self) -> Result<(), String> {
+        if !matches!(
+            (self.version, self.reservation_roots.is_empty()),
+            (1, true) | (2, false)
+        ) || self.reservation_roots.len() > MAX_RESERVATION_ROOTS
+            || self
+                .reservation_roots
+                .iter()
+                .any(|p| !valid_reservation_root(p))
+            || self.reservation_roots.windows(2).any(|w| w[0] >= w[1])
+        {
+            return Err("削除予約ルートの形式・順序・件数が不正です".into());
+        }
+        Ok(())
+    }
+    pub(super) fn is_tree_root(&self, path: &str) -> bool {
+        path == format!("meetings/{}", self.meeting_id)
+            || self.reservation_roots.iter().any(|r| r == path)
+    }
+    pub(super) fn valid_observed_path(&self, path: &str) -> bool {
+        path.len() <= 256
+            && !path.contains(['\\', '\0'])
+            && path
+                .split('/')
+                .all(|p| !p.is_empty() && !matches!(p, "." | ".."))
+            && (self.is_tree_root(path)
+                || valid_path(path, &self.meeting_id)
+                || self
+                    .reservation_roots
+                    .iter()
+                    .any(|r| path.starts_with(&format!("{r}/"))))
+    }
+}
+pub(super) fn valid_reservation_root(path: &str) -> bool {
+    let Some(name) = path.strip_prefix("meetings/.mon-delete-") else {
+        return false;
+    };
+    let Some((prefix, index)) = name.rsplit_once('-') else {
+        return false;
+    };
+    if !index
+        .parse::<usize>()
+        .is_ok_and(|n| n < MAX_ENTRIES && n.to_string() == index)
+    {
+        return false;
+    }
+    if uuid(prefix) {
+        return true;
+    }
+    let Some((operation, generation)) = prefix.rsplit_once("-r") else {
+        return false;
+    };
+    uuid(operation)
+        && generation
+            .parse::<u32>()
+            .is_ok_and(|n| (1..=32).contains(&n) && n.to_string() == generation)
 }
 #[derive(Debug)]
 pub(super) struct Census {
@@ -70,6 +133,7 @@ fn hash(s: &[u8]) -> String {
     format!("{:x}", Sha256::digest(s))
 }
 
+#[derive(Default)]
 struct Records {
     assets: BTreeMap<String, Registered>,
     sessions: BTreeSet<String>,
@@ -319,7 +383,14 @@ fn inventory(
     records: &Records,
     check: &impl Fn() -> bool,
     reserved: Option<&str>,
+    reservation_roots: &[String],
 ) -> Result<Vec<Entry>, String> {
+    if reservation_roots.len() > MAX_RESERVATION_ROOTS
+        || reservation_roots.iter().any(|p| !valid_reservation_root(p))
+        || reservation_roots.windows(2).any(|w| w[0] >= w[1])
+    {
+        return Err("予約ルートの読取範囲が不正です".into());
+    }
     root.verify()?;
     let mut entries = BTreeMap::new();
     if let Some(meetings) = root.child("meetings")? {
@@ -333,6 +404,25 @@ fn inventory(
                 check,
                 reserved,
             )?;
+        }
+        // Never enumerate siblings. Only canonical, exact plan-derived names
+        // are opened relative to the pinned meetings descriptor, no links.
+        for path in reservation_roots {
+            cancel(check)?;
+            let leaf = path
+                .strip_prefix("meetings/")
+                .ok_or("予約ルートが不正です")?;
+            if let Some(directory) = meetings.child(leaf)? {
+                walk(
+                    &directory,
+                    path,
+                    0,
+                    &mut entries,
+                    &Records::default(),
+                    check,
+                    reserved,
+                )?;
+            }
         }
     }
     for (path, asset) in &records.assets {
@@ -369,6 +459,7 @@ impl Census {
         prepared: &super::intent::Prepared,
         check: &impl Fn() -> bool,
         reserved: Option<&str>,
+        reservation_roots: &[String],
     ) -> Result<Self, String> {
         cancel(check)?;
         super::intent::read_database(db, prepared.operation(), check)?.matches_saved(prepared)?;
@@ -393,8 +484,23 @@ impl Census {
         }
         let records = Records::read(db, &scope.meeting_id)?;
         let directory = storage.managed_anchor.directory_ref()?;
-        let entries = inventory(directory, &scope.meeting_id, &records, check, reserved)?;
-        if inventory(directory, &scope.meeting_id, &records, check, reserved)? != entries {
+        let entries = inventory(
+            directory,
+            &scope.meeting_id,
+            &records,
+            check,
+            reserved,
+            reservation_roots,
+        )?;
+        if inventory(
+            directory,
+            &scope.meeting_id,
+            &records,
+            check,
+            reserved,
+            reservation_roots,
+        )? != entries
+        {
             return Err("削除済み範囲の再確認中に対象が変更されました".into());
         }
         super::database::verify_rows_deleted(db, scope, check)?;
@@ -405,12 +511,13 @@ impl Census {
         let result = Self {
             scope: scope.clone(),
             manifest: Manifest {
-                version: 1,
+                version: if reservation_roots.is_empty() { 1 } else { 2 },
                 database_scope_hash: scope.hash()?,
                 meeting_id: scope.meeting_id.clone(),
                 root,
                 database,
                 entries,
+                reservation_roots: reservation_roots.to_vec(),
             },
         };
         result.encode()?;
@@ -436,7 +543,7 @@ impl Census {
         omitted_operation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        Self::capture_removal_locked(storage, db, meeting, omitted_operation, check, None)
+        Self::capture_removal_locked(storage, db, meeting, omitted_operation, check, None, &[])
     }
     // The exact reserved sibling from an armed receipt is a read allowance,
     // not authority to adopt or delete an unregistered object.
@@ -447,6 +554,7 @@ impl Census {
         omitted_operation: &str,
         check: &impl Fn() -> bool,
         reserved: Option<&str>,
+        reservation_roots: &[String],
     ) -> Result<Self, String> {
         if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
             return Err("予約パスが安全上限を超えています".into());
@@ -466,8 +574,22 @@ impl Census {
         // Enumerate through the startup descriptor, never reopen a path and
         // temporarily treat its replacement as the original root.
         let root_directory = storage.managed_anchor.directory_ref()?;
-        let entries = inventory(root_directory, meeting, &records, check, reserved)?;
-        if inventory(root_directory, meeting, &records, check, reserved)? != entries
+        let entries = inventory(
+            root_directory,
+            meeting,
+            &records,
+            check,
+            reserved,
+            reservation_roots,
+        )?;
+        if inventory(
+            root_directory,
+            meeting,
+            &records,
+            check,
+            reserved,
+            reservation_roots,
+        )? != entries
             || Scope::capture(db, meeting, omitted_operation, check)? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {
@@ -475,12 +597,13 @@ impl Census {
         }
         let result = Self {
             manifest: Manifest {
-                version: 1,
+                version: if reservation_roots.is_empty() { 1 } else { 2 },
                 database_scope_hash: scope.hash()?,
                 meeting_id: meeting.into(),
                 root,
                 database,
                 entries,
+                reservation_roots: reservation_roots.to_vec(),
             },
             scope,
         };
@@ -494,6 +617,7 @@ impl Census {
         &self.scope
     }
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
+        self.manifest.validate_roots()?;
         let bytes = serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?;
         if bytes.len() > MAX_MANIFEST {
             Err("ファイルmanifestが安全上限を超えています".into())
@@ -503,6 +627,32 @@ impl Census {
     }
     pub(super) fn hash(&self) -> Result<String, String> {
         Ok(hash(&self.encode()?))
+    }
+    pub(super) fn verify_tree_roots(&self, storage: &Storage) -> Result<(), String> {
+        let meetings = storage.managed_anchor.directory_ref()?.child("meetings")?;
+        let mut paths = self.manifest.reservation_roots.clone();
+        paths.push(format!("meetings/{}", self.manifest.meeting_id));
+        for path in paths {
+            let actual = meetings
+                .as_ref()
+                .map(|dir| dir.child(path.strip_prefix("meetings/").ok_or("ルートが不正です")?))
+                .transpose()?
+                .flatten()
+                .map(|dir| dir.proof())
+                .transpose()?;
+            let expected = self
+                .manifest
+                .entries
+                .iter()
+                .find(|e| e.path == path)
+                .and_then(|e| e.proof.as_ref());
+            if actual.as_ref() != expected {
+                return Err(
+                    "確認終盤に会議・予約ルートが変更されています。対象を保持します".into(),
+                );
+            }
+        }
+        storage.managed_anchor.verify()
     }
     pub(super) fn summary(&self) -> Result<Summary, String> {
         let mut result = Summary {

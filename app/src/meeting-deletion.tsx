@@ -58,7 +58,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     setPage(null); setPageError(""); setPageBusy(true);
     try {
       const value = await invoke<DeletionPathPage>("get_deletion_paths", { confirmationId: p.confirmationId, offset });
-      assertDeletionPathPage(value, p.confirmationId, offset, p.pathCount, p.meetingId);
+      assertDeletionPathPage(value, p.confirmationId, offset, p.pathCount, p.meetingId, p.reservationRoots, p.operationId);
       if (epoch === pageEpoch.current && latest.current.operation.getSnapshot()?.deletionPreview?.confirmationId === p.confirmationId) setPage(value);
     } catch (cause) { if (epoch === pageEpoch.current) setPageError(String(cause)); }
     finally { if (epoch === pageEpoch.current) setPageBusy(false); }
@@ -174,6 +174,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {isDeletionReconfirmation(p.phase) && <p role="alert">以前の計画では {p.previousProcessedPaths} / {p.previousPathCount} パスを処理済みです。ここには現在残る新しい範囲を表示しています。元の同意と進捗を履歴として保持し、再同意後に新しい計画で続行します。処理済みデータの復元や未開始への巻き戻しではありません。</p>}
       {p.reconfirmationAllowed && <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>変更後の残り範囲を確認する（まだ削除しない）</button>}
       {p.rowPhaseCommitted && <p>会議のDB行は削除済みです。再作成せず、確認した残りのファイルと後処理・完了応答を扱います。</p>}
+      {!!p.reservationRoots?.length && <p>元の削除計画から導いた会議ツリー外の予約ルートも照合しています。実在する予約対象は下の一覧に表示します。新しい会議フォルダーと併存する場合は両方を確認し、未登録ファイルには別の同意が必要です。隣の会議フォルダーは対象にしません。</p>}
       {p.resumeReason && <p role="alert">削除を進められません: {p.resumeReason}</p>}
       <h3>確認時の対象パス</h3>{c.pageBusy && <p role="status">一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
       {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {e.directory ? "フォルダー" : e.missing ? "欠落" : `${bytesLabel(e.bytes!)} · ${e.registered ? "登録済み" : "未登録"}${e.changed ? "・登録時と変更" : ""}`}{e.stageHint && ` · 由来候補 ${e.stageHint}（所有証明ではありません）`}</li>)}</ul></>}

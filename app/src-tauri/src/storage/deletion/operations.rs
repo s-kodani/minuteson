@@ -37,6 +37,7 @@ pub(crate) struct Preview {
     pub reconfirmation_allowed: bool,
     pub previous_processed_paths: Option<usize>,
     pub previous_path_count: Option<usize>,
+    pub reservation_roots: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,6 +269,7 @@ impl Prepared {
             reconfirmation_allowed: false,
             previous_processed_paths: None,
             previous_path_count: None,
+            reservation_roots: m.reservation_roots.clone(),
         };
         for e in &m.entries {
             if e.directory {

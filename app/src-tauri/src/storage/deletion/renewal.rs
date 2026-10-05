@@ -104,7 +104,7 @@ pub(super) fn active_manifest(
             return Err("残りの削除範囲の固定確認記録を検証できません".into());
         }
         let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if record.version != 1
+        if !matches!(record.version, 1 | 2)
             || record.source_operation != original.operation()
             || record.source_intent_hash != source_hash
             || record.encode()? != json
@@ -153,6 +153,13 @@ pub(super) fn active_manifest(
         {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
+        verify_root_lineage(
+            record.version,
+            &manifest,
+            &record.previous_progress,
+            &observations.manifest,
+            original.operation(),
+        )?;
         manifest = observations.manifest;
         previous = Some(reference);
         latest_consent = Some(consent);
@@ -165,6 +172,25 @@ pub(super) fn active_manifest(
     }
     progress.validate(original, &manifest)?;
     Ok(manifest)
+}
+pub(super) fn verify_root_lineage(
+    version: u32,
+    previous: &Manifest,
+    progress: &Progress,
+    next: &Manifest,
+    operation: &str,
+) -> Result<(), String> {
+    previous.validate_roots()?;
+    next.validate_roots()?;
+    let roots = progress.reconfirmation_roots(previous, operation)?;
+    if !matches!(version, 1 | 2)
+        || (version == 1
+            && (!next.reservation_roots.is_empty() || !previous.reservation_roots.is_empty()))
+        || (version == 2 && next.reservation_roots != roots)
+    {
+        return Err("元の計画から導けない予約ルートや範囲の忘却は採用できません".into());
+    }
+    Ok(())
 }
 
 pub(super) struct Review {
@@ -234,14 +260,6 @@ impl Source<'_> {
         match self {
             Self::Files(r) => r.progress.state(),
             Self::Database(r) => r.database_phase().state(),
-        }
-    }
-}
-impl Source<'_> {
-    fn verify_archived_root(&self, storage: &Storage) -> Result<(), String> {
-        match self {
-            Self::Files(r) => r.verify_review_root(storage),
-            Self::Database(r) => r.verify_review_root(storage),
         }
     }
 }
@@ -391,7 +409,11 @@ fn accept_inner(
     let original = source.confirmed();
     let observations = Observations::capture(&review.census)?;
     let record = Record {
-        version: 1,
+        version: if review.manifest().reservation_roots.is_empty() {
+            1
+        } else {
+            2
+        },
         source_operation: original.operation().into(),
         source_intent_hash: original.intent_hash()?,
         previous_progress: source.files().clone(),
@@ -447,16 +469,15 @@ fn accept_inner(
     storage.managed_anchor.verify()?;
     event("beforeReviewCommit");
     cancel(&check)?;
-    source.verify_archived_root(storage)?;
     // Recheck the actual inventory once more after publication, without using
     // the stale cursor that was just archived in the immutable audit record.
     let saved = removal::Receipt::load(&tx, original.operation(), &check)?;
-    let live = saved.review_census(storage, &tx, &check)?;
+    let live = saved.current_census(storage, &tx, &check, &saved.manifest.reservation_roots)?;
     if live.manifest() != review.manifest() || live.scope() != original.scope() {
         return Err("再確認の確定前に対象が変わりました".into());
     }
-    source.verify_archived_root(storage)?;
     cancel(&check)?;
+    live.verify_tree_roots(storage)?;
     tx.commit().map_err(|e| e.to_string())?;
     event("reviewCommitted");
     Ok(saved)

@@ -82,20 +82,27 @@ impl Receipt {
         if other {
             return Err("別の未完了保守操作があります。対象を保持します".into());
         }
-        self.progress.files.verify_root_reservation_absent(
-            storage,
-            &self.manifest,
-            &self.confirmed,
-        )?;
+        let roots = self
+            .file_progress()
+            .reconfirmation_roots(&self.manifest, self.confirmed.operation())?;
         let census = if self.row_phase_committed() {
-            super::files::Census::capture_deleted_locked(storage, db, &self.confirmed, check, None)?
+            super::files::Census::capture_deleted_locked(
+                storage,
+                db,
+                &self.confirmed,
+                check,
+                None,
+                &roots,
+            )?
         } else {
-            super::files::Census::capture_locked(
+            super::files::Census::capture_removal_locked(
                 storage,
                 db,
                 &self.confirmed.scope().meeting_id,
                 self.confirmed.operation(),
                 check,
+                None,
+                &roots,
             )?
         };
         if census.scope() != self.confirmed.scope()
@@ -105,11 +112,7 @@ impl Receipt {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
         self.verify_saved(db, check)?;
-        self.progress.files.verify_root_reservation_absent(
-            storage,
-            &self.manifest,
-            &self.confirmed,
-        )?;
+        census.verify_tree_roots(storage)?;
         Ok(census)
     }
     pub(super) fn confirmed(&self) -> &Prepared {

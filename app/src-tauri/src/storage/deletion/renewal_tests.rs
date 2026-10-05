@@ -3,6 +3,9 @@ use super::*;
 use crate::analysis_worker::{data_maintenance::DataMaintenanceLease, AnalysisController};
 use crate::storage::deletion::{completion, operations, renewal};
 
+#[path = "root_renewal_tests.rs"]
+mod root_renewal_tests;
+
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
         .begin_data_maintenance(false, false, &|| false)
@@ -558,7 +561,13 @@ fn renewal_preserves_reserved_meeting_root_outside_logical_tree_without_silently
     assert!(stop.get());
     let reserved = f.storage.root().join("meetings").join(r.reserved());
     assert!(reserved.exists());
-    assert!(renewal::Review::capture(&f.storage, &r, &|| false).is_err());
+    let inspected = renewal::Review::capture(&f.storage, &r, &|| false).unwrap();
+    assert!(inspected.manifest().entries.iter().any(|e| e.path
+        == reserved
+            .strip_prefix(f.storage.root())
+            .unwrap()
+            .to_str()
+            .unwrap()));
     assert!(reserved.exists());
     assert_eq!(audit_count(&f), 0);
     // The unchanged original plan can still resolve its exact reservation.
@@ -758,8 +767,25 @@ fn renewal_checkpoint_child_fixture() {
     let phase = std::env::var("MON_RENEWAL_TEST_PHASE").unwrap();
     let f = Fixture::at(tempfile::tempdir_in(&base).unwrap());
     let mut r = f.begin(false);
-    pause_first(&f, &mut r, "advanced");
-    let extra = f.file.parent().unwrap().join("remaining.txt");
+    let extra = if std::env::var("MON_RENEWAL_TEST_ROOT").as_deref() == Ok("1") {
+        let logical = f.storage.root().join(format!("meetings/{}", f.meeting));
+        let stop = Cell::new(false);
+        assert!(run_observed(&f.storage, &mut r, &|| stop.get(), &|point| {
+            if point == "renamed" && !logical.exists() {
+                stop.set(true);
+            }
+        })
+        .is_err());
+        assert!(stop.get());
+        f.storage
+            .root()
+            .join("meetings")
+            .join(r.reserved())
+            .join("remaining.txt")
+    } else {
+        pause_first(&f, &mut r, "advanced");
+        f.file.parent().unwrap().join("remaining.txt")
+    };
     std::fs::write(&extra, b"KEEP UNTIL EXPLICIT RESUME").unwrap();
     let v = review(&f, &r);
     let original = snapshot(&f);
@@ -801,6 +827,15 @@ fn renewal_checkpoint_child_fixture() {
 #[test]
 fn renewal_sigkill_at_five_atomic_boundaries_cold_reopens_without_losing_old_progress_or_new_consent(
 ) {
+    sigkill_reconfirmation(false);
+}
+
+#[test]
+fn renewal_root_sigkill_at_five_atomic_boundaries_retains_exact_reserved_scope_and_consent() {
+    sigkill_reconfirmation(true);
+}
+
+fn sigkill_reconfirmation(reserved_root: bool) {
     use std::os::unix::process::ExitStatusExt;
     for phase in [
         "reviewIntentStored",
@@ -814,6 +849,7 @@ fn renewal_sigkill_at_five_atomic_boundaries_cold_reopens_without_losing_old_pro
             .args(["--exact", "storage::deletion::removal::tests::renewal_tests::renewal_checkpoint_child_fixture", "--ignored", "--nocapture"])
             .env("MON_RENEWAL_TEST_BASE", base.path())
             .env("MON_RENEWAL_TEST_PHASE", phase)
+            .env("MON_RENEWAL_TEST_ROOT", if reserved_root { "1" } else { "0" })
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .spawn().unwrap();
@@ -888,6 +924,9 @@ fn renewal_sigkill_at_five_atomic_boundaries_cold_reopens_without_losing_old_pro
         }
         finish(&f, &mut resumed);
         assert!(!extra.exists());
+        if reserved_root {
+            assert!(!extra.parent().unwrap().exists());
+        }
         assert_eq!(snapshot(&f), original);
         assert_eq!(audit_count(&f), 1);
         assert!(f.storage.restart_required());

@@ -112,8 +112,8 @@ impl PathRow {
             observation,
         })
     }
-    fn entry(&self, meeting: &str) -> Result<Entry, String> {
-        if (self.path != format!("meetings/{meeting}") && !files::valid_path(&self.path, meeting))
+    fn entry(&self, manifest: &Manifest) -> Result<Entry, String> {
+        if !manifest.valid_observed_path(&self.path)
             || self.observation.len() > MAX_OBSERVATION
             || hash(self.observation.as_bytes()) != self.observation_hash
         {
@@ -121,6 +121,11 @@ impl PathRow {
         }
         let observed: Observation =
             serde_json::from_str(&self.observation).map_err(|e| e.to_string())?;
+        if !files::valid_path(&self.path, &manifest.meeting_id)
+            && (observed.registered.is_some() || observed.stage_hint.is_some())
+        {
+            return Err("予約ルートの観測へ以前の登録所有を採用しません".into());
+        }
         if encode(&observed, MAX_OBSERVATION)? != self.observation {
             return Err("削除対象の実体記録が標準形式と一致しません".into());
         }
@@ -163,7 +168,7 @@ impl PathRow {
                 return Err("削除対象フォルダーの記録が不正です".into());
             }
         } else {
-            if self.path == format!("meetings/{meeting}")
+            if manifest.is_tree_root(&self.path)
                 || self.size.is_none_or(|s| s < 0)
                 || !self.content_hash.as_deref().is_some_and(valid_hash)
             {
@@ -213,8 +218,8 @@ impl Intent {
         self.scope.validate_format(db)?;
         self.file_header.root.validate(true)?;
         self.file_header.database.validate(false)?;
+        self.file_header.validate_roots()?;
         if self.version != 1
-            || self.file_header.version != 1
             || !self.file_header.entries.is_empty()
             || self.file_header.meeting_id != self.scope.meeting_id
             || self.file_header.database_scope_hash != self.scope.hash()?
@@ -237,7 +242,8 @@ impl Intent {
                 return Err("削除対象の順序・重複が不正です".into());
             }
             previous = Some(&row.path);
-            manifest.entries.push(row.entry(&self.scope.meeting_id)?);
+            let entry = row.entry(&manifest)?;
+            manifest.entries.push(entry);
         }
         if hash(encode(&manifest, 64 * 1024 * 1024)?.as_bytes()) != self.file_manifest_hash {
             return Err("削除対象の全体manifestが確認記録と一致しません".into());
@@ -469,7 +475,9 @@ fn read_state(
     }
     let intent: Intent = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     intent.validate(db)?;
-    if encode(&intent, MAX_INTENT)? != json
+    if intent.file_header.version != 1
+        || !intent.file_header.reservation_roots.is_empty()
+        || encode(&intent, MAX_INTENT)? != json
         || (meeting.as_deref() != Some(intent.scope.meeting_id.as_str())
             && !(matches!(mode, ReadMode::Database) && meeting.is_none()))
     {

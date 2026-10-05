@@ -239,6 +239,44 @@ async (page) => {
     if (phase === "awaiting_ack") check(started[1].args.request.action === "publish", "DB fixed plan did not resume existing policy");
     results.push(`DB remaining scope ${phase} preserves row phase, explicit unknown consent and fixed-plan continuation`);
   }
+  for (const foreignRootPage of [false, true]) {
+    await boot(); await set({ reservedMode: true, foreignRootPage, mode: "unknown" }); await pending("files", true);
+    const oldId = await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.confirmationId);
+    await dialog().getByRole("button", { name: "変更後の残り範囲を確認する（まだ削除しない）", exact: true }).click();
+    await renewedDialog().waitFor();
+    check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.confirmationId) !== oldId, "reserved review inherited old ID");
+    check((await calls("start_data_operation")).every(c => c.args.request.action === "review_remaining"), "reserved inspection executed deletion");
+    if (foreignRootPage) {
+      await renewedDialog().getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
+      check(await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "foreign sibling page enabled deletion");
+      results.push("foreign operation reservation path is refused before consent or execution");
+      continue;
+    }
+    await renewedDialog().getByText("1〜5 / 5 件", { exact: true }).waitFor();
+    const paths = await renewedDialog().innerText();
+    check(paths.includes("会議ツリー外の予約ルート") && paths.includes("/unknown.txt") && paths.includes("/audio/input.flac"), "coexisting reserved and logical roots not explained or listed");
+    await renewedDialog().getByRole("checkbox", { name: /対象と削除範囲を確認/u }).check();
+    check(await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).isDisabled(), "reserved unknown consent was inherited");
+    await renewedDialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).check();
+    await page.setViewportSize({ width: 1200, height: 850 }); await renewedDialog().evaluate(el => { el.scrollTop = 0; });
+    await page.screenshot({ path: "output/playwright/deletion-root-reconfirmation-1200.png" });
+    await page.setViewportSize({ width: 900, height: 700 }); await renewedDialog().evaluate(el => { el.scrollTop = 0; });
+    check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "reserved scope page overflows horizontally");
+    await page.screenshot({ path: "output/playwright/deletion-root-reconfirmation-900.png" });
+    await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "output/playwright/deletion-root-reconfirmation-consent-900.png" });
+    await set({ mode: "partial" }); await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click();
+    await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+    check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.reservationRoots.length) === 1, "partial plan forgot reserved root");
+    await set({ mode: "success" }); await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click();
+    await dialog().waitFor(); await dialog().getByText("1〜5 / 5 件", { exact: true }).waitFor();
+    check(await dialog().getByRole("checkbox", { name: /確認時の一覧にある未登録/u }).count() === 0, "fixed reserved plan changed unknown policy");
+    await understand(); await publish(); await deleted();
+    const started = (await calls("start_data_operation")).filter(c => ["publish", "delete_including_unregistered"].includes(c.args.request.action));
+    check(started.length === 2 && started[0].args.request.action === "delete_including_unregistered" && started[1].args.request.action === "publish", "reserved plan publication/retry policy not fixed");
+    check(await page.getByRole("button", { name: "残す会議を削除" }).count() === 1, "reserved deletion removed neighbor meeting");
+    results.push("coexisting reserved root requires fresh unknown consent and retains fixed plan through partial stop");
+  }
   await boot(); await review(); await page.setViewportSize({ width: 1200, height: 900 });
   await page.screenshot({ path: "output/playwright/deletion-confirm-1200.png" });
   await page.setViewportSize({ width: 900, height: 650 });

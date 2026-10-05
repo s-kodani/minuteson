@@ -149,7 +149,17 @@ fn compound_current_census_retains_reserved_root_and_external_symlink_without_fo
             path
         };
         let db = f.f.storage.connection.lock().unwrap();
-        assert!(receipt.review_census(&f.f.storage, &db, &|| false).is_err());
+        let census = receipt.review_census(&f.f.storage, &db, &|| false);
+        if reserved {
+            let census = census.unwrap();
+            assert!(census
+                .manifest()
+                .entries
+                .iter()
+                .any(|e| !e.directory && e.registered.is_none() && e.path.ends_with("/unknown")));
+        } else {
+            assert!(census.is_err());
+        }
         drop(db);
         assert!(std::fs::symlink_metadata(&target).is_ok());
         if reserved {

@@ -56,6 +56,99 @@ fn reappear(f: &Fixture, bytes: &[u8]) {
 }
 
 #[test]
+fn database_renewal_reserved_sibling_and_coexisting_tree_require_new_consent_in_all_sql_stages() {
+    for phase in [Phase::RowsPending, Phase::RowsDeleted, Phase::Finished] {
+        let f = Fixture::new();
+        let original = at_database_phase(&f, phase);
+        let fixed = evidence(&f);
+        let progress = root_json(&f);
+        let index = original
+            .manifest
+            .entries
+            .iter()
+            .rev()
+            .position(|e| e.path == format!("meetings/{}", f.f.meeting))
+            .unwrap();
+        let root = format!("meetings/.mon-delete-{}-{index}", f.operation);
+        let reserved = f.f.storage.root().join(&root);
+        std::fs::create_dir(&reserved).unwrap();
+        std::fs::write(reserved.join("unknown"), b"RESERVED SQL-STAGE CONTENT").unwrap();
+        reappear(&f, b"COEXISTING LOGICAL TREE");
+        assert!(original
+            .verify_live(
+                &f.f.storage,
+                &f.f.storage.connection.lock().unwrap(),
+                &|| false
+            )
+            .is_err());
+        let mut prepared =
+            operations::Prepared::pending(&f.f.storage, &f.operation, &|| false).unwrap();
+        assert!(!prepared.preview().execute_allowed && prepared.preview().reconfirmation_allowed);
+        let admitted = lease();
+        prepared
+            .review_remaining(
+                &f.f.storage,
+                &admitted,
+                &prepared.preview().confirmation_id,
+                &|| false,
+            )
+            .unwrap();
+        let p = prepared.preview();
+        assert_eq!(p.phase, "database_reconfirmation");
+        assert_eq!(p.row_phase_committed, phase.rows_committed());
+        assert!(p.reservation_roots.contains(&root));
+        let page = prepared.page(&p.confirmation_id, 0).unwrap();
+        assert!(page
+            .entries
+            .iter()
+            .any(|e| e.relative_path == format!("{root}/unknown") && !e.registered));
+        assert!(prepared
+            .execute(
+                &f.f.storage,
+                &admitted,
+                &p.confirmation_id,
+                false,
+                &|| false,
+                &|_| {}
+            )
+            .is_err());
+        assert_eq!(root_json(&f), progress);
+        assert_eq!(audits(&f), 0);
+        assert_eq!(
+            std::fs::read(reserved.join("unknown")).unwrap(),
+            b"RESERVED SQL-STAGE CONTENT"
+        );
+        assert_ne!(prepared.preview().confirmation_id, p.confirmation_id);
+        assert!(!prepared.preview().execute_allowed);
+        prepared
+            .review_remaining(
+                &f.f.storage,
+                &admitted,
+                &prepared.preview().confirmation_id,
+                &|| false,
+            )
+            .unwrap();
+        let p = prepared.preview();
+        let done = prepared
+            .execute(
+                &f.f.storage,
+                &admitted,
+                &p.confirmation_id,
+                true,
+                &|| false,
+                &|_| {},
+            )
+            .unwrap();
+        assert!(done.deleted);
+        assert!(!reserved.exists() && !f.file.exists());
+        assert_eq!(evidence(&f), fixed);
+        assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
+        assert_eq!(audits(&f), 1);
+        f.unaffected();
+    }
+}
+
+#[test]
 fn database_renewal_after_cold_completion_retains_actual_restart_fenced_admission_for_new_pending_plan(
 ) {
     let f = Fixture::new();

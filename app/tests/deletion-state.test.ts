@@ -118,6 +118,26 @@ test("listing distinguishes write fence and restart, rejects duplicates and unsu
   assert.throws(() => assertDeletionListing({ ...l, reason: null }));
   assert.throws(() => assertDeletionListing({ ...l, items: [l.items[0], l.items[0]] }));
 });
+test("reservation roots are bounded canonical names of this operation, never fresh deletion scope", () => {
+  const root = `meetings/.mon-delete-${id(3)}-2`;
+  const p = { ...preview(), phase: "files" as const, pending: true, reservationRoots: [root] };
+  assert.doesNotThrow(() => assertDeletionPreview(p));
+  assert.doesNotThrow(() => assertDeletionPreview({ ...p, reservationRoots: [root, `meetings/.mon-delete-${id(3)}-r32-199999`] }));
+  for (const reservationRoots of [[root, root], [root + "/child"], [`meetings/.mon-delete-${id(5)}-2`], [root.replace(/-2$/u, "-02")], [root.replace(/-2$/u, "-200000")], [root.replace(/-2$/u, "-r33-2")], [root.replace(/-2$/u, "-r0-2")], ["meetings"], Array.from({ length: 257 }, (_, n) => root.replace(/-2$/u, `-${n}`)).sort()]) assert.throws(() => assertDeletionPreview({ ...p, reservationRoots }));
+  for (const phase of ["review", "not_started", "retained"] as const) assert.throws(() => assertDeletionPreview({ ...p, phase, pending: phase === "not_started", keepAllowed: phase !== "review", executeAllowed: phase !== "retained" }));
+});
+test("reserved pages require exact advertised roots and never assign database ownership or follow neighbors", () => {
+  const root = `meetings/.mon-delete-${id(3)}-r1-2`;
+  const entry = { relativePath: root + "/unknown", directory: false, registered: false, missing: false, changed: false, stageHint: null, bytes: 42 };
+  const page = { confirmationId: id(2), offset: 0, total: 1, nextOffset: null, entries: [entry] };
+  const check = (entries = [entry], roots = [root], operation = id(3)) => assertDeletionPathPage({ ...page, entries }, id(2), 0, 1, id(4), roots, operation);
+  assert.doesNotThrow(() => check());
+  assert.doesNotThrow(() => check([{ ...entry, relativePath: root, directory: true, bytes: null } as typeof entry]));
+  assert.throws(() => check([entry], []));
+  assert.throws(() => check([entry], [root], id(5)));
+  assert.throws(() => assertDeletionPathPage(page, id(2), 0, 1, id(4), [root]));
+  for (const patch of [{ registered: true }, { changed: true }, { stageHint: "transcription" }, { relativePath: root }, { relativePath: root + "/../neighbor" }, { relativePath: root + "-other/unknown" }, { relativePath: `meetings/${id(5)}/unknown` }, { relativePath: root + "/" + "x".repeat(256) }]) assert.throws(() => check([{ ...entry, ...patch }]));
+});
 test("stale deletion snapshots do not restore old confirmation and same revision conflicts fail", () => {
   const old = ready(), newer = { ...old, revision: 2, deletionPreview: { ...old.deletionPreview!, confirmationId: id(5) } };
   assert.equal(acceptDataSnapshot(newer, old), newer);
