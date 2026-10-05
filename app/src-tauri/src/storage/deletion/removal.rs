@@ -1,5 +1,5 @@
 //! Fixed, explicitly reviewed file removal with a bounded durable cursor.
-//! No controller/IPC calls this until user consent and shared admission exist.
+//! Reconfirmation appends evidence without changing the original intent.
 use super::{
     database::Scope,
     files::{Census, Entry, Manifest},
@@ -116,7 +116,7 @@ struct Pending {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Progress {
+pub(super) struct Progress {
     version: u32,
     file_phase: Phase,
     manifest_hash: String,
@@ -125,9 +125,11 @@ struct Progress {
     consent_at: i64,
     next: usize,
     pending: Option<Pending>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) confirmation: Option<super::renewal::Reference>,
 }
 impl Progress {
-    fn encode(&self) -> Result<String, String> {
+    pub(super) fn encode(&self) -> Result<String, String> {
         let s = serde_json::to_string(self).map_err(|e| e.to_string())?;
         if s.len() > 4096 {
             Err("削除進捗が安全上限を超えています".into())
@@ -135,18 +137,22 @@ impl Progress {
             Ok(s)
         }
     }
-    fn validate(&self, p: &Prepared) -> Result<(), String> {
-        if self.version != 1
-            || self.manifest_hash != manifest_hash(p.manifest())?
-            || self.plan_hash != plan_hash(p.manifest(), &self.policy)?
+    pub(super) fn consent_at(&self) -> i64 {
+        self.consent_at
+    }
+    pub(super) fn validate(&self, p: &Prepared, manifest: &Manifest) -> Result<(), String> {
+        if !((self.version == 1 && self.confirmation.is_none() && manifest == p.manifest())
+            || (self.version == 2 && self.confirmation.as_ref().is_some_and(|r| r.valid())))
+            || self.manifest_hash != manifest_hash(manifest)?
+            || self.plan_hash != plan_hash(manifest, &self.policy)?
             || self.consent_at < p.consent_at()
         {
             return Err("削除進捗と確認したファイル範囲が一致しません".into());
         }
-        self.validate_cursor(p)
+        self.validate_cursor(manifest)
     }
-    fn validate_cursor(&self, p: &Prepared) -> Result<(), String> {
-        let entries = &p.manifest().entries;
+    fn validate_cursor(&self, manifest: &Manifest) -> Result<(), String> {
+        let entries = &manifest.entries;
         if self.next > entries.len()
             || (self.file_phase == Phase::Removed
                 && (self.next != entries.len() || self.pending.is_some()))
@@ -178,18 +184,56 @@ impl Progress {
         }
         Ok(())
     }
+    pub(super) fn renewed(
+        p: &Prepared,
+        manifest: &Manifest,
+        confirmation: super::renewal::Reference,
+        include_unregistered: bool,
+        consent_at: i64,
+    ) -> Result<Self, String> {
+        let policy = if include_unregistered {
+            Policy::ExplicitUnregistered
+        } else {
+            Policy::RegisteredOnly
+        };
+        let next = Self {
+            version: 2,
+            file_phase: Phase::Removing,
+            manifest_hash: manifest_hash(manifest)?,
+            plan_hash: plan_hash(manifest, &policy)?,
+            policy,
+            consent_at,
+            next: 0,
+            pending: None,
+            confirmation: Some(confirmation),
+        };
+        next.validate(p, manifest)?;
+        Ok(next)
+    }
+    fn reserved(&self, operation: &str, index: usize) -> String {
+        if let Some(c) = &self.confirmation {
+            format!(".mon-delete-{operation}-r{}-{index}", c.generation)
+        } else {
+            format!(".mon-delete-{operation}-{index}")
+        }
+    }
 }
 // A stored file-completion proof retains the exact policy, plan and cursor.
 // Only the compound DB receipt may parse it, and must revalidate all fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Finished(Progress);
 impl Finished {
-    pub(super) fn validate(&self, confirmed: &Prepared) -> Result<(), String> {
-        self.0.validate(confirmed)?;
+    pub(super) fn manifest(
+        &self,
+        db: &Connection,
+        confirmed: &Prepared,
+        check: &impl Fn() -> bool,
+    ) -> Result<Manifest, String> {
+        let manifest = super::renewal::active_manifest(db, confirmed, &self.0, check)?;
         if self.0.file_phase != Phase::Removed {
             return Err("ファイル段階の完了を確認できません".into());
         }
-        Ok(())
+        Ok(manifest)
     }
     pub(super) fn verify_remaining(
         &self,
@@ -198,13 +242,14 @@ impl Finished {
         confirmed: &Prepared,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        self.validate(confirmed)?;
+        let manifest = self.manifest(db, confirmed, check)?;
         verify_remaining(
             storage,
             db,
             &Receipt {
                 confirmed: confirmed.clone(),
                 progress: self.0.clone(),
+                manifest,
             },
             check,
         )
@@ -212,10 +257,10 @@ impl Finished {
     pub(super) fn verify_absent(
         &self,
         storage: &Storage,
+        db: &Connection,
         confirmed: &Prepared,
     ) -> Result<(), String> {
-        self.validate(confirmed)?;
-        let manifest = confirmed.manifest();
+        let manifest = self.manifest(db, confirmed, &|| false)?;
         if storage.managed_anchor.identity()? != (manifest.root.clone(), manifest.database.clone())
         {
             return Err("削除確認時の管理領域・DBの実体が一致しません".into());
@@ -232,7 +277,7 @@ impl Finished {
             .rev()
             .position(|e| e.path == format!("meetings/{}", manifest.meeting_id))
         {
-            let reserved = format!(".mon-delete-{}-{index}", confirmed.operation());
+            let reserved = self.0.reserved(confirmed.operation(), index);
             if meetings.optional_kind(&reserved)?.is_some() {
                 return Err("会議フォルダーの削除予約対象が残っています".into());
             }
@@ -244,7 +289,8 @@ impl Finished {
 #[derive(Debug)]
 pub(super) struct Receipt {
     confirmed: Prepared,
-    progress: Progress,
+    pub(super) progress: Progress,
+    pub(super) manifest: Manifest,
 }
 impl Receipt {
     pub(super) fn verify_live(
@@ -263,6 +309,63 @@ impl Receipt {
     }
     pub(super) fn confirmed(&self) -> &Prepared {
         &self.confirmed
+    }
+    pub(super) fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    pub(super) fn review_census(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<Census, String> {
+        let p = &self.confirmed;
+        let other: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE id!=?1 AND state IN ('prepared','installing','cleanup','attention'))",params![p.operation()],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if other {
+            return Err("別の未完了保守操作があります。再確認を進めません".into());
+        }
+        // A reserved empty meeting root is outside this meeting's logical tree.
+        // Never forget it or include arbitrary sibling meetings in a new plan.
+        if self.progress.pending.is_some()
+            && self
+                .target()
+                .is_some_and(|e| e.path == format!("meetings/{}", self.manifest.meeting_id))
+        {
+            if let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? {
+                if meetings.optional_kind(&self.reserved())?.is_some() {
+                    return Err(
+                        "移動済み会議ルートの解決が必要です。元の予約対象を保持します".into(),
+                    );
+                }
+            }
+        }
+        let census =
+            Census::capture_locked(storage, db, &p.scope().meeting_id, p.operation(), check)?;
+        if census.scope() != p.scope()
+            || census.manifest().root != p.manifest().root
+            || census.manifest().database != p.manifest().database
+        {
+            return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
+        }
+        Ok(census)
+    }
+    pub(super) fn verify_reservation_names(
+        &self,
+        manifest: &Manifest,
+        progress: &Progress,
+    ) -> Result<(), String> {
+        let observed: BTreeSet<_> = manifest.entries.iter().map(|e| e.path.as_str()).collect();
+        for (index, target) in manifest.entries.iter().rev().enumerate() {
+            let parent = target.path.rsplit_once('/').ok_or("対象パスが不正です")?.0;
+            let reserved = format!(
+                "{parent}/{}",
+                progress.reserved(self.confirmed.operation(), index)
+            );
+            if observed.contains(reserved.as_str()) {
+                return Err("再確認の削除予約名が既に存在します".into());
+            }
+        }
+        Ok(())
     }
     pub(super) fn matches_completion(
         &self,
@@ -300,13 +403,14 @@ impl Receipt {
             )
             .map_err(|e| e.to_string())?;
         let progress: Progress = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        progress.validate(&confirmed)?;
+        let manifest = super::renewal::active_manifest(db, &confirmed, &progress, check)?;
         if progress.encode()? != json {
             return Err("削除進捗が標準形式と一致しません".into());
         }
         Ok(Self {
             confirmed,
             progress,
+            manifest,
         })
     }
     pub(super) fn verify_saved(
@@ -316,7 +420,7 @@ impl Receipt {
     ) -> Result<(), String> {
         let current = Self::load(db, self.confirmed.operation(), check)?;
         self.confirmed.matches_saved(&current.confirmed)?;
-        if self.progress != current.progress {
+        if self.progress != current.progress || self.manifest != current.manifest {
             return Err("削除進捗が変更されています。保存済み状態を再確認してください".into());
         }
         Ok(())
@@ -325,14 +429,11 @@ impl Receipt {
         self.progress.file_phase == Phase::Removed
     }
     fn reserved(&self) -> String {
-        format!(
-            ".mon-delete-{}-{}",
-            self.confirmed.operation(),
-            self.progress.next
-        )
+        self.progress
+            .reserved(self.confirmed.operation(), self.progress.next)
     }
     fn target(&self) -> Option<&Entry> {
-        let entries = &self.confirmed.manifest().entries;
+        let entries = &self.manifest.entries;
         entries
             .len()
             .checked_sub(self.progress.next + 1)
@@ -356,10 +457,11 @@ impl Receipt {
             || next.plan_hash != self.progress.plan_hash
             || next.policy != self.progress.policy
             || next.consent_at != self.progress.consent_at
+            || next.confirmation != self.progress.confirmation
         {
             return Err("削除進捗の固定条件は変更できません".into());
         }
-        next.validate_cursor(&self.confirmed)?;
+        next.validate_cursor(&self.manifest)?;
         let transition = if next.next == self.progress.next + 1 {
             next.pending.is_none()
                 && next.file_phase == Phase::Removing
@@ -371,7 +473,7 @@ impl Receipt {
                         .is_some_and(|p| p.staged.is_some()))
         } else if next.next == self.progress.next && next.file_phase == Phase::Removed {
             self.progress.file_phase == Phase::Removing
-                && next.next == self.confirmed.manifest().entries.len()
+                && next.next == self.manifest.entries.len()
                 && self.progress.pending.is_none()
                 && next.pending.is_none()
         } else if next.next == self.progress.next && next.file_phase == Phase::Removing {
@@ -435,8 +537,9 @@ pub(super) fn start(
         consent_at: now_ms()?.max(confirmed.consent_at()),
         next: 0,
         pending: None,
+        confirmation: None,
     };
-    progress.validate(confirmed)?;
+    progress.validate(confirmed, confirmed.manifest())?;
     // Reserve names must be absent even when the user explicitly included
     // unregistered objects. Never overwrite an already observed object.
     let observed: BTreeSet<_> = reviewed
@@ -463,7 +566,7 @@ pub(super) fn start(
     Receipt::load(&db, confirmed.operation(), check)
 }
 
-fn parent(storage: &Storage, p: &Prepared, path: &str) -> Result<Option<Directory>, String> {
+fn parent(storage: &Storage, manifest: &Manifest, path: &str) -> Result<Option<Directory>, String> {
     let (parent, _) = path.rsplit_once('/').ok_or("管理パスが不正です")?;
     let root = storage.managed_anchor.directory_ref()?;
     let mut held: Option<Directory> = None;
@@ -477,12 +580,8 @@ fn parent(storage: &Storage, p: &Prepared, path: &str) -> Result<Option<Director
             relative.push('/');
         }
         relative.push_str(component);
-        if let Ok(index) = p
-            .manifest()
-            .entries
-            .binary_search_by(|e| e.path.cmp(&relative))
-        {
-            let expected = &p.manifest().entries[index];
+        if let Ok(index) = manifest.entries.binary_search_by(|e| e.path.cmp(&relative)) {
+            let expected = &manifest.entries[index];
             if !expected.directory {
                 return Err("確認した親はフォルダーではありません".into());
             }
@@ -606,14 +705,14 @@ fn verify_remaining(
     let current = Census::capture_removal_locked(
         storage,
         db,
-        &p.manifest().meeting_id,
+        &receipt.manifest.meeting_id,
         p.operation(),
         check,
         reserved.as_deref(),
     )?;
     if current.scope() != p.scope()
-        || current.manifest().root != p.manifest().root
-        || current.manifest().database != p.manifest().database
+        || current.manifest().root != receipt.manifest.root
+        || current.manifest().database != receipt.manifest.database
     {
         return Err("削除中にDB範囲または起動時実体が変更されています".into());
     }
@@ -629,7 +728,8 @@ fn verify_remaining(
         e.path == format!("meetings/{}", p.manifest().meeting_id)
             && receipt.progress.pending.is_some()
     }) {
-        let dir = parent(storage, p, &target.path)?.ok_or("確認した親がありません")?;
+        let dir =
+            parent(storage, &receipt.manifest, &target.path)?.ok_or("確認した親がありません")?;
         let leaf = receipt.reserved();
         if physical(&dir, &leaf)? {
             let child = dir.child(&leaf)?.ok_or("予約フォルダーがありません")?;
@@ -645,7 +745,7 @@ fn verify_remaining(
         }
     }
     let mut expected = BTreeMap::new();
-    for (index, entry) in p.manifest().entries.iter().rev().enumerate() {
+    for (index, entry) in receipt.manifest.entries.iter().rev().enumerate() {
         let candidate = if index < receipt.progress.next {
             missing(entry)
         } else if index == receipt.progress.next && receipt.progress.pending.is_some() {
@@ -741,7 +841,7 @@ fn run_inner(
         cancel(check)?;
         storage.managed_anchor.verify()?;
         let leaf = target.path.rsplit_once('/').ok_or("対象パスが不正です")?.1;
-        let dir = parent(storage, &receipt.confirmed, &target.path)?;
+        let dir = parent(storage, &receipt.manifest, &target.path)?;
         if target.proof.is_none() {
             if dir
                 .as_ref()

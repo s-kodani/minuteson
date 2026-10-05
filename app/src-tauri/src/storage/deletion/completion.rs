@@ -42,10 +42,14 @@ impl Progress {
 pub(super) struct Receipt {
     confirmed: Prepared,
     progress: Progress,
+    manifest: super::files::Manifest,
 }
 impl Receipt {
     pub(super) fn confirmed(&self) -> &Prepared {
         &self.confirmed
+    }
+    pub(super) fn manifest(&self) -> &super::files::Manifest {
+        &self.manifest
     }
     pub(super) fn verify_resume(
         &self,
@@ -71,7 +75,7 @@ impl Receipt {
             )
             .map_err(|e| e.to_string())?;
         let progress: Progress = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        progress.files.validate(&confirmed)?;
+        let manifest = progress.files.manifest(db, &confirmed, check)?;
         let state_matches = match progress.database_phase {
             Phase::RowsPending => {
                 state == "cleanup"
@@ -86,6 +90,7 @@ impl Receipt {
         Ok(Self {
             confirmed,
             progress,
+            manifest,
         })
     }
     pub(super) fn verify_saved(
@@ -95,7 +100,7 @@ impl Receipt {
     ) -> Result<(), String> {
         let current = Self::load(db, self.confirmed.operation(), check)?;
         self.confirmed.matches_saved(&current.confirmed)?;
-        if self.progress != current.progress {
+        if self.progress != current.progress || self.manifest != current.manifest {
             return Err("複合削除の進捗が変更されています".into());
         }
         Ok(())
@@ -122,7 +127,7 @@ impl Receipt {
         } else {
             self.progress
                 .files
-                .verify_absent(storage, &self.confirmed)?;
+                .verify_absent(storage, db, &self.confirmed)?;
             database::verify_rows_deleted(db, self.confirmed.scope(), check)
         }
     }
@@ -236,7 +241,7 @@ fn run_locked(
         receipt
             .progress
             .files
-            .verify_absent(storage, &receipt.confirmed)?;
+            .verify_absent(storage, db, &receipt.confirmed)?;
         tx.commit().map_err(|e| e.to_string())?;
         receipt.progress = next;
         event("rowsCommitted");
@@ -272,7 +277,7 @@ fn run_locked(
         receipt
             .progress
             .files
-            .verify_absent(storage, &receipt.confirmed)?;
+            .verify_absent(storage, db, &receipt.confirmed)?;
         tx.commit().map_err(|e| e.to_string())?;
         receipt.progress = next;
         event("completed");

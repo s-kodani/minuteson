@@ -117,6 +117,21 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String, String)>, Stri
         .map_err(|e| e.to_string())?.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .map_err(|e| e.to_string())?.collect::<Result<_,_>>().map_err(|e| e.to_string())
 }
+fn expected_schema() -> Result<&'static Vec<(String, String, String, String)>, String> {
+    // Cache only the schema built from this binary's fixed migrations, never a
+    // live connection's schema, migration history, trigger/FK state or rows.
+    // Each actual DB still undergoes every inspection below on every call.
+    static EXPECTED: std::sync::OnceLock<Result<Vec<(String, String, String, String)>, String>> =
+        std::sync::OnceLock::new();
+    EXPECTED
+        .get_or_init(|| {
+            let mut expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            apply_migrations(&mut expected).map_err(|e| e.to_string())?;
+            schema(&expected)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
 fn trusted_schema(db: &Connection) -> Result<String, String> {
     if db
         .query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema)", [], |r| {
@@ -131,10 +146,8 @@ fn trusted_schema(db: &Connection) -> Result<String, String> {
     {
         return Err("削除対象のDB移行が未完了です".into());
     }
-    let mut expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-    apply_migrations(&mut expected).map_err(|e| e.to_string())?;
     let actual = schema(db)?;
-    if actual != schema(&expected)? {
+    if &actual != expected_schema()? {
         return Err("削除対象DBの構造・保護制約が既知の形式と一致しません".into());
     }
     if !db

@@ -14,6 +14,8 @@ mod intent;
 pub(crate) mod operations;
 #[cfg(unix)]
 mod removal;
+#[cfg(unix)]
+mod renewal;
 
 #[cfg(all(test, unix))]
 mod fence_tests;

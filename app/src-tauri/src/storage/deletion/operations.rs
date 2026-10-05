@@ -94,8 +94,8 @@ impl Target {
         match self {
             Self::Fresh(c) => (c.manifest(), c.scope()),
             Self::Unstarted(p) | Self::Kept(p) => (p.manifest(), p.scope()),
-            Self::Files(r) => (r.confirmed().manifest(), r.confirmed().scope()),
-            Self::Database(r) => (r.confirmed().manifest(), r.confirmed().scope()),
+            Self::Files(r) => (r.manifest(), r.confirmed().scope()),
+            Self::Database(r) => (r.manifest(), r.confirmed().scope()),
         }
     }
     fn verify_live(&self, storage: &Storage, check: &impl Fn() -> bool) -> Result<(), String> {

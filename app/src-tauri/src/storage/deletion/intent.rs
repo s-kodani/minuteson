@@ -1,5 +1,5 @@
 //! Durable confirmation observations, not an ownership/unlink capability.
-//! No user-facing caller exists until deletion admission and recovery follow.
+//! Only the server-owned controller can admit a reviewed deletion.
 use super::{
     database::Scope,
     files::{self, Census, Entry, Manifest, Registered},
@@ -36,7 +36,7 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Intent {
+pub(super) struct Intent {
     version: u32,
     scope: Scope,
     // Header only: full entries live in maintenance_paths, not the 64KiB intent.
@@ -209,7 +209,7 @@ impl Intent {
             paths_hash: paths_hash(rows)?,
         })
     }
-    fn validate(&self, db: &Connection) -> Result<(), String> {
+    pub(super) fn validate(&self, db: &Connection) -> Result<(), String> {
         self.scope.validate_format(db)?;
         self.file_header.root.validate(true)?;
         self.file_header.database.validate(false)?;
@@ -246,6 +246,64 @@ impl Intent {
     }
 }
 
+// Reconfirmation uses the same bounded path observations but a separate,
+// immutable audit intent. It never overwrites the original manifest/consent.
+pub(super) struct Observations {
+    pub(super) header: Intent,
+    pub(super) manifest: Manifest,
+}
+impl Observations {
+    pub(super) fn scope(&self) -> &Scope {
+        &self.header.scope
+    }
+    pub(super) fn capture(census: &Census) -> Result<Self, String> {
+        let rows = census
+            .manifest()
+            .entries
+            .iter()
+            .map(PathRow::from_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            header: Intent::from_census(census, &rows)?,
+            manifest: census.manifest().clone(),
+        })
+    }
+    pub(super) fn load(
+        db: &Connection,
+        operation: &str,
+        header: Intent,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        header.validate(db)?;
+        let manifest = header.manifest(&read_paths(db, operation, check)?)?;
+        Ok(Self { header, manifest })
+    }
+    pub(super) fn store_paths(
+        &self,
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+        event: &impl Fn(&str),
+    ) -> Result<(), String> {
+        self.header.validate(db)?;
+        let rows = self
+            .manifest
+            .entries
+            .iter()
+            .map(PathRow::from_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        if self.header.manifest(&rows)? != self.manifest {
+            return Err("再確認したパス観測が一致しません".into());
+        }
+        for row in rows {
+            cancel(check)?;
+            db.execute("INSERT INTO maintenance_paths(operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![operation,row.path,row.kind,row.size,row.content_hash,row.observation,row.observation_hash]).map_err(|e|e.to_string())?;
+            event("reviewPathStored");
+        }
+        Ok(())
+    }
+}
+
 // A saved observation can be inspected even when files changed. verify_live is
 // mandatory before any future transition; loading is not deletion admission.
 #[derive(Clone, Debug)]
@@ -256,6 +314,9 @@ pub(super) struct Prepared {
     consent_at: i64,
 }
 impl Prepared {
+    pub(super) fn intent_hash(&self) -> Result<String, String> {
+        Ok(hash(encode(&self.intent, MAX_INTENT)?.as_bytes()))
+    }
     pub(super) fn manifest(&self) -> &Manifest {
         &self.manifest
     }
@@ -404,6 +465,21 @@ fn read_state(
     {
         return Err("削除の対象会議・固定確認記録が一致しません".into());
     }
+    let rows = read_paths(db, operation, check)?;
+    let manifest = intent.manifest(&rows)?;
+    cancel(check)?;
+    Ok(Prepared {
+        operation: operation.into(),
+        intent,
+        manifest,
+        consent_at: consent.unwrap(),
+    })
+}
+fn read_paths(
+    db: &Connection,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Vec<PathRow>, String> {
     let mut q = db.prepare("SELECT relative_path,kind,size_bytes,content_hash,identity_json,identity_hash FROM maintenance_paths WHERE operation_id=?1 ORDER BY relative_path LIMIT 200001").map_err(|e| e.to_string())?;
     let mut query = q.query(params![operation]).map_err(|e| e.to_string())?;
     let mut rows = Vec::new();
@@ -421,14 +497,7 @@ fn read_state(
             observation_hash: row.get(5).map_err(|e| e.to_string())?,
         });
     }
-    let manifest = intent.manifest(&rows)?;
-    cancel(check)?;
-    Ok(Prepared {
-        operation: operation.into(),
-        intent,
-        manifest,
-        consent_at: consent.unwrap(),
-    })
+    Ok(rows)
 }
 pub(super) fn read(
     storage: &Storage,

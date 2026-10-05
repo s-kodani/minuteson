@@ -1,6 +1,9 @@
 use super::*;
 use std::{cell::Cell, path::PathBuf};
 
+#[path = "renewal_tests.rs"]
+mod renewal_tests;
+
 struct Fixture {
     base: tempfile::TempDir,
     storage: Storage,
