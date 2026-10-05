@@ -85,7 +85,7 @@ pub(crate) struct RestoreReceipt {
 pub(crate) struct PreparedRestore {
     archive: archive::VerifiedArchive,
     // Archive closes first, then every private validation copy is removed.
-    scratch: tempfile::TempDir,
+    scratch: scratch::Stage,
     preview: RestorePreview,
     vocabulary_fingerprint: String,
     destination_root: PathBuf,
@@ -339,7 +339,8 @@ impl Storage {
         // Read/extract only while the normal storage write gate is held.
         let maintenance = self.backup_maintenance()?;
         progress("reading");
-        let scratch = archive::private_stage(self.import_scratch()?)?;
+        self.import_scratch()?;
+        let scratch = self.backup_stage()?;
         let archive = archive::read(&mut source_file(path)?, scratch.path(), cancelled)?;
         drop(maintenance);
         let mut selection = PreparedRestore {

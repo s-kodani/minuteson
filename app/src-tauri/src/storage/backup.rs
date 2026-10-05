@@ -14,6 +14,7 @@ mod exclusions;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
+pub(in crate::storage) mod scratch;
 
 // Only durable restore omission evidence grants the missing-cache exception.
 // Neither a broken ready file nor an original input can be adopted as a cache.
@@ -162,7 +163,7 @@ impl Drop for Maintenance<'_> {
 
 pub(crate) struct Snapshot<'a> {
     // Drop stage before unlocking; only this operation's unpublished files go away.
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
     pub(super) database: PathBuf,
     pub(super) database_hash: String,
     pub(super) database_size: u64,
@@ -263,18 +264,10 @@ impl Storage {
     ) -> Result<Snapshot<'_>, String> {
         check_cancelled(cancelled)?;
         let maintenance = self.backup_maintenance()?;
-        let mut builder = tempfile::Builder::new();
-        builder.prefix("mon-backup-");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            builder.permissions(std::fs::Permissions::from_mode(0o700));
-        }
         let stage = match parent {
-            Some(parent) => builder.tempdir_in(parent),
-            None => builder.tempdir(),
-        }
-        .map_err(|e| e.to_string())?;
+            Some(parent) => scratch::Stage::create(parent)?,
+            None => self.backup_stage()?,
+        };
         let database = stage.path().join("snapshot.sqlite3");
         // create_new/private permissions before SQLite opens the image.
         private_file(&database)?
@@ -297,6 +290,9 @@ impl Storage {
                 u64::try_from(required).map_err(|_| "DBサイズが範囲外です")?,
             )?;
             let mut target = Connection::open(&database).map_err(|e| e.to_string())?;
+            target
+                .execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
+                .map_err(|e| e.to_string())?;
             {
                 // Online Backup reads committed WAL frames; never copy the raw
                 // live DB file, checkpoint it, or close/reopen the original.
@@ -337,7 +333,7 @@ impl Storage {
         })?;
         check_capacity(stage.path(), required)?;
         let asset_directory = stage.path().join("assets");
-        std::fs::create_dir(&asset_directory).map_err(|e| e.to_string())?;
+        scratch::directories(&asset_directory)?;
         let mut staged = Vec::with_capacity(assets.len());
         for asset in assets {
             check_cancelled(cancelled)?;
@@ -638,6 +634,7 @@ fn source_path(storage: &Storage, asset: &FileAsset) -> Result<PathBuf, String> 
 }
 
 fn private_file(path: &Path) -> Result<File, String> {
+    scratch::check_creation(path)?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -645,7 +642,9 @@ fn private_file(path: &Path) -> Result<File, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path).map_err(|e| e.to_string())
+    let file = options.open(path).map_err(|e| e.to_string())?;
+    scratch::record_file(path, &file)?;
+    Ok(file)
 }
 
 fn same_file(before: &Metadata, after: &Metadata) -> bool {

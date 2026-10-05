@@ -666,10 +666,10 @@ pub(super) fn load(
     private_file(database)?
         .sync_all()
         .map_err(|e| e.to_string())?;
-    let mut db = initialize(
-        Connection::open(database).map_err(|e| e.to_string())?,
-        version,
-    )?;
+    let db = Connection::open(database).map_err(|e| e.to_string())?;
+    db.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
+        .map_err(|e| e.to_string())?;
+    let mut db = initialize(db, version)?;
     let trusted = tables(&db)?;
     if descriptions.len() != trusted.len()
         || descriptions

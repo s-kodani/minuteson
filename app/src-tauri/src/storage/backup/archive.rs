@@ -83,7 +83,7 @@ pub(crate) struct VerifiedArchive {
     pub(super) assets: BTreeMap<String, PathBuf>,
     database_proof: (u64, String),
     database_identity: Metadata,
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
 }
 
 impl VerifiedArchive {
@@ -138,15 +138,8 @@ pub(crate) struct BackupReceipt {
     pub sha256: String,
 }
 
-pub(super) fn private_stage(parent: &Path) -> Result<tempfile::TempDir, String> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(".mon-archive-");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o700));
-    }
-    builder.tempdir_in(parent).map_err(|e| e.to_string())
+pub(super) fn private_stage(parent: &Path) -> Result<scratch::Stage, String> {
+    scratch::Stage::create(parent)
 }
 
 impl Snapshot<'_> {
@@ -545,7 +538,7 @@ pub(crate) fn read(
         .ok_or("検証容量が範囲外です")?;
     check_capacity(parent, required)?;
     let stage = private_stage(parent)?;
-    std::fs::create_dir(stage.path().join("assets")).map_err(|e| e.to_string())?;
+    scratch::directories(&stage.path().join("assets"))?;
     let mut assets = BTreeMap::new();
     for entry in &manifest.entries {
         check_cancelled(cancelled)?;

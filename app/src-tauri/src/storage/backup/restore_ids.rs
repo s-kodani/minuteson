@@ -28,7 +28,7 @@ pub(crate) struct RestoreIds<'a> {
     pub batch_id: String,
     pub archive_id: String,
     saved: Option<super::ledger::SavedBatch>,
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,7 +198,7 @@ impl<'a> RestoreIds<'a> {
         let path = stage.path().join("identities.sqlite3");
         private_file(&path)?;
         let database = Connection::open(path).map_err(|e| e.to_string())?;
-        database.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA cache_size=-8192;
+        database.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL; PRAGMA cache_size=-8192;
             CREATE TABLE mappings(domain TEXT NOT NULL,scope TEXT NOT NULL,old_id TEXT NOT NULL,new_id TEXT NOT NULL,
                 PRIMARY KEY(domain,scope,old_id));
             CREATE INDEX mappings_target ON mappings(new_id);

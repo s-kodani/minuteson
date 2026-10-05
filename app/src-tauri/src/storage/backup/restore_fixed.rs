@@ -118,7 +118,7 @@ pub(super) struct FixedData<'p, 's> {
     // Both connections close before this operation's registry directory.
     registry: Connection,
     ids: &'p RestoreIds<'s>,
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
 }
 
 impl<'p, 's> FixedData<'p, 's> {
@@ -231,7 +231,7 @@ impl<'p, 's> FixedData<'p, 's> {
         let path = stage.path().join("fixed-hashes.sqlite3");
         private_file(&path)?;
         let registry = Connection::open(path).map_err(|e| e.to_string())?;
-        registry.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA cache_size=-8192;
+        registry.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL; PRAGMA cache_size=-8192;
             CREATE TABLE hashes(domain TEXT NOT NULL,meeting TEXT NOT NULL,old_id TEXT NOT NULL,old_hash TEXT NOT NULL,new_hash TEXT NOT NULL,
                 PRIMARY KEY(domain,meeting,old_id,old_hash));
             CREATE TABLE assets(meeting TEXT NOT NULL,old_id TEXT NOT NULL,old_hash TEXT NOT NULL,new_hash TEXT NOT NULL,new_size INTEGER NOT NULL,

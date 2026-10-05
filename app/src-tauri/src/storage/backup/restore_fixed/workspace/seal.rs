@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 pub(in crate::storage::backup) struct SealedWorkspace {
     database: Connection,
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
     database_proof: (u64, String),
     identity_proof: (String, String, i64),
     batch_id: String,
@@ -24,7 +24,7 @@ fn uuid(value: &str) -> bool {
     Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)
 }
 
-fn root(stage: &tempfile::TempDir) -> Result<PathBuf, String> {
+fn root(stage: &scratch::Stage) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(stage.path()).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
         return Err("復元専用領域が変更されています".into());

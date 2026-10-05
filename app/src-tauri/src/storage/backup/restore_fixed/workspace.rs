@@ -13,7 +13,7 @@ mod speech;
 pub(in crate::storage::backup) struct FixedWorkspace {
     // Close SQLite before removing only this operation's private directory.
     database: Connection,
-    stage: tempfile::TempDir,
+    stage: scratch::Stage,
     // Definitions come from our migrations, not from archived executable SQL.
     triggers: Vec<String>,
     missing_assets: std::collections::BTreeSet<String>,
@@ -103,13 +103,11 @@ impl FixedWorkspace {
         let stage = archive::private_stage(parent)?;
         let image = stage.path().join("fixed.sqlite3");
         private_file(&image)?;
-        let database = portable::initialize(
-            Connection::open(&image).map_err(|e| e.to_string())?,
-            MIGRATIONS.len(),
-        )?;
+        let database = Connection::open(&image).map_err(|e| e.to_string())?;
         database
-            .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
+            .execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
             .map_err(|e| e.to_string())?;
+        let database = portable::initialize(database, MIGRATIONS.len())?;
         let definitions: Vec<(String, String)> = database
             .prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger' ORDER BY name")
             .map_err(|e| e.to_string())?
@@ -233,7 +231,7 @@ impl FixedWorkspace {
             let input = source.owned_asset_path(&id)?;
             let destination = self.stage.path().join(&relative);
             let directory = destination.parent().ok_or("復元先フォルダーがありません")?;
-            std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+            scratch::directories(directory)?;
             // Archive payload hashes can differ from source hashes after
             // portability redaction. Check the verified physical payload first.
             let entry = entries

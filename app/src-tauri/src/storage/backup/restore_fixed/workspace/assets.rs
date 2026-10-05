@@ -60,11 +60,7 @@ impl<C: Fn() -> bool> WorkspaceAssets<'_, '_, '_, C> {
         let mut directory = self.root.to_path_buf();
         for part in ["meetings", meeting.as_str(), "restored"] {
             directory.push(part);
-            match std::fs::create_dir(&directory) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e.to_string()),
-            }
+            scratch::directories(&directory)?;
             if !std::fs::symlink_metadata(&directory)
                 .map_err(|e| e.to_string())?
                 .is_dir()
