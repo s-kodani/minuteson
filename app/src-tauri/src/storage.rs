@@ -157,10 +157,10 @@ impl Storage {
 
     pub(crate) fn require_data_writable(&self) -> Result<(), String> {
         if self.deletion_fence.pending() {
-            Err("未完了の会議削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
+            Err("未完了の会議削除／モデル削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
         } else if self.deletion_fence.restart_required() {
             Err(
-                "会議削除の確認記録を解決しました。保留した起動時回復を行うため再起動してください"
+                "削除の確認記録を解決しました。保留した起動時回復を行うため再起動してください"
                     .into(),
             )
         } else if self.restart_required() {
@@ -207,8 +207,7 @@ impl Storage {
         if pending_deletion {
             if verify_migration_history(&connection)? != MIGRATIONS.len() {
                 return Err(
-                    "未完了の会議削除があるDBは移行せず保持します。元の対応版で確認してください"
-                        .into(),
+                    "未完了の削除があるDBは移行せず保持します。元の対応版で確認してください".into(),
                 );
             }
         } else {

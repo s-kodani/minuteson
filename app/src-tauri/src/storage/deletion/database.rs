@@ -132,7 +132,7 @@ fn expected_schema() -> Result<&'static Vec<(String, String, String, String)>, S
         .as_ref()
         .map_err(Clone::clone)
 }
-fn trusted_schema(db: &Connection) -> Result<String, String> {
+pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
     #[cfg(unix)]
     super::startup::verify_temp_schema(db)?;
     #[cfg(not(unix))]
@@ -182,6 +182,22 @@ pub(super) fn stopped(db: &Connection) -> Result<(), String> {
     let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE source_type!='historical_snapshot' AND state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if active {
         Err("録音・解析・取り込み・準備・書き出しの停止完了後に削除を確認してください".into())
+    } else {
+        Ok(())
+    }
+}
+
+// A crash-stale partial model package is a legitimate deletion target. The
+// caller MUST own the real DataMaintenanceLease (which excludes live model
+// workers); all other active SQL work and unfinished CPU checks still block.
+#[cfg(unix)]
+pub(super) fn stopped_for_model_consent(db: &Connection) -> Result<(), String> {
+    let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_compatibility_checks WHERE state='preparing')", [], |r|r.get(0)).map_err(|e|e.to_string())?;
+    if active {
+        Err(
+            "録音・解析・取り込み・互換性確認・書き出しの停止完了後にモデル削除を確認してください"
+                .into(),
+        )
     } else {
         Ok(())
     }

@@ -108,6 +108,25 @@ impl AnalysisController {
         })
     }
 
+    #[cfg(unix)]
+    #[allow(dead_code)] // Model deletion execution/recovery API follows.
+    pub(crate) fn begin_model_deletion_maintenance(
+        &self,
+        storage: &Storage,
+        operation: &str,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DataMaintenanceLease, String> {
+        crate::storage::deletion::models::intent::authorize_review(storage, operation)?;
+        self.begin_data_maintenance_inner(
+            recording_active,
+            import_blocked,
+            cancelled,
+            storage.deletion_resume_restart_required(),
+        )
+    }
+
     pub(crate) fn begin_export(&self) -> Result<ExportAdmissionLease, String> {
         let mut state = self
             .state

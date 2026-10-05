@@ -2,7 +2,7 @@
 use super::fs::{Directory, Identity, Proof};
 use crate::{model_inspection::MANIFEST, model_placement::PlacementRecord, storage::Storage};
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, path::Path};
 
@@ -10,8 +10,8 @@ const MAX_ENTRIES: usize = 256;
 const MAX_DEPTH: usize = 32;
 const MAX_PATH: usize = 4096;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {
     pub relative_path: String,
     pub directory: bool,
@@ -21,12 +21,14 @@ pub(crate) struct Entry {
     pub sha256: Option<String>,
     pub changed: bool,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Observation {
     entry: Entry,
     proof: Option<Proof>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Snapshot {
     record: PlacementRecord,
     placed: bool,
@@ -37,6 +39,87 @@ struct Snapshot {
     profile_references: u64,
     job_references: u64,
     active_jobs: u64,
+}
+impl Snapshot {
+    fn validate(&self) -> Result<(), String> {
+        self.record.validate()?;
+        self.storage_root.validate(true)?;
+        self.database.validate(false)?;
+        self.models_root.validate(true)?;
+        let registered = expected(&self.record);
+        let mut paths = BTreeMap::new();
+        if self.observations.is_empty() || self.observations.len() > MAX_ENTRIES {
+            return Err("モデル削除の保存対象数が不正です".into());
+        }
+        let mut previous: Option<&str> = None;
+        for observation in &self.observations {
+            let e = &observation.entry;
+            let path = e.relative_path.as_str();
+            if path.len() > MAX_PATH
+                || path.split('/').count() > MAX_DEPTH
+                || previous.is_some_and(|p| p >= path)
+                || (!path.is_empty()
+                    && path.split('/').any(|leaf| {
+                        leaf.is_empty()
+                            || leaf == "."
+                            || leaf == ".."
+                            || leaf.len() > 255
+                            || leaf.contains(['\\', '\0', ':'])
+                    }))
+                || e.registered != registered.contains_key(path)
+                || registered
+                    .get(path)
+                    .is_some_and(|v| v.is_none() != e.directory)
+                || (!e.present && !e.registered)
+                || observation.proof.is_some() != e.present
+            {
+                return Err("モデル削除の保存対象・順序・実体証拠が不正です".into());
+            }
+            if let Some(proof) = &observation.proof {
+                proof.validate(e.directory)?;
+            }
+            if e.directory || !e.present {
+                if e.bytes.is_some() || e.sha256.is_some() || e.changed {
+                    return Err("モデル削除の保存容量・変更分類が不正です".into());
+                }
+            } else {
+                let proof = observation
+                    .proof
+                    .as_ref()
+                    .ok_or("モデル実体証拠がありません")?;
+                let hash = e.sha256.as_deref().ok_or("モデル内容証拠がありません")?;
+                let changed =
+                    registered
+                        .get(path)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|(size, sha)| {
+                            size.is_some_and(|n| n != proof.size) || sha != hash
+                        });
+                if e.bytes != Some(proof.size) || !intent::hash_valid(hash) || e.changed != changed
+                {
+                    return Err("モデル削除の保存内容・変更分類が不正です".into());
+                }
+            }
+            if !path.is_empty() {
+                let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+                let parent: &Entry = paths.get(parent).ok_or("モデル削除の親対象がありません")?;
+                if !parent.directory || (e.present && !parent.present) {
+                    return Err("モデル削除の親対象が不正です".into());
+                }
+            } else if !e.directory || !e.registered {
+                return Err("モデル削除のルート対象が不正です".into());
+            }
+            paths.insert(path, e.clone());
+            previous = Some(path);
+        }
+        if registered
+            .keys()
+            .any(|path| !paths.contains_key(path.as_str()))
+        {
+            return Err("登録モデルの保存対象が欠落しています".into());
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -265,8 +348,26 @@ fn capture(
     review: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Snapshot, String> {
-    cancel(check)?;
     storage.require_data_writable()?;
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let snapshot = capture_locked(storage, &db, root, package, review, check)?;
+    storage.require_data_writable()?;
+    Ok(snapshot)
+}
+// Pending-intent callers must first validate their typed receipt and hold the
+// real shared lease. This helper itself grants no writer or deletion authority.
+fn capture_locked(
+    storage: &Storage,
+    db: &Connection,
+    root: &Path,
+    package: &str,
+    review: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Snapshot, String> {
+    cancel(check)?;
     if !uuid::Uuid::parse_str(package).is_ok_and(|id| id.to_string() == package)
         || root.file_name() != Some(std::ffi::OsStr::new("models"))
         // Pre-bootstrap installs keep their meeting DB in app-data beside
@@ -279,29 +380,24 @@ fn capture(
     }
     let models = Directory::root(root)?;
     let models_root = models.proof()?.identity;
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
     let (record, placed) =
-        storage::model_placements::load(&db, package)?.ok_or("管理モデルの配置記録がありません")?;
+        storage::model_placements::load(db, package)?.ok_or("管理モデルの配置記録がありません")?;
     if record.review_hash != review {
         return Err("モデル削除の確認対象が配置記録と一致しません".into());
     }
     let (storage_root, database) = storage.managed_anchor.identity()?;
     let observations = inventory(&models, &record, check)?;
-    let (profile_references, job_references, active_jobs) = usages(&db, package)?;
+    let (profile_references, job_references, active_jobs) = usages(db, package)?;
     if inventory(&models, &record, check)? != observations
         || models.proof()?.identity != models_root
         || storage.managed_anchor.identity()? != (storage_root.clone(), database.clone())
-        || storage::model_placements::load(&db, package)? != Some((record.clone(), placed))
-        || usages(&db, package)? != (profile_references, job_references, active_jobs)
+        || storage::model_placements::load(db, package)? != Some((record.clone(), placed))
+        || usages(db, package)? != (profile_references, job_references, active_jobs)
     {
         return Err("モデル削除の対象・記録が検査中に変更されました".into());
     }
     cancel(check)?;
-    storage.require_data_writable()?;
-    Ok(Snapshot {
+    let snapshot = Snapshot {
         record,
         placed,
         storage_root,
@@ -311,7 +407,9 @@ fn capture(
         profile_references,
         job_references,
         active_jobs,
-    })
+    };
+    snapshot.validate()?;
+    Ok(snapshot)
 }
 use crate::storage;
 pub(crate) fn preview(
@@ -371,3 +469,8 @@ pub(crate) fn preview(
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
+
+// Kept internal until deletion execution and its recovery UI are connected.
+#[allow(dead_code)]
+#[path = "model_intent.rs"]
+pub(crate) mod intent;

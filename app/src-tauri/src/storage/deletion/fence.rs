@@ -32,7 +32,7 @@ pub(in crate::storage) fn has_pending(db: &Connection) -> Result<bool, String> {
         return Ok(false);
     }
     let pending = predicate(db)?;
-    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND {pending})"), [], |r|r.get(0)).map_err(|e|e.to_string())
+    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind IN ('delete_meeting','delete_assets') AND {pending})"), [], |r|r.get(0)).map_err(|e|e.to_string())
 }
 fn readonly(context: AuthContext<'_>) -> Authorization {
     match context.action {
@@ -215,6 +215,18 @@ pub(super) fn write_prepared<'a>(
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
     confirmed.verify_saved(db, check)?;
+    Writer::begin(storage, db, true)
+}
+
+#[cfg(unix)]
+pub(super) fn write_model_prepared<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    confirmed: &super::models::intent::Prepared,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    confirmed.verify_saved(db)?;
     Writer::begin(storage, db, true)
 }
 

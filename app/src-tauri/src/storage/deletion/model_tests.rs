@@ -4,6 +4,9 @@ use crate::model_inspection::{self, Engine, PackageFile, PackageManifest, Role, 
 use crate::model_placement;
 use std::{cell::Cell, path::PathBuf};
 
+#[path = "model_intent_tests.rs"]
+mod durable;
+
 struct Fixture {
     _source: tempfile::TempDir,
     _meetings: tempfile::TempDir,
