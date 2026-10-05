@@ -242,6 +242,14 @@ impl Storage {
         &self,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Snapshot<'_>, String> {
+        self.prepare_backup_snapshot_at(None, cancelled)
+    }
+
+    fn prepare_backup_snapshot_at(
+        &self,
+        parent: Option<&Path>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Snapshot<'_>, String> {
         check_cancelled(cancelled)?;
         let maintenance = self.backup_maintenance()?;
         let mut builder = tempfile::Builder::new();
@@ -251,7 +259,11 @@ impl Storage {
             use std::os::unix::fs::PermissionsExt;
             builder.permissions(std::fs::Permissions::from_mode(0o700));
         }
-        let stage = builder.tempdir().map_err(|e| e.to_string())?;
+        let stage = match parent {
+            Some(parent) => builder.tempdir_in(parent),
+            None => builder.tempdir(),
+        }
+        .map_err(|e| e.to_string())?;
         let database = stage.path().join("snapshot.sqlite3");
         // create_new/private permissions before SQLite opens the image.
         private_file(&database)?
@@ -397,6 +409,10 @@ fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Resu
     if verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
         return Err("未対応のDBスナップショット形式です".into());
     }
+    // A consistent image must validate unused models and superseded profiles
+    // too. This path-free catalog is a construction prerequisite, not yet a
+    // claim that the archive transports the complete catalog.
+    super::model_profiles::portable::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;
     let result: String = db
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))

@@ -4,6 +4,7 @@ use crate::model_inspection::{PackageFile, PackageManifest, Target};
 use std::os::unix::fs::PermissionsExt;
 
 mod jobs;
+mod portable;
 
 pub(in crate::storage) fn publication_fixture() -> (
     tempfile::TempDir,

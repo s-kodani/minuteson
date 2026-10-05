@@ -7,6 +7,7 @@ use crate::model_placement::PlacementRecord;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) mod jobs;
+pub(in crate::storage) mod portable;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -361,11 +362,14 @@ fn settings(db: &Connection, name: ProfileName, engine: Engine) -> Result<(Setti
     }
     Ok((value, version))
 }
-fn load_profile(db: &Connection, name: ProfileName, head: &Head) -> Result<StoredProfile, String> {
+fn read_profile(db: &Connection, name: ProfileName, id: &str) -> Result<StoredProfile, String> {
+    if !canonical_id(id) {
+        return Err("モデル構成のIDが不正です".into());
+    }
     let row: Option<(String, i64, String)> = db
         .query_row(
             "SELECT name,profile_version,state FROM model_profiles WHERE id=?1",
-            params![head.id],
+            params![id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
@@ -377,17 +381,7 @@ fn load_profile(db: &Connection, name: ProfileName, head: &Head) -> Result<Store
     {
         return Err("モデル構成の名前・確定状態が不正です".into());
     }
-    let latest: i64 = db
-        .query_row(
-            "SELECT max(profile_version) FROM model_profiles WHERE name=?1",
-            params![name.text()],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if latest != version {
-        return Err("モデル構成の現在版が古い版へ差し戻されています".into());
-    }
-    let rows=db.prepare("SELECT role,package_id,settings_json FROM profile_components WHERE profile_id=?1 ORDER BY role").map_err(|e|e.to_string())?.query_map(params![head.id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    let rows=db.prepare("SELECT role,package_id,settings_json FROM profile_components WHERE profile_id=?1 ORDER BY role").map_err(|e|e.to_string())?.query_map(params![id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     if rows.is_empty() || rows.len() > 4 {
         return Err("モデル構成要素の数が不正です".into());
     }
@@ -433,13 +427,27 @@ fn load_profile(db: &Connection, name: ProfileName, head: &Head) -> Result<Store
         return Err("モデル構成要素の役割が欠損しています".into());
     }
     let stored = StoredProfile {
-        id: head.id.clone(),
+        id: id.to_owned(),
         name,
         version,
         state,
         application_hash: application.unwrap(),
         bindings,
     };
+    Ok(stored)
+}
+fn load_profile(db: &Connection, name: ProfileName, head: &Head) -> Result<StoredProfile, String> {
+    let stored = read_profile(db, name, &head.id)?;
+    let latest: i64 = db
+        .query_row(
+            "SELECT max(profile_version) FROM model_profiles WHERE name=?1",
+            params![name.text()],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if latest != stored.version {
+        return Err("モデル構成の現在版が古い版へ差し戻されています".into());
+    }
     if digest(&stored)? != head.content_hash {
         return Err("モデル構成の内容SHAが一致しません".into());
     }

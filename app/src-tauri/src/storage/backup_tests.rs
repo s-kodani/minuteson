@@ -252,15 +252,31 @@ fn cancellation_during_copy_releases_gate_and_leaves_original_untouched() {
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = storage.create_meeting("キャンセル").unwrap();
     let managed = asset(&storage, &meeting.id, &vec![7; 8 * BUFFER_BYTES]);
-    let calls = Cell::new(0);
+    let staging = tempfile::tempdir().unwrap();
+    let copied = Cell::new(0_u64);
     assert!(storage
-        .prepare_backup_snapshot(&|| {
-            calls.set(calls.get() + 1);
-            calls.get() > 6
+        .prepare_backup_snapshot_at(Some(staging.path()), &|| {
+            // Cancel at a physical copy boundary, not at a brittle count of
+            // validation callbacks. Inspect only this test's private parent.
+            for stage in std::fs::read_dir(staging.path()).unwrap() {
+                let assets = stage.unwrap().path().join("assets");
+                if let Ok(files) = std::fs::read_dir(assets) {
+                    for file in files {
+                        let bytes = file.unwrap().metadata().unwrap().len();
+                        if bytes > 0 {
+                            copied.set(bytes);
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
         })
         .err()
         .unwrap()
         .contains("中断"));
+    assert!(copied.get() > 0 && copied.get() < managed.size_bytes as u64);
+    assert_eq!(std::fs::read_dir(staging.path()).unwrap().count(), 0);
     assert!(storage.verify_asset(&managed.id).unwrap());
     assert_eq!(storage.list_meetings().unwrap(), vec![meeting]);
     assert!(storage.create_meeting("再開").is_ok());
