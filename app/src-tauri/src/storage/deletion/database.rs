@@ -1,4 +1,6 @@
-use crate::storage::{apply_migrations, now_ms};
+use crate::storage::apply_migrations;
+#[cfg(test)]
+use crate::storage::now_ms;
 use rusqlite::{config::DbConfig, params, types::ValueRef, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -160,7 +162,7 @@ fn trusted_schema(db: &Connection) -> Result<String, String> {
     ))
 }
 
-fn stopped(db: &Connection) -> Result<(), String> {
+pub(super) fn stopped(db: &Connection) -> Result<(), String> {
     let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running','pausing')) OR EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing','recording','stopping')) OR EXISTS(SELECT 1 FROM audio_imports WHERE state IN ('copying','converting')) OR EXISTS(SELECT 1 FROM export_records WHERE state='writing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE state='writing') OR EXISTS(SELECT 1 FROM analysis_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM minutes_revisions WHERE publication_state='building') OR EXISTS(SELECT 1 FROM model_packages WHERE source_type!='historical_snapshot' AND state='preparing')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if active {
         Err("録音・解析・取り込み・準備・書き出しの停止完了後に削除を確認してください".into())
@@ -169,7 +171,7 @@ fn stopped(db: &Connection) -> Result<(), String> {
     }
 }
 
-fn secure_delete(db: &Connection) -> Result<(), String> {
+pub(super) fn secure_delete(db: &Connection) -> Result<(), String> {
     db.execute_batch("PRAGMA secure_delete=ON")
         .map_err(|e| e.to_string())?;
     if db
@@ -415,6 +417,7 @@ impl Drop for Triggers<'_> {
 // Internal row phase only. Its caller must hold Storage's connection mutex and
 // maintenance admission, and must have durably completed the fixed file phase.
 // No production entry point calls it yet; the consent/file orchestrator follows.
+#[cfg(test)]
 pub(super) fn erase_confirmed_rows(
     db: &Connection,
     operation: &str,
@@ -439,6 +442,25 @@ pub(super) fn erase_confirmed_rows(
             "確認後に削除対象・依存関係・保守記録が変更されています。再確認してください".into(),
         );
     }
+    let erased = erase_rows(&tx, expected, check)?;
+    tx.execute("UPDATE maintenance_operations SET progress_json='{\"databaseDeleted\":true}',error_code=NULL,updated_at=?2 WHERE id=?1", params![operation,now_ms()?]).map_err(|e| e.to_string())?;
+    cancel(check)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(erased)
+}
+
+// The compound receipt owner validates its exact saved scope and file proof
+// while holding the connection mutex, then commits rows and progress together.
+pub(super) fn erase_rows(
+    tx: &Connection,
+    expected: &Scope,
+    check: &impl Fn() -> bool,
+) -> Result<u64, String> {
+    if tx.is_autocommit() {
+        return Err("DB行削除には同じ接続の確定トランザクションが必要です".into());
+    }
+    expected.validate_format(tx)?;
+    let db = tx;
     cancel(check)?;
     // Keep this enabled on the connection even if cancellation rolls back.
     // WAL pages still need the separately resumable purge below.
@@ -496,7 +518,6 @@ pub(super) fn erase_confirmed_rows(
     {
         return Err("削除後の参照整合性が不正です。DB削除を巻き戻しました".into());
     }
-    tx.execute("UPDATE maintenance_operations SET progress_json='{\"databaseDeleted\":true}',error_code=NULL,updated_at=?2 WHERE id=?1", params![operation,now_ms()?]).map_err(|e| e.to_string())?;
     drop(triggers);
     if !db
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
@@ -505,10 +526,36 @@ pub(super) fn erase_confirmed_rows(
         return Err("削除後の保護制約を再有効化できません".into());
     }
     cancel(check)?;
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(erased)
 }
 
+pub(super) fn verify_rows_deleted(
+    db: &Connection,
+    expected: &Scope,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    expected.validate_format(db)?;
+    stopped(db)?;
+    for (name, predicate) in TARGETS {
+        cancel(check)?;
+        let exists: bool = db
+            .query_row(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM {} WHERE {predicate})",
+                    quote(name)
+                ),
+                params![expected.meeting_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists {
+            return Err("削除済み会議のDB行が残存または再出現しています".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Progress {
@@ -517,7 +564,7 @@ struct Progress {
     database_purged: bool,
 }
 
-fn checkpoint(db: &Connection) -> Result<(), String> {
+pub(super) fn checkpoint(db: &Connection) -> Result<(), String> {
     let result: (i64, i64, i64) = db
         .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -532,6 +579,7 @@ fn checkpoint(db: &Connection) -> Result<(), String> {
 // Same mutex/admission/file-phase requirements as erase_confirmed_rows.
 // This may run after reopening a DB whose row phase committed before a crash.
 // It purges application DB/WAL contents, not physical media or user backups.
+#[cfg(test)]
 pub(super) fn finish_database_purge(
     db: &Connection,
     operation: &str,

@@ -14,7 +14,7 @@ mod analysis_ui;
 // Backup snapshot/archive core; additive restore and controller integration follow.
 #[allow(dead_code)]
 pub(crate) mod backup;
-#[allow(dead_code)] // File removal and user confirmation integration follow.
+#[allow(dead_code)] // Shared deletion admission and user confirmation follow.
 pub(crate) mod deletion;
 mod diarization;
 mod diarization_preferences;

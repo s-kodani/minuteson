@@ -158,12 +158,103 @@ impl Progress {
         Ok(())
     }
 }
+// A stored file-completion proof retains the exact policy, plan and cursor.
+// Only the compound DB receipt may parse it, and must revalidate all fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Finished(Progress);
+impl Finished {
+    pub(super) fn validate(&self, confirmed: &Prepared) -> Result<(), String> {
+        self.0.validate(confirmed)?;
+        if self.0.file_phase != Phase::Removed {
+            return Err("ファイル段階の完了を確認できません".into());
+        }
+        Ok(())
+    }
+    pub(super) fn verify_remaining(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        confirmed: &Prepared,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        self.validate(confirmed)?;
+        verify_remaining(
+            storage,
+            db,
+            &Receipt {
+                confirmed: confirmed.clone(),
+                progress: self.0.clone(),
+            },
+            check,
+        )
+    }
+    pub(super) fn verify_absent(
+        &self,
+        storage: &Storage,
+        confirmed: &Prepared,
+    ) -> Result<(), String> {
+        self.validate(confirmed)?;
+        let manifest = confirmed.manifest();
+        if storage.managed_anchor.identity()? != (manifest.root.clone(), manifest.database.clone())
+        {
+            return Err("削除確認時の管理領域・DBの実体が一致しません".into());
+        }
+        let Some(meetings) = storage.managed_anchor.directory_ref()?.child("meetings")? else {
+            return Ok(());
+        };
+        if meetings.optional_kind(&manifest.meeting_id)?.is_some() {
+            return Err("削除済み会議フォルダーが再出現しています。削除せず保持します".into());
+        }
+        if let Some(index) = manifest
+            .entries
+            .iter()
+            .rev()
+            .position(|e| e.path == format!("meetings/{}", manifest.meeting_id))
+        {
+            let reserved = format!(".mon-delete-{}-{index}", confirmed.operation());
+            if meetings.optional_kind(&reserved)?.is_some() {
+                return Err("会議フォルダーの削除予約対象が残っています".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Receipt {
     confirmed: Prepared,
     progress: Progress,
 }
 impl Receipt {
+    pub(super) fn confirmed(&self) -> &Prepared {
+        &self.confirmed
+    }
+    pub(super) fn matches_completion(
+        &self,
+        confirmed: &Prepared,
+        finished: &Finished,
+    ) -> Result<(), String> {
+        self.confirmed.matches_saved(confirmed)?;
+        if !self.removed() || self.progress != finished.0 {
+            return Err("DB段階と元のファイル完了記録が一致しません".into());
+        }
+        Ok(())
+    }
+    pub(super) fn progress_json(&self) -> Result<String, String> {
+        self.progress.encode()
+    }
+    pub(super) fn verify_finished(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<Finished, String> {
+        if !self.removed() {
+            return Err("ファイル削除が未完了です。DB行を削除しません".into());
+        }
+        preflight(storage, db, self, check)?;
+        Ok(Finished(self.progress.clone()))
+    }
     fn load(db: &Connection, operation: &str, check: &impl Fn() -> bool) -> Result<Self, String> {
         let confirmed = intent::read_removing(db, operation, check)?;
         let json: String = db
@@ -448,6 +539,14 @@ fn preflight(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     receipt.verify_saved(db, check)?;
+    verify_remaining(storage, db, receipt, check)
+}
+fn verify_remaining(
+    storage: &Storage,
+    db: &Connection,
+    receipt: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
     let p = &receipt.confirmed;
     let other_pending: bool = db
         .query_row(

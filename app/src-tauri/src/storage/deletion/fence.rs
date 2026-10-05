@@ -121,10 +121,15 @@ pub(super) struct Writer<'a> {
     db: &'a Connection,
 }
 impl Writer<'_> {
-    fn begin<'a>(storage: &'a Storage, db: &'a Connection) -> Result<Writer<'a>, String> {
+    fn begin<'a>(
+        storage: &'a Storage,
+        db: &'a Connection,
+        require_pending: bool,
+    ) -> Result<Writer<'a>, String> {
         if storage.retired.load(Ordering::Acquire)
             || storage.maintenance.load(Ordering::Acquire)
-            || !storage.deletion_fence.pending()
+            || (require_pending && !storage.deletion_fence.pending())
+            || (!require_pending && has_pending(db)?)
             || !db.is_autocommit()
             || storage.deletion_fence.connection_identity != connection_identity(db)
         {
@@ -186,7 +191,7 @@ pub(super) fn write_prepared<'a>(
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
     confirmed.verify_saved(db, check)?;
-    Writer::begin(storage, db)
+    Writer::begin(storage, db, true)
 }
 
 #[cfg(unix)]
@@ -197,7 +202,7 @@ pub(super) fn write_removal<'a>(
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
     confirmed.verify_saved(db, check)?;
-    Writer::begin(storage, db)
+    Writer::begin(storage, db, true)
 }
 
 // Old Scope-only receipts exist only in the row-phase fixtures, not a public
@@ -215,5 +220,18 @@ pub(super) fn write_scope_fixture<'a>(
     if json != scope.encode()? || hash != scope.hash()? || consent.is_none_or(|n| n < 0) {
         return Err("DB段階fixtureの確認記録が一致しません".into());
     }
-    Writer::begin(storage, db)
+    Writer::begin(storage, db, true)
+}
+
+#[cfg(unix)]
+pub(super) fn write_completion<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    confirmed: &super::completion::Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    confirmed.verify_saved(db, check)?;
+    // A completed acknowledgement retry can checkpoint only after validating
+    // its full receipt; it never grants the old raw Scope fixture admission.
+    Writer::begin(storage, db, !confirmed.completed())
 }

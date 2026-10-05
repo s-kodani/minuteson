@@ -1,5 +1,7 @@
 //! Meeting deletion is staged: consent, fixed file removal, then row removal.
-//! No IPC/Storage deletion entry point is exposed until the file phase exists.
+//! User-facing deletion requires shared admission and explicit scope review.
+#[cfg(unix)]
+mod completion;
 mod database;
 pub(in crate::storage) mod fence;
 #[cfg(unix)]

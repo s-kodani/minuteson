@@ -3,17 +3,17 @@ use crate::storage::{minutes_ui::tests as minutes_fixture, Storage};
 use rusqlite::{config::DbConfig, params, Connection};
 use std::cell::Cell;
 
-struct Fixture {
-    _root: tempfile::TempDir,
-    storage: Storage,
-    meeting: String,
-    other: String,
+pub(super) struct Fixture {
+    pub(super) _root: tempfile::TempDir,
+    pub(super) storage: Storage,
+    pub(super) meeting: String,
+    pub(super) other: String,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::at(tempfile::tempdir().unwrap())
     }
-    fn at(root: tempfile::TempDir) -> Self {
+    pub(super) fn at(root: tempfile::TempDir) -> Self {
         let storage = Storage::open(root.path().into()).unwrap();
         let meeting = minutes_fixture::meeting(&storage);
         for i in 0..3 {

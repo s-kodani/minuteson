@@ -248,7 +248,7 @@ impl Intent {
 
 // A saved observation can be inspected even when files changed. verify_live is
 // mandatory before any future transition; loading is not deletion admission.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Prepared {
     operation: String,
     intent: Intent,
@@ -292,7 +292,8 @@ impl Prepared {
         self.matches_saved(&saved)
     }
     pub(super) fn matches_saved(&self, saved: &Self) -> Result<(), String> {
-        if saved.intent != self.intent
+        if saved.operation != self.operation
+            || saved.intent != self.intent
             || saved.manifest != self.manifest
             || saved.consent_at != self.consent_at
         {
@@ -347,6 +348,14 @@ enum ReadMode {
     Prepared,
     Kept,
     Removing,
+    Database,
+}
+pub(super) fn read_database(
+    db: &Connection,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
+    read_state(db, operation, ReadMode::Database, check)
 }
 pub(super) fn read_removing(
     db: &Connection,
@@ -377,6 +386,9 @@ fn read_state(
                 && progress == KEPT_PROGRESS)
             || (matches!(mode, ReadMode::Removing)
                 && state == "installing"
+                && progress.len() <= 4096)
+            || (matches!(mode, ReadMode::Database)
+                && matches!(state.as_str(), "cleanup" | "completed")
                 && progress.len() <= 4096))
         || created < 0
         || updated < created
@@ -387,7 +399,8 @@ fn read_state(
     let intent: Intent = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     intent.validate(db)?;
     if encode(&intent, MAX_INTENT)? != json
-        || meeting.as_deref() != Some(intent.scope.meeting_id.as_str())
+        || (meeting.as_deref() != Some(intent.scope.meeting_id.as_str())
+            && !(matches!(mode, ReadMode::Database) && meeting.is_none()))
     {
         return Err("削除の対象会議・固定確認記録が一致しません".into());
     }
