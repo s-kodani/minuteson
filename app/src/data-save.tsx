@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataPhaseLabel, dataRequest, type DataKind, type DataRequest, type DataSnapshot, type RestoreReceipt } from "./data-operation-state";
 import { bytesLabel } from "./import-state";
+import { assertStorageView, type StorageView } from "./storage-placement-state";
 
 export function DataSavePanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRestored, onShowMeetings }: {
   operation: DataOperation; visible: boolean; locked: boolean;
@@ -29,6 +30,17 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const opener = useRef<HTMLElement | null>(null);
   const restoreFocus = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const [storage, setStorage] = useState<StorageView | null>(null);
+  const [storageError, setStorageError] = useState("");
+  useEffect(() => {
+    if (!visible || !isTauri()) return;
+    let disposed = false;
+    void invoke<StorageView>("get_storage_bootstrap").then(value => {
+      assertStorageView(value);
+      if (!disposed) { setStorage(value); setStorageError(""); }
+    }).catch(cause => { if (!disposed) { setStorage(null); setStorageError(String(cause)); } });
+    return () => { disposed = true; };
+  }, [visible, s?.revision]);
   useEffect(() => { onProtectionChange(rpcBusy || unknown); }, [rpcBusy, unknown, onProtectionChange]);
   useEffect(() => {
     if (open && dialog.current && !dialog.current.open) { restoreFocus.current = false; dialog.current.showModal(); heading.current?.focus(); }
@@ -66,7 +78,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   };
   const choose = async (kind: DataKind) => {
     if (rpcRunning.current || locked || unknown || s?.busy || !connected || !availability?.available) return;
-    if (s?.attentionRequired && !window.confirm("前の保存結果は未確定です。保存先の実ファイルを確認してから、別の操作を開始しますか？ 前の結果は変更しません。")) return;
+    if (s?.attentionRequired && !window.confirm("前の保存結果は未確定です。保存先の実ファイルを確認してから、別の操作を開始しますか？ 前の結果と途中コピーは変更しません。")) return;
     if (s?.retryAllowed && !window.confirm("現在の確認内容を破棄して選び直しますか？ 既存会議と元バックアップは変更しません。")) return;
     const selectionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     await withSavedEdits(async () => run(async () => {
@@ -96,7 +108,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const cancel = async () => {
     const current = latest.current.getSnapshot();
     if (rpcRunning.current || !current?.token) return;
-    if (current.busy && !window.confirm("進行中の処理を取り消しますか？ 公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。")) return;
+    if (current.busy && !window.confirm(current.kind === "relocation" ? "保存先変更を取り消しますか？ 旧保存先と途中コピーを保持します。切替済みの場合は終了して再起動が必要です。" : "進行中の処理を取り消しますか？ 公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。")) return;
     await run(async () => {
       latest.current.accept(await invoke<DataSnapshot>("cancel_data_operation", { token: current.token }));
       setOpen(false); pending.current = null; pendingChoice.current = null; setUnknown(false);
@@ -120,10 +132,10 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     }
     if (s.phase === "completed" && s.token !== completed.current) {
       completed.current = s.token; setOpen(false); setError("");
-      setToast(s.restoreReceipt ? `会議 ${s.restoreReceipt.meetingIds.length} 件を追加復元しました。` : "バックアップを作成しました。");
+      setToast(s.relocationReceipt ? "保存先を切り替えました。終了して再起動してください。旧保存先は削除していません。" : s.restoreReceipt ? `会議 ${s.restoreReceipt.meetingIds.length} 件を追加復元しました。` : "バックアップを作成しました。");
       if (s.restoreReceipt) void onRestored(s.restoreReceipt).catch(cause => setOpenError(`復元は完了しています。会議一覧を再読込してください: ${String(cause)}`));
     }
-    const confirmation = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId;
+    const confirmation = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.relocationPreview?.confirmationId;
     if (s.phase === "ready" && confirmation && !rpcBusy && !locked && !unknown) {
       if (s.kind === "backup" && !s.backupPreview?.replacesExisting) {
         if (autoBackup.current !== confirmation && connected && availability?.available) {
@@ -134,15 +146,20 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       }
     }
   }, [s, rpcBusy, locked, unknown, connected, availability?.available, visible]);
-  const canAct = isTauri() && connected && !locked && !rpcBusy && !s?.busy && !unknown && !!availability?.available;
+  const canAct = isTauri() && connected && !locked && !rpcBusy && !s?.busy && !s?.restartRequired && !storage?.restartRequired && !unknown && !!availability?.available;
   const requestReady = s?.kind !== "recovery" && !!s?.retryAllowed && !s.attentionRequired;
   const restore = s?.restorePreview;
-  const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && !!restore && restore.availableBytes >= restore.requiredBytes));
+  const moving = s?.relocationPreview;
+  const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && ((!!restore && restore.availableBytes >= restore.requiredBytes) || (!!moving && moving.availableBytes >= moving.requiredBytes))));
   const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); });
   return <>
     {visible && <section className="analysis-card data-save" aria-label="データと保存">
       <div className="card-head"><h2>データと保存</h2><details className="data-info"><summary aria-label="バックアップと追加復元の説明">info</summary><p>会議・管理音声・文字起こし・議事録・下書き・用語を保存します。AIモデル本体・一時PCM・ログ・端末固有の設定は含みません。追加復元は現在の会議を置き換えず、同じ会議も新しい別会議として追加します。独自暗号化やクラウド同期ではありません。内容を含むファイルは安全な場所へ保管してください。</p></details></div>
       <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={() => void choose("backup")}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={() => void choose("restore")}>バックアップから追加復元</button></div>
+      {storage && <><p>会議保存先: <span className="data-path">{storage.meetingRoot}</span></p><p>AIモデル保存先（移動しません）: <span className="data-path">{storage.modelsRoot}</span></p><button type="button" className="secondary" disabled={!canAct || !!storage.pendingOperationId} onClick={() => void choose("relocation")}>会議保存先を変更</button>{storage.pendingOperationId && <p role="alert">未完了の保存先変更があります。旧保存先と途中コピーを保持しています。新たな保存先変更は開始しません。途中コピー: <span className="data-path">{storage.pendingTarget}</span></p>}</>}
+      {storageError && <p role="status">保存先の確認・変更は利用できません: {storageError}</p>}
+      {(s?.restartRequired || storage?.restartRequired) && <p role="alert">保存先切替の書込停止中です。新しい録音・編集・AI処理は開始できません。アプリを終了して再起動してください。現在開いている保存先: <span className="data-path">{storage?.activeMeetingRoot ?? moving?.source}</span>。旧保存先は削除しません。</p>}
+      {(s?.restartRequired || storage?.restartRequired) && <button type="button" disabled={rpcBusy || !!s?.busy} onClick={() => void run(async () => { if (window.confirm("アプリを安全に終了しますか？ 終了後、手動で再起動してください。旧保存先は削除しません。")) await invoke("finish_main_close", { quit: true }); })}>終了する（再起動は手動）</button>}
       {!connected && <p role="status">データ操作の状態を確認できるまで変更操作を停止しています。</p>}
       {availability?.reason && !s?.busy && <p role="status">{availability.reason}。停止・完了後にバックアップ／復元できます。</p>}
       {s?.token && s.kind !== "recovery" && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
@@ -150,22 +167,23 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(read)}>状態を再確認</button>
         {unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}
         {s?.busy && <button type="button" className="stop-button" disabled={rpcBusy || ["cancelling", "discarding"].includes(s.phase)} onClick={() => void cancel()}>処理を取り消す</button>}
-        {requestReady && !s?.busy && !unknown && <><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>確認内容を開く</button>{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}<button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void cancel()}>確認内容を破棄</button></>}
+        {requestReady && !s?.busy && !unknown && <><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>確認内容を開く</button>{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void cancel()}>確認内容を破棄</button></>}
       </div>
       {(error || operation.error || s?.errorMessage) && <p className="action-error" role="alert">{error || operation.error || s?.errorMessage}</p>}
-      {s?.attentionRequired && <p role="alert">保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。</p>}
+      {s?.attentionRequired && <p role="alert">{s.kind === "relocation" ? "保存先変更の確認が必要です。旧保存先と途中コピーを保持し、自動削除・再上書きは行いません。切替結果が未確定の場合は終了して再起動してください。" : "保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。"}</p>}
       {toast && <p className="data-toast" role="status">{toast}<button type="button" className="small-secondary" onClick={() => setToast("")}>通知を閉じる</button></p>}
       {s?.backupReceipt && <p>保存先: <span className="data-path">{s.backupPreview?.destination}</span><br />会議 {s.backupReceipt.meetingCount} 件 · {bytesLabel(s.backupReceipt.size)}</p>}
       {s?.restoreReceipt && <><button type="button" disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
       {openError && <p role="alert">{openError}</p>}
     </section>}
     <dialog ref={dialog} className="import-dialog data-dialog" aria-labelledby="data-confirm-title" onCancel={event => { event.preventDefault(); void dismiss(); }}>
-      <h2 id="data-confirm-title" ref={heading} tabIndex={-1}>{s?.kind === "backup" ? "バックアップの保存先確認" : "バックアップから追加復元"}</h2>
+      <h2 id="data-confirm-title" ref={heading} tabIndex={-1}>{s?.kind === "relocation" ? "会議保存先の変更確認" : s?.kind === "backup" ? "バックアップの保存先確認" : "バックアップから追加復元"}</h2>
+      {moving && <><p>会議DBと管理音声をコピーして全対象を照合し、保存先を切り替えます。切替後は終了して再起動が必要です。旧保存先は削除せず、モデルと起動設定は移動しません。</p><dl className="import-info"><dt>現在の会議保存先</dt><dd className="data-path">{moving.source}</dd><dt>新規作成する保存先</dt><dd className="data-path">{moving.destination}</dd><dt>対象</dt><dd>会議 {moving.meetingCount} 件・ファイル {moving.fileCount} 件</dd><dt>必要容量（余裕を含む）</dt><dd>{bytesLabel(moving.requiredBytes)}</dd><dt>移動先の空き容量</dt><dd>{bytesLabel(moving.availableBytes)}</dd></dl><p>選んだ親フォルダーの下に非公開の新規フォルダーを作成します。既存物は上書きしません。確認後に編集した場合は再確認してください。</p>{moving.availableBytes < moving.requiredBytes && <p role="alert">移動先の空き容量が不足しています。容量を確保して再確認してください。</p>}</>}
       {s?.backupPreview && <><p>{s.backupPreview.replacesExisting ? "次の既存ファイルを上書きします。元のファイルは置き換えられます。" : "次の保存先にバックアップを作成します。"}</p><p className="data-path">{s.backupPreview.destination}</p></>}
       {restore && <><p>会議 {restore.meetingTitles.length} 件を追加します。現在の会議は置き換えません。同じ会議も新しい別会議として復元されます。</p><dl className="import-info"><dt>必要容量（余裕を含む）</dt><dd>{bytesLabel(restore.requiredBytes)}</dd><dt>保存先の空き容量</dt><dd>{bytesLabel(restore.availableBytes)}</dd></dl><details><summary>追加する会議</summary><ul>{restore.meetingTitles.map((title, i) => <li key={i}>{title}</li>)}</ul></details><p>共通用語：追加予定 {restore.vocabularyAdded} 件、完全一致の重複 {restore.vocabularyDeduplicated} 件、既存を保持する競合 {restore.vocabularyConflicts.length} 件。AIモデル本体は追加しません。</p>{restore.vocabularyConflicts.length > 0 && <details><summary>競合予定の用語</summary><ul>{restore.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}{restore.availableBytes < restore.requiredBytes && <p role="alert">保存先の空き容量が不足しています。容量を確保して再検証してください。</p>}</>}
       {(error || operation.error || s?.errorMessage) && <p className="action-error" role="alert">{error || operation.error || s?.errorMessage}</p>}
       <p>編集内容の保存を待ってから実行します。公開後の結果は取消で削除しません。</p>
-      <div className="analysis-actions"><button type="button" disabled={!canPublish} onClick={() => void submit("publish")}>{s?.kind === "backup" ? s.backupPreview?.replacesExisting ? "上書きして作成" : "作成する" : "追加して復元"}</button>{unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}<button type="button" className="small-secondary" disabled={rpcBusy || !!s?.busy || unknown} onClick={() => void dismiss()}>取り消して閉じる</button></div>
+      <div className="analysis-actions"><button type="button" disabled={!canPublish} onClick={() => void submit("publish")}>{s?.kind === "relocation" ? "コピーして保存先を切替" : s?.kind === "backup" ? s.backupPreview?.replacesExisting ? "上書きして作成" : "作成する" : "追加して復元"}</button>{unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy || !!s?.busy || unknown} onClick={() => void dismiss()}>取り消して閉じる</button></div>
     </dialog>
   </>;
 }

@@ -26,14 +26,21 @@ pub(super) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Option<
                     let mtm = MainThreadMarker::new()
                         .ok_or("バックアップ選択にはメインスレッドが必要です")?;
                     let panel = NSOpenPanel::openPanel(mtm);
-                    panel.setTitle(Some(&NSString::from_str("バックアップから追加復元")));
-                    panel.setCanChooseFiles(true);
-                    panel.setCanChooseDirectories(false);
+                    let moving = kind == Kind::Relocation;
+                    panel.setTitle(Some(&NSString::from_str(if moving {
+                        "会議保存先の親フォルダーを選択"
+                    } else {
+                        "バックアップから追加復元"
+                    })));
+                    panel.setCanChooseFiles(!moving);
+                    panel.setCanChooseDirectories(moving);
                     panel.setAllowsMultipleSelection(false);
-                    #[allow(deprecated)]
-                    panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
-                        NSString::from_str("monbackup"),
-                    ])));
+                    if !moving {
+                        #[allow(deprecated)]
+                        panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
+                            NSString::from_str("monbackup"),
+                        ])));
+                    }
                     match panel.runModal() {
                         response if response == NSModalResponseCancel => Ok(None),
                         response if response == NSModalResponseOK => {

@@ -4,7 +4,7 @@ import { assertRecoveryListing, assertRecoveryPreview, assertRecoveryReceipt, re
 import { dataRequest, assertDataSnapshot, type DataSnapshot } from "../src/data-operation-state.ts";
 const id = "11111111-1111-4111-8111-111111111111";
 const preview = (): RecoveryPreview => ({ confirmationId: id, item: { source: "scratch", operationId: id, paths: [`.mon-stage-${id}`], registeredPaths: 2, reason: "所有不明", retained: false }, root: "/safe/root", observedPaths: 3, inspectionComplete: true });
-const ready = (): DataSnapshot => ({ revision: 1, token: id, kind: "recovery", phase: "ready", busy: false, retryAllowed: true, attentionRequired: false, errorMessage: null, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: preview(), recoveryReceipt: null });
+const ready = (): DataSnapshot => ({ revision: 1, token: id, kind: "recovery", phase: "ready", busy: false, retryAllowed: true, attentionRequired: false, errorMessage: null, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: preview(), recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false });
 test("recovery requests bind the native token and confirmation, not client paths", () => {
   for (const action of ["recover", "keep", "refresh"] as const) assert.deepEqual(dataRequest(ready(), action), { token: id, confirmationId: id, action });
   assert.throws(() => dataRequest(ready(), "publish"));

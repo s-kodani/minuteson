@@ -22,11 +22,13 @@ struct State {
     model_preparation: Option<std::sync::Arc<AtomicBool>>,
     data_maintenance: Option<std::sync::Arc<AtomicBool>>,
     export_intent: bool,
+    storage_restart_required: bool,
 }
 
 impl State {
     fn blocks_worker(&self) -> bool {
-        self.recording_intent
+        self.storage_restart_required
+            || self.recording_intent
             || self.import_intent
             || self.model_preparation.is_some()
             || self.data_maintenance.is_some()
@@ -202,6 +204,7 @@ impl AnalysisController {
             if state.recording_intent
                 || state.import_intent
                 || state.data_maintenance.is_some()
+                || state.storage_restart_required
                 || controller.shutdown.load(Ordering::SeqCst)
             {
                 return Err("録音開始・取り込み・バックアップ・復元・終了処理が進行中です".into());
@@ -240,6 +243,7 @@ impl AnalysisController {
                 || state.import_intent
                 || state.model_preparation.is_some()
                 || state.data_maintenance.is_some()
+                || state.storage_restart_required
                 || c.shutdown.load(Ordering::SeqCst)
                 || cancelled()
             {

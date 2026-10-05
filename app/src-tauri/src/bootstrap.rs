@@ -18,6 +18,7 @@ const LOCK: &str = ".bootstrap.lock";
 const STAMP: &[u8] = b"MON bootstrap 1\n";
 const LIMIT: u64 = 32 * 1024;
 
+pub(crate) mod movement;
 #[allow(dead_code)] // Native coordinator/UI and cutover integration follow.
 pub(crate) mod placement;
 
@@ -256,7 +257,7 @@ struct State {
     uncertain: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct View {
     pub meeting_root: PathBuf,

@@ -42,9 +42,186 @@ fn request(snapshot: &Snapshot, action: Action) -> Request {
                     .as_ref()
                     .map(|p| p.confirmation_id.clone())
             })
+            .or_else(|| {
+                snapshot
+                    .relocation_preview
+                    .as_ref()
+                    .map(|p| p.confirmation_id.clone())
+            })
             .unwrap(),
         action,
     }
+}
+
+#[test]
+fn cancelled_selection_cannot_become_ready_in_the_gap_before_terminal_snapshot() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let controller = DataController::default();
+    let (choosing, cancel, previous) = controller.begin(Kind::Backup).unwrap();
+    let completion = Work::Select(
+        Kind::Backup,
+        Ok(Some(output.path().join("keep.monbackup"))),
+        previous,
+    )
+    .run(&storage, &|| false, &|_| {});
+    assert!(completion.selection.is_some());
+    cancel.store(true, Ordering::Release);
+    let done = controller
+        .finish(choosing.token.as_deref().unwrap(), completion)
+        .unwrap();
+    assert_eq!(done.phase, "cancelled");
+    assert!(!done.busy);
+    assert!(done.backup_receipt.is_none());
+    assert!(!output.path().join("keep.monbackup").exists());
+    #[cfg(target_os = "macos")]
+    {
+        let parent = root.path().canonicalize().unwrap();
+        let bootstrap =
+            crate::bootstrap::Bootstrap::open(&parent.join("config"), &parent.join("data"))
+                .unwrap();
+        let storage = Storage::open(bootstrap.root().into()).unwrap();
+        bootstrap.initialize(&storage).unwrap();
+        let (choosing, cancel, previous) = controller.begin(Kind::Relocation).unwrap();
+        let completion = Work::Select(Kind::Relocation, Ok(Some(parent)), previous)
+            .run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+        assert!(completion.selection.is_some());
+        cancel.store(true, Ordering::Release);
+        let done = controller
+            .finish(choosing.token.as_deref().unwrap(), completion)
+            .unwrap();
+        assert_eq!(done.phase, "cancelled");
+        assert!(!done
+            .relocation_preview
+            .as_ref()
+            .unwrap()
+            .destination
+            .exists());
+        assert!(controller
+            .begin_request(request(&done, Action::Publish))
+            .is_err());
+        assert!(controller
+            .begin_request(request(&done, Action::Refresh))
+            .unwrap()
+            .is_some());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operation_until_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap();
+    let bootstrap =
+        crate::bootstrap::Bootstrap::open(&parent.join("config"), &parent.join("data")).unwrap();
+    let storage = Storage::open(bootstrap.root().into()).unwrap();
+    bootstrap.initialize(&storage).unwrap();
+    storage.create_meeting("original").unwrap();
+    let controller = DataController::default();
+    let (choosing, _, previous) = controller.begin(Kind::Relocation).unwrap();
+    let done = Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &|| false,
+        &|_| {},
+    );
+    let ready = controller
+        .finish(choosing.token.as_deref().unwrap(), done)
+        .unwrap();
+    assert_eq!(ready.phase, "ready");
+    for action in [Action::Keep, Action::Recover] {
+        assert!(controller.begin_request(request(&ready, action)).is_err());
+    }
+    let publish = request(&ready, Action::Publish);
+    let (work, cancel, started) = controller.begin_request(publish.clone()).unwrap().unwrap();
+    assert!(controller.begin_request(publish.clone()).unwrap().is_none());
+    let completion = work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {});
+    cancel.store(true, Ordering::Release);
+    let done = controller
+        .finish(started.token.as_deref().unwrap(), completion)
+        .unwrap();
+    assert_eq!(done.phase, "completed");
+    assert!(done.restart_required);
+    assert!(done.relocation_receipt.is_some());
+    assert!(controller.begin_request(publish).unwrap().is_none());
+    for kind in [
+        Kind::Backup,
+        Kind::Restore,
+        Kind::Recovery,
+        Kind::Relocation,
+    ] {
+        assert!(controller.begin(kind).is_err());
+    }
+    assert!(!done.retry_allowed);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn relocation_controller_refresh_loss_keeps_selection_and_cancelled_copy_requires_attention() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap();
+    let bootstrap =
+        crate::bootstrap::Bootstrap::open(&parent.join("config"), &parent.join("data")).unwrap();
+    let storage = Storage::open(bootstrap.root().into()).unwrap();
+    bootstrap.initialize(&storage).unwrap();
+    let controller = DataController::default();
+    let (choosing, _, previous) = controller.begin(Kind::Relocation).unwrap();
+    let ready = controller
+        .finish(
+            choosing.token.as_deref().unwrap(),
+            Work::Select(Kind::Relocation, Ok(Some(parent)), previous).run_with_bootstrap(
+                &storage,
+                &bootstrap,
+                &|| false,
+                &|_| {},
+            ),
+        )
+        .unwrap();
+    let refresh = request(&ready, Action::Refresh);
+    let (work, _, started) = controller.begin_request(refresh.clone()).unwrap().unwrap();
+    let ready = controller
+        .finish(
+            started.token.as_deref().unwrap(),
+            work.run_with_bootstrap(&storage, &bootstrap, &|| false, &|_| {}),
+        )
+        .unwrap();
+    assert_ne!(
+        ready.relocation_preview.as_ref().unwrap().confirmation_id,
+        refresh.confirmation_id
+    );
+    assert!(controller.begin_request(refresh).unwrap().is_none());
+    let (work, cancel, started) = controller
+        .begin_request(request(&ready, Action::Publish))
+        .unwrap()
+        .unwrap();
+    let completion = work.run_with_bootstrap(
+        &storage,
+        &bootstrap,
+        &|| cancel.load(Ordering::Acquire),
+        &|phase| {
+            if phase == "copying" {
+                cancel.store(true, Ordering::Release);
+            }
+        },
+    );
+    let done = controller
+        .finish(started.token.as_deref().unwrap(), completion)
+        .unwrap();
+    assert_eq!(done.phase, "attention");
+    assert!(done.attention_required);
+    assert!(!done.retry_allowed);
+    assert!(!done.restart_required);
+    assert!(done.relocation_receipt.is_none());
+    storage.create_meeting("old source still usable").unwrap();
+    // Re-reading the already accepted request is allowed, never a fresh copy.
+    assert!(controller
+        .begin_request(request(&done, Action::Publish))
+        .unwrap()
+        .is_none());
+    assert!(controller
+        .begin_request(request(&done, Action::Refresh))
+        .is_err());
 }
 
 #[test]

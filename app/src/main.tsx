@@ -104,7 +104,7 @@ function MainWindow() {
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings">("overview");
-  const writeLocked = navigationBusy || dataPending || recoveryPending || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const writeLocked = navigationBusy || dataPending || recoveryPending || !dataOperation.connected || !!dataOperation.snapshot?.busy || !!dataOperation.snapshot?.restartRequired;
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }

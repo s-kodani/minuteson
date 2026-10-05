@@ -31,7 +31,9 @@ impl Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         drop(self.lease.take());
-        let _ = AnalysisController::kick(&self.app);
+        if !self.app.state::<Storage>().restart_required() {
+            let _ = AnalysisController::kick(&self.app);
+        }
     }
 }
 
@@ -47,6 +49,8 @@ pub(super) struct Completion {
     pub backup: Option<BackupReceipt>,
     pub restore: Option<RestoreReceipt>,
     pub recovery: Option<recovery::Receipt>,
+    pub relocation: Option<MoveReceipt>,
+    pub restart_required: bool,
     pub error: Option<String>,
     pub attention: bool,
     pub cancelled: bool,
@@ -62,6 +66,90 @@ impl Completion {
 }
 
 impl Work {
+    #[cfg(target_os = "macos")]
+    pub(super) fn run_with_bootstrap(
+        self,
+        storage: &Storage,
+        bootstrap: &crate::bootstrap::Bootstrap,
+        cancelled: &impl Fn() -> bool,
+        progress: &impl Fn(&str),
+    ) -> Completion {
+        match self {
+            Self::Select(Kind::Relocation, path, previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    if cancelled() {
+                        return Err("保存先の選択を取り消しました".into());
+                    }
+                    let Some(parent) = path? else {
+                        return Ok(None);
+                    };
+                    let prepared = bootstrap.prepare_move(storage, &parent, cancelled, progress)?;
+                    if cancelled() {
+                        return Err("保存先の確認を取り消しました".into());
+                    }
+                    Ok(Some(Selection::Relocation(prepared)))
+                }))
+                .unwrap_or_else(|_| {
+                    Err("保存先の確認が予期せず停止しました。旧保存先を保持します".into())
+                });
+                match result {
+                    Ok(selection) => Completion {
+                        selection,
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        cancelled: cancelled(),
+                        ..Completion::default()
+                    },
+                }
+            }
+            Self::Request(Selection::Relocation(mut prepared), request) => {
+                let mut completion = Completion::default();
+                let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+                    match request.action {
+                        Action::Refresh => {
+                            prepared.refresh(bootstrap, storage, cancelled, progress)?
+                        }
+                        Action::Publish => {
+                            completion.relocation = Some(prepared.publish(
+                                bootstrap,
+                                storage,
+                                &request.confirmation_id,
+                                cancelled,
+                                progress,
+                            )?)
+                        }
+                        _ => return Err("確認対象と保存先変更の操作が一致しません".into()),
+                    }
+                    Ok(())
+                }));
+                completion.restart_required = storage.restart_required();
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => completion.error = Some(error),
+                    Err(_) => {
+                        completion.error = Some(
+                            "保存先変更が予期せず停止しました。旧保存先と途中コピーを保持します"
+                                .into(),
+                        )
+                    }
+                }
+                if completion.error.is_some() {
+                    completion.attention = completion.restart_required
+                        || bootstrap
+                            .view()
+                            .map_or(true, |v| v.pending_operation_id.is_some());
+                    completion.cancelled = !completion.attention && cancelled();
+                }
+                completion.selection = Some(Selection::Relocation(prepared));
+                completion
+            }
+            other => other.run(storage, cancelled, progress),
+        }
+    }
+
     pub(super) fn run(
         self,
         storage: &Storage,
@@ -110,6 +198,7 @@ impl Work {
                             storage.prepare_additive_restore(&path, cancelled, progress)?,
                         ),
                         Kind::Recovery => return Err("要確認一覧から対象を選択してください".into()),
+                        Kind::Relocation => return Err("このOSの保存先変更は保留中です".into()),
                     };
                     if cancelled() {
                         return Err("データの確認を取り消しました".into());

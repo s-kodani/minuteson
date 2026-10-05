@@ -136,6 +136,10 @@ impl Storage {
         &self.root
     }
 
+    pub(crate) fn restart_required(&self) -> bool {
+        self.retired.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.

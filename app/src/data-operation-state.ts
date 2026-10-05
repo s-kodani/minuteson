@@ -1,5 +1,7 @@
 import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, type RecoveryReceipt } from "./recovery-state.ts";
-export type DataKind = "backup" | "restore" | "recovery";
+export type DataKind = "backup" | "restore" | "recovery" | "relocation";
+export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number; requiredBytes: number; availableBytes: number }
+export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
 export interface RestorePreview {
   confirmationId: string; batchId: string; archiveId: string; meetingTitles: string[];
@@ -19,6 +21,7 @@ export interface DataSnapshot {
   backupPreview: BackupPreview | null; restorePreview: RestorePreview | null;
   backupReceipt: BackupReceipt | null; restoreReceipt: RestoreReceipt | null;
   recoveryPreview: RecoveryPreview | null; recoveryReceipt: RecoveryReceipt | null;
+  relocationPreview: MovePreview | null; relocationReceipt: MoveReceipt | null; restartRequired: boolean;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
 export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" }
@@ -29,9 +32,10 @@ const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as nu
 const texts = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 65536 && values.every(v => typeof v === "string" && !v.includes("\0"));
 export function assertDataSnapshot(s: DataSnapshot): void {
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
-  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention"].includes(s.phase)
+  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"
-    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery"].includes(s.kind)
+    || typeof s.restartRequired !== "boolean"
+    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation"].includes(s.kind)
     || (s.errorMessage !== null && typeof s.errorMessage !== "string")) fail();
   if (s.backupPreview !== null) {
     const p = s.backupPreview;
@@ -59,9 +63,22 @@ export function assertDataSnapshot(s: DataSnapshot): void {
     assertRecoveryReceipt(s.recoveryReceipt);
     if (s.kind !== "recovery" || (s.recoveryPreview && (s.recoveryReceipt.operationId !== s.recoveryPreview.item.operationId || s.recoveryReceipt.source !== s.recoveryPreview.item.source))) fail();
   }
-  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt);
+  const path = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && p.length <= 4096 && !p.includes("\0");
+  if (s.relocationPreview !== null) {
+    const p = s.relocationPreview;
+    if (!p || s.kind !== "relocation" || !uuid.test(p.confirmationId) || !uuid.test(p.operationId)
+      || !path(p.source) || !path(p.destination) || p.source === p.destination
+      || ![p.meetingCount, p.fileCount, p.requiredBytes, p.availableBytes].every(integer)) fail();
+  }
+  if (s.relocationReceipt !== null) {
+    const r = s.relocationReceipt, p = s.relocationPreview;
+    if (!r || s.kind !== "relocation" || !uuid.test(r.operationId) || !path(r.source) || !path(r.destination) || r.source === r.destination
+      || r.restartRequired !== true || !s.restartRequired || !p || p.operationId !== r.operationId || p.source !== r.source || p.destination !== r.destination) fail();
+  }
+  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
-    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview)))
+    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview)))
+    || (s.restartRequired && (s.busy || s.retryAllowed || s.kind !== "relocation" || (!s.relocationReceipt && !s.attentionRequired)))
     || ((s.busy || s.retryAllowed || hasResult || s.attentionRequired) && (!s.token || !s.kind))) fail();
 }
 export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnapshot): DataSnapshot {
@@ -75,11 +92,12 @@ export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnaps
 }
 export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): DataRequest {
   assertDataSnapshot(s);
-  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId;
-  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery")) throw Error("確認済みの操作を再確認してください。");
+  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId ?? s.relocationPreview?.confirmationId;
+  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
   if ((s.kind === "recovery") !== ["recover", "keep"].includes(action) && action !== "refresh") throw Error("対象と実行する操作が一致しません。");
   if (["recover", "keep"].includes(action) && (s.kind !== "recovery" || s.phase !== "ready" || !s.recoveryPreview)) throw Error("最新の回収内容を再確認してください。");
   if (action === "publish" && s.kind === "restore" && (s.phase !== "ready" || !s.restorePreview || s.restorePreview.availableBytes < s.restorePreview.requiredBytes)) throw Error("復元内容と容量を再確認してください。");
+  if (action === "publish" && s.kind === "relocation" && (s.phase !== "ready" || !s.relocationPreview || s.relocationPreview.availableBytes < s.relocationPreview.requiredBytes)) throw Error("保存先と容量を再確認してください。");
   return { token: s.token, confirmationId: id, action };
 }
-export const dataPhaseLabel = (phase: string) => ({ idle: "操作を選択", choosing: "ファイル選択中", reading: "バックアップを読み込み中", verifying: "内容と容量を検証中", reconstructing: "追加する会議を検証中", ready: "確認待ち", publishing: "保存を確定中", completed: "完了", failed: "要対応", cancelling: "安全に取消中", cancelled: "取消済み", discarding: "確認用コピーを整理中", attention: "保存結果の確認が必要" } as Record<string, string>)[phase] ?? phase;
+export const dataPhaseLabel = (phase: string) => ({ idle: "操作を選択", choosing: "ファイル・フォルダー選択中", reading: "バックアップを読み込み中", verifying: "内容と容量を検証中", reconstructing: "追加する会議を検証中", copying: "会議DBと管理音声をコピー中", handoff: "回復履歴と所有台帳を検証中", switching: "保存先を切替中", ready: "確認待ち", publishing: "保存を確定中", completed: "完了", failed: "要対応", cancelling: "安全に取消中", cancelled: "取消済み", discarding: "確認用コピーを整理中", attention: "保存結果の確認が必要" } as Record<string, string>)[phase] ?? phase;

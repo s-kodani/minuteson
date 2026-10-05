@@ -2,6 +2,35 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn storage_restart_fence_survives_temporary_lease_release_and_aborted_exit() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    controller.require_storage_restart();
+    drop(lease);
+    controller.abort_shutdown();
+    let state = controller.state.lock().unwrap();
+    assert!(state.data_maintenance.is_none());
+    assert!(state.storage_restart_required);
+    assert!(state.blocks_worker());
+    assert!(!state.wake);
+    drop(state);
+    assert!(controller.begin_export().is_err());
+    assert!(controller
+        .begin_model_preparation(false, false, &|| false)
+        .is_err());
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_err());
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("保存先の切替後は終了して再起動が必要です")
+    );
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_ok());
+}
+
+#[test]
 fn data_availability_is_informational_and_reports_the_held_start_gate() {
     let controller = AnalysisController::default();
     assert!(controller.data_operation_blocker().unwrap().is_none());

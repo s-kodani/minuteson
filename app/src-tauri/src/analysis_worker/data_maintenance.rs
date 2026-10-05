@@ -13,6 +13,11 @@ pub(crate) struct DataMaintenanceLease {
 pub(crate) struct ExportAdmissionLease(Arc<Mutex<State>>);
 
 impl AnalysisController {
+    pub(crate) fn require_storage_restart(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.storage_restart_required = true;
+        state.wake = false;
+    }
     // Informational only. Actual starts recheck all gates atomically.
     pub(crate) fn data_operation_blocker(&self) -> Result<Option<String>, String> {
         let state = self
@@ -21,6 +26,8 @@ impl AnalysisController {
             .map_err(|_| "解析ロックを取得できません")?;
         Ok(if self.shutdown.load(Ordering::SeqCst) {
             Some("終了処理中")
+        } else if state.storage_restart_required {
+            Some("保存先の切替後は終了して再起動が必要です")
         } else if state.data_maintenance.is_some() {
             Some("バックアップ／復元中")
         } else if state.recording_intent {
@@ -76,6 +83,7 @@ impl AnalysisController {
             .map_err(|_| "解析ロックを取得できません")?;
         if state.data_maintenance.is_some()
             || state.export_intent
+            || state.storage_restart_required
             || self.shutdown.load(Ordering::SeqCst)
         {
             return Err("バックアップ・復元・書き出し・終了処理が進行中です".into());

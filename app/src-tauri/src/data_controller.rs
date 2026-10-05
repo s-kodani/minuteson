@@ -25,6 +25,29 @@ pub(crate) enum Kind {
     Backup,
     Restore,
     Recovery,
+    Relocation,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MovePreview {
+    pub confirmation_id: String,
+    pub operation_id: String,
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    pub meeting_count: usize,
+    pub file_count: usize,
+    pub required_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MoveReceipt {
+    pub operation_id: String,
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    pub restart_required: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -58,6 +81,9 @@ pub(crate) struct Snapshot {
     pub restore_receipt: Option<RestoreReceipt>,
     pub recovery_preview: Option<recovery::Preview>,
     pub recovery_receipt: Option<recovery::Receipt>,
+    pub relocation_preview: Option<MovePreview>,
+    pub relocation_receipt: Option<MoveReceipt>,
+    pub restart_required: bool,
     pub error_message: Option<String>,
     pub attention_required: bool,
     pub retry_allowed: bool,
@@ -77,6 +103,9 @@ impl Default for Snapshot {
             restore_receipt: None,
             recovery_preview: None,
             recovery_receipt: None,
+            relocation_preview: None,
+            relocation_receipt: None,
+            restart_required: false,
             error_message: None,
             attention_required: false,
             retry_allowed: false,
@@ -88,6 +117,8 @@ enum Selection {
     Backup(PreparedBackup),
     Restore(PreparedRestore),
     Recovery(recovery::Prepared),
+    #[cfg(target_os = "macos")]
+    Relocation(crate::bootstrap::movement::Prepared),
 }
 
 impl Selection {
@@ -96,6 +127,8 @@ impl Selection {
             Self::Backup(p) => p.preview().confirmation_id,
             Self::Restore(p) => p.preview().confirmation_id,
             Self::Recovery(p) => p.preview().confirmation_id,
+            #[cfg(target_os = "macos")]
+            Self::Relocation(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -130,7 +163,7 @@ impl DataController {
             .state
             .lock()
             .map_err(|_| "データ操作ロックを取得できません")?;
-        if s.closing || s.snapshot.busy {
+        if s.closing || s.snapshot.busy || s.snapshot.restart_required {
             return Err("バックアップ・復元・終了処理が進行中です".into());
         }
         let previous = s.selection.take();
@@ -160,12 +193,17 @@ impl DataController {
                 || s.snapshot.backup_receipt.is_some()
                 || s.snapshot.restore_receipt.is_some()
                 || s.snapshot.recovery_receipt.is_some()
+                || s.snapshot.relocation_receipt.is_some()
                 || s.snapshot.attention_required
                 || (request.action == Action::Refresh && s.snapshot.phase == "ready"))
         {
             return Ok(true);
         }
-        if s.closing || s.snapshot.busy || s.snapshot.attention_required {
+        if s.closing
+            || s.snapshot.busy
+            || s.snapshot.attention_required
+            || s.snapshot.restart_required
+        {
             return Err("別のデータ操作または終了処理が進行中です。結果を確認してください".into());
         }
         let selection = s
@@ -175,7 +213,7 @@ impl DataController {
         if selection.confirmation_id() != request.confirmation_id {
             return Err("確認内容が変更されています。現在の確認内容を使用してください".into());
         }
-        if !matches!(
+        let allowed = matches!(
             (selection, request.action),
             (Selection::Backup(_), Action::Publish)
                 | (Selection::Restore(_), Action::Publish | Action::Refresh)
@@ -183,12 +221,26 @@ impl DataController {
                     Selection::Recovery(_),
                     Action::Refresh | Action::Recover | Action::Keep
                 )
-        ) {
+        );
+        #[cfg(target_os = "macos")]
+        let allowed = allowed
+            || matches!(
+                (selection, request.action),
+                (Selection::Relocation(_), Action::Refresh | Action::Publish)
+            );
+        if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
+        }
+        if s.snapshot.kind == Some(Kind::Relocation)
+            && request.action == Action::Publish
+            && s.snapshot.phase != "ready"
+        {
+            return Err("保存先変更の確認が失効しています。同じ対象を再確認してください".into());
         }
         if s.snapshot.backup_receipt.is_some()
             || s.snapshot.restore_receipt.is_some()
             || s.snapshot.recovery_receipt.is_some()
+            || s.snapshot.relocation_receipt.is_some()
         {
             return Err("この操作は完了済みです。別の操作を明示して選択してください".into());
         }
@@ -251,18 +303,21 @@ impl DataController {
         s.snapshot.backup_receipt = completion.backup;
         s.snapshot.restore_receipt = completion.restore;
         s.snapshot.recovery_receipt = completion.recovery;
+        s.snapshot.relocation_receipt = completion.relocation;
+        s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
         let published = s.snapshot.backup_receipt.is_some()
             || s.snapshot.restore_receipt.is_some()
-            || s.snapshot.recovery_receipt.is_some();
+            || s.snapshot.recovery_receipt.is_some()
+            || s.snapshot.relocation_receipt.is_some();
         // Publication wins over late cancellation. Never label a committed
         // restore cancelled or destroy its receipt after a successful commit.
         s.snapshot.phase = if published {
             "completed"
         } else if completion.attention {
             "attention"
-        } else if completion.cancelled {
+        } else if completion.cancelled || s.cancel.load(Ordering::Acquire) {
             "cancelled"
         } else if s.snapshot.error_message.is_some() {
             "failed"
@@ -282,6 +337,11 @@ impl DataController {
         };
         s.snapshot.recovery_preview = match &s.selection {
             Some(Selection::Recovery(p)) => Some(p.preview()),
+            _ => None,
+        };
+        s.snapshot.relocation_preview = match &s.selection {
+            #[cfg(target_os = "macos")]
+            Some(Selection::Relocation(p)) => Some(p.preview()),
             _ => None,
         };
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
@@ -379,7 +439,22 @@ impl DataController {
                         Self::emit(&worker, snapshot);
                     }
                 };
+                #[cfg(target_os = "macos")]
+                let completion = work.run_with_bootstrap(
+                    &worker.state::<Storage>(),
+                    &worker.state::<crate::bootstrap::Bootstrap>(),
+                    &cancelled,
+                    &progress,
+                );
+                #[cfg(not(target_os = "macos"))]
                 let completion = work.run(&worker.state::<Storage>(), &cancelled, &progress);
+                // Set the permanent admission fence before publishing the result
+                // or releasing the temporary lease, including ambiguous cutover.
+                if worker.state::<Storage>().restart_required() {
+                    worker
+                        .state::<AnalysisController>()
+                        .require_storage_restart();
+                }
                 if let Some(snapshot) = worker.state::<Self>().finish(&worker_token, completion) {
                     Self::emit(&worker, snapshot);
                 }
@@ -416,6 +491,7 @@ impl DataController {
                 && s.snapshot.backup_receipt.is_none()
                 && s.snapshot.restore_receipt.is_none()
                 && s.snapshot.recovery_receipt.is_none()
+                && s.snapshot.relocation_receipt.is_none()
                 && !s.snapshot.attention_required
             {
                 let discarded = s.selection.take();
@@ -484,6 +560,9 @@ impl DataController {
             s.snapshot.backup_preview = None;
             s.snapshot.restore_preview = None;
             s.snapshot.recovery_preview = None;
+            if s.snapshot.relocation_receipt.is_none() {
+                s.snapshot.relocation_preview = None;
+            }
             s.snapshot.retry_allowed = false;
         }
         s.snapshot.revision += 1;
