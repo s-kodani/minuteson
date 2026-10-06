@@ -17,6 +17,17 @@ pub(super) struct Identity {
     mode: u32,
 }
 impl Identity {
+    #[cfg(target_os = "macos")]
+    pub(super) fn registered(&self) -> Result<(u64, u64, u64), String> {
+        Ok((
+            self.device,
+            self.inode,
+            self.birth_seconds
+                .checked_mul(1_000_000_000)
+                .and_then(|n| n.checked_add(self.birth_nanos.into()))
+                .ok_or("実体の時刻が範囲外です")?,
+        ))
+    }
     pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
         let kind = if directory {
             libc::S_IFDIR
@@ -528,7 +539,7 @@ impl RootAnchor {
         Err("履歴の親フォルダーを別の実体として採用しません".into())
     }
     #[cfg(target_os = "macos")]
-    pub(super) fn with_inspection_history(
+    pub(in crate::storage) fn with_inspection_history(
         mut self,
         history: std::sync::Arc<super::relocation::receiver::Aliases>,
     ) -> Result<Self, String> {

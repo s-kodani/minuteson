@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use std::collections::BTreeMap;
 
 pub(super) mod activation;
+pub(crate) use activation::NativeHistoryAdmission;
 mod history;
 
 const SCHEMA: &str = "

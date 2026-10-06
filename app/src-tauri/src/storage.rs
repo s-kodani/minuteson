@@ -194,7 +194,12 @@ impl Storage {
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
         #[cfg(unix)]
         {
-            Self::open_inner(root, None)
+            Self::open_inner(
+                root,
+                None,
+                #[cfg(target_os = "macos")]
+                None,
+            )
         }
         #[cfg(not(unix))]
         {
@@ -207,12 +212,36 @@ impl Storage {
         root: PathBuf,
         models_root: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
-        Self::open_inner(root, Some(models_root))
+        Self::open_inner(
+            root,
+            Some(models_root),
+            #[cfg(target_os = "macos")]
+            None,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn open_with_history(
+        admission: &crate::bootstrap::placement::NativeHistoryAdmission<'_, '_>,
+    ) -> Result<Self, String> {
+        admission.verify()?;
+        let history = deletion::relocation::receiver::admitted_history(admission)?;
+        let storage = Self::open_inner(
+            admission.root().to_owned(),
+            Some(admission.models_root().to_owned()),
+            history,
+        )
+        .map_err(|e| e.to_string())?;
+        admission.verify()?;
+        Ok(storage)
     }
 
     fn open_inner(
         root: PathBuf,
         #[cfg(unix)] models_root: Option<PathBuf>,
+        #[cfg(target_os = "macos")] history: Option<
+            std::sync::Arc<deletion::relocation::receiver::Aliases>,
+        >,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
@@ -227,6 +256,10 @@ impl Storage {
         )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
+        #[cfg(target_os = "macos")]
+        if let Some(history) = history {
+            managed_anchor = managed_anchor.with_inspection_history(history)?;
+        }
         #[cfg(unix)]
         let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
         #[cfg(unix)]

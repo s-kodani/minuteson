@@ -10,6 +10,93 @@ CREATE TRIGGER admission_fixed BEFORE UPDATE ON admission BEGIN SELECT RAISE(ABO
 CREATE TRIGGER admission_retained BEFORE DELETE ON admission BEGIN SELECT RAISE(ABORT,'activation admission is retained'); END;
 ";
 
+// Borrowed from a live, OS-locked placement owner and the selected bootstrap
+// record. JSON cannot construct this capability. It authorizes history reads
+// at this root only; it grants neither original consent nor an unlink permit.
+pub(crate) struct NativeHistoryAdmission<'a, 'b> {
+    placement: &'a Placement<'b>,
+    root: Root,
+    activation: Activation,
+}
+impl NativeHistoryAdmission<'_, '_> {
+    pub(crate) fn verify(&self) -> Result<(), String> {
+        let state = self
+            .placement
+            .bootstrap
+            .state
+            .lock()
+            .map_err(|_| "起動設定ロックを取得できません")?;
+        self.placement.bootstrap.guard(&state)?;
+        let record = &state
+            .loaded
+            .as_ref()
+            .ok_or("承認済み起動設定がありません")?
+            .record;
+        if record.current != self.root || record.activation.as_ref() != Some(&self.activation) {
+            return Err("選択中の保存先と削除履歴の承認が一致しません".into());
+        }
+        drop(state);
+        if !self.placement.admitted(&self.root, &self.activation)? {
+            return Err("削除履歴を読み戻す配置先は未承認です".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn root(&self) -> &Path {
+        &self.root.path
+    }
+    pub(crate) fn models_root(&self) -> &Path {
+        &self.placement.bootstrap.models_root
+    }
+    pub(crate) fn operation(&self) -> &str {
+        &self.activation.pending.operation_id
+    }
+    pub(crate) fn native_hash(&self) -> &str {
+        &self.activation.pending.manifest_hash
+    }
+    pub(crate) fn control_hash(&self) -> &str {
+        &self.activation.control_hash
+    }
+    pub(crate) fn source(&self) -> (&Path, (u64, u64, u64), (u64, u64, u64)) {
+        let source = &self.activation.pending.source;
+        (
+            &source.path,
+            (
+                source.directory.device,
+                source.directory.inode,
+                source.directory.birth_ns,
+            ),
+            (
+                source.database.device,
+                source.database.inode,
+                source.database.birth_ns,
+            ),
+        )
+    }
+    pub(crate) fn control(&self) -> Result<String, String> {
+        self.verify()?;
+        history::admitted_control(self.placement, self.control_hash())
+    }
+    pub(crate) fn owned_directory(&self, path: &str) -> Result<(u64, u64, u64), String> {
+        // The complete selected admission is checked at both parser boundaries.
+        // Keep each inventory lookup tied to this live owner without rescanning
+        // the whole destination registry once per directory.
+        self.placement.guard()?;
+        let node = self
+            .placement
+            .nodes
+            .get(path)
+            .ok_or("履歴の親は配置台帳の所有対象ではありません")?;
+        if !node.entry.directory || node.state != "copied" {
+            return Err("履歴の親の配置が未完了です".into());
+        }
+        let id = node
+            .identity
+            .as_ref()
+            .ok_or("履歴の親の所有実体がありません")?;
+        Ok((id.device, id.inode, id.birth_ns))
+    }
+}
+
 pub(super) fn validate_manifest(m: &Manifest) -> Result<(), String> {
     if m.version != 1
         || !sha(&m.schema_hash)
@@ -303,6 +390,33 @@ impl Placement<'_> {
 }
 
 impl Bootstrap {
+    pub(crate) fn open_storage(&self) -> Result<Storage, String> {
+        let record = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "起動設定ロックを取得できません")?;
+            self.guard(&state)?;
+            state.loaded.as_ref().map(|l| l.record.clone())
+        };
+        let storage = match record.and_then(|record| record.activation.map(|a| (record.current, a)))
+        {
+            None => Storage::open_with_models(self.root().to_owned(), self.models_root.clone())
+                .map_err(|e| e.to_string())?,
+            Some((root, activation)) => {
+                let p = self.open_placement(activation.pending.clone(), None)?;
+                let admission = NativeHistoryAdmission {
+                    placement: &p,
+                    root,
+                    activation,
+                };
+                admission.verify()?;
+                Storage::open_with_history(&admission)?
+            }
+        };
+        self.initialize(&storage)?;
+        Ok(storage)
+    }
     pub(in crate::bootstrap) fn admit_activation(&self) -> Result<(), String> {
         let record = {
             let state = self

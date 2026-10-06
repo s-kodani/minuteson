@@ -174,7 +174,20 @@ fn load(storage: &Storage, operation: &str, check: &impl Fn() -> bool) -> Result
     };
     let m = target.fixed().0;
     if storage.managed_anchor.identity()? != (m.root.clone(), m.database.clone()) {
-        return Err("削除確認時の管理領域・DBと現在の実体が一致しません".into());
+        // Kept receipts have no execute route: Target::verify_live refuses
+        // them unconditionally. Only their read-only preview may use the
+        // bootstrap-qualified correspondence. Other targets remain exact.
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        if !matches!(target, Target::Kept(_))
+            || !storage
+                .managed_anchor
+                .matches_history_root(&db, operation, &m.root, &m.database)?
+        {
+            return Err("削除確認時の管理領域・DBと現在の実体が一致しません".into());
+        }
     }
     Ok(target)
 }

@@ -1702,9 +1702,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let selection = bootstrap::Bootstrap::open(&app.path().app_config_dir()?, &root)?;
-                let storage =
-                    Storage::open_with_models(selection.root().to_path_buf(), root.join("models"))?;
-                selection.initialize(&storage)?;
+                let storage = selection.open_storage()?;
                 app.manage(storage);
                 app.manage(selection);
             }

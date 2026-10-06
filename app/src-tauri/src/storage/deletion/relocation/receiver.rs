@@ -1,7 +1,7 @@
 //! Qualified read-only inspection of an installed relocation image. Aliases
 //! cannot be deserialized or used to change an anchor's current identity.
-//! Cold-start admission and fresh-consent resolution must be connected before
-//! removing the cutover gate; this reader does not confer either capability.
+//! Cold-start admission is qualified by the selected bootstrap's live owner.
+//! Fresh-consent resolution and repeated moves remain required before cutover.
 use super::{
     check, database, fs, intent, operation_row, paths, row_hash, startup, BoundDirectory,
     Destination, Record, Source, MAX_BYTES, MAX_OPERATIONS, MAX_PATHS,
@@ -17,6 +17,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+mod startup_admission;
+pub(in crate::storage) use startup_admission::admitted_history;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,15 +41,16 @@ impl Report {
     }
 }
 
-// Only inspect() below constructs this private, non-Deserialize correspondence
-// after the held source, exact copied bytes, local journal and installed origin
-// have agreed. It is attached only to that function's read-only local anchor.
-pub(in crate::storage::deletion) struct Aliases {
+// inspect() constructs a pre-cutover correspondence from a held source and
+// owned copy; startup_admission constructs a cold correspondence only behind
+// the selected bootstrap's live owner. Neither path grants deletion authority.
+pub(in crate::storage) struct Aliases {
     target: PathBuf,
     original: (fs::Identity, fs::Identity),
     current: (fs::Identity, fs::Identity),
     records: BTreeMap<String, Record>,
     directories: BTreeMap<String, BoundDirectory>,
+    cold: bool,
 }
 impl Aliases {
     pub(in crate::storage::deletion) fn verify_anchor(
@@ -66,7 +69,15 @@ impl Aliases {
             .get(operation)
             .ok_or("所有対応にない削除履歴を採用しません")?;
         let row = db.query_row("SELECT rowid,id,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND length(CAST(target_manifest_json AS BLOB))+length(CAST(progress_json AS BLOB))+512<=67108864", [operation], operation_row).map_err(|e|e.to_string())?;
-        if row_hash(&row)? != expected.row_hash || row.7 != expected.target_hash {
+        let matches = if self.cold {
+            match &expected.immutable_hash {
+                Some(hash) => super::immutable_hash(&row)? == *hash,
+                None => row_hash(&row)? == expected.row_hash,
+            }
+        } else {
+            row_hash(&row)? == expected.row_hash
+        };
+        if !matches || row.7 != expected.target_hash || row.4 != expected.state {
             return Err("所有対応を固定した後に削除履歴が変更されています".into());
         }
         Ok(())
@@ -114,6 +125,7 @@ impl Aliases {
                 .into_iter()
                 .map(|d| (d.relative_path.clone(), d))
                 .collect(),
+            cold: false,
         }
     }
 }
@@ -286,6 +298,14 @@ pub(crate) fn inspect(
 // Test fixtures own every supplied storage/model/audio path. Exercise the real
 // bootstrap, held snapshot, native copy and installed journal, not JSON mocks.
 #[cfg(test)]
+pub(crate) fn synthetic_consent_record(
+    storage: &crate::storage::Storage,
+    operation: &str,
+) -> String {
+    storage.connection.lock().unwrap().query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,created_at) FROM maintenance_operations WHERE id=?1",[operation],|r|r.get(0)).unwrap()
+}
+
+#[cfg(test)]
 pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Report {
     use crate::bootstrap::Bootstrap;
     use std::os::unix::fs::DirBuilderExt;
@@ -329,4 +349,24 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
     );
     assert_eq!(bootstrap.view().unwrap().meeting_root, storage.root());
     report
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_keep_meeting(storage: &crate::storage::Storage, meeting: &str) -> String {
+    let census = super::super::files::Census::capture(storage, meeting, &|| false).unwrap();
+    let operation = uuid::Uuid::new_v4().to_string();
+    let prepared = intent::prepare(storage, &operation, &census, &|| false).unwrap();
+    intent::keep_unstarted(storage, &prepared, &|| false).unwrap();
+    operation
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_restored_audio_operation(
+    storage: &crate::storage::Storage,
+    meeting: &str,
+) -> String {
+    let db = storage.connection.lock().unwrap();
+    let operation: String = db.query_row("SELECT id FROM maintenance_operations WHERE meeting_id=?1 AND kind='delete_assets' AND state='completed' AND consent_at IS NULL", [meeting], |r|r.get(0)).unwrap();
+    super::super::audio::restored::deleted(&db, &operation, meeting).unwrap();
+    operation
 }

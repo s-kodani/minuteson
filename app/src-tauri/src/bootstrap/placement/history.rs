@@ -429,5 +429,16 @@ pub(super) fn admitted_registry(
     local.guard(p)
 }
 
+pub(super) fn admitted_control(p: &Placement<'_>, expected: &str) -> Result<String, String> {
+    let local = Local::open(p, false)?.ok_or("承認済みの履歴台帳がありません")?;
+    let saved = local.saved()?;
+    if saved.state != "installed" || saved.control.as_ref().is_none_or(|c| c.1 != expected) {
+        return Err("承認済みの制御記録が一致しません".into());
+    }
+    local.registry_file(p, &saved)?;
+    local.guard(p)?;
+    Ok(saved.control.ok_or("制御記録がありません")?.0)
+}
+
 #[cfg(test)]
 mod tests;

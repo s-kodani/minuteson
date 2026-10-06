@@ -5,7 +5,7 @@
 use super::{database, fs, intent, startup};
 use crate::storage::Storage;
 use rusqlite::{params, Connection, OpenFlags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{fs::Metadata, path::PathBuf};
 
@@ -15,8 +15,8 @@ const MAX_OPERATIONS: usize = 10_000;
 const MAX_PATHS: usize = 200_000;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Record {
     operation_id: String,
     kind: String,
@@ -26,9 +26,11 @@ struct Record {
     row_hash: String,
     path_count: usize,
     paths_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    immutable_hash: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Directory {
     relative_path: String,
     identity: fs::Identity,
@@ -47,8 +49,8 @@ pub(in crate::storage) struct Source {
     records: Vec<Record>,
     directories: Vec<Directory>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BoundDirectory {
     relative_path: String,
     original: fs::Identity,
@@ -109,6 +111,17 @@ fn row_hash(row: &OperationRow) -> Result<String, String> {
     let mut h = Sha256::new();
     h.update(b"mon/relocation-deletion-row/v1\0");
     frame(&mut h, row)?;
+    Ok(format!("{:x}", h.finalize()))
+}
+// FK detachment, progress and updated_at may change only through the typed
+// native completion/reconfirmation readers. Original consent and target do not.
+fn immutable_hash(row: &OperationRow) -> Result<String, String> {
+    let mut h = Sha256::new();
+    h.update(b"mon/relocation-deletion-immutable/v1\0");
+    frame(
+        &mut h,
+        &(row.0, &row.1, &row.3, &row.5, &row.6, &row.7, row.8, row.11),
+    )?;
     Ok(format!("{:x}", h.finalize()))
 }
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
@@ -304,6 +317,7 @@ impl Source {
                 "keptModel" | "completedModel" | "modelReconfirmation"
             );
             let row_hash = row_hash(&value)?;
+            let immutable_hash = Some(immutable_hash(&value)?);
             let (path_count, paths_hash) = paths(db, &value.1, cancelled)?;
             records.push(Record {
                 operation_id: value.1,
@@ -314,6 +328,7 @@ impl Source {
                 row_hash,
                 path_count,
                 paths_hash,
+                immutable_hash,
             });
         }
         let models_identity = if has_models {
@@ -324,7 +339,7 @@ impl Source {
         storage.managed_anchor.verify()?;
         check(cancelled)?;
         let mut result = Self {
-            version: 1,
+            version: 2,
             source_root: storage.root.clone(),
             native_hash: snapshot.manifest_hash().into(),
             root,

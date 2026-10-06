@@ -2,6 +2,8 @@ use super::super::tests::Fixture;
 use super::*;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
+mod native_history;
+
 fn select(f: &Fixture) {
     let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
     f.intent(&s);
@@ -244,8 +246,7 @@ fn activation_legacy_shared_config_root_preserves_models_and_lost_response_repla
     // A real pre-bootstrap legacy DB makes config and meeting roots identical.
     drop(Storage::open(root.clone()).unwrap());
     let b = Bootstrap::open(&root, &root).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
-    b.initialize(&storage).unwrap();
+    let storage = b.open_storage().unwrap();
     let meeting = storage.create_meeting("shared source").unwrap();
     std::fs::create_dir_all(root.join("models")).unwrap();
     std::fs::write(root.join("models/model.bin"), b"kept model").unwrap();
@@ -277,7 +278,7 @@ fn activation_legacy_shared_config_root_preserves_models_and_lost_response_repla
     drop(storage);
     drop(b);
     let b = Bootstrap::open(&root, &root).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
+    let storage = b.open_storage().unwrap();
     assert!(storage.get_meeting(&meeting.id).unwrap().is_some());
     assert_eq!(
         std::fs::read(root.join("models/model.bin")).unwrap(),
@@ -296,8 +297,7 @@ fn activation_second_move_uses_current_admitted_root_without_restoring_stale_sou
     drop(f.storage);
     drop(f.bootstrap);
     let b = Bootstrap::open(&config, &legacy).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
-    b.initialize(&storage).unwrap();
+    let storage = b.open_storage().unwrap();
     let added = storage.create_meeting("first target edit").unwrap();
     let target = f._base.path().canonicalize().unwrap().join("second-target");
     std::fs::DirBuilder::new()
@@ -321,7 +321,7 @@ fn activation_second_move_uses_current_admitted_root_without_restoring_stale_sou
     drop(storage);
     drop(b);
     let b = Bootstrap::open(&config, &legacy).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
+    let storage = b.open_storage().unwrap();
     assert_eq!(b.root(), target);
     assert!(storage.get_meeting(&added.id).unwrap().is_some());
     assert!(storage.get_meeting(&f.meeting).unwrap().is_some());
@@ -392,7 +392,7 @@ fn activation_publication_failure_before_or_after_rename_never_releases_old_writ
                 &f.target
             }
         );
-        let storage = Storage::open(b.root().into()).unwrap();
+        let storage = b.open_storage().unwrap();
         assert!(storage.get_meeting(&f.meeting).unwrap().is_some());
         assert_eq!(
             std::fs::read(source.join(&f.relative)).unwrap(),
@@ -412,8 +412,7 @@ fn activation_cutover_child() {
         String,
     ) = serde_json::from_str(&std::env::var("MON_ACTIVATION_TEST_PATHS").unwrap()).unwrap();
     let b = Bootstrap::open(&config, &legacy).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
-    b.initialize(&storage).unwrap();
+    let storage = b.open_storage().unwrap();
     let s = storage.prepare_relocation_snapshot(&|| false).unwrap();
     b.begin_move(&operation, &confirmation, &target, s.manifest_hash(), 0)
         .unwrap();
@@ -559,8 +558,7 @@ fn activation_actual_sigkill_before_selection_after_selection_and_after_admissio
             continue;
         }
         let b = Bootstrap::open(&config, &legacy).unwrap();
-        let storage = Storage::open(b.root().into()).unwrap();
-        b.initialize(&storage).unwrap();
+        let storage = b.open_storage().unwrap();
         if phase == "before_selection" {
             // Resume the interrupted, still-pending operation through new source
             // staging and the installed compatible history, not a fake receipt.
@@ -578,7 +576,7 @@ fn activation_actual_sigkill_before_selection_after_selection_and_after_admissio
             drop(storage);
             drop(b);
             let b = Bootstrap::open(&config, &legacy).unwrap();
-            let storage = Storage::open(b.root().into()).unwrap();
+            let storage = b.open_storage().unwrap();
             assert_eq!(b.root(), f.target);
             assert!(storage.get_meeting(&f.meeting).unwrap().is_some());
         } else {
@@ -650,8 +648,7 @@ fn activation_selection_freezes_old_storage_then_cold_start_admits_same_owned_me
         1
     );
     drop(db);
-    let storage = Storage::open(b.root().into()).unwrap();
-    b.initialize(&storage).unwrap();
+    let storage = b.open_storage().unwrap();
     assert!(storage.get_meeting(&meeting).unwrap().is_some());
     assert!(!b.view().unwrap().restart_required);
     assert_eq!(b.view().unwrap().active_meeting_root, target);
@@ -662,7 +659,7 @@ fn activation_selection_freezes_old_storage_then_cold_start_admits_same_owned_me
     // An admitted, normally modified DB/registry is not rechecked against the
     // old payload SHA; its ownership and original admission remain required.
     let b = Bootstrap::open(&config, &legacy).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
+    let storage = b.open_storage().unwrap();
     assert_eq!(storage.list_meetings().unwrap().len(), 2);
     assert_eq!(
         std::fs::read(retained.join(&relative)).unwrap(),

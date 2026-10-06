@@ -112,6 +112,38 @@ fn capture(storage: &Storage) -> Source {
 }
 
 #[test]
+fn deletion_relocation_immutable_stamp_retains_consent_and_target_but_not_typed_progress_or_fk() {
+    let f = Fixture::new(true);
+    let db = f.storage.connection.lock().unwrap();
+    let row = db.query_row("SELECT rowid,id,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1", [&f.operation], operation_row).unwrap();
+    let expected = immutable_hash(&row).unwrap();
+    for field in [
+        "rowid", "id", "kind", "restore", "target", "sha", "consent", "created",
+    ] {
+        let mut changed = row.clone();
+        match field {
+            "rowid" => changed.0 += 1,
+            "id" => changed.1 = uuid::Uuid::new_v4().to_string(),
+            "kind" => changed.3 = "delete_meeting".into(),
+            "restore" => changed.5 = Some(uuid::Uuid::new_v4().to_string()),
+            "target" => changed.6.push(' '),
+            "sha" => changed.7 = "0".repeat(64),
+            "consent" => changed.8 = None,
+            "created" => changed.11 += 1,
+            _ => unreachable!(),
+        }
+        assert_ne!(immutable_hash(&changed).unwrap(), expected, "{field}");
+    }
+    let mut changed = row.clone();
+    changed.2 = None;
+    changed.9 = "{}".into();
+    changed.10 = Some("typed inspection still required".into());
+    changed.12 += 1;
+    assert_eq!(immutable_hash(&changed).unwrap(), expected);
+    assert_ne!(row_hash(&changed).unwrap(), row_hash(&row).unwrap());
+}
+
+#[test]
 fn deletion_relocation_completed_audio_seals_every_row_and_proof_without_consent_rewrite() {
     let f = Fixture::new(true);
     let original = f.original();
