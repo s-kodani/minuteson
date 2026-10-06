@@ -634,3 +634,26 @@ pub(crate) fn synthetic_restored_audio_operation(
     super::super::audio::restored::deleted(&db, &operation, meeting).unwrap();
     operation
 }
+
+#[cfg(test)]
+pub(crate) fn synthetic_restored_audio_paths(
+    storage: &crate::storage::Storage,
+    operation: &str,
+) -> Vec<std::path::PathBuf> {
+    let db = storage.connection.lock().unwrap();
+    let source = super::super::audio::restored::Source::load(&db, operation, &|| false).unwrap();
+    source.verify_anchor(&db, &storage.managed_anchor).unwrap();
+    source
+        .paths()
+        .iter()
+        .map(|p| storage.root().join(p))
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_audio_operation_record(
+    storage: &crate::storage::Storage,
+    operation: &str,
+) -> String {
+    storage.connection.lock().unwrap().query_row("SELECT json_array(rowid,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1)) FROM maintenance_operations WHERE id=?1", [operation], |r|r.get(0)).unwrap()
+}

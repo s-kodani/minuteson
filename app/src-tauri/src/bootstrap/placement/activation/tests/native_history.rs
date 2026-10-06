@@ -194,6 +194,7 @@ mod audio_reconfirmation;
 mod model_reconfirmation;
 mod reconfirmation;
 mod repeated;
+mod restored_audio_reconfirmation;
 
 #[test]
 fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supersession_without_rewriting_consent(

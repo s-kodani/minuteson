@@ -103,6 +103,27 @@ impl Synthetic {
         action: Action,
         phase: &str,
     ) -> Snapshot {
+        let cancelled = AtomicBool::new(false);
+        self.run_observed(
+            storage,
+            s,
+            action,
+            &|| cancelled.load(Ordering::Acquire),
+            &|p| {
+                if p == phase {
+                    cancelled.store(true, Ordering::Release);
+                }
+            },
+        )
+    }
+    pub(crate) fn run_observed(
+        &self,
+        storage: &Storage,
+        s: &Snapshot,
+        action: Action,
+        check: &impl Fn() -> bool,
+        progress: &impl Fn(&str),
+    ) -> Snapshot {
         let lease = self
             .analysis
             .begin_audio_deletion_maintenance(storage, &self.admission(), false, false, &|| false)
@@ -112,19 +133,7 @@ impl Synthetic {
             .begin_request(Self::request(s, action))
             .unwrap()
             .unwrap();
-        let cancelled = AtomicBool::new(false);
-        self.finish(
-            storage,
-            work,
-            &started,
-            &lease,
-            &|| cancelled.load(Ordering::Acquire),
-            &|p| {
-                if p == phase {
-                    cancelled.store(true, Ordering::Release);
-                }
-            },
-        )
+        self.finish(storage, work, &started, &lease, check, progress)
     }
     pub(crate) fn page(&self, s: &Snapshot, offset: usize) -> audio_deletion::PathPage {
         self.controller
