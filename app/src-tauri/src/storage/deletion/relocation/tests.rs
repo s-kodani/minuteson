@@ -508,3 +508,28 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
         assert!(Source::capture(&f.storage, &snapshot, &|| false).is_err());
     }
 }
+
+#[test]
+fn deletion_repeat_moves_flat_identity_history_has_per_record_and_aggregate_caps() {
+    let f = Fixture::new(true);
+    let before = f.original();
+    let mut source = capture(&f.storage);
+    let root = HistoricalRoot {
+        root: source.root.clone(),
+        database: source.database.clone(),
+    };
+    source.records[0].historical_roots = vec![root.clone(); MAX_ROOTS_PER_RECORD];
+    assert!(source.verify_size().is_ok());
+    source.records[0].historical_roots.push(root);
+    assert!(source.verify_size().is_err());
+    source.records[0].historical_roots.clear();
+    let actual = &source.directories[0];
+    let history = HistoricalDirectory {
+        relative_path: actual.relative_path.clone(),
+        historical: actual.identity.clone(),
+        current: actual.identity.clone(),
+    };
+    source.historical_directories = vec![history; MAX_PATHS];
+    assert!(source.verify_size().is_err());
+    assert_eq!(f.original(), before);
+}

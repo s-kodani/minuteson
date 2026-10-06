@@ -14,6 +14,28 @@ pub(crate) mod receiver;
 const MAX_OPERATIONS: usize = 10_000;
 const MAX_PATHS: usize = 200_000;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ROOTS_PER_RECORD: usize = 64;
+
+// Flat observations only: never an origin JSON, nested history, or a permit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct HistoricalRoot {
+    root: fs::Identity,
+    database: fs::Identity,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct HistoricalDirectory {
+    relative_path: String,
+    historical: fs::Identity,
+    current: fs::Identity,
+}
+fn identity_key(identity: &fs::Identity) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(identity).map_err(|e| e.to_string())
+}
+fn root_key(root: &HistoricalRoot) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(root).map_err(|e| e.to_string())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -28,10 +50,12 @@ struct Record {
     paths_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     immutable_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    historical_roots: Vec<HistoricalRoot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Directory {
+pub(super) struct Directory {
     relative_path: String,
     identity: fs::Identity,
 }
@@ -48,6 +72,8 @@ pub(in crate::storage) struct Source {
     schema_hash: String,
     records: Vec<Record>,
     directories: Vec<Directory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    historical_directories: Vec<HistoricalDirectory>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -66,6 +92,8 @@ pub(in crate::storage) struct Destination {
     root: fs::Identity,
     database: fs::Identity,
     directories: Vec<BoundDirectory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    historical_directories: Vec<BoundDirectory>,
 }
 type OperationRow = (
     i64,
@@ -175,12 +203,12 @@ fn validate_kept(
     let operation = &row.1;
     if row.3 == "delete_meeting" {
         let saved = intent::read_kept_database(db, operation, cancelled)?;
-        if storage.managed_anchor.identity()?
-            != (
-                saved.manifest().root.clone(),
-                saved.manifest().database.clone(),
-            )
-        {
+        if !storage.managed_anchor.matches_history_root(
+            db,
+            operation,
+            &saved.manifest().root,
+            &saved.manifest().database,
+        )? {
             return Err("保持した会議削除履歴の保存先・DB実体が一致しません".into());
         }
         return Ok("keptMeeting");
@@ -219,12 +247,12 @@ fn completed_kind(
             return Ok("legacyDatabaseOnly");
         }
         let (saved, _) = startup::supersession_source(db, &row.1, cancelled)?;
-        if storage.managed_anchor.identity()?
-            != (
-                saved.manifest().root.clone(),
-                saved.manifest().database.clone(),
-            )
-        {
+        if !storage.managed_anchor.matches_history_root(
+            db,
+            &row.1,
+            &saved.manifest().root,
+            &saved.manifest().database,
+        )? {
             return Err("完了した会議削除履歴の保存先・DB実体が一致しません".into());
         }
         return Ok("completedMeeting");
@@ -274,6 +302,11 @@ impl Source {
             return Err("移動する削除履歴が件数・容量上限を超えています".into());
         }
         if count == 0 {
+            // An admitted predecessor cannot disappear into a no-history
+            // handoff. Check its retained operation set even in this fast path.
+            storage
+                .managed_anchor
+                .relocation_directory_history(db, &[], &[], cancelled)?;
             return Ok(None);
         }
         let (path_count, path_bytes): (i64, i64) = db.query_row("SELECT count(*),coalesce(sum(length(CAST(p.relative_path AS BLOB))+coalesce(length(CAST(p.identity_json AS BLOB)),0)+256),0) FROM maintenance_paths p JOIN maintenance_operations m ON m.id=p.operation_id WHERE m.kind IN ('delete_meeting','delete_assets')", [], |r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
@@ -319,6 +352,9 @@ impl Source {
             let row_hash = row_hash(&value)?;
             let immutable_hash = Some(immutable_hash(&value)?);
             let (path_count, paths_hash) = paths(db, &value.1, cancelled)?;
+            let historical_roots = storage
+                .managed_anchor
+                .relocation_record_roots(db, &value.1, cancelled)?;
             records.push(Record {
                 operation_id: value.1,
                 kind: value.3,
@@ -329,6 +365,7 @@ impl Source {
                 path_count,
                 paths_hash,
                 immutable_hash,
+                historical_roots,
             });
         }
         let models_identity = if has_models {
@@ -349,6 +386,7 @@ impl Source {
             schema_hash,
             records,
             directories: Vec::new(),
+            historical_directories: Vec::new(),
         };
         for node in snapshot.manifest().entries.iter().filter(|n| n.directory) {
             check(cancelled)?;
@@ -358,6 +396,24 @@ impl Source {
                     .source_metadata(&node.relative_path)?
                     .ok_or("元の親フォルダーがありません")?,
             )?;
+        }
+        result.historical_directories = storage.managed_anchor.relocation_directory_history(
+            db,
+            &result
+                .records
+                .iter()
+                .map(|r| r.operation_id.as_str())
+                .collect::<Vec<_>>(),
+            &result.directories,
+            cancelled,
+        )?;
+        if !result.historical_directories.is_empty()
+            || result
+                .records
+                .iter()
+                .any(|r| !r.historical_roots.is_empty())
+        {
+            result.version = 3;
         }
         result.verify_size()?;
         snapshot.verify(cancelled)?;
@@ -391,7 +447,20 @@ impl Source {
         Ok(())
     }
     pub(in crate::storage) fn verify_size(&self) -> Result<(), String> {
-        if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_BYTES {
+        if self
+            .records
+            .iter()
+            .any(|r| r.historical_roots.len() > MAX_ROOTS_PER_RECORD)
+            || self.directories.len()
+                + self.historical_directories.len()
+                + self
+                    .records
+                    .iter()
+                    .map(|r| r.historical_roots.len())
+                    .sum::<usize>()
+                > MAX_PATHS
+            || serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_BYTES
+        {
             return Err("移動する削除履歴の固定記録が容量上限を超えています".into());
         }
         Ok(())
@@ -442,14 +511,35 @@ impl Source {
                 copied: copied.identity,
             });
         }
+        let mut historical_directories = Vec::with_capacity(self.historical_directories.len());
+        for history in &self.historical_directories {
+            check(cancelled)?;
+            let held = snapshot
+                .source_metadata(&history.relative_path)?
+                .ok_or("引継ぐ親フォルダーの現在実体が欠落しています")?;
+            if fs::Proof::read(&held)?.identity != history.current {
+                return Err("引継ぐ親フォルダーの現在実体が変更されています".into());
+            }
+            let copied = placement
+                .owned_path(&history.relative_path)?
+                .ok_or("引継ぐ親フォルダーの新しい所有実体がありません")?;
+            let copied = fs::Proof::read(&copied)?;
+            copied.validate(true)?;
+            historical_directories.push(BoundDirectory {
+                relative_path: history.relative_path.clone(),
+                original: history.historical.clone(),
+                copied: copied.identity,
+            });
+        }
         let result = Destination {
-            version: 1,
+            version: if self.version == 3 { 2 } else { 1 },
             operation: operation.into(),
             native_hash: snapshot.manifest_hash().into(),
             target_root: progress.target,
             root: root.identity.clone(),
             database: database.identity,
             directories,
+            historical_directories,
         };
         if serde_json::to_vec(&result)
             .map_err(|e| e.to_string())?

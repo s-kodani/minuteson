@@ -558,6 +558,37 @@ impl RootAnchor {
         let _ = (db, operation);
         Ok(false)
     }
+    // Source-side inheritance is derived from this live admitted anchor and
+    // the held native snapshot's rows; saved JSON cannot construct it.
+    #[cfg(target_os = "macos")]
+    pub(super) fn relocation_record_roots(
+        &self,
+        db: &rusqlite::Connection,
+        operation: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<super::relocation::HistoricalRoot>, String> {
+        let current = self.identity()?;
+        if let Some(history) = &self.inspection_history {
+            history.verify_anchor(&self.root.path, &current)?;
+            return history.record_roots(db, operation, &current, cancelled);
+        }
+        Ok(Vec::new())
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn relocation_directory_history(
+        &self,
+        db: &rusqlite::Connection,
+        operations: &[&str],
+        actual: &[super::relocation::Directory],
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<super::relocation::HistoricalDirectory>, String> {
+        let current = self.identity()?;
+        if let Some(history) = &self.inspection_history {
+            history.verify_anchor(&self.root.path, &current)?;
+            return history.directory_history(db, operations, actual, &current, cancelled);
+        }
+        Ok(Vec::new())
+    }
     #[cfg(target_os = "macos")]
     pub(in crate::storage) fn with_inspection_history(
         mut self,

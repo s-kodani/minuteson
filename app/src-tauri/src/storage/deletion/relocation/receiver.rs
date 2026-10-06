@@ -4,7 +4,8 @@
 //! Fresh-consent resolution and repeated moves remain required before cutover.
 use super::{
     check, database, fs, intent, operation_row, paths, row_hash, startup, BoundDirectory,
-    Destination, Record, Source, MAX_BYTES, MAX_OPERATIONS, MAX_PATHS,
+    Destination, HistoricalDirectory, HistoricalRoot, Record, Source, MAX_BYTES, MAX_OPERATIONS,
+    MAX_PATHS, MAX_ROOTS_PER_RECORD,
 };
 use crate::{
     bootstrap::placement::Placement, storage::backup::relocation::control::ControlHandoff,
@@ -13,7 +14,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -49,7 +50,7 @@ pub(in crate::storage) struct Aliases {
     original: (fs::Identity, fs::Identity),
     current: (fs::Identity, fs::Identity),
     records: BTreeMap<String, Record>,
-    directories: BTreeMap<String, BoundDirectory>,
+    directories: BTreeMap<(String, Vec<u8>), BoundDirectory>,
     cold: bool,
 }
 impl Aliases {
@@ -90,7 +91,18 @@ impl Aliases {
         database: &fs::Identity,
         current: &(fs::Identity, fs::Identity),
     ) -> Result<bool, String> {
-        if current != &self.current || (&self.original.0, &self.original.1) != (root, database) {
+        if current != &self.current {
+            return Ok(false);
+        }
+        let Some(record) = self.records.get(operation) else {
+            return Ok(false);
+        };
+        if (&self.original.0, &self.original.1) != (root, database)
+            && !record
+                .historical_roots
+                .iter()
+                .any(|r| (&r.root, &r.database) == (root, database))
+        {
             return Ok(false);
         }
         self.eligible(db, operation)?;
@@ -129,12 +141,11 @@ impl Aliases {
         self.eligible(db, operation)?;
         Ok(self
             .directories
-            .get(path)
-            .filter(|d| &d.original == expected)
+            .get(&(path.to_owned(), super::identity_key(expected)?))
             .map(|d| &d.copied))
     }
-    fn new(source: &Source, destination: Destination) -> Self {
-        Self {
+    fn new(source: &Source, destination: Destination) -> Result<Self, String> {
+        Ok(Self {
             target: destination.target_root,
             original: (source.root.clone(), source.database.clone()),
             current: (destination.root, destination.database),
@@ -143,14 +154,124 @@ impl Aliases {
                 .iter()
                 .map(|r| (r.operation_id.clone(), r.clone()))
                 .collect(),
-            directories: destination
-                .directories
-                .into_iter()
-                .map(|d| (d.relative_path.clone(), d))
-                .collect(),
+            directories: directory_index(
+                destination.directories,
+                destination.historical_directories,
+            )?,
             cold: false,
+        })
+    }
+    fn verify_inheritance(&self, current: &(fs::Identity, fs::Identity)) -> Result<(), String> {
+        if !self.cold || current != &self.current {
+            return Err("再移動へ引き継ぐ履歴は選択済みの所有確認した保存先ではありません".into());
+        }
+        Ok(())
+    }
+    fn eligible_inheritance(
+        &self,
+        db: &Connection,
+        operation: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        check(cancelled)?;
+        self.eligible(db, operation)?;
+        let record = self
+            .records
+            .get(operation)
+            .ok_or("引き継ぐ元の履歴がありません")?;
+        if paths(db, operation, cancelled)? != (record.path_count, record.paths_hash.clone()) {
+            return Err("再移動へ引き継ぐ元の対象行が変更されています".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage::deletion) fn record_roots(
+        &self,
+        db: &Connection,
+        operation: &str,
+        current: &(fs::Identity, fs::Identity),
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<HistoricalRoot>, String> {
+        check(cancelled)?;
+        self.verify_inheritance(current)?;
+        let Some(record) = self.records.get(operation) else {
+            return Ok(Vec::new());
+        };
+        self.eligible_inheritance(db, operation, cancelled)?;
+        let mut roots = BTreeMap::new();
+        for root in record
+            .historical_roots
+            .iter()
+            .cloned()
+            .chain(std::iter::once(HistoricalRoot {
+                root: self.original.0.clone(),
+                database: self.original.1.clone(),
+            }))
+        {
+            check(cancelled)?;
+            if (&root.root, &root.database) != (&current.0, &current.1) {
+                roots.insert(super::root_key(&root)?, root);
+            }
+        }
+        if roots.len() > MAX_ROOTS_PER_RECORD {
+            return Err("再移動の履歴実体が操作ごとの安全上限を超えています".into());
+        }
+        Ok(roots.into_values().collect())
+    }
+    pub(in crate::storage::deletion) fn directory_history(
+        &self,
+        db: &Connection,
+        operations: &[&str],
+        actual: &[super::Directory],
+        current: &(fs::Identity, fs::Identity),
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<HistoricalDirectory>, String> {
+        check(cancelled)?;
+        self.verify_inheritance(current)?;
+        let operations: BTreeSet<_> = operations.iter().copied().collect();
+        for operation in self.records.keys() {
+            check(cancelled)?;
+            if !operations.contains(operation.as_str()) {
+                return Err("再移動へ引き継ぐ元の操作が欠落しています".into());
+            }
+            self.eligible_inheritance(db, operation, cancelled)?;
+        }
+        let actual: BTreeMap<_, _> = actual
+            .iter()
+            .map(|d| (d.relative_path.as_str(), &d.identity))
+            .collect();
+        let mut result = Vec::new();
+        for d in self.directories.values() {
+            check(cancelled)?;
+            // Absent/replaced directories are not adopted through an old
+            // correspondence. The typed receipt scan must independently be
+            // clean before capture; it decides whether any old parent is needed.
+            if actual.get(d.relative_path.as_str()) == Some(&&d.copied) && d.original != d.copied {
+                if result.len() >= MAX_PATHS {
+                    return Err("再移動の親実体履歴が安全上限を超えています".into());
+                }
+                result.push(HistoricalDirectory {
+                    relative_path: d.relative_path.clone(),
+                    historical: d.original.clone(),
+                    current: d.copied.clone(),
+                });
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn directory_index(
+    actual: Vec<BoundDirectory>,
+    historical: Vec<BoundDirectory>,
+) -> Result<BTreeMap<(String, Vec<u8>), BoundDirectory>, String> {
+    let mut result = BTreeMap::new();
+    for d in actual.into_iter().chain(historical) {
+        let key = (d.relative_path.clone(), super::identity_key(&d.original)?);
+        if result.len() >= MAX_PATHS || result.insert(key, d).is_some() {
+            return Err("履歴の親実体対応が重複または上限超過しています".into());
         }
     }
+    Ok(result)
 }
 
 fn verify_records(
@@ -254,7 +375,7 @@ pub(crate) fn inspect(
         return Err("配置済みの削除履歴と所有確認したコピー先対応が一致しません".into());
     }
     root.verify_file(".mon-scratch.sqlite3", &registry_file)?;
-    let aliases = Arc::new(Aliases::new(source, destination));
+    let aliases = Arc::new(Aliases::new(source, destination)?);
     let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(&progress.target)?)?
         .with_inspection_history(aliases)?;
     anchor.seal_controls()?;
@@ -320,6 +441,41 @@ pub(crate) fn inspect(
 
 // Test fixtures own every supplied storage/model/audio path. Exercise the real
 // bootstrap, held snapshot, native copy and installed journal, not JSON mocks.
+#[cfg(test)]
+pub(crate) fn synthetic_remove_kept_audio_record(
+    storage: &crate::storage::Storage,
+    operation: &str,
+) {
+    use rusqlite::config::DbConfig;
+    let db = storage.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT kind||':'||state FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "delete_assets:recovered"
+    );
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        .unwrap();
+    db.execute(
+        "DELETE FROM maintenance_paths WHERE operation_id=?1",
+        [operation],
+    )
+    .unwrap();
+    assert_eq!(
+        db.execute(
+            "DELETE FROM maintenance_operations WHERE id=?1",
+            [operation]
+        )
+        .unwrap(),
+        1
+    );
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+        .unwrap();
+}
+
 #[cfg(test)]
 pub(crate) fn synthetic_consent_record(
     storage: &crate::storage::Storage,

@@ -191,6 +191,7 @@ impl NativeFixture {
 }
 
 mod reconfirmation;
+mod repeated;
 
 #[test]
 fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supersession_without_rewriting_consent(

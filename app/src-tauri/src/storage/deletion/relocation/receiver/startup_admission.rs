@@ -17,6 +17,8 @@ struct SourceFacts {
     schema_hash: String,
     records: Vec<Record>,
     directories: Vec<super::super::Directory>,
+    #[serde(default)]
+    historical_directories: Vec<super::super::HistoricalDirectory>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -28,6 +30,8 @@ struct DestinationFacts {
     root: fs::Identity,
     database: fs::Identity,
     directories: Vec<BoundDirectory>,
+    #[serde(default)]
+    historical_directories: Vec<BoundDirectory>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,9 +62,11 @@ fn record_valid(record: &Record, version: u32) -> bool {
         && sha(&record.row_hash)
         && sha(&record.paths_hash)
         && record.path_count <= MAX_PATHS
+        && record.historical_roots.len() <= MAX_ROOTS_PER_RECORD
+        && (version == 3 || record.historical_roots.is_empty())
         && match (version, &record.immutable_hash) {
             (1, None) => true,
-            (2, Some(h)) => sha(h),
+            (2 | 3, Some(h)) => sha(h),
             _ => false,
         }
         && match (
@@ -187,7 +193,7 @@ pub(in crate::storage) fn admitted_history(
     destination.root.validate(true)?;
     destination.database.validate(false)?;
     let (path, root_id, db_id) = admission.source();
-    if !matches!(source.version, 1 | 2)
+    if !matches!(source.version, 1 | 2 | 3)
         || source.source_root != path
         || source.root.registered()? != root_id
         || source.database.registered()? != db_id
@@ -197,6 +203,19 @@ pub(in crate::storage) fn admitted_history(
         || source.records.is_empty()
         || source.records.len() > MAX_OPERATIONS
         || source.directories.len() > MAX_PATHS
+        || source.historical_directories.len() > MAX_PATHS
+        || source.directories.len()
+            + source.historical_directories.len()
+            + source
+                .records
+                .iter()
+                .map(|r| r.historical_roots.len())
+                .sum::<usize>()
+            > MAX_PATHS
+        || (source.version != 3 && !source.historical_directories.is_empty())
+        || (source.version == 3
+            && source.historical_directories.is_empty()
+            && source.records.iter().all(|r| r.historical_roots.is_empty()))
         || source
             .records
             .windows(2)
@@ -206,14 +225,29 @@ pub(in crate::storage) fn admitted_history(
             .iter()
             .any(|r| !record_valid(r, source.version))
         || source.records.iter().map(|r| r.path_count).sum::<usize>() > MAX_PATHS
-        || destination.version != 1
+        || destination.version != if source.version == 3 { 2 } else { 1 }
         || destination.operation != admission.operation()
         || destination.native_hash != admission.native_hash()
         || destination.target_root != admission.root()
         || destination.root != root.identity
         || destination.directories.len() != source.directories.len()
+        || destination.historical_directories.len() != source.historical_directories.len()
     {
         return Err("承認済みの削除履歴・元領域・コピー先が一致しません".into());
+    }
+    for record in &source.records {
+        let mut previous = None;
+        for root in &record.historical_roots {
+            root.root.validate(true)?;
+            root.database.validate(false)?;
+            let key = super::super::root_key(root)?;
+            if (&root.root, &root.database) == (&source.root, &source.database)
+                || previous.as_ref().is_some_and(|p| p >= &key)
+            {
+                return Err("再移動の領域・DB履歴が重複または順序不正です".into());
+            }
+            previous = Some(key);
+        }
     }
     let has_models = source.records.iter().any(|r| {
         matches!(
@@ -247,6 +281,37 @@ pub(in crate::storage) fn admitted_history(
             return Err("履歴の親フォルダーを配置台帳の所有実体へ対応付けられません".into());
         }
     }
+    let actual: BTreeMap<_, _> = source
+        .directories
+        .iter()
+        .map(|d| (d.relative_path.as_str(), &d.identity))
+        .collect();
+    let mut previous = None;
+    for (history, bound) in source
+        .historical_directories
+        .iter()
+        .zip(&destination.historical_directories)
+    {
+        history.historical.validate(true)?;
+        history.current.validate(true)?;
+        bound.original.validate(true)?;
+        bound.copied.validate(true)?;
+        let key = (
+            history.relative_path.clone(),
+            super::super::identity_key(&history.historical)?,
+        );
+        if !relative(&history.relative_path)
+            || history.historical == history.current
+            || previous.as_ref().is_some_and(|p| p >= &key)
+            || actual.get(history.relative_path.as_str()) != Some(&&history.current)
+            || bound.relative_path != history.relative_path
+            || bound.original != history.historical
+            || bound.copied.registered()? != admission.owned_directory(&history.relative_path)?
+        {
+            return Err("再移動の過去の親実体と今回の所有コピーが一致しません".into());
+        }
+        previous = Some(key);
+    }
     let aliases = Arc::new(Aliases {
         target: destination.target_root,
         original: (source.root.clone(), source.database.clone()),
@@ -256,11 +321,7 @@ pub(in crate::storage) fn admitted_history(
             .iter()
             .map(|r| (r.operation_id.clone(), r.clone()))
             .collect(),
-        directories: destination
-            .directories
-            .into_iter()
-            .map(|d| (d.relative_path.clone(), d))
-            .collect(),
+        directories: directory_index(destination.directories, destination.historical_directories)?,
         cold: true,
     });
     let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(admission.root())?)?
