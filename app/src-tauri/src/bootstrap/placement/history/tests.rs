@@ -386,7 +386,7 @@ fn deletion_relocation_history_install_rejects_replaced_destination_parent_and_k
 }
 
 #[test]
-fn deletion_relocation_cutover_waits_for_typed_receiver_before_retirement_or_selection() {
+fn deletion_relocation_cutover_rejects_changed_owned_image_before_retirement_or_selection() {
     let f = Fixture::new();
     delete_audio(&f);
     let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
@@ -395,12 +395,13 @@ fn deletion_relocation_cutover_waits_for_typed_receiver_before_retirement_or_sel
     p.copy(&s, &|| false).unwrap();
     let h = s.prepare_control_handoff(&|| false).unwrap();
     p.install_history(&h, &|| false).unwrap();
+    // A deletion history is no longer a blanket refusal. A real unowned change
+    // must still fail before either old-source retirement or config publication.
+    std::fs::write(f.target.join("unowned.txt"), b"KEEP UNOWNED IMAGE").unwrap();
     let before = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
     let confirmation = p.pending.confirmation_id.clone();
-    let error = p
-        .activate_for_restart(&h, &confirmation, 1, &|| false)
+    p.activate_for_restart(&h, &confirmation, 1, &|| false)
         .unwrap_err();
-    assert!(error.contains("削除履歴を含む保存先の切替"));
     assert_eq!(
         std::fs::read(f.bootstrap.config.join(NAME)).unwrap(),
         before
@@ -408,7 +409,7 @@ fn deletion_relocation_cutover_waits_for_typed_receiver_before_retirement_or_sel
     assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
     assert!(!f.bootstrap.view().unwrap().restart_required);
     assert!(!f.storage.restart_required());
-    p.verify(&s, &|| false).unwrap();
+    assert!(p.verify(&s, &|| false).is_err());
     drop(p);
     drop(h);
     drop(s);

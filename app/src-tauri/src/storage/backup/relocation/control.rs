@@ -111,17 +111,6 @@ impl ControlHandoff<'_, '_> {
     ) -> Option<&crate::storage::deletion::relocation::Source> {
         self.deletion_history.as_ref()
     }
-    pub(crate) fn require_supported_cutover(&self) -> Result<(), String> {
-        // Typed bootstrap admission is connected, but end-to-end interrupted
-        // cutover and legacy/abnormal history resolution still need coverage.
-        // Reject before irreversible source retirement or selection publication;
-        // a successful history read alone does not complete the cutover workflow.
-        if self.deletion_history.is_some() {
-            Err("削除履歴を含む保存先の切替はまだ対応していません。確認記録とコピーを保持し、旧保存先を維持します".into())
-        } else {
-            Ok(())
-        }
-    }
     pub(crate) fn check_compatible(&self, saved: &[u8]) -> Result<(), String> {
         if saved == self.bytes {
             return Ok(());

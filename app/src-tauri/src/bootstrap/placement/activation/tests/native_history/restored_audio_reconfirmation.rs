@@ -1,5 +1,5 @@
 //! Real additive restore, owned copies and cold bootstrap, not fabricated receipts.
-//! Public deletion-history cutover remains closed; only test selection bypasses it.
+//! Production cutover and owned admission never turn a baseline into consent.
 use super::*;
 use crate::data_controller::{restored_audio_synthetic::Synthetic, Action};
 use crate::storage::deletion::relocation::receiver::{

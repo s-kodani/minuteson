@@ -1,4 +1,4 @@
-//! Actual cold Bootstrap ownership; the public native-history cutover gate stays closed.
+//! Actual cold Bootstrap ownership and production cutover; no old unlink consent.
 use super::*;
 use audio::intent::{self, reconfirmation};
 use std::os::unix::fs::MetadataExt;

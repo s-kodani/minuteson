@@ -1,7 +1,8 @@
 //! Qualified read-only inspection of an installed relocation image. Aliases
 //! cannot be deserialized or used to change an anchor's current identity.
 //! Cold-start admission is qualified by the selected bootstrap's live owner.
-//! Fresh-consent resolution and repeated moves remain required before cutover.
+//! A clean inspection permits the cutover coordinator to continue its own
+//! ownership checks; neither the report nor aliases grant deletion consent.
 use super::{
     check, database, fs, operation_row, paths, row_hash, startup, BoundDirectory, Destination,
     HistoricalDirectory, HistoricalRoot, Record, Source, MAX_BYTES, MAX_OPERATIONS, MAX_PATHS,
@@ -657,6 +658,13 @@ pub(crate) fn synthetic_restored_audio_paths(
         .iter()
         .map(|p| storage.root().join(p))
         .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_all_deletion_evidence(storage: &crate::storage::Storage) -> String {
+    storage.connection.lock().unwrap().query_row(
+        "SELECT json_array((SELECT json_group_array(json(item)) FROM (SELECT json_array(rowid,id,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at) item FROM maintenance_operations ORDER BY rowid)),(SELECT json_group_array(json(item)) FROM (SELECT json_array(rowid,operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) item FROM maintenance_paths ORDER BY rowid)))", [], |r| r.get(0),
+    ).unwrap()
 }
 
 #[cfg(test)]

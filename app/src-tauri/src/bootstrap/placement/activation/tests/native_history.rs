@@ -1,6 +1,6 @@
 //! Real owned snapshots, journals, bootstrap and Storage; synthetic audio only.
-//! Test selection bypasses only the still-required public cutover gate. It
-//! retains all actual copy proofs, source retirement and durable config writes.
+//! Selection uses the production cutover coordinator, including actual copy
+//! proofs, source retirement and durable config publication.
 use super::super::*;
 use crate::{
     analysis_worker::AnalysisController,
@@ -154,29 +154,21 @@ impl NativeFixture {
             .unwrap()
             .require_clean()
             .unwrap();
-        assert!(h.require_supported_cutover().is_err());
-        let (_, control_hash, _) = history::installed_control(&p).unwrap();
-        let mut record = bootstrap
-            .state
-            .lock()
-            .unwrap()
-            .loaded
-            .as_ref()
-            .unwrap()
-            .record
-            .clone();
-        record.current = Root::inspect(&self.target).unwrap();
-        record.origin = Origin::Relocated;
-        record.pending_move = None;
-        record.activation = Some(Activation {
-            pending: p.pending.clone(),
-            control_hash,
-        });
-        record.revision += 1;
-        snapshot.retire_source_for_restart(&|| false).unwrap();
-        bootstrap
-            .write(&mut bootstrap.state.lock().unwrap(), record)
+        let confirmation = p.pending.confirmation_id.clone();
+        let revision = bootstrap.view().unwrap().revision;
+        let selected = p
+            .activate_for_restart(&h, &confirmation, revision, &|| false)
             .unwrap();
+        assert_eq!(selected.meeting_root, self.target);
+        assert!(selected.restart_required && storage.restart_required());
+        let config = std::fs::read(self.config.join(NAME)).unwrap();
+        assert_eq!(
+            p.activate_for_restart(&h, &confirmation, revision, &|| false)
+                .unwrap()
+                .meeting_root,
+            self.target
+        );
+        assert_eq!(std::fs::read(self.config.join(NAME)).unwrap(), config);
         drop(p);
         drop(h);
         drop(snapshot);
@@ -209,6 +201,7 @@ impl NativeFixture {
 
 mod audio_reconfirmation;
 mod audio_remaining_relocation;
+mod cutover;
 mod kept_audio_supersession;
 mod kept_meeting_supersession;
 mod model_reconfirmation;

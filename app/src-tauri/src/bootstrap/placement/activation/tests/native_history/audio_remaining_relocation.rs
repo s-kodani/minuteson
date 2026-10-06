@@ -1,5 +1,5 @@
 //! Owned copies and real cold Bootstrap; only synthetic audio and private DBs.
-//! The native-history public cutover gate must remain closed.
+//! Production cutover retains all typed history and current-consent checks.
 use super::*;
 use crate::analysis_worker::data_maintenance::DataMaintenanceLease;
 use crate::storage::deletion::relocation::receiver::synthetic_audio_operation_record;

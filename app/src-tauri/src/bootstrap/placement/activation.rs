@@ -333,7 +333,9 @@ impl Placement<'_> {
         handoff.check_compatible(control_json.as_bytes())?;
         self.inspect_deletion_handoff(handoff, cancelled)?
             .require_clean()?;
-        handoff.require_supported_cutover()?;
+        // Only the held source, owned placement and freshly checked typed
+        // histories can reach selection. The read-only inspection is not a
+        // deletion permit; cold startup separately verifies live admission.
         self.verify_target(cancelled)?;
         let target = Root::inspect(&self.pending.target)?;
         if target.directory != self.pending.target_directory {

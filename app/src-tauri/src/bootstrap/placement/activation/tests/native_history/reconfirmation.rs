@@ -1,5 +1,5 @@
 //! Current-root consent through the real owned cold bootstrap and controller.
-//! No public cutover gate is removed and no original consent is rewritten.
+//! Production cutover preserves every original consent and historical target.
 use super::*;
 use std::os::unix::fs::MetadataExt;
 use std::sync::atomic::{AtomicBool, Ordering};

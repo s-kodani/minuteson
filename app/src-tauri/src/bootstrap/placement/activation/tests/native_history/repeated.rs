@@ -1,5 +1,5 @@
 //! Repeated moves through held snapshots, real placement ownership and cold
-//! bootstrap admission. All data is synthetic; the public cutover stays gated.
+//! bootstrap admission. All data is synthetic; selection uses production code.
 use super::*;
 use crate::storage::deletion::relocation::receiver::{
     synthetic_consent_record, synthetic_keep_meeting, synthetic_restored_audio_operation,
@@ -34,27 +34,12 @@ pub(super) fn select_current(b: &Bootstrap, storage: &Storage, target: &Path) ->
         .unwrap()
         .require_clean()
         .unwrap();
-    assert!(h.require_supported_cutover().is_err());
-    let (_, control_hash, _) = history::installed_control(&p).unwrap();
-    let mut record = b
-        .state
-        .lock()
-        .unwrap()
-        .loaded
-        .as_ref()
-        .unwrap()
-        .record
-        .clone();
-    record.current = Root::inspect(target).unwrap();
-    record.origin = Origin::Relocated;
-    record.pending_move = None;
-    record.activation = Some(Activation {
-        pending: p.pending.clone(),
-        control_hash,
-    });
-    record.revision += 1;
-    snapshot.retire_source_for_restart(&|| false).unwrap();
-    b.write(&mut b.state.lock().unwrap(), record).unwrap();
+    let confirmation = p.pending.confirmation_id.clone();
+    let selected = p
+        .activate_for_restart(&h, &confirmation, b.view().unwrap().revision, &|| false)
+        .unwrap();
+    assert_eq!(selected.meeting_root, target);
+    assert!(selected.restart_required && storage.restart_required());
     control
 }
 
@@ -495,7 +480,10 @@ fn deletion_repeat_moves_cancel_never_retire_source_or_publish_selection() {
     let before = std::fs::read(&registry).unwrap();
     assert!(p.inspect_deletion_handoff(&h, &|| true).is_err());
     assert_eq!(std::fs::read(registry).unwrap(), before);
-    assert!(h.require_supported_cutover().is_err());
+    let confirmation = p.pending.confirmation_id.clone();
+    assert!(p
+        .activate_for_restart(&h, &confirmation, b.view().unwrap().revision, &|| true)
+        .is_err());
     assert_eq!(
         b.state
             .lock()
