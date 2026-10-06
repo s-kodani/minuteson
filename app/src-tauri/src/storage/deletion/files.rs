@@ -480,7 +480,8 @@ impl Census {
                 prepared.manifest().database.clone(),
             )
         {
-            return Err("元の管理領域・DBの実体が一致しません".into());
+            let (active, finished) = super::startup::review_manifest(db, prepared, check)?;
+            super::renewal::verify_review_identity(storage, db, prepared, &active, finished)?;
         }
         let records = Records::read(db, &scope.meeting_id)?;
         let directory = storage.managed_anchor.directory_ref()?;

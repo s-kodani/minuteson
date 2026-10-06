@@ -96,6 +96,29 @@ impl Aliases {
         self.eligible(db, operation)?;
         Ok(true)
     }
+    // This permits only capturing a new current-root review. It is not a
+    // writer/unlink admission. Legacy whole-row seals cannot survive appended
+    // progress, so they remain readable but are not silently upgraded here.
+    pub(in crate::storage::deletion) fn matches_reconfirmation_root(
+        &self,
+        db: &Connection,
+        operation: &str,
+        root: &fs::Identity,
+        database: &fs::Identity,
+        current: &(fs::Identity, fs::Identity),
+    ) -> Result<bool, String> {
+        let Some(record) = self.records.get(operation) else {
+            return Ok(false);
+        };
+        if !self.cold
+            || record.immutable_hash.is_none()
+            || record.kind != "delete_meeting"
+            || record.state != "completed"
+        {
+            return Ok(false);
+        }
+        self.matches_root(db, operation, root, database, current)
+    }
     pub(in crate::storage::deletion) fn directory(
         &self,
         db: &Connection,
@@ -303,6 +326,51 @@ pub(crate) fn synthetic_consent_record(
     operation: &str,
 ) -> String {
     storage.connection.lock().unwrap().query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,created_at) FROM maintenance_operations WHERE id=?1",[operation],|r|r.get(0)).unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_meeting_reconfirmation_records(
+    storage: &crate::storage::Storage,
+) -> Vec<(String, String, i64)> {
+    let db = storage.connection.lock().unwrap();
+    let mut query = db.prepare("SELECT id,target_manifest_json,consent_at FROM maintenance_operations WHERE kind='delete_meeting' AND progress_json='{\"confirmationRecorded\":true}' ORDER BY created_at,id").unwrap();
+    let rows = query
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    rows
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_reconfirmation_cancel_at(
+    storage: &crate::storage::Storage,
+    operation: &str,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+    checkpoint: &str,
+) {
+    use super::super::{completion, renewal};
+    let receipt = completion::read(storage, operation, &|| false).unwrap();
+    let review = renewal::Review::capture_database(storage, &receipt, &|| false).unwrap();
+    let stop = std::cell::Cell::new(false);
+    assert!(renewal::accept_database_observed(
+        storage,
+        &receipt,
+        &review,
+        true,
+        lease,
+        &|| stop.get(),
+        &|event| {
+            if event == checkpoint {
+                stop.set(true);
+            }
+        }
+    )
+    .is_err());
+    assert!(stop.get());
+    receipt
+        .verify_saved(&storage.connection.lock().unwrap(), &|| false)
+        .unwrap();
 }
 
 #[cfg(test)]

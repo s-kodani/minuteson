@@ -538,6 +538,26 @@ impl RootAnchor {
         let _ = (db, operation, relative_path);
         Err("履歴の親フォルダーを別の実体として採用しません".into())
     }
+    // Read allowance for an explicitly new census only. identity(), writers
+    // and unlink still require the actual current root/database identities.
+    pub(super) fn matches_reconfirmation_root(
+        &self,
+        db: &rusqlite::Connection,
+        operation: &str,
+        root: &Identity,
+        database: &Identity,
+    ) -> Result<bool, String> {
+        let current = self.identity()?;
+        if current == (root.clone(), database.clone()) {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(history) = &self.inspection_history {
+            return history.matches_reconfirmation_root(db, operation, root, database, &current);
+        }
+        let _ = (db, operation);
+        Ok(false)
+    }
     #[cfg(target_os = "macos")]
     pub(in crate::storage) fn with_inspection_history(
         mut self,

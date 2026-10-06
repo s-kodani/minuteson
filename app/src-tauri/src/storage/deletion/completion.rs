@@ -99,12 +99,16 @@ impl Receipt {
                 &roots,
             )?
         };
-        if census.scope() != self.confirmed.scope()
-            || census.manifest().root != self.manifest.root
-            || census.manifest().database != self.manifest.database
-        {
+        if census.scope() != self.confirmed.scope() {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
+        super::renewal::verify_review_identity(
+            storage,
+            db,
+            &self.confirmed,
+            &self.manifest,
+            self.completed(),
+        )?;
         self.verify_saved(db, check)?;
         census.verify_tree_roots(storage)?;
         Ok(census)
@@ -190,6 +194,13 @@ impl Receipt {
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
+        // Historical correspondence permits a separate review, never an old
+        // acknowledgement, checkpoint, or delete at a different root.
+        if storage.managed_anchor.identity()?
+            != (self.manifest.root.clone(), self.manifest.database.clone())
+        {
+            return Err("移動後の保存先では現在の一覧と新しい同意が必要です".into());
+        }
         let census = self.review_census(storage, db, check)?;
         if census
             .manifest()

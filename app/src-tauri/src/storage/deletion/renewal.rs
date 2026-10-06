@@ -27,6 +27,33 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
         Ok(())
     }
 }
+
+// Only a typed, fully completed receipt with a live bootstrap-qualified seal
+// may be read to capture a new current-root census. No file permit or writer
+// uses this allowance; their active plan must match the current root exactly.
+pub(super) fn verify_review_identity(
+    storage: &Storage,
+    db: &Connection,
+    original: &Prepared,
+    active: &Manifest,
+    finished: bool,
+) -> Result<(), String> {
+    let current = storage.managed_anchor.identity()?;
+    if current == (active.root.clone(), active.database.clone()) {
+        return Ok(());
+    }
+    if !finished
+        || !storage.managed_anchor.matches_reconfirmation_root(
+            db,
+            original.operation(),
+            &active.root,
+            &active.database,
+        )?
+    {
+        return Err("元の管理領域・DBと現在の再確認用所有対応が一致しません".into());
+    }
+    Ok(())
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Reference {
@@ -121,7 +148,7 @@ fn active_plan(
             return Err("残りの削除範囲の固定確認記録を検証できません".into());
         }
         let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if !matches!(record.version, 1 | 2 | 3)
+        if !matches!(record.version, 1 | 2 | 3 | 4)
             || record.source_operation != original.operation()
             || record.source_intent_hash != source_hash
             || record.encode()? != json
@@ -171,14 +198,25 @@ fn active_plan(
         database_phase = record.previous_database_phase;
         let observations =
             Observations::load(db, &reference.operation_id, record.observations, check)?;
+        let relocated = observations.manifest.root != manifest.root
+            || observations.manifest.database != manifest.database;
+        // v4 records a genuinely NEW consent for the current-root census.
+        // It cannot move an unfinished cursor or restore any deleted DB row.
+        // Every preceding plan and policy remains in the append-only chain.
+        let transition_valid = if record.version == 4 {
+            relocated
+                && record.previous_database_phase == Some(completion::Phase::Finished)
+                && record.previous_progress.removed()
+        } else {
+            !relocated
+        };
         if observations.scope() != original.scope()
-            || observations.manifest.root != original.manifest().root
-            || observations.manifest.database != original.manifest().database
             || observations.manifest.meeting_id != original.manifest().meeting_id
+            || !transition_valid
         {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
-        if record.version == 3 {
+        if matches!(record.version, 3 | 4) {
             if observations.manifest.reservation_roots
                 != historical.iter().cloned().collect::<Vec<_>>()
             {
@@ -220,7 +258,7 @@ pub(super) fn audit_references(
 }
 pub(super) fn audit_source(json: &str) -> Result<String, String> {
     let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2 | 3)
+    if !matches!(record.version, 1 | 2 | 3 | 4)
         || record.encode()? != json
         || !uuid::Uuid::parse_str(&record.source_operation)
             .is_ok_and(|id| id.to_string() == record.source_operation)
@@ -268,6 +306,12 @@ enum Source<'a> {
     Database(&'a completion::Receipt),
 }
 impl Source<'_> {
+    fn manifest(&self) -> &Manifest {
+        match self {
+            Self::Files(r) => r.manifest(),
+            Self::Database(r) => r.manifest(),
+        }
+    }
     fn confirmed(&self) -> &Prepared {
         match self {
             Self::Files(r) => r.confirmed(),
@@ -473,7 +517,15 @@ fn accept_inner(
     let original = source.confirmed();
     let observations = Observations::capture(&review.census)?;
     let record = Record {
-        version: if review.manifest().reservation_roots.is_empty() {
+        version: if (
+            source.manifest().root.clone(),
+            source.manifest().database.clone(),
+        ) != (
+            review.manifest().root.clone(),
+            review.manifest().database.clone(),
+        ) {
+            4
+        } else if review.manifest().reservation_roots.is_empty() {
             1
         } else {
             3

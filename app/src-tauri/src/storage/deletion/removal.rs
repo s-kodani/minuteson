@@ -378,12 +378,16 @@ impl Receipt {
                 roots,
             )?
         };
-        if census.scope() != p.scope()
-            || census.manifest().root != p.manifest().root
-            || census.manifest().database != p.manifest().database
-        {
+        if census.scope() != p.scope() {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
+        super::renewal::verify_review_identity(
+            storage,
+            db,
+            p,
+            &self.manifest,
+            self.progress.database_phase == Some(super::completion::Phase::Finished),
+        )?;
         self.verify_saved(db, check)?;
         census.verify_tree_roots(storage)?;
         Ok(census)

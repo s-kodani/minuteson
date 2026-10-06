@@ -174,14 +174,16 @@ fn load(storage: &Storage, operation: &str, check: &impl Fn() -> bool) -> Result
     };
     let m = target.fixed().0;
     if storage.managed_anchor.identity()? != (m.root.clone(), m.database.clone()) {
-        // Kept receipts have no execute route: Target::verify_live refuses
-        // them unconditionally. Only their read-only preview may use the
-        // bootstrap-qualified correspondence. Other targets remain exact.
+        // Kept receipts have no execute route. Completed historical receipts
+        // reject resume at a different root and require a new current census
+        // and separate consent. This is only their read-only preview route.
         let db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        if !matches!(target, Target::Kept(_))
+        let read_only_history = matches!(target, Target::Kept(_))
+            || matches!(&target, Target::Database(receipt) if receipt.completed());
+        if !read_only_history
             || !storage
                 .managed_anchor
                 .matches_history_root(&db, operation, &m.root, &m.database)?

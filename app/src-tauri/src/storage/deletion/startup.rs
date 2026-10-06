@@ -150,6 +150,24 @@ pub(super) fn supersession_source(
     Ok((original, files))
 }
 
+// The active, typed plan is read-only provenance for a new census. Never
+// replace its historical identity with the current identity on load.
+pub(super) fn review_manifest(
+    db: &Connection,
+    original: &Prepared,
+    check: &impl Fn() -> bool,
+) -> Result<(super::files::Manifest, bool), String> {
+    let (saved, files) = source(db, original.operation())?;
+    original.matches_saved(&saved)?;
+    let finished = files.database_phase == Some(completion::Phase::Finished)
+        || completion::Receipt::load(db, original.operation(), check)
+            .is_ok_and(|receipt| receipt.completed());
+    Ok((
+        renewal::active_manifest(db, original, &files, check)?,
+        finished,
+    ))
+}
+
 pub(in crate::storage) fn inspect(
     db: &Connection,
     anchor: &RootAnchor,

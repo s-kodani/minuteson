@@ -23,6 +23,7 @@ struct NativeFixture {
     meeting: String,
     deletion: String,
     audio: String,
+    full_deletion: Option<String>,
 }
 impl NativeFixture {
     fn new(kept: bool, full: bool) -> Self {
@@ -73,9 +74,11 @@ impl NativeFixture {
                 .unwrap();
         }
         drop(lease);
+        let mut full_deletion = None;
         if full {
             let mut p = operations::Prepared::fresh(&storage, &meeting, &|| false).unwrap();
             let view = p.preview();
+            full_deletion = Some(view.operation_id.clone());
             let lease = AnalysisController::default()
                 .begin_data_maintenance(false, false, &|| false)
                 .unwrap();
@@ -108,6 +111,7 @@ impl NativeFixture {
             meeting,
             deletion,
             audio,
+            full_deletion,
         }
     }
     fn select(&mut self) {
@@ -185,6 +189,8 @@ impl NativeFixture {
         db.query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,created_at) FROM maintenance_operations WHERE id=?1",[&self.deletion],|r|r.get(0)).unwrap()
     }
 }
+
+mod reconfirmation;
 
 #[test]
 fn deletion_startup_admission_real_bootstrap_reads_completed_audio_and_full_supersession_without_rewriting_consent(
