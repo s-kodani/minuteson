@@ -112,6 +112,89 @@ pub(super) fn valid_domain(domain: &str) -> bool {
         )
 }
 
+// Read-only origin verification for native restored-audio unavailability. A
+// completed maintenance label alone cannot establish a published restore.
+pub(in crate::storage) fn verify_restored_audio_origin(
+    db: &Connection,
+    batch: &str,
+    archive: &str,
+    fingerprint: &str,
+    source: &str,
+    target: &str,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<i64, String> {
+    let (actual_archive, actual_fingerprint, expected_hash, expected_count, state, created, published):
+        (String, String, String, i64, String, i64, Option<i64>) = db.query_row(
+        "SELECT archive_id,archive_fingerprint,mapping_hash,mapping_count,state,created_at,published_at FROM restore_batches WHERE batch_id=?1",
+        params![batch], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)),
+    ).map_err(|e| e.to_string())?;
+    let published = published.ok_or("音声利用不可の復元は未公開です")?;
+    let database_bytes: i64 = db
+        .query_row(
+            "SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if actual_archive != archive
+        || actual_fingerprint != fingerprint
+        || state != "published"
+        || created < 0
+        || published < created
+        || expected_count < 0
+        || expected_count >= database_bytes
+        || !portable::valid_hash(&expected_hash)
+    {
+        return Err("音声利用不可の復元元・公開状態が一致しません".into());
+    }
+    let mut query = db.prepare("SELECT domain,source_scope,source_key,target_key FROM restore_identity_maps WHERE batch_id=?1 ORDER BY domain,source_scope,source_key LIMIT ?2").map_err(|e|e.to_string())?;
+    let mut rows = query
+        .query(params![batch, expected_count + 1])
+        .map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut count = 0_i64;
+    let key = super::restored_audio::operation_key(archive, source);
+    let mut found = (false, false);
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        check_cancelled(check)?;
+        count += 1;
+        if count > expected_count {
+            return Err("復元ID台帳が記録件数を超えています".into());
+        }
+        let map = IdentityMap {
+            domain: row.get(0).map_err(|e| e.to_string())?,
+            scope: row.get(1).map_err(|e| e.to_string())?,
+            source: row.get(2).map_err(|e| e.to_string())?,
+            target: row.get(3).map_err(|e| e.to_string())?,
+        };
+        if map.domain == "meetings"
+            && map.scope.is_empty()
+            && map.source == source
+            && map.target == target
+        {
+            found.0 = true;
+        }
+        if map.domain == "operation"
+            && map.scope == source
+            && map.source == key
+            && map.target == operation
+        {
+            found.1 = true;
+        }
+        hash.update(serde_json::to_vec(&map).map_err(|e| e.to_string())?);
+        hash.update(b"\n");
+    }
+    if count != expected_count
+        || format!("{:x}", hash.finalize()) != expected_hash
+        || found != (true, true)
+    {
+        return Err("音声利用不可の復元ID台帳・件数・SHAが一致しません".into());
+    }
+    check_cancelled(check)?;
+    Ok(published)
+}
+
 fn uuid(text: &str) -> bool {
     Uuid::parse_str(text).is_ok_and(|id| id.to_string() == text)
 }

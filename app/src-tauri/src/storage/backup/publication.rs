@@ -87,7 +87,11 @@ impl Drop for AppendOnly<'_> {
     }
 }
 
-fn append(db: &Connection, source: &Connection, check: &impl Fn() -> bool) -> Result<(), String> {
+pub(in crate::storage::backup) fn append(
+    db: &Connection,
+    source: &Connection,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
     let guard = AppendOnly::begin(db)?;
     for table in portable::tables(source)? {
         check_cancelled(check)?;

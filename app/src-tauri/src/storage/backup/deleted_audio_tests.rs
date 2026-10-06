@@ -3,6 +3,8 @@ use super::*;
 use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
 use serde_json::{json, Value};
 
+#[path = "restored_audio_tests.rs"]
+mod restored;
 #[path = "deleted_audio_workspace_tests.rs"]
 mod workspace;
 

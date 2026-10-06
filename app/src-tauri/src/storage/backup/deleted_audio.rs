@@ -143,6 +143,10 @@ pub(super) struct MissingSourceAsset {
     pub(super) hash: String,
 }
 impl Verified {
+    pub(super) fn meetings(&self) -> impl Iterator<Item = &str> {
+        self.proofs.keys().map(String::as_str)
+    }
+
     pub(super) fn verify_omissions(&self, omitted: &[archive::OmittedAsset]) -> Result<(), String> {
         let mut seen = BTreeSet::new();
         for item in omitted {

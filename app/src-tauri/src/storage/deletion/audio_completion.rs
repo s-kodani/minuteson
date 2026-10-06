@@ -166,13 +166,19 @@ pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool
         }
         return Err("現行DBの音声削除台帳が欠落しています。音声を利用しません".into());
     }
-    // Model receipts have no meeting FK. A non-null unknown subtype is not
-    // silently filtered away, even if its raw JSON was modified.
-    let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND meeting_id=?1 ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![meeting],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    // Also route a restored header claiming this meeting when its nullable FK
+    // was detached. The raw claim is NOT authority: strict load must match it
+    // to the FK and ledger, or source use fails closed. Model receipts do not
+    // carry this top-level meeting field. Unknown subtypes are never exempted.
+    let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND (meeting_id=?1 OR json_extract(target_manifest_json,'$.meeting')=?1) ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![meeting],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     if ids.len() > 256 {
         return Err("音声削除履歴が安全上限を超えています".into());
     }
     for id in &ids {
+        if crate::storage::deletion::audio::restored::hinted(db, id)? {
+            crate::storage::deletion::audio::restored::deleted(db, id, meeting)?;
+            continue;
+        }
         let r = Receipt::load(db, id, &|| false)?;
         if r.saved.meeting() != meeting {
             return Err("音声削除の会議が一致しません".into());
@@ -191,7 +197,7 @@ pub(in crate::storage) fn backup_deleted(
     check: &impl Fn() -> bool,
 ) -> Result<std::collections::BTreeSet<String>, String> {
     super::super::super::cancel(check)?;
-    let ids = db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND meeting_id IS NOT NULL ORDER BY id LIMIT 10001")
+    let ids = db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND (meeting_id IS NOT NULL OR json_type(target_manifest_json,'$.meeting') IS NOT NULL) ORDER BY id LIMIT 10001")
         .map_err(|e| e.to_string())?.query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     if ids.len() > 10_000 {
@@ -199,6 +205,15 @@ pub(in crate::storage) fn backup_deleted(
     }
     let mut meetings = std::collections::BTreeSet::new();
     for id in ids {
+        if crate::storage::deletion::audio::restored::hinted(db, &id)? {
+            meetings.insert(crate::storage::deletion::audio::restored::backup_meeting(
+                db,
+                &storage.managed_anchor,
+                &id,
+                check,
+            )?);
+            continue;
+        }
         let receipt = Receipt::load(db, &id, check)?;
         verify_available_state(db, &receipt, check)?;
         if !absent(&storage.managed_anchor, &receipt, check)? {

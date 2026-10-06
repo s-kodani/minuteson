@@ -356,7 +356,7 @@ impl<'a> RestoreIds<'a> {
         Ok(())
     }
 
-    fn verify_saved_destination(
+    pub(super) fn verify_saved_destination(
         &self,
         db: &Connection,
         cancelled: &impl Fn() -> bool,

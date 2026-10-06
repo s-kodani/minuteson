@@ -84,6 +84,8 @@ struct Records {
 
 #[path = "audio_intent.rs"]
 pub(crate) mod intent;
+#[path = "audio_restored.rs"]
+pub(in crate::storage) mod restored;
 
 pub(in crate::storage) fn is_audio_media(media: &str) -> bool {
     media

@@ -188,6 +188,35 @@ impl<'a> RestoreIds<'a> {
         )
     }
 
+    pub(in crate::storage::backup) fn prepare_historical_for_batch(
+        archive: &'a VerifiedArchive,
+        parent: &Path,
+        batch: &str,
+        destination: &Connection,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        if archive.deleted_audio.is_empty() {
+            return Err("削除済み音声の履歴再構築には検査済み履歴が必要です".into());
+        }
+        archive.verify_validation_database(cancelled)?;
+        archive
+            .deleted_audio
+            .verify_omissions(&archive.manifest.omitted_assets)?;
+        let ids = Self::prepare_inner(
+            archive,
+            parent,
+            batch,
+            Some(destination),
+            PreparationScope::HistoricalConstruction,
+            cancelled,
+        )?;
+        ids.verify_saved_destination(destination, cancelled)?;
+        if super::ledger::saved_batch(destination, batch, archive, cancelled)? != ids.saved {
+            return Err("履歴再構築中に保存済み復元バッチが変更されています".into());
+        }
+        Ok(ids)
+    }
+
     fn prepare_inner(
         archive: &'a VerifiedArchive,
         parent: &Path,
@@ -305,6 +334,12 @@ impl<'a> RestoreIds<'a> {
         plan.visit_documents(&archive.database, cancelled, 0)?;
         plan.visit_fixed_definitions(cancelled, 0)?;
         plan.visit_provenance(cancelled, false)?;
+        for meeting in archive.deleted_audio.meetings() {
+            plan.reserve(&super::restored_audio::operation_key(
+                &plan.archive_id,
+                meeting,
+            ))?;
+        }
         if let Some(destination) = destination {
             plan.check_destination_capacity(destination)?;
             plan.load_saved(destination, cancelled)?;
@@ -362,6 +397,15 @@ impl<'a> RestoreIds<'a> {
                     }
                 }
             }
+        }
+        // Native unavailable records need a stable, replayed operation identity.
+        // A source operation using our synthetic key is a conflict, not authority.
+        for meeting in archive.deleted_audio.meetings() {
+            let key = super::restored_audio::operation_key(&plan.archive_id, meeting);
+            if plan.lookup("operation", meeting, &key)?.is_some() {
+                return Err("復元用の音声利用不可操作と元の操作IDが競合しています".into());
+            }
+            plan.declare("operation", meeting, &key)?;
         }
         // Validate every mapped reference, including nullable and composite FKs.
         for table in &tables {
