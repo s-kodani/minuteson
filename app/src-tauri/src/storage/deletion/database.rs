@@ -96,6 +96,27 @@ pub(super) struct Scope {
     pub tables: Vec<Table>,
     pub maintenance_hash: String,
 }
+
+// Historical audio metadata only. Non-audio artifacts may still be added by
+// text-based minutes generation after source audio is deliberately removed.
+pub(super) fn audio_tables(
+    db: &Connection,
+    meeting: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Vec<Table>, String> {
+    if !uuid(meeting) {
+        return Err("音声履歴の会議IDが不正です".into());
+    }
+    trusted_schema(db)?;
+    [
+        ("audio_chunks", "meeting_id=?1"),
+        ("audio_tracks", "meeting_id=?1"),
+        ("file_assets", "meeting_id=?1 AND media_type LIKE 'audio/%'"),
+    ]
+    .iter()
+    .map(|(name, predicate)| table(db, name, predicate, meeting, "", check))
+    .collect()
+}
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -131,6 +152,44 @@ fn expected_schema() -> Result<&'static Vec<(String, String, String, String)>, S
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+// Older portable/private readers may inspect v20/v21 before their normal
+// migration. Check the actual fixed schema too: truncating migration history
+// cannot disguise a current DB with its deletion journal removed.
+pub(super) fn legacy_without_journal(db: &Connection) -> Result<bool, String> {
+    let version = crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?;
+    if !(20..22).contains(&version) {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    super::startup::verify_temp_schema(db)?;
+    let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    expected.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
+    for (_, sql) in &crate::storage::MIGRATIONS[..version] {
+        expected.execute_batch(sql).map_err(|e| e.to_string())?;
+    }
+    if schema(db)? != schema(&expected)?
+        || !db
+            .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
+            .map_err(|e| e.to_string())?
+        || !db
+            .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
+            .map_err(|e| e.to_string())?
+    {
+        return Err("音声利用可否を確認する旧DBの構造・保護が既知の形式と一致しません".into());
+    }
+    if db
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(|e| e.to_string())?
+        .query([])
+        .map_err(|e| e.to_string())?
+        .next()
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Err("旧DBの参照整合性を確認できません".into());
+    }
+    Ok(true)
 }
 pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
     #[cfg(unix)]

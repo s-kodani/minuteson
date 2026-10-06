@@ -1,0 +1,294 @@
+//! Atomic availability change, retaining IDs, times, text and import provenance.
+//! A completed receipt is checked as audio, never ignored by a JSON route hint.
+use super::super::{active, Prepared};
+use super::{Phase, Receipt};
+use crate::{
+    analysis_worker::data_maintenance::DataMaintenanceLease,
+    storage::{
+        deletion::{
+            database::{self, Scope, Table},
+            fs::RootAnchor,
+        },
+        Storage,
+    },
+};
+use rusqlite::{params, Connection, TransactionBehavior};
+
+pub(super) fn validate_tables(saved: &Prepared, tables: &[Table]) -> Result<(), String> {
+    let names = ["audio_chunks", "audio_tracks", "file_assets"];
+    if tables.len() != 3
+        || tables.iter().zip(names).any(|(t, n)| {
+            t.name != n
+                || !super::super::hash_valid(&t.sha256)
+                || t.rows
+                    != if n == "file_assets" {
+                        saved.snapshot.records.audio_assets.len() as u64
+                    } else {
+                        saved
+                            .snapshot
+                            .scope
+                            .tables
+                            .iter()
+                            .find(|t| t.name == n)
+                            .map_or(u64::MAX, |t| t.rows)
+                    }
+        })
+    {
+        return Err("音声利用不可の履歴指紋・件数が不正です".into());
+    }
+    Ok(())
+}
+pub(super) fn verify_available_state(
+    db: &Connection,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    if !r.completed() {
+        return Err("音声削除は完了していません".into());
+    }
+    let expected = r
+        .progress
+        .final_audio
+        .as_ref()
+        .ok_or("音声利用不可の証拠がありません")?;
+    validate_tables(&r.saved, expected)?;
+    if database::audio_tables(db, r.saved.meeting(), check)? != *expected {
+        return Err("削除済み音声の資産・区間・トラック履歴が変更されています".into());
+    }
+    let available:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM file_assets WHERE meeting_id=?1 AND media_type LIKE 'audio/%' AND state!='missing') OR EXISTS(SELECT 1 FROM audio_chunks WHERE meeting_id=?1 AND state!='missing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE meeting_id=?1 AND state!='failed')",params![r.saved.meeting()],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if available {
+        return Err("削除済み音声の利用状態が復活しています".into());
+    }
+    super::super::super::cancel(check)
+}
+// Presence/identity only, not a body scan or an execution permission. Text
+// artifacts and later minutes jobs may change normally after completion.
+pub(super) fn absent(
+    anchor: &RootAnchor,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<bool, String> {
+    if anchor.identity()?
+        != (
+            r.saved.snapshot.manifest.root.clone(),
+            r.saved.snapshot.manifest.database.clone(),
+        )
+    {
+        return Err("音声削除記録の保存領域・DB実体が一致しません".into());
+    }
+    let Some(meetings) = anchor.directory_ref()?.child("meetings")? else {
+        return Ok(true);
+    };
+    for (index, target) in r.targets.iter().enumerate() {
+        super::super::super::cancel(check)?;
+        let Some(mut dir) = meetings.child(r.saved.meeting())? else {
+            continue;
+        };
+        let mut prefix = format!("meetings/{}", r.saved.meeting());
+        let root = r
+            .saved
+            .snapshot
+            .manifest
+            .entries
+            .iter()
+            .find(|e| e.path == prefix)
+            .and_then(|e| e.proof.as_ref())
+            .ok_or("会議ルートの確認実体がありません")?;
+        dir.verify_identity(&root.identity)?;
+        let rest = target
+            .path
+            .strip_prefix(&format!("{prefix}/"))
+            .ok_or("音声対象が会議外です")?;
+        let (parents, leaf) = rest.rsplit_once('/').unwrap_or(("", rest));
+        let mut missing = false;
+        for component in parents.split('/').filter(|s| !s.is_empty()) {
+            prefix = format!("{prefix}/{component}");
+            let Some(child) = dir.child(component)? else {
+                missing = true;
+                break;
+            };
+            let expected = r
+                .saved
+                .snapshot
+                .manifest
+                .entries
+                .iter()
+                .find(|e| e.path == prefix)
+                .and_then(|e| e.proof.as_ref())
+                .ok_or("音声の親を別の実体として採用しません")?;
+            child.verify_identity(&expected.identity)?;
+            dir = child;
+        }
+        if !missing
+            && (dir.optional_kind(leaf)?.is_some()
+                || dir.optional_kind(&r.reserved(index))?.is_some())
+        {
+            return Ok(false);
+        }
+    }
+    anchor.verify()?;
+    super::super::super::cancel(check)?;
+    Ok(true)
+}
+pub(in crate::storage::deletion) fn inspect_one(
+    db: &Connection,
+    anchor: &RootAnchor,
+    operation: &str,
+) -> Result<Option<&'static str>, String> {
+    let checked = (|| {
+        let r = Receipt::load(db, operation, &|| false)?;
+        verify_available_state(db, &r, &|| false)?;
+        if anchor.identity()?
+            != (
+                r.saved.snapshot.manifest.root.clone(),
+                r.saved.snapshot.manifest.database.clone(),
+            )
+        {
+            return Err("音声削除記録の保存領域が一致しません".to_string());
+        }
+        match absent(anchor, &r, &|| false) {
+            Ok(true) => Ok(None),
+            Ok(false) => Ok(Some("audio_completed_scope_reappeared")),
+            Err(_) => Ok(Some("audio_completed_scope_uninspectable")),
+        }
+    })();
+    // Invalid typed data stays fenced; a subtype or completed label alone
+    // never exempts a row from startup inspection.
+    Ok(checked.unwrap_or(Some("audio_completed_receipt_invalid")))
+}
+pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
+    let has_table: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if !has_table {
+        // Verified old private images predate the deletion journal. A missing
+        // journal in a current image is corruption, not permission to use audio.
+        if database::legacy_without_journal(db)? {
+            return Ok(false);
+        }
+        return Err("現行DBの音声削除台帳が欠落しています。音声を利用しません".into());
+    }
+    // Model receipts have no meeting FK. A non-null unknown subtype is not
+    // silently filtered away, even if its raw JSON was modified.
+    let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND meeting_id=?1 ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![meeting],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    if ids.len() > 256 {
+        return Err("音声削除履歴が安全上限を超えています".into());
+    }
+    for id in &ids {
+        let r = Receipt::load(db, id, &|| false)?;
+        if r.saved.meeting() != meeting {
+            return Err("音声削除の会議が一致しません".into());
+        }
+        verify_available_state(db, &r, &|| false)?;
+    }
+    Ok(!ids.is_empty())
+}
+pub(crate) fn finish(
+    storage: &Storage,
+    operation: &str,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Receipt, String> {
+    finish_inner(storage, operation, lease, check, &|_| {})
+}
+fn finish_inner(
+    storage: &Storage,
+    operation: &str,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<Receipt, String> {
+    active(lease, check)?;
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let cancelled = || check() || lease.cancelled();
+    let r = Receipt::load(&db, operation, &cancelled)?;
+    if r.completed() {
+        r.verify_anchor(storage)?;
+        verify_available_state(&db, &r, &cancelled)?;
+        if !absent(&storage.managed_anchor, &r, &cancelled)? {
+            return Err("削除済み音声が再出現しています。確認を維持します".into());
+        }
+        if crate::storage::deletion::startup::contains(&db, operation)? {
+            let _writer = crate::storage::deletion::fence::write_audio_removal(
+                storage, &db, &r, lease, &cancelled,
+            )?;
+            active(lease, check)?;
+            r.verify_saved(&db, &cancelled)?;
+            db.execute(
+                "DELETE FROM temp.mon_deletion_startup_attention WHERE operation_id=?1",
+                params![operation],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        return Ok(r);
+    }
+    if !r.files_removed() {
+        return Err("音声ファイル処理が完了するまで利用不可を確定しません".into());
+    }
+    let _writer =
+        crate::storage::deletion::fence::write_audio_removal(storage, &db, &r, lease, &cancelled)?;
+    super::verify_remaining(storage, &db, &r, &cancelled)?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    r.verify_saved(&tx, &cancelled)?;
+    r.metadata(storage, &tx, &cancelled)?;
+    tx.execute(
+        "UPDATE file_assets SET state='missing' WHERE meeting_id=?1 AND media_type LIKE 'audio/%'",
+        params![r.saved.meeting()],
+    )
+    .map_err(|e| e.to_string())?;
+    event("audioAssetsUnavailable");
+    tx.execute(
+        "UPDATE audio_chunks SET state='missing' WHERE meeting_id=?1",
+        params![r.saved.meeting()],
+    )
+    .map_err(|e| e.to_string())?;
+    event("audioChunksUnavailable");
+    tx.execute(
+        "UPDATE audio_tracks SET state='failed' WHERE meeting_id=?1",
+        params![r.saved.meeting()],
+    )
+    .map_err(|e| e.to_string())?;
+    event("audioTracksUnavailable");
+    let changed = Scope::capture(&tx, r.saved.meeting(), operation, &cancelled)?;
+    if changed.schema_hash != r.saved.snapshot.scope.schema_hash
+        || changed.maintenance_hash != r.saved.snapshot.scope.maintenance_hash
+        || changed
+            .tables
+            .iter()
+            .zip(&r.saved.snapshot.scope.tables)
+            .any(|(a, b)| {
+                a.rows != b.rows
+                    || a.name != b.name
+                    || (!matches!(
+                        a.name.as_str(),
+                        "file_assets" | "audio_chunks" | "audio_tracks"
+                    ) && a != b)
+            })
+    {
+        return Err("音声以外の保持履歴が確定中に変更されました".into());
+    }
+    let mut done = r.clone();
+    done.progress.phase = Phase::AudioDeletionCompleted;
+    done.progress.final_audio = Some(database::audio_tables(&tx, r.saved.meeting(), &cancelled)?);
+    done.progress.validate(&done.saved, &done.targets)?;
+    super::verify_tree(storage, &tx, &r, &changed, true, &cancelled)?;
+    if tx.execute("UPDATE maintenance_operations SET state='completed',progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND state='cleanup' AND progress_json=?4",params![operation,done.progress.encode()?,crate::storage::now_ms()?,r.progress.encode()?]).map_err(|e|e.to_string())?!=1 {return Err("音声削除完了の確定対象が変更されています".into());}
+    event("beforeAudioCompletionCommit");
+    done.verify_saved(&tx, &cancelled)?;
+    verify_available_state(&tx, &done, &cancelled)?;
+    super::verify_tree(storage, &tx, &r, &changed, true, &cancelled)?;
+    active(lease, check)?;
+    done.verify_anchor(storage)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    // The commit wins a racing cancellation. Drop restores the normal fence
+    // or the mandatory restart barrier BEFORE any post-commit callback.
+    drop(_writer);
+    event("audioCompletionCommitted");
+    Ok(done)
+}
+
+#[cfg(test)]
+#[path = "audio_completion_tests.rs"]
+mod tests;

@@ -58,6 +58,8 @@ pub(super) fn read_audio_plan(
     transaction: &Connection,
     meeting_id: &str,
 ) -> Result<RecordedAudioPlan, String> {
+    #[cfg(unix)]
+    super::deletion::audio::require_source(transaction, meeting_id)?;
     // Keep the serialized plan shape for old jobs; both source types use
     // verified managed manifests, never an external original path.
     let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(

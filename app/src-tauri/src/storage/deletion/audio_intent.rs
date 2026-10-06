@@ -250,7 +250,7 @@ fn read_with_progress(
         || !match admitted {
             None => (state == "prepared" || kept) && progress == if kept { KEPT } else { INITIAL },
             Some((expected_state, expected_progress)) => {
-                matches!(expected_state, "installing" | "cleanup")
+                matches!(expected_state, "installing" | "cleanup" | "completed")
                     && state == expected_state
                     && progress == expected_progress
                     && !kept
@@ -340,7 +340,7 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if matches!(state.as_str(), "installing" | "cleanup") {
+    if matches!(state.as_str(), "installing" | "cleanup" | "completed") {
         removal::Receipt::load(&db, operation, &|| false)?.verify_anchor(storage)?;
     } else {
         read(&db, operation, &|| false)?.verify_anchor(storage)?;

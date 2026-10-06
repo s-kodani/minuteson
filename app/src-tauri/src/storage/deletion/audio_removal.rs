@@ -18,6 +18,9 @@ use std::{
     io::Read,
 };
 
+#[path = "audio_completion.rs"]
+pub(crate) mod completion;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Pending {
@@ -29,6 +32,7 @@ struct Pending {
 enum Phase {
     RemovingAudio,
     AudioFilesRemoved,
+    AudioDeletionCompleted,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -38,10 +42,14 @@ struct Progress {
     census_hash: String,
     next: usize,
     pending: Option<Pending>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    final_audio: Option<Vec<crate::storage::deletion::database::Table>>,
 }
 impl Progress {
     fn state(&self) -> &'static str {
-        if self.phase == Phase::AudioFilesRemoved {
+        if self.phase == Phase::AudioDeletionCompleted {
+            "completed"
+        } else if self.phase == Phase::AudioFilesRemoved {
             "cleanup"
         } else {
             "installing"
@@ -58,10 +66,17 @@ impl Progress {
         if self.version != 2
             || self.census_hash != saved.header.census_hash
             || self.next > targets.len()
-            || (self.phase == Phase::AudioFilesRemoved
+            || (self.phase != Phase::RemovingAudio
                 && (self.next != targets.len() || self.pending.is_some()))
         {
             return Err("音声削除の固定対象・進捗が不正です".into());
+        }
+        match (&self.phase, &self.final_audio) {
+            (Phase::AudioDeletionCompleted, Some(tables)) => {
+                completion::validate_tables(saved, tables)?
+            }
+            (Phase::RemovingAudio | Phase::AudioFilesRemoved, None) => {}
+            _ => return Err("音声利用不可の確定証拠と段階が一致しません".into()),
         }
         if let Some(p) = &self.pending {
             let original = targets
@@ -143,7 +158,10 @@ impl Receipt {
         self.saved.verify_anchor(storage)
     }
     pub(crate) fn files_removed(&self) -> bool {
-        self.progress.phase == Phase::AudioFilesRemoved
+        self.progress.phase != Phase::RemovingAudio
+    }
+    pub(crate) fn completed(&self) -> bool {
+        self.progress.phase == Phase::AudioDeletionCompleted
     }
     pub(crate) fn processed_files(&self) -> usize {
         self.progress.next
@@ -220,6 +238,7 @@ impl Receipt {
         if !valid
             || next.version != self.progress.version
             || next.census_hash != self.progress.census_hash
+            || next.final_audio != self.progress.final_audio
         {
             return Err("音声削除の進捗遷移が不正です".into());
         }
@@ -243,7 +262,24 @@ fn verify_remaining(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     r.verify_saved(db, check)?;
+    if r.completed() {
+        completion::verify_available_state(db, r, check)?;
+        if !completion::absent(&storage.managed_anchor, r, check)? {
+            return Err("削除済み音声が再出現しました。再確認してください".into());
+        }
+        return r.verify_anchor(storage);
+    }
     r.metadata(storage, db, check)?;
+    verify_tree(storage, db, r, &r.saved.snapshot.scope, false, check)
+}
+fn verify_tree(
+    storage: &Storage,
+    db: &Connection,
+    r: &Receipt,
+    scope: &crate::storage::deletion::database::Scope,
+    unavailable: bool,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
     let reserved = r
         .progress
         .pending
@@ -258,7 +294,7 @@ fn verify_remaining(
         reserved.as_deref(),
         &[],
     )?;
-    if current.scope() != &r.saved.snapshot.scope {
+    if current.scope() != scope {
         return Err("音声削除の保持範囲が変更されています".into());
     }
     let actual: BTreeMap<_, _> = current
@@ -284,6 +320,11 @@ fn verify_remaining(
         missing.proof = None;
         missing.sha256 = None;
         missing.stage_hint = None;
+        if unavailable {
+            if let Some(asset) = &mut missing.registered {
+                asset.state = "missing".into();
+            }
+        }
         let mut absent = || {
             if missing.registered.is_some() {
                 expected.insert(target.path.clone(), missing.clone());
@@ -458,6 +499,7 @@ pub(crate) fn start(
         census_hash: saved.header.census_hash.clone(),
         next: 0,
         pending: None,
+        final_audio: None,
     };
     let r = Receipt {
         saved,

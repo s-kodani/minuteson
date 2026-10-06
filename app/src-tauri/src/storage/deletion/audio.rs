@@ -85,6 +85,21 @@ struct Records {
 #[path = "audio_intent.rs"]
 pub(crate) mod intent;
 
+pub(in crate::storage) fn is_audio_media(media: &str) -> bool {
+    media
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("audio/"))
+}
+
+// Audio history remains readable, but cannot become an input again. This
+// validates typed completion evidence instead of trusting mutable ready flags.
+pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Result<(), String> {
+    if intent::removal::completion::deleted(db, meeting)? {
+        return Err("音声は削除済みのため再生・再解析できません。文字起こし・議事録・根拠は保持されています".into());
+    }
+    Ok(())
+}
+
 // This saved observation is not a file-removal capability. No external path,
 // transcript body, document payload or whole-meeting Prepared is serialized.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,15 +299,15 @@ fn records(db: &Connection, meeting: &str, check: &impl Fn() -> bool) -> Result<
         if count > MAX_ENTRIES || !uuid(&id) {
             return Err("音声資産の識別子・件数が不正です".into());
         }
-        if referenced && !media.starts_with("audio/") {
+        if referenced && !is_audio_media(&media) {
             return Err("音声参照と登録資産の種類が一致しません。対象を保持します".into());
         }
-        if manifest && (referenced || media.starts_with("audio/")) {
+        if manifest && (referenced || is_audio_media(&media)) {
             return Err(
                 "保持する音声manifestと削除する音声資産が競合しています。対象を保持します".into(),
             );
         }
-        if media.starts_with("audio/") && audio_assets.insert(path, id).is_some() {
+        if is_audio_media(&media) && audio_assets.insert(path, id).is_some() {
             return Err("音声資産の対象パスが重複しています".into());
         }
     }

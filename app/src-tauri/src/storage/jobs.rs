@@ -147,13 +147,54 @@ impl Storage {
         if recording_active || job_active {
             return Ok(None);
         }
-        let queued: Option<(String, String, Option<String>, String)> = transaction.query_row(
-            "SELECT id, meeting_id, input_analysis_id, input_hash FROM processing_jobs WHERE state = 'queued' AND (?1 IS NULL OR kind = ?1) AND (?2 = 0 OR kind IN ('transcription','diarization','minutes_generation')) ORDER BY created_at, rowid LIMIT 1",
-            params![kind.map(JobKind::as_str), local_only], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        ).optional().map_err(|error| error.to_string())?;
+        // Preserve fixed historical jobs after audio deletion, but do not let
+        // those queued entries starve another meeting or text-only work.
+        let queued = {
+            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND (?1 IS NULL OR kind=?1) AND (?2=0 OR kind IN ('transcription','diarization','minutes_generation')) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
+            let mut rows = query
+                .query(params![kind.map(JobKind::as_str), local_only])
+                .map_err(|e| e.to_string())?;
+            let mut selected = None;
+            let mut count = 0;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                count += 1;
+                if count > 4096 {
+                    return Err("音声利用可否を確認する待機ジョブが安全上限を超えています".into());
+                }
+                let id: String = row.get(0).map_err(|e| e.to_string())?;
+                let meeting: String = row.get(1).map_err(|e| e.to_string())?;
+                let job_kind: String = row.get(4).map_err(|e| e.to_string())?;
+                #[cfg(unix)]
+                if matches!(job_kind.as_str(), "transcription" | "diarization")
+                    && super::deletion::audio::intent::removal::completion::deleted(
+                        &transaction,
+                        &meeting,
+                    )?
+                {
+                    continue;
+                }
+                #[cfg(not(unix))]
+                let _ = job_kind;
+                selected = Some((
+                    id,
+                    meeting,
+                    row.get::<_, Option<String>>(2).map_err(|e| e.to_string())?,
+                    row.get::<_, String>(3).map_err(|e| e.to_string())?,
+                ));
+                break;
+            }
+            selected
+        };
         let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
             return Ok(None);
         };
+        require_audio_source(
+            &transaction,
+            &load_job(&transaction, &id)?
+                .ok_or("処理を読み込めません")?
+                .kind,
+            &meeting_id,
+        )?;
         validate_job_input(
             &transaction,
             &meeting_id,
@@ -270,6 +311,13 @@ impl Storage {
             params![job_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional().map_err(|error| error.to_string())?;
         let (state, meeting_id, analysis_id, input_hash) = current.ok_or("処理が見つかりません")?;
+        require_audio_source(
+            &transaction,
+            &load_job(&transaction, job_id)?
+                .ok_or("処理を読み込めません")?
+                .kind,
+            &meeting_id,
+        )?;
         if !matches!(state.as_str(), "paused" | "interrupted") {
             return Err("再開可能な処理状態ではありません".into());
         }
@@ -393,6 +441,7 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let original = load_job(&transaction, &source.id)?.ok_or("元の処理が見つかりません")?;
         let (mut spec, checkpoint) = read_fixed_input(&transaction, &source.id)?;
+        require_audio_source(&transaction, spec.kind.as_str(), &spec.meeting_id)?;
         if &original != source
             || &spec != verified_spec
             || checkpoint.as_ref() != verified_checkpoint
@@ -669,10 +718,21 @@ fn job_from_row(row: &Row<'_>) -> rusqlite::Result<JobSnapshot> {
     })
 }
 
+fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    if matches!(kind, "transcription" | "diarization") {
+        super::deletion::audio::require_source(db, meeting)?;
+    }
+    #[cfg(not(unix))]
+    let _ = (db, kind, meeting);
+    Ok(())
+}
+
 pub(super) fn enqueue_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     spec: &JobSpec,
 ) -> Result<JobSnapshot, String> {
+    require_audio_source(transaction, spec.kind.as_str(), &spec.meeting_id)?;
     if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
         return Err("処理の操作IDが不正です".into());
     }

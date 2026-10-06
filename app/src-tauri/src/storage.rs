@@ -488,6 +488,14 @@ impl Storage {
         if relative_text.contains('\\') {
             return Err("管理パスに使用できない文字があります".into());
         }
+        #[cfg(unix)]
+        if deletion::audio::is_audio_media(media_type) {
+            let db = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            deletion::audio::require_source(&db, meeting_id)?;
+        }
         let file = self.managed_path(relative)?;
         let root = self
             .root
@@ -511,10 +519,15 @@ impl Storage {
             content_hash,
             state: "ready".into(),
         };
-        self.connection
+        let db = self
+            .connection
             .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?
-            .execute(
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        #[cfg(unix)]
+        if deletion::audio::is_audio_media(media_type) {
+            deletion::audio::require_source(&db, meeting_id)?;
+        }
+        db.execute(
                 "INSERT INTO file_assets (id, meeting_id, storage_scope, relative_path, media_type, size_bytes, hash_algorithm, content_hash, state, created_at, updated_at) VALUES (?1, ?2, 'meeting', ?3, ?4, ?5, 'sha256', ?6, 'ready', ?7, ?7)",
                 params![asset.id, asset.meeting_id, asset.relative_path, asset.media_type, asset.size_bytes, asset.content_hash, now],
             )

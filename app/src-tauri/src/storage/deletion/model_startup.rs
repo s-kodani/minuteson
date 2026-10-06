@@ -55,6 +55,14 @@ pub(in crate::storage) fn inspect(
             let progress: Option<String> = row.get(2).map_err(|e| e.to_string())?;
             let json = json.ok_or("モデル削除履歴が容量上限を超えています")?;
             let progress = progress.ok_or("モデル削除進捗が容量上限を超えています")?;
+            if serde_json::from_str::<serde_json::Value>(&json)
+                .ok()
+                .is_some_and(|v| v["subtype"] == "audioOnlyDeletion")
+            {
+                return crate::storage::deletion::audio::intent::removal::completion::inspect_one(
+                    db, anchor, &operation,
+                );
+            }
             if progress == "{\"modelReconfirmationRecorded\":true}" {
                 let parent = renewal::audit_source(&json)?;
                 let audits = linked
