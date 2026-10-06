@@ -37,7 +37,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   // use its restricted native resume lane; it never enables ordinary writes.
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
   const canReviewPending = canInspect && sharedAvailable;
-  const canReviewMeeting = canReviewPending && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.modelDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
+  const canReviewMeeting = canReviewPending && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.modelDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const run = async (action: () => Promise<void>) => {
     if (running.current) return;
@@ -48,7 +48,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const protect = async (action: () => Promise<void>) => {
     // Pending receipts already fenced writes. Initial review/publication flush
     // edits before that fence; recovery never attempts to rewrite deleted rows.
-    if (latest.current.operation.deletionListing?.writeBlocked || latest.current.operation.modelDeletionListing?.writeBlocked || latest.current.operation.getSnapshot()?.deletionPreview?.pending || latest.current.operation.getSnapshot()?.modelDeletionPreview?.pending) await run(action);
+    if (latest.current.operation.deletionListing?.writeBlocked || latest.current.operation.modelDeletionListing?.writeBlocked || latest.current.operation.audioDeletionListing?.writeBlocked || latest.current.operation.getSnapshot()?.audioDeletionPreview?.pending || latest.current.operation.getSnapshot()?.deletionPreview?.pending || latest.current.operation.getSnapshot()?.modelDeletionPreview?.pending) await run(action);
     else await latest.current.withSavedEdits(async () => run(action));
   };
   const loadPage = async (offset = 0) => {

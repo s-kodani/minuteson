@@ -27,7 +27,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
   const listing = operation.modelDeletionListing, protectedNow = rpcBusy || unknown;
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
   const canReviewPending = isTauri() && operation.modelDeletionSupported && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
-  const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
+  const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const understood = !!preview && understoodId === preview.confirmationId, includeUnknown = !!preview && includeUnknownId === preview.confirmationId;
   const run = async (action: () => Promise<void>) => {
@@ -38,7 +38,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
   };
   const protect = async (action: () => Promise<void>) => {
     const op = latest.current.operation, now = op.getSnapshot();
-    if (op.modelDeletionListing?.writeBlocked || op.deletionListing?.writeBlocked || now?.modelDeletionPreview?.pending || now?.deletionPreview?.pending) await run(action);
+    if (op.modelDeletionListing?.writeBlocked || op.deletionListing?.writeBlocked || op.audioDeletionListing?.writeBlocked || now?.audioDeletionPreview?.pending || now?.modelDeletionPreview?.pending || now?.deletionPreview?.pending) await run(action);
     else await latest.current.withSavedEdits(async () => run(action));
   };
   const loadPage = async (offset = 0) => {
