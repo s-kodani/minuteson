@@ -41,6 +41,7 @@ mod recordings;
 mod revisions;
 mod speaker_review;
 mod transcription;
+mod ui_preferences;
 pub(crate) mod vocabulary;
 pub use analysis::AnalysisView;
 pub(crate) use analysis::{AnalysisInput, UtteranceInput};
@@ -68,6 +69,7 @@ pub use recordings::RecordingConfig;
 pub(crate) use revisions::{CommittedAnalysis, CommittedMinutes};
 pub(crate) use speaker_review::{SpeakerReviewRequest, SpeakerReviewResponse};
 pub(crate) use transcription::RecordedAudioPlan;
+pub(crate) use ui_preferences::{UiPreferences, UiPreferencesSnapshot};
 pub(crate) use vocabulary::{
     VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
 };

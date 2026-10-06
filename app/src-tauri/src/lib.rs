@@ -727,6 +727,34 @@ fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::Preference
 }
 
 #[tauri::command]
+fn get_ui_preferences(window: WebviewWindow) -> Result<storage::UiPreferencesSnapshot, String> {
+    if !matches!(window.label(), "main" | "recorder") {
+        return Err("Only application windows can read presentation settings".into());
+    }
+    window.state::<Storage>().ui_preferences()
+}
+
+#[tauri::command]
+fn save_ui_preferences(
+    window: WebviewWindow,
+    expected_lock_version: i64,
+    payload: storage::UiPreferences,
+) -> Result<storage::UiPreferencesSnapshot, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can edit presentation settings".into());
+    }
+    let saved = window
+        .state::<Storage>()
+        .save_ui_preferences(expected_lock_version, payload)?;
+    // A hint only: every window reloads Storage. A missed event is covered by
+    // periodic reads; event failure must not hide an already committed setting.
+    let _ = window
+        .app_handle()
+        .emit("ui-preferences-changed", saved.lock_version);
+    Ok(saved)
+}
+
+#[tauri::command]
 fn get_diarization_preferences(
     window: WebviewWindow,
 ) -> Result<storage::DiarizationPreferencesSnapshot, String> {
@@ -1876,6 +1904,8 @@ pub fn run() {
             resume_analysis_job,
             cancel_analysis_job,
             get_analysis_preferences,
+            get_ui_preferences,
+            save_ui_preferences,
             get_diarization_preferences,
             save_diarization_preferences,
             get_speaker_reviews,

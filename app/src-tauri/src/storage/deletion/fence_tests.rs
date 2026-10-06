@@ -80,6 +80,44 @@ impl Fixture {
 }
 
 #[test]
+fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
+    use crate::storage::ui_preferences::{Theme, UiPreferences};
+    let f = Fixture::new();
+    let p = f.prepare();
+    assert!(f.storage.data_write_blocked());
+    assert_eq!(
+        f.storage.ui_preferences().unwrap().payload.theme,
+        Theme::System
+    );
+    assert!(f
+        .storage
+        .save_ui_preferences(
+            0,
+            UiPreferences {
+                schema_version: 1,
+                theme: Theme::Dark
+            }
+        )
+        .is_err());
+    f.untouched();
+    drop(p);
+    drop(f.storage);
+    let storage = Storage::open(f.base.path().join("root")).unwrap();
+    assert!(storage.data_write_blocked());
+    assert_eq!(storage.ui_preferences().unwrap().lock_version, 0);
+    assert!(storage
+        .save_ui_preferences(
+            0,
+            UiPreferences {
+                schema_version: 1,
+                theme: Theme::Light
+            }
+        )
+        .is_err());
+    assert!(f.file.exists());
+}
+
+#[test]
 fn deletion_fence_arms_after_durable_confirmation_and_keeps_read_views_and_portable_cells_unchanged(
 ) {
     let f = Fixture::new();

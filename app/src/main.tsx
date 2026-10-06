@@ -20,6 +20,7 @@ import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
+import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice } from "./theme";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
 
@@ -82,6 +83,7 @@ function RecorderPanel() {
         {idle && <button type="button" className="text-button" onClick={() => action.run("hide_recorder_preview")} disabled={action.busy}>閉じる</button>}
       </div>
       {action.error && <p className="mini-error" role="alert">{action.error}</p>}
+      <ThemeReadNotice />
     </main>
   );
 }
@@ -310,7 +312,7 @@ function MainWindow() {
         <div className="sidebar-foot">端末内で会議を記録</div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
+        <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><ThemeSelection compact locked={writeLocked} /><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
         <main className="content">
           <AudioImportPanel visible={screen==="overview"} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={()=>{document.getElementById("meeting-title")?.focus();}} onSaved={async(id)=>{
             await flushPendingEdits();
@@ -319,6 +321,8 @@ function MainWindow() {
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
+          {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
+          {screen !== "settings" && <ThemeReadNotice />}
           <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
           <ModelBodyDeletionPanel operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
@@ -381,4 +385,4 @@ function MainWindow() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(isRecorderPanel ? <RecorderPanel /> : <MainWindow />);
+createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecorderPanel ? <RecorderPanel /> : <MainWindow />}</ThemeProvider>);

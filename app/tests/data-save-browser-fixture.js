@@ -17,6 +17,7 @@ const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false }
 window.isTauri = true; mockWindows("main");
 export const dataSaveIPC = async (command, args) => {
   f.calls.push({ command, args: structuredClone(args) });
+  if (command === "get_ui_preferences") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") { const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker; return { available: reason === null, reason }; }
   if (command === "get_storage_bootstrap") {

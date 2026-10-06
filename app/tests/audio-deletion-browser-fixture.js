@@ -28,7 +28,7 @@ const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID()
   tracks: [{ id: "11111111-1111-4111-8111-111111111111", kind: "mic", state: "ready", chunks: 2, durationUs: 60000000 }, { id: "21111111-1111-4111-8111-111111111111", kind: "system", state: "ready", chunks: 2, durationUs: 60000000 }], priorDeletionCompleted: phase === "awaiting_ack" });
 const analysis = { id: crypto.randomUUID(), meetingId: f.meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: crypto.randomUUID(), label: "話者1", displayName: "田中" }], utterances: [{ id: crypto.randomUUID(), trackId: "11111111-1111-4111-8111-111111111111", startUs: 0, endUs: 1000000, recognizedText: "点検日です。", effectiveText: "点検日です。", attributionState: "assigned", speakerIds: [] }] };
 d.draft = { id: crypto.randomUUID(), meetingId: analysis.meetingId, baseAnalysisId: analysis.id, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791160000000 };
-mockIPC(async (command, args) => {
+export const audioDeletionIPC = async (command, args) => {
   if (["get_audio_deletion_items", "review_meeting_audio_deletion", "review_pending_audio_deletion", "get_audio_deletion_paths"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "audio_deletion")) f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_deletion_items") return { items: [], deletingMeetingIds: [], writeBlocked: d.blocked, restartRequired: d.restart, reason: d.blocked ? "音声削除のため書込停止" : null };
@@ -139,5 +139,6 @@ mockIPC(async (command, args) => {
     return structuredClone(f.snapshot);
   }
   return dataSaveIPC(command, args);
-}, { shouldMockEvents: true });
-await import("../src/main.tsx");
+};
+mockIPC(audioDeletionIPC, { shouldMockEvents: true });
+if (!window.skipAudioDeletionFixtureMain) await import("../src/main.tsx");
