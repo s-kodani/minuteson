@@ -78,6 +78,7 @@ enum Target {
     Fresh(Census),
     Unstarted(intent::Prepared),
     Files(removal::Receipt),
+    Remaining(removal::renewal::Review),
     Reconfirmation(reconfirmation::Review),
     Restored(reconfirmation::Review),
     Kept(intent::Prepared),
@@ -88,6 +89,7 @@ impl Target {
             Self::Fresh(c) => c.snapshot(),
             Self::Unstarted(p) | Self::Kept(p) => p.snapshot().clone(),
             Self::Files(r) => r.snapshot().clone(),
+            Self::Remaining(r) => r.snapshot().clone(),
             Self::Reconfirmation(r) | Self::Restored(r) => r.snapshot().clone(),
         }
     }
@@ -102,6 +104,7 @@ impl Target {
             Self::Fresh(c) => c.verify(storage, &|| check() || lease.cancelled())?,
             Self::Unstarted(p) => p.verify_current(storage, lease, check)?,
             Self::Files(r) => r.verify_live(storage, lease, check)?,
+            Self::Remaining(r) => r.verify_live(storage, lease, check)?,
             Self::Reconfirmation(r) => r.verify_live(storage, lease, check)?,
             Self::Restored(r) => {
                 r.verify_live(storage, lease, check)?;
@@ -282,6 +285,7 @@ impl Prepared {
                 0,
                 !r.source_was_restored(),
             ),
+            Target::Remaining(r) => ("reconfirmation", None, Some(r.operation()), 0, false),
             Target::Restored(_) => ("restored_unavailable", None, None, 0, false),
         };
         Ok(Preview {
@@ -290,6 +294,7 @@ impl Prepared {
             meeting_id: s.scope.meeting_id.clone(),
             source_operation_id: source.map(str::to_owned),
             reconfirmation_source_kind: match target {
+                Target::Remaining(_) => Some("native_audio_pending".into()),
                 Target::Reconfirmation(r) => Some(
                     if r.source_was_restored() {
                         "restored_audio_unavailable"
@@ -339,15 +344,29 @@ impl Prepared {
             Ok(()) => preview.execute_allowed = true,
             Err(reason) => preview.resume_reason = Some(reason),
         }
-        if (matches!(&target, Target::Files(r) if r.completed())
-            || matches!(&target, Target::Restored(_)))
-            && !preview.execute_allowed
-        {
+        if !preview.execute_allowed {
             preview.reconfirmation_allowed =
-                reconfirmation::Review::capture(storage, &operation, lease, check).is_ok();
+                Self::can_reconfirm(storage, &operation, &target, lease, check);
         }
         active(lease, check)?;
         Ok(Self { preview, target })
+    }
+    fn can_reconfirm(
+        storage: &Storage,
+        operation: &str,
+        target: &Target,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> bool {
+        match target {
+            Target::Files(r) if !r.completed() => {
+                removal::renewal::Review::capture(storage, operation, lease, check).is_ok()
+            }
+            Target::Files(_) | Target::Restored(_) => {
+                reconfirmation::Review::capture(storage, operation, lease, check).is_ok()
+            }
+            _ => false,
+        }
     }
     pub(crate) fn fresh(
         storage: &Storage,
@@ -442,6 +461,12 @@ impl Prepared {
                 Target::Reconfirmation(r) => Target::Reconfirmation(
                     reconfirmation::Review::capture(storage, r.source_operation(), lease, check)?,
                 ),
+                Target::Remaining(r) => Target::Remaining(removal::renewal::Review::capture(
+                    storage,
+                    r.operation(),
+                    lease,
+                    check,
+                )?),
                 _ => load(storage, &self.preview.operation_id)?.live(storage, lease, check)?,
             };
         *self = Self::build(
@@ -465,15 +490,28 @@ impl Prepared {
         if !self.preview.reconfirmation_allowed {
             return Err("この音声削除段階では追加同意を開始できません。残りを保持します".into());
         }
-        let review =
-            reconfirmation::Review::capture(storage, &self.preview.operation_id, lease, check)?;
-        *self = Self::build(
-            storage,
-            Uuid::new_v4().to_string(),
-            Target::Reconfirmation(review),
-            lease,
-            check,
-        )?;
+        let (operation, target) = match &self.target {
+            Target::Files(r) if !r.completed() => (
+                self.preview.operation_id.clone(),
+                Target::Remaining(removal::renewal::Review::capture(
+                    storage,
+                    &self.preview.operation_id,
+                    lease,
+                    check,
+                )?),
+            ),
+            Target::Files(_) | Target::Restored(_) => (
+                Uuid::new_v4().to_string(),
+                Target::Reconfirmation(reconfirmation::Review::capture(
+                    storage,
+                    &self.preview.operation_id,
+                    lease,
+                    check,
+                )?),
+            ),
+            _ => return Err("この音声削除段階では追加同意を開始できません".into()),
+        };
+        *self = Self::build(storage, operation, target, lease, check)?;
         Ok(())
     }
     pub(crate) fn execute(
@@ -494,7 +532,12 @@ impl Prepared {
                 .clone()
                 .unwrap_or("音声削除対象を再確認してください".into()));
         }
-        if include && !matches!(self.target, Target::Fresh(_) | Target::Reconfirmation(_)) {
+        if include
+            && !matches!(
+                self.target,
+                Target::Fresh(_) | Target::Reconfirmation(_) | Target::Remaining(_)
+            )
+        {
             return Err("保存済み音声削除の方針を変更できません".into());
         }
         let result = self.execute_inner(storage, lease, include, check, progress);
@@ -512,8 +555,13 @@ impl Prepared {
                 "処理を停止しました。既に消した音声は復元せず、残りの状態を再検査してください"
                     .into(),
             );
-            self.preview.reconfirmation_allowed =
-                matches!(&self.target, Target::Files(r) if r.completed());
+            self.preview.reconfirmation_allowed = Self::can_reconfirm(
+                storage,
+                &self.preview.operation_id,
+                &self.target,
+                lease,
+                check,
+            );
         }
         result
     }
@@ -558,6 +606,14 @@ impl Prepared {
             self.target = Target::Unstarted(p);
             self.preview.pending = true;
             self.preview.keep_allowed = true;
+            progress("audio_delete_scope_fixed");
+        }
+        if let Target::Remaining(r) = &self.target {
+            progress("fixing_audio_delete_scope");
+            let receipt = removal::renewal::accept(storage, r, include, lease, check)?;
+            self.target = Target::Files(receipt);
+            self.preview.pending = true;
+            self.preview.keep_allowed = false;
             progress("audio_delete_scope_fixed");
         }
         if matches!(self.target, Target::Unstarted(_)) {

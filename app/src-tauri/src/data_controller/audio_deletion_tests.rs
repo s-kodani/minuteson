@@ -119,6 +119,9 @@ impl Fixture {
     fn count(&self) -> i64 {
         self.audio.operation_count()
     }
+    fn original(&self, operation: &str) -> (String, String, i64, i64, i64) {
+        self.audio.original_deletion_record(operation)
+    }
 }
 
 #[test]
@@ -449,22 +452,202 @@ fn audio_controller_cancel_after_completion_does_not_erase_committed_receipt() {
     assert_eq!(f.count(), 1);
 }
 #[test]
-fn audio_controller_modified_unfinished_scope_stays_fenced_without_larger_consent() {
+fn audio_controller_modified_unfinished_scope_requires_readonly_review_and_separate_consent() {
     let f = Fixture::new();
     let stopped = f.stop_at(&f.ready(), Action::Publish, "deleting_audio_files");
     std::fs::write(&f.audio.path, b"CHANGED AFTER CONSENT").unwrap();
     let s = f.run(&stopped, Action::Refresh);
     let p = s.audio_deletion_preview.as_ref().unwrap();
-    assert!(!p.execute_allowed && !p.reconfirmation_allowed && !p.keep_allowed);
+    assert!(!p.execute_allowed && p.reconfirmation_allowed && !p.keep_allowed);
     assert!(f
         .controller
         .begin_request(f.request(&s, Action::Publish))
         .is_err());
+    assert!(f.audio.path.exists() && f.audio.storage.data_write_blocked());
+    let operation = p.operation_id.clone();
+    let original = f.original(&operation);
+    let request = f.request(&s, Action::ReviewRemaining);
+    let reviewed = f.run(&s, Action::ReviewRemaining);
+    let p = reviewed.audio_deletion_preview.as_ref().unwrap();
+    assert_eq!(reviewed.phase, "ready", "{:?}", reviewed.error_message);
+    assert_eq!(p.phase, "reconfirmation");
+    assert_eq!(
+        p.reconfirmation_source_kind.as_deref(),
+        Some("native_audio_pending")
+    );
+    assert_eq!(p.source_operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(p.operation_id, operation);
+    assert_ne!(
+        p.confirmation_id,
+        s.audio_deletion_preview.as_ref().unwrap().confirmation_id
+    );
+    assert!(
+        p.execute_allowed
+            && !p.keep_allowed
+            && !p.reconfirmation_allowed
+            && !p.prior_deletion_completed
+    );
+    assert_eq!(p.include_unregistered_recorded, None);
+    assert_eq!(p.changed_audio_files, 1);
+    assert_eq!(f.count(), 1);
+    assert_eq!(f.original(&operation), original);
+    assert!(f.controller.begin_request(request).unwrap().is_none());
+    let done = f.run(&reviewed, Action::Publish);
+    assert_eq!(done.phase, "completed", "{:?}", done.error_message);
+    assert_eq!(done.audio_deletion_receipt.unwrap().operation_id, operation);
+    assert_eq!(f.count(), 2);
+    assert_eq!(f.original(&operation), original);
+    assert!(!f.audio.path.exists());
+}
+
+#[test]
+fn audio_controller_remaining_consent_uses_new_choice_and_cold_resumes_same_operation() {
+    let mut f = Fixture::new();
+    let stopped = f.stop_at(&f.ready(), Action::Publish, "deleting_audio_files");
+    let operation = stopped
+        .audio_deletion_preview
+        .as_ref()
+        .unwrap()
+        .operation_id
+        .clone();
+    let original = f.original(&operation);
+    let leftover = f.audio.unregistered_audio();
+    let pending = f.run(&stopped, Action::Refresh);
+    let reviewed = f.run(&pending, Action::ReviewRemaining);
+    let p = reviewed.audio_deletion_preview.as_ref().unwrap();
+    assert_eq!(p.unregistered_audio_files, 1);
+    assert!(p.execute_allowed && !p.keep_allowed);
     assert!(f
         .controller
-        .begin_request(f.request(&s, Action::ReviewRemaining))
+        .begin_request(f.request(&reviewed, Action::Publish))
         .is_err());
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Keep))
+        .is_err());
+    assert_eq!(f.count(), 1);
+    let request = f.request(&reviewed, Action::DeleteIncludingUnregistered);
+    let fixed = f.stop_at(
+        &reviewed,
+        Action::DeleteIncludingUnregistered,
+        "audio_delete_scope_fixed",
+    );
+    let p = fixed.audio_deletion_preview.as_ref().unwrap();
+    assert_eq!(p.phase, "files");
+    assert_eq!(p.operation_id, operation);
+    assert_eq!(p.include_unregistered_recorded, Some(true));
+    assert!(!p.keep_allowed && !p.reconfirmation_allowed);
+    assert!(f.audio.path.exists() && leftover.exists());
+    assert!(f.controller.begin_request(request).unwrap().is_none());
+    assert_eq!(f.count(), 2);
+    assert_eq!(f.original(&operation), original);
+    f.audio = f.audio.reopen();
+    f.controller = DataController::default();
+    f.analysis.require_storage_restart();
+    let pending = f.pending(&operation);
+    let p = pending.audio_deletion_preview.as_ref().unwrap();
+    assert_eq!(p.include_unregistered_recorded, Some(true));
+    assert!(p.execute_allowed && !p.reconfirmation_allowed && !p.keep_allowed);
+    assert!(f
+        .controller
+        .begin_request(f.request(&pending, Action::DeleteIncludingUnregistered))
+        .is_err());
+    let done = f.run(&pending, Action::Publish);
+    assert_eq!(done.phase, "completed", "{:?}", done.error_message);
+    assert!(done.restart_required);
+    assert_eq!(done.audio_deletion_receipt.unwrap().operation_id, operation);
+    assert_eq!(f.count(), 2);
+    assert_eq!(f.original(&operation), original);
+    assert!(!f.audio.path.exists() && !leftover.exists());
+    f.audio = f.audio.reopen();
+    assert!(!f.audio.storage.data_write_blocked());
+}
+
+#[test]
+fn audio_controller_remaining_stale_page_refresh_and_cancel_never_accept_new_bytes() {
+    let f = Fixture::new();
+    let stopped = f.stop_at(&f.ready(), Action::Publish, "deleting_audio_files");
+    std::fs::write(&f.audio.path, b"FIRST CHANGE").unwrap();
+    let pending = f.run(&stopped, Action::Refresh);
+    let cancelled = f.stop_at(
+        &pending,
+        Action::ReviewRemaining,
+        "verifying_audio_delete_scope",
+    );
+    assert_eq!(f.count(), 1);
+    assert!(f.audio.path.exists());
+    let pending = f.run(&cancelled, Action::Refresh);
+    let reviewed = f.run(&pending, Action::ReviewRemaining);
+    let old = reviewed
+        .audio_deletion_preview
+        .as_ref()
+        .unwrap()
+        .confirmation_id
+        .clone();
+    let old_request = f.request(&reviewed, Action::Publish);
+    let refreshed = f.run(&reviewed, Action::Refresh);
+    assert_eq!(
+        refreshed.audio_deletion_preview.as_ref().unwrap().phase,
+        "reconfirmation"
+    );
+    assert_ne!(
+        refreshed
+            .audio_deletion_preview
+            .as_ref()
+            .unwrap()
+            .confirmation_id,
+        old
+    );
+    assert!(f.controller.audio_deletion_page(&old, 0).is_err());
+    assert!(f.controller.begin_request(old_request).is_err());
+    std::fs::write(&f.audio.path, b"SECOND UNCONFIRMED CHANGE").unwrap();
+    let rejected = f.run(&refreshed, Action::Publish);
+    assert!(rejected.error_message.is_some() && rejected.audio_deletion_receipt.is_none());
+    assert_eq!(f.count(), 1);
     assert!(f.audio.path.exists() && f.audio.storage.data_write_blocked());
+    let pending = f.run(&rejected, Action::Refresh);
+    let reviewed = f.run(&pending, Action::ReviewRemaining);
+    let done = f.run(&reviewed, Action::Publish);
+    assert_eq!(done.phase, "completed", "{:?}", done.error_message);
+    assert_eq!(f.count(), 2);
+}
+
+#[test]
+fn audio_controller_remaining_availability_reappearance_and_unsafe_links() {
+    for unsafe_link in [false, true] {
+        let f = Fixture::new();
+        let stopped = f.stop_at(&f.ready(), Action::Publish, "fixing_audio_unavailable");
+        assert!(!f.audio.path.exists());
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), b"OUTSIDE AUDIO MUST SURVIVE").unwrap();
+        if unsafe_link {
+            std::os::unix::fs::symlink(outside.path(), &f.audio.path).unwrap();
+        } else {
+            std::fs::write(&f.audio.path, b"RETURNED BEFORE AVAILABILITY").unwrap();
+        }
+        let pending = f.run(&stopped, Action::Refresh);
+        let p = pending.audio_deletion_preview.as_ref().unwrap();
+        assert_eq!(p.phase, "availability");
+        assert!(!p.execute_allowed && !p.keep_allowed);
+        assert_eq!(p.reconfirmation_allowed, !unsafe_link);
+        if unsafe_link {
+            assert!(f
+                .controller
+                .begin_request(f.request(&pending, Action::ReviewRemaining))
+                .is_err());
+            assert_eq!(f.count(), 1);
+        } else {
+            let reviewed = f.run(&pending, Action::ReviewRemaining);
+            let done = f.run(&reviewed, Action::Publish);
+            assert_eq!(done.phase, "completed", "{:?}", done.error_message);
+            assert_eq!(f.count(), 2);
+            assert!(!f.audio.path.exists());
+        }
+        assert_eq!(
+            std::fs::read(outside.path()).unwrap(),
+            b"OUTSIDE AUDIO MUST SURVIVE"
+        );
+    }
 }
 
 #[test]

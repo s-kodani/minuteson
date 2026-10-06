@@ -355,6 +355,20 @@ impl Review {
     pub(in crate::storage::deletion::audio) fn snapshot(&self) -> &audio::Snapshot {
         &self.snapshot
     }
+    pub(in crate::storage::deletion::audio) fn verify_live(
+        &self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify(storage, &db, &|| check() || lease.cancelled())?;
+        active(lease, check)
+    }
     pub(in crate::storage::deletion::audio) fn operation(&self) -> &str {
         self.receipt.saved.operation()
     }

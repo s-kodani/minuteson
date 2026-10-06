@@ -60,3 +60,13 @@ test("restored new consent binds a new ID and the exact current page independent
   assert.throws(() => audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, id(2)));
   assert.equal(audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, p.confirmationId).action, "delete_including_unregistered");
 });
+test("remaining-scope UI resets both consents while preserving the native operation ID", () => {
+  const p: AudioDeletionPreview = { ...preview(), confirmationId: id(6), sourceOperationId: id(3), reconfirmationSourceKind: "native_audio_pending", phase: "reconfirmation", pending: true, unregisteredAudioFiles: 1 };
+  assert.equal(audioDeletionNewScope(p), true);
+  assert.throws(() => audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), id(2), id(2)));
+  assert.throws(() => audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, id(2)));
+  assert.equal(audioDeletionPublishRequest(ready(p), p.confirmationId, page(p), p.confirmationId, p.confirmationId).action, "delete_including_unregistered");
+  const refreshed = { ...p, confirmationId: id(8) };
+  assert.throws(() => audioDeletionPublishRequest(ready(refreshed), refreshed.confirmationId, page(p), p.confirmationId, p.confirmationId));
+  assert.match(audioDeletionPhaseLabel("reconfirmation"), /現在の音声範囲/u);
+});

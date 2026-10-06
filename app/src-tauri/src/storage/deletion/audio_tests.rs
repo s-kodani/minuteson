@@ -12,6 +12,16 @@ pub(crate) struct Fixture {
     pub(crate) path: PathBuf,
 }
 impl Fixture {
+    // Read-only fixture evidence; keep Storage's connection private to storage.
+    pub(crate) fn original_deletion_record(
+        &self,
+        operation: &str,
+    ) -> (String, String, i64, i64, i64) {
+        self.storage.connection.lock().unwrap().query_row(
+            "SELECT target_manifest_json,target_hash,consent_at,created_at,rowid FROM maintenance_operations WHERE id=?1",
+            [operation], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+        ).unwrap()
+    }
     pub(crate) fn corrupt_operation_header(&self, operation: &str, header: &str) {
         let db = self.storage.connection.lock().unwrap();
         // Fault injection on this fixture's private DB only. Restore the real

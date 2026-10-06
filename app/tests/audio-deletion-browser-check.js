@@ -5,7 +5,7 @@ async (page) => {
   const set = patch => page.evaluate(p => Object.assign(window.audioDeletionFixture, p), patch);
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(v => v.command === c), command);
   const region = () => page.getByRole("region", { name: "音声だけの削除と中断対応", exact: true });
-  const dialog = () => page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: /音声だけの削除を確認|再出現した音声への新しい同意/u }) });
+  const dialog = () => page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: /音声だけの削除を確認|再出現した音声への新しい同意|残り音声への新しい同意/u }) });
   const trigger = () => page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true });
   const understand = () => dialog().getByRole("checkbox", { name: /対象を確認し、音声の再生/u }).check();
   const unknown = () => dialog().getByRole("checkbox", { name: /一覧にある未登録音声も/u });
@@ -80,6 +80,60 @@ async (page) => {
   check((await dialog().innerText()).includes("元の操作") && (await dialog().innerText()).includes("新しい操作") && await publish().isDisabled(), "old progress lost or renewed autoexec");
   await understand(); check(await publish().isDisabled(), "renewed unknown implicitly adopted"); await unknown().check(); await publish().click(); await done(); results.push("renewed scope retains former progress and requires new distinct consent");
 
+  for (const phase of ["files", "availability"]) {
+    await boot(); await pending(phase, true); await set({ unknownCount: 1 });
+    const before = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.audioDeletionPreview));
+    await dialog().getByRole("button", { name: "残り音声を確認（まだ削除しない）", exact: true }).click();
+    await dialog().getByRole("heading", { name: "残り音声への新しい同意", exact: true }).waitFor();
+    await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+    const after = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.audioDeletionPreview));
+    check(after.operationId === before.operationId && after.sourceOperationId === before.operationId && after.confirmationId !== before.confirmationId && after.reconfirmationSourceKind === "native_audio_pending" && !after.priorDeletionCompleted, "remaining scope mislabeled or changed native ID");
+    const body = await dialog().innerText();
+    check(body.includes("同じ操作") && body.includes("中断位置") && !body.includes("音声削除完了済み") && !body.includes("新しい操作"), "remaining history incorrectly described");
+    check(await publish().isDisabled() && await page.evaluate(() => window.audioDeletionFixture.deleted) === 0 && await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止" }).count() === 0, "remaining review deleted or exposed keep");
+    if (phase === "files") {
+      for (const width of [1200, 900]) {
+        await page.setViewportSize({ width, height: 800 });
+        check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll("dialog[open]")].every(e => e.scrollWidth <= e.clientWidth + 1)), "remaining dialog overflow");
+        await page.screenshot({ path: `output/playwright/audio-remaining-${width}.png` });
+        await dialog().evaluate(e => { e.scrollTop = e.scrollHeight; });
+        await page.screenshot({ path: `output/playwright/audio-remaining-${width}-actions.png` });
+        await dialog().evaluate(e => { e.scrollTop = 0; });
+      }
+      results.push("remaining consent warning, same ID, separate choices and actions at 1200px and 900px");
+    }
+    await understand(); await unknown().check();
+    await dialog().getByRole("button", { name: "音声の残りを再検査", exact: true }).click();
+    await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+    check(!await unknown().isChecked() && await publish().isDisabled(), "remaining refresh inherited consent");
+    await understand(); check(await publish().isDisabled(), "remaining unknown adopted by prior policy");
+    await unknown().check(); await publish().click(); await done();
+    check(await page.evaluate(() => window.dataFixture.snapshot.audioDeletionReceipt.operationId) === before.operationId, "remaining result not bound to original operation");
+    results.push(`${phase} remaining review is readonly, same native ID, fresh checkbox decisions and no false completion`);
+  }
+
+  await boot(); await pending("files", true); await set({ unknownCount: 1 });
+  const pendingId = await page.evaluate(() => window.dataFixture.snapshot.audioDeletionPreview.operationId);
+  await dialog().getByRole("button", { name: "残り音声を確認（まだ削除しない）", exact: true }).click();
+  await dialog().getByRole("heading", { name: "残り音声への新しい同意", exact: true }).waitFor();
+  await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  await understand(); await unknown().check(); await set({ mode: "lostNoCommit" }); await publish().click();
+  await dialog().getByRole("button", { name: "同じ音声削除操作の結果を確認", exact: true }).waitFor();
+  const lostRemaining = (await calls("start_data_operation")).at(-1).args.request;
+  check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "remaining lost response released protection");
+  await set({ mode: "unstarted" });
+  await dialog().getByRole("button", { name: "同じ音声削除操作の結果を確認", exact: true }).click();
+  await region().getByRole("alert").filter({ hasText: "再同意保存後に停止。残り音声を保持" }).waitFor();
+  await region().getByRole("button", { name: "音声削除の確認内容を開く", exact: true }).click();
+  await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
+  const savedRemaining = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.audioDeletionPreview));
+  check(JSON.stringify((await calls("start_data_operation")).at(-1).args.request) === JSON.stringify(lostRemaining), "remaining retry replaced confirmation or choice");
+  check(savedRemaining.phase === "files" && savedRemaining.operationId === pendingId && savedRemaining.includeUnregisteredRecorded === true && !savedRemaining.keepAllowed && await unknown().count() === 0, "remaining saved consent became unstarted or mutable");
+  await set({ mode: "success" }); await dialog().getByRole("button", { name: "音声の残りを再検査", exact: true }).click();
+  await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); await understand(); await publish().click(); await done();
+  check((await calls("start_data_operation")).at(-1).args.request.action === "publish" && await page.evaluate(() => window.dataFixture.snapshot.audioDeletionReceipt.operationId) === pendingId, "remaining resume used a new choice or operation");
+  results.push("remaining lost response replays exact consent; saved consent resumes original started operation without keep or new choice");
+
   await boot(); await set({ mode: "lostNoCommit" }); await review(); await understand(); await publish().click();
   await region().getByRole("button", { name: "同じ音声削除操作の結果を確認", exact: true }).waitFor();
   check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled() && await page.getByRole("button", { name: "既存会議を削除", exact: true }).isDisabled(), "unknown response unlocked other writes");
@@ -153,9 +207,9 @@ async (page) => {
   check(await page.evaluate(() => window.dataFixture.meetings.length === 1), "completion acknowledgement deleted meeting"); results.push("completed file stage acknowledged without meeting deletion");
 
   await boot(); await pending("files", true);
-  check(await publish().isDisabled() && await dialog().getByRole("button", { name: "再出現した音声を確認（まだ削除しない）", exact: true }).count() === 0 && await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止", exact: true }).count() === 0, "changed unfinished scope expanded or restored");
+  check(await publish().isDisabled() && await dialog().getByRole("button", { name: "残り音声を確認（まだ削除しない）", exact: true }).count() === 1 && await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止", exact: true }).count() === 0, "changed unfinished scope executed or falsely became unstarted");
   await page.keyboard.press("Escape"); await dialog().waitFor({ state: "hidden" });
-  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled() && !(await calls("start_data_operation")).length, "closing pending scope released fence"); results.push("changed unfinished scope refuses expanded consent, close preserves write fence");
+  check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled() && !(await calls("start_data_operation")).length, "closing pending scope released fence"); results.push("changed unfinished scope refuses old consent; readonly remaining review offered, close preserves fence");
 
   await boot();
   await page.evaluate(async () => {
@@ -207,9 +261,9 @@ async (page) => {
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 800 });
     check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll("dialog[open]")].every(e => e.scrollWidth <= e.clientWidth + 1)), "horizontal dialog overflow");
-    await page.screenshot({ path: `audio-deletion-${width}.png` });
+    await page.screenshot({ path: `output/playwright/audio-deletion-${width}.png` });
     await dialog().evaluate(e => { e.scrollTop = e.scrollHeight; });
-    await page.screenshot({ path: `audio-deletion-${width}-actions.png` });
+    await page.screenshot({ path: `output/playwright/audio-deletion-${width}-actions.png` });
     await dialog().evaluate(e => { e.scrollTop = 0; });
   }
   results.push("1200px and 900px modal layout screenshots");

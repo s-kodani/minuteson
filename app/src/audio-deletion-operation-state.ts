@@ -4,7 +4,7 @@ export interface AudioDeletionTrack { id: string; kind: string; state: string; c
 export interface AudioDeletionRetained { analysisRevisions: number; utterances: number; minutesRevisions: number; drafts: number; editOperations: number; evidenceLinks: number; jobs: number; externalExportRecords: number }
 export interface AudioDeletionPreview {
   confirmationId: string; operationId: string; meetingId: string; sourceOperationId: string | null;
-  reconfirmationSourceKind: "native_audio_deletion" | "restored_audio_unavailable" | null;
+  reconfirmationSourceKind: "native_audio_deletion" | "native_audio_pending" | "restored_audio_unavailable" | null;
   phase: "review" | "not_started" | "files" | "availability" | "awaiting_ack" | "restored_unavailable" | "reconfirmation" | "retained" | "completed";
   pending: boolean; executeAllowed: boolean; resumeReason: string | null; keepAllowed: boolean; reconfirmationAllowed: boolean;
   includeUnregisteredRecorded: boolean | null; pathCount: number; processedFiles: number; audioFiles: number; audioBytes: number;
@@ -21,7 +21,8 @@ const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as numb
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !v.includes("\0");
 const fail = (): never => { throw Error("音声削除の状態が不正です。対象を再確認してください。"); };
 export function assertAudioDeletionPreview(p: AudioDeletionPreview): void {
-  if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(id) || (p.sourceOperationId !== null && (!id(p.sourceOperationId) || p.sourceOperationId === p.operationId))
+  if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(id) || (p.sourceOperationId !== null && !id(p.sourceOperationId))
+    || (p.sourceOperationId === p.operationId && !(p.phase === "reconfirmation" && p.reconfirmationSourceKind === "native_audio_pending"))
     || !["review", "not_started", "files", "availability", "awaiting_ack", "restored_unavailable", "reconfirmation", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.reconfirmationAllowed, p.priorDeletionCompleted].every(v => typeof v === "boolean")
     || (p.resumeReason !== null && !text(p.resumeReason)) || (p.executeAllowed && p.resumeReason !== null)
@@ -32,8 +33,8 @@ export function assertAudioDeletionPreview(p: AudioDeletionPreview): void {
     || p.keepAllowed !== ["not_started", "retained"].includes(p.phase)
     || (["review", "not_started", "restored_unavailable", "reconfirmation", "retained"].includes(p.phase) && p.processedFiles !== 0)
     || (["retained", "completed"].includes(p.phase) && p.executeAllowed)
-    || (p.reconfirmationAllowed && (!["awaiting_ack", "restored_unavailable"].includes(p.phase) || p.executeAllowed))
-    || (p.phase === "reconfirmation" ? (!p.sourceOperationId || !["native_audio_deletion", "restored_audio_unavailable"].includes(p.reconfirmationSourceKind!) || p.priorDeletionCompleted !== (p.reconfirmationSourceKind === "native_audio_deletion")) : p.reconfirmationSourceKind !== null)
+    || (p.reconfirmationAllowed && (!["files", "availability", "awaiting_ack", "restored_unavailable"].includes(p.phase) || p.executeAllowed))
+    || (p.phase === "reconfirmation" ? (!p.sourceOperationId || !["native_audio_deletion", "native_audio_pending", "restored_audio_unavailable"].includes(p.reconfirmationSourceKind!) || p.priorDeletionCompleted !== (p.reconfirmationSourceKind === "native_audio_deletion") || (p.reconfirmationSourceKind === "native_audio_pending" && p.sourceOperationId !== p.operationId)) : p.reconfirmationSourceKind !== null)
     || (p.phase === "restored_unavailable" && (p.executeAllowed || p.priorDeletionCompleted || p.sourceOperationId !== null))
     || (p.phase === "review" && (p.sourceOperationId !== null || p.priorDeletionCompleted))
     || (["review", "restored_unavailable", "reconfirmation"].includes(p.phase) ? p.includeUnregisteredRecorded !== null : typeof p.includeUnregisteredRecorded !== "boolean")) fail();

@@ -110,3 +110,21 @@ test("verified restored startup evidence is reviewable but invalid records are n
   assert.doesNotThrow(() => assertAudioDeletionListing(listing));
   assert.throws(() => assertAudioDeletionListing({ ...listing, items: [{ ...listing.items[0], errorMessage: "invalid" }] }));
 });
+test("unfinished reconfirmation is bounded to the same operation and fresh consent", () => {
+  const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "reconfirmation", pending: true, sourceOperationId: id(3), reconfirmationSourceKind: "native_audio_pending", unregisteredAudioFiles: 1 });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.equal(dataRequest(s, "delete_including_unregistered").action, "delete_including_unregistered");
+  for (const action of ["publish", "keep", "review_remaining"] as const) assert.throws(() => dataRequest(s, action));
+  for (const change of [{ sourceOperationId: id(6) }, { sourceOperationId: null }, { priorDeletionCompleted: true }, { keepAllowed: true }, { processedFiles: 1 }, { includeUnregisteredRecorded: false }, { phase: "files", includeUnregisteredRecorded: false }]) assert.throws(() => assertAudioDeletionPreview({ ...s.audioDeletionPreview!, ...change } as never));
+});
+test("only blocked unfinished file or availability phases admit remaining-scope review", () => {
+  for (const phase of ["files", "availability"] as const) {
+    const s = ready(); Object.assign(s.audioDeletionPreview!, { phase, pending: true, includeUnregisteredRecorded: false, executeAllowed: false, resumeReason: "changed", reconfirmationAllowed: true });
+    Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });
+    assert.equal(dataRequest(s, "review_remaining").action, "review_remaining");
+    assert.throws(() => dataRequest(s, "publish"));
+    assert.throws(() => assertAudioDeletionPreview({ ...s.audioDeletionPreview!, executeAllowed: true, resumeReason: null }));
+  }
+  const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "not_started", pending: true, keepAllowed: true, includeUnregisteredRecorded: false, executeAllowed: false, resumeReason: "changed", reconfirmationAllowed: true });
+  assert.throws(() => assertDataSnapshot(s));
+});
