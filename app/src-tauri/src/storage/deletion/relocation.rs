@@ -216,8 +216,12 @@ fn validate_kept(
     let routing: serde_json::Value = serde_json::from_str(&row.6).map_err(|e| e.to_string())?;
     match routing["subtype"].as_str() {
         Some("audioOnlyDeletion") => {
-            super::audio::intent::read(db, operation, cancelled)?
-                .verify_kept_history_anchor(db, &storage.managed_anchor)?;
+            super::audio_supersession::inspect_kept(
+                db,
+                &storage.managed_anchor,
+                operation,
+                cancelled,
+            )?;
             Ok("keptAudio")
         }
         Some("modelDeletion") => {

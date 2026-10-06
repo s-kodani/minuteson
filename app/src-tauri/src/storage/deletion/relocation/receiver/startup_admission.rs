@@ -347,10 +347,12 @@ pub(in crate::storage) fn admitted_history(
                     return Err("保持した会議削除の元実体が一致しません".into());
                 }
             }
-            "keptAudio" => {
-                super::super::super::audio::intent::read(&db, &record.operation_id, &|| false)?
-                    .verify_kept_history_anchor(&db, &anchor)?
-            }
+            "keptAudio" => super::super::super::audio_supersession::inspect_kept(
+                &db,
+                &anchor,
+                &record.operation_id,
+                &|| false,
+            )?,
             "keptModel" => super::super::super::models::intent::read(&db, &record.operation_id)?
                 .verify_kept_history_anchor(&db, &anchor, admission.models_root())?,
             _ => {}

@@ -97,7 +97,6 @@ fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(),
     }
 }
 impl Prepared {
-    #[cfg(target_os = "macos")]
     pub(in crate::storage::deletion) fn verify_kept_history_anchor(
         &self,
         db: &Connection,

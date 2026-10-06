@@ -150,11 +150,18 @@ impl SourceFrame {
     }
     pub(super) fn verify_superseded(
         &self,
+        db: &Connection,
         proof: &crate::storage::deletion::audio_supersession::Proof,
     ) -> Result<(), String> {
         let manifest = &self.0.saved.snapshot.manifest;
         if !self.0.completed()
-            || (manifest.root.clone(), manifest.database.clone()) != proof.identities()
+            || !proof.matches_root(
+                db,
+                self.0.saved.operation(),
+                self.0.saved.meeting(),
+                &manifest.root,
+                &manifest.database,
+            )?
         {
             return Err("引き継ぐ音声削除の完了状態・管理領域が一致しません".into());
         }
@@ -221,7 +228,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<SourceFrame, String> {
         let frame = SourceFrame(Self::load_frame(db, operation, Some(proof), check)?);
-        frame.verify_superseded(proof)?;
+        frame.verify_superseded(db, proof)?;
         Ok(frame)
     }
     fn load_frame(

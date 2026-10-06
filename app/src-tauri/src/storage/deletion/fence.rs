@@ -14,10 +14,12 @@ pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installi
 // Keep other_pending below restricted to actual unfinished operations: several
 // independent completed receipts can be reviewed one at a time under the real
 // shared lease, while ordinary writes stay blocked until all hints resolve.
+// Invalid retained records also fence writes; a recovered state must not hide
+// a startup-detected orphan or make its historical consent executable again.
 pub(in crate::storage) fn predicate(db: &Connection) -> Result<String, String> {
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema WHERE type='table' AND name='mon_deletion_startup_attention')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     Ok(if exists {
-        format!("({UNFINISHED} OR (kind IN ('delete_meeting','delete_assets') AND state='completed' AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
+        format!("({UNFINISHED} OR (kind IN ('delete_meeting','delete_assets') AND state IN ('completed','recovered') AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
     } else {
         UNFINISHED.into()
     })

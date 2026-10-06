@@ -433,10 +433,12 @@ pub(crate) fn inspect(
                         return Err("保持した会議削除履歴の実体が一致しません".into());
                     }
                 }
-                "keptAudio" => {
-                    super::super::audio::intent::read(&db, &record.operation_id, cancelled)?
-                        .verify_kept_history_anchor(&db, &anchor)?
-                }
+                "keptAudio" => super::super::audio_supersession::inspect_kept(
+                    &db,
+                    &anchor,
+                    &record.operation_id,
+                    cancelled,
+                )?,
                 "keptModel" => super::super::models::intent::read(&db, &record.operation_id)?
                     .verify_kept_history_anchor(&db, &anchor, models)?,
                 _ => return Err("保持した削除履歴の型が一致しません".into()),

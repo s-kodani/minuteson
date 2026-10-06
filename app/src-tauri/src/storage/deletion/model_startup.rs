@@ -34,7 +34,7 @@ pub(in crate::storage) fn inspect(
     anchor: &crate::storage::deletion::fs::RootAnchor,
     root: &Path,
 ) -> Result<Vec<(String, &'static str)>, String> {
-    let mut query = db.prepare("SELECT id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' ORDER BY created_at,id LIMIT 10001").map_err(|e| e.to_string())?;
+    let mut query = db.prepare("SELECT id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END,state FROM maintenance_operations WHERE kind='delete_assets' AND state IN ('completed','recovered') ORDER BY created_at,id LIMIT 10001").map_err(|e| e.to_string())?;
     let mut rows = query.query([]).map_err(|e| e.to_string())?;
     let mut count = 0;
     let mut attention = Vec::new();
@@ -43,7 +43,8 @@ pub(in crate::storage) fn inspect(
         count += 1;
         if count > MAX_COMPLETED {
             return Err(
-                "完了済みモデル削除履歴が起動時検査の上限を超えています。対象を保持します".into(),
+                "完了・保持した資産削除履歴が起動時検査の上限を超えています。対象を保持します"
+                    .into(),
             );
         }
         let operation: String = row.get(0).map_err(|e| e.to_string())?;
@@ -55,6 +56,23 @@ pub(in crate::storage) fn inspect(
             let progress: Option<String> = row.get(2).map_err(|e| e.to_string())?;
             let json = json.ok_or("モデル削除履歴が容量上限を超えています")?;
             let progress = progress.ok_or("モデル削除進捗が容量上限を超えています")?;
+            let state: String = row.get(3).map_err(|e| e.to_string())?;
+            if state == "recovered" {
+                let route: serde_json::Value =
+                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                match route["subtype"].as_str() {
+                    Some("audioOnlyDeletion") => super::super::audio_supersession::inspect_kept(
+                        db,
+                        anchor,
+                        &operation,
+                        &|| false,
+                    )?,
+                    Some("modelDeletion") => super::intent::read(db, &operation)?
+                        .verify_kept_history_anchor(db, anchor, root)?,
+                    _ => return Err("未開始保持の資産削除履歴の種類が不正です".into()),
+                }
+                return Ok(None);
+            }
             if super::super::audio_supersession::startup_parent(db, anchor, &operation)?.is_some() {
                 return Ok(None);
             }

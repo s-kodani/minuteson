@@ -209,6 +209,11 @@ pub(in crate::storage) fn backup_deleted(
     check: &impl Fn() -> bool,
 ) -> Result<std::collections::BTreeSet<String>, String> {
     super::super::super::cancel(check)?;
+    crate::storage::deletion::audio_supersession::verify_detached_kept(
+        db,
+        &storage.managed_anchor,
+        check,
+    )?;
     let ids = db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND (meeting_id IS NOT NULL OR json_type(target_manifest_json,'$.meeting') IS NOT NULL) ORDER BY id LIMIT 10001")
         .map_err(|e| e.to_string())?.query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;

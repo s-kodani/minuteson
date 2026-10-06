@@ -10,6 +10,9 @@ use crate::{
 use rusqlite::config::DbConfig;
 use std::{cell::Cell, path::PathBuf};
 
+#[path = "kept_audio_supersession_tests.rs"]
+mod kept_history;
+
 struct Fixture {
     base: tempfile::TempDir,
     storage: Storage,

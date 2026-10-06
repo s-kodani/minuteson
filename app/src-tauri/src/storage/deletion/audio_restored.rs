@@ -342,8 +342,13 @@ pub(in crate::storage::deletion::audio) fn superseded_baseline(
     check: &impl Fn() -> bool,
 ) -> Result<SupersededBaseline, String> {
     let header = Receipt::read_header(db, operation, Some(proof), check)?;
-    if (header.root.clone(), header.database.clone()) != proof.identities()
-        || header.meeting != child.scope.meeting_id
+    if !proof.matches_root(
+        db,
+        operation,
+        &header.meeting,
+        &header.root,
+        &header.database,
+    )? || header.meeting != child.scope.meeting_id
         || header.tables[2].rows != child.records.audio_assets.len() as u64
         || child.records.audio_assets.iter().any(|(path, id)| {
             !uuid(id) || *path != format!("meetings/{}/restored/{id}", header.meeting)
@@ -385,7 +390,13 @@ pub(in crate::storage::deletion) fn validate_superseded(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let header = Receipt::read_header(db, operation, Some(proof), check)?;
-    if (header.root, header.database) != proof.identities() {
+    if !proof.matches_root(
+        db,
+        operation,
+        &header.meeting,
+        &header.root,
+        &header.database,
+    )? {
         return Err("引き継ぐ復元音声履歴の管理領域が一致しません".into());
     }
     cancel(check)

@@ -177,7 +177,6 @@ impl Prepared {
             crate::storage::deletion::database::Scope::capture(db, meeting, operation, check)
         }
     }
-    #[cfg(target_os = "macos")]
     pub(in crate::storage::deletion) fn verify_kept_history_anchor(
         &self,
         db: &Connection,
@@ -194,6 +193,26 @@ impl Prepared {
             return Err("保持した音声削除履歴の保存先・DB実体が一致しません".into());
         }
         Ok(())
+    }
+    pub(in crate::storage::deletion) fn verify_kept_ancestry(
+        &self,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if !self.kept {
+            return Err("未開始保持の音声記録ではありません".into());
+        }
+        if self.header.origin.is_some() {
+            let source = reconfirmation::Source::for_prepared(db, self, check)?;
+            if source
+                .source_bytes()
+                .checked_add(self.snapshot.encode()?.len())
+                .is_none_or(|n| n > MAX_BYTES)
+            {
+                return Err("音声保持履歴の証拠合計が容量上限を超えています".into());
+            }
+        }
+        super::cancel(check)
     }
     pub(in crate::storage::deletion) fn verify_saved(
         &self,
@@ -311,7 +330,14 @@ fn read_frame(
     let consent = consent.ok_or("音声削除の同意時刻がありません")?;
     let meeting_valid = match supersession {
         None => meeting.as_deref() == Some(header.meeting_id.as_str()),
-        Some(proof) => meeting.is_none() && proof.authorizes(operation, &header.meeting_id),
+        Some(proof) => {
+            meeting.is_none()
+                && if kept {
+                    proof.authorizes_kept(operation, &header.meeting_id)
+                } else {
+                    proof.authorizes(operation, &header.meeting_id)
+                }
+        }
     };
     if !meeting_valid
         || kind != "delete_assets"
