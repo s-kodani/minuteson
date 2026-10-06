@@ -16,12 +16,12 @@ const d = window.audioDeletionFixture = {
     const p = makePreview(phase);
     if (altered) Object.assign(p, { executeAllowed: false, resumeReason: "確認後に音声が変わりました。保持しています", reconfirmationAllowed: phase === "awaiting_ack" });
     d.pendingPreview = p;
-    d.items = [{ operationId: p.operationId, state: phase === "awaiting_ack" ? "completed" : "installing", meetingId: p.meetingId, reviewAllowed: true, errorMessage: null, startupReason: null }];
+    d.items = [{ operationId: p.operationId, state: ["awaiting_ack", "restored_unavailable"].includes(phase) ? "completed" : "installing", meetingId: p.meetingId, reviewAllowed: true, errorMessage: null, startupReason: phase === "restored_unavailable" ? "restored_audio_scope_reappeared" : null }];
   },
 };
-const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID(), operationId: crypto.randomUUID(), meetingId: f.meetings[0].id, sourceOperationId: null,
-  phase, pending: phase !== "review", executeAllowed: true, resumeReason: null, keepAllowed: phase === "not_started", reconfirmationAllowed: false,
-  includeUnregisteredRecorded: phase === "review" ? null : d.unknownCount > 0, pathCount: d.fileCount + 1,
+const makePreview = (phase = "review") => ({ confirmationId: crypto.randomUUID(), operationId: crypto.randomUUID(), meetingId: f.meetings[0].id, sourceOperationId: null, reconfirmationSourceKind: null,
+  phase, pending: phase !== "review", executeAllowed: phase !== "restored_unavailable", resumeReason: phase === "restored_unavailable" ? "元記録に削除同意がありません" : null, keepAllowed: phase === "not_started", reconfirmationAllowed: phase === "restored_unavailable",
+  includeUnregisteredRecorded: ["review", "restored_unavailable"].includes(phase) ? null : d.unknownCount > 0, pathCount: d.fileCount + 1,
   processedFiles: phase === "files" ? 1 : ["availability", "awaiting_ack"].includes(phase) ? d.fileCount : 0,
   audioFiles: d.fileCount, audioBytes: 20 * d.fileCount, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: d.unknownCount, unclassifiedFiles: 1,
   retained: { analysisRevisions: 2, utterances: 105, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 4, jobs: 3, externalExportRecords: 1 },
@@ -83,17 +83,18 @@ mockIPC(async (command, args) => {
     if (!p || r.token !== f.snapshot.token || r.confirmationId !== p.confirmationId || f.snapshot.busy) throw Error("確認が変更されています");
     d.last = structuredClone(r);
     if (r.action === "refresh") {
-      await f.changed({ phase: "ready", retryAllowed: true, busy: false, attentionRequired: false, errorMessage: null, audioDeletionPreview: { ...p, confirmationId: crypto.randomUUID(), executeAllowed: d.mode !== "unknown", resumeReason: d.mode === "unknown" ? "変更された音声を保持" : null, reconfirmationAllowed: d.mode === "unknown" && p.phase === "awaiting_ack" } });
+      await f.changed({ phase: "ready", retryAllowed: true, busy: false, attentionRequired: false, errorMessage: null, audioDeletionPreview: { ...p, confirmationId: crypto.randomUUID(), executeAllowed: p.phase !== "restored_unavailable" && d.mode !== "unknown", resumeReason: p.phase === "restored_unavailable" ? "元記録に削除同意がありません" : d.mode === "unknown" ? "変更された音声を保持" : null, reconfirmationAllowed: p.phase === "restored_unavailable" || (d.mode === "unknown" && p.phase === "awaiting_ack") } });
       return structuredClone(f.snapshot);
     }
     if (r.action === "review_remaining") {
       if (!p.reconfirmationAllowed) throw Error("再同意できません");
-      await f.changed({ phase: "ready", retryAllowed: true, busy: false, attentionRequired: false, errorMessage: null, audioDeletionPreview: { ...p, confirmationId: crypto.randomUUID(), operationId: crypto.randomUUID(), sourceOperationId: p.operationId, phase: "reconfirmation", pending: true, executeAllowed: true, resumeReason: null, reconfirmationAllowed: false, keepAllowed: false, includeUnregisteredRecorded: null, processedFiles: 0, unregisteredAudioFiles: d.unknownCount, priorDeletionCompleted: true } });
+      if (p.phase === "restored_unavailable") d.originalRestoredItem = structuredClone(d.items.find(i => i.operationId === p.operationId));
+      await f.changed({ phase: "ready", retryAllowed: true, busy: false, attentionRequired: false, errorMessage: null, audioDeletionPreview: { ...p, confirmationId: crypto.randomUUID(), operationId: crypto.randomUUID(), sourceOperationId: p.operationId, reconfirmationSourceKind: p.phase === "restored_unavailable" ? "restored_audio_unavailable" : "native_audio_deletion", phase: "reconfirmation", pending: true, executeAllowed: true, resumeReason: null, reconfirmationAllowed: false, keepAllowed: false, includeUnregisteredRecorded: null, processedFiles: 0, unregisteredAudioFiles: d.unknownCount, priorDeletionCompleted: p.phase !== "restored_unavailable" } });
       return structuredClone(f.snapshot);
     }
     if (r.action === "keep") {
       if (!p.keepAllowed) throw Error("開始済み削除は保持不可");
-      d.kept++; d.items = []; d.restart = d.cold; d.blocked = d.restart;
+      d.kept++; d.items = d.originalRestoredItem ? [d.originalRestoredItem] : []; d.restart = d.cold && !d.items.length; d.blocked = d.restart || !!d.items.length;
       await f.changed({ phase: "completed", retryAllowed: false, attentionRequired: false, errorMessage: null, restartRequired: d.restart, audioDeletionPreview: { ...p, phase: "retained", pending: false, executeAllowed: false }, audioDeletionReceipt: { operationId: p.operationId, meetingId: p.meetingId, audioDeleted: false, retained: true, historyRetained: true, restartRequired: d.restart } });
       return structuredClone(f.snapshot);
     }
@@ -102,15 +103,21 @@ mockIPC(async (command, args) => {
     d.blocked = true;
     const policy = p.includeUnregisteredRecorded ?? r.action === "delete_including_unregistered";
     d.items = [{ operationId: p.operationId, state: "installing", meetingId: p.meetingId, reviewAllowed: true, errorMessage: null, startupReason: null }];
+    if (d.mode === "unstarted") {
+      d.pendingPreview = { ...p, phase: "not_started", reconfirmationSourceKind: null, pending: true, executeAllowed: false, resumeReason: "同意保存後に停止。音声は未開始のまま保持", keepAllowed: true, reconfirmationAllowed: false, includeUnregisteredRecorded: policy, processedFiles: 0 };
+      if (d.originalRestoredItem) d.items.push(d.originalRestoredItem);
+      await f.changed({ phase: "attention", busy: false, retryAllowed: false, attentionRequired: true, audioDeletionPreview: d.pendingPreview, errorMessage: "同意保存後に停止。音声は未開始のまま保持" });
+      return structuredClone(f.snapshot);
+    }
     await f.changed({ phase: "deleting_audio_files", busy: true, retryAllowed: false });
     d.complete = async () => {
       if ((f.snapshot.phase === "cancelling" && d.mode !== "cancelRace") || d.mode === "partial") {
-        d.pendingPreview = { ...p, phase: "files", pending: true, executeAllowed: false, resumeReason: "停止後に残りを再検査してください", keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: policy, processedFiles: 1 };
+        d.pendingPreview = { ...p, phase: "files", reconfirmationSourceKind: null, pending: true, executeAllowed: false, resumeReason: "停止後に残りを再検査してください", keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: policy, processedFiles: 1 };
         await f.changed({ phase: "attention", busy: false, attentionRequired: true, audioDeletionPreview: d.pendingPreview, errorMessage: "部分削除を保持しています。復元していません" }); return;
       }
       d.deleted++; d.items = []; d.restart = d.cold; d.blocked = d.restart;
       await f.changed({ phase: "completed", busy: false, retryAllowed: false, attentionRequired: false, errorMessage: null, restartRequired: d.restart,
-        audioDeletionPreview: { ...p, phase: "completed", pending: false, executeAllowed: false, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: policy, processedFiles: p.audioFiles - (policy ? 0 : p.unregisteredAudioFiles), priorDeletionCompleted: true },
+        audioDeletionPreview: { ...p, phase: "completed", reconfirmationSourceKind: null, pending: false, executeAllowed: false, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: policy, processedFiles: p.audioFiles - (policy ? 0 : p.unregisteredAudioFiles), priorDeletionCompleted: true },
         audioDeletionReceipt: { operationId: p.operationId, meetingId: p.meetingId, audioDeleted: true, retained: false, historyRetained: true, restartRequired: d.restart } });
     };
     if (!["delay", "cancelRace"].includes(d.mode)) setTimeout(() => void d.complete(), 40);

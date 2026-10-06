@@ -270,6 +270,9 @@ impl Review {
     pub(in crate::storage::deletion::audio) fn source_operation(&self) -> &str {
         &self.source.origin.operation_id
     }
+    pub(in crate::storage::deletion::audio) fn source_was_restored(&self) -> bool {
+        self.source.receipts.is_empty() && self.source.restored.is_some()
+    }
     pub(in crate::storage::deletion::audio) fn verify_live(
         &self,
         storage: &Storage,

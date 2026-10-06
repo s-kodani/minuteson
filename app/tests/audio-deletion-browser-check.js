@@ -164,7 +164,7 @@ async (page) => {
     d.items = [{ operationId: crypto.randomUUID(), state: "completed", meetingId: null, reviewAllowed: false, errorMessage: "復元履歴を検証できません", startupReason: "restored_audio_scope_reappeared" }];
   });
   await page.getByRole("button", { name: "設定", exact: true }).click();
-  await region().getByRole("alert").filter({ hasText: "復元履歴の解決は未対応" }).waitFor();
+  await region().getByRole("alert").filter({ hasText: "元の利用不可記録には削除同意がありません" }).waitFor();
   check(await region().getByRole("button", { name: "未完了音声削除の対象を確認", exact: true }).isDisabled() && await page.getByRole("button", { name: "バックアップを作成", exact: true }).isDisabled(), "unsupported restored receipt granted authority"); results.push("restored invalid history stays visible without review or ordinary writes");
 
   await boot(); await pending("not_started");

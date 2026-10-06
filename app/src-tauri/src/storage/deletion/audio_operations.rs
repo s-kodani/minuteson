@@ -16,6 +16,8 @@ pub(crate) struct Preview {
     pub operation_id: String,
     pub meeting_id: String,
     pub source_operation_id: Option<String>,
+    // Display attribution for a live new-scope review, never a permit.
+    pub reconfirmation_source_kind: Option<String>,
     pub phase: String,
     pub pending: bool,
     pub execute_allowed: bool,
@@ -77,6 +79,7 @@ enum Target {
     Unstarted(intent::Prepared),
     Files(removal::Receipt),
     Reconfirmation(reconfirmation::Review),
+    Restored(reconfirmation::Review),
     Kept(intent::Prepared),
 }
 impl Target {
@@ -85,7 +88,7 @@ impl Target {
             Self::Fresh(c) => c.snapshot(),
             Self::Unstarted(p) | Self::Kept(p) => p.snapshot().clone(),
             Self::Files(r) => r.confirmed().snapshot().clone(),
-            Self::Reconfirmation(r) => r.snapshot().clone(),
+            Self::Reconfirmation(r) | Self::Restored(r) => r.snapshot().clone(),
         }
     }
     fn verify(
@@ -100,6 +103,10 @@ impl Target {
             Self::Unstarted(p) => p.verify_current(storage, lease, check)?,
             Self::Files(r) => r.verify_live(storage, lease, check)?,
             Self::Reconfirmation(r) => r.verify_live(storage, lease, check)?,
+            Self::Restored(r) => {
+                r.verify_live(storage, lease, check)?;
+                return Err("復元元の利用不可記録には削除同意がありません。現在の音声を新しい操作で確認してください".into());
+            }
             Self::Kept(_) => return Err("この音声削除は未開始のまま保持・中止済みです".into()),
         }
         active(lease, check)
@@ -116,7 +123,35 @@ pub(crate) fn authorize_review(storage: &Storage, operation: Option<&str>) -> Re
         storage.require_data_writable()
     }
 }
-fn load(storage: &Storage, operation: &str) -> Result<Target, String> {
+enum Loaded {
+    Native(Target),
+    Restored(super::restored::Source),
+}
+impl Loaded {
+    fn meeting(&self) -> String {
+        match self {
+            Self::Native(t) => t.snapshot().scope.meeting_id,
+            Self::Restored(r) => r.meeting().to_owned(),
+        }
+    }
+    fn live(
+        self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<Target, String> {
+        match self {
+            Self::Native(t) => Ok(t),
+            Self::Restored(r) => Ok(Target::Restored(reconfirmation::Review::capture(
+                storage,
+                r.operation(),
+                lease,
+                check,
+            )?)),
+        }
+    }
+}
+fn load(storage: &Storage, operation: &str) -> Result<Loaded, String> {
     intent::authorize_review(storage, operation)?;
     let db = storage
         .connection
@@ -129,16 +164,22 @@ fn load(storage: &Storage, operation: &str) -> Result<Target, String> {
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    match state.as_str() {
-        "prepared" => Ok(Target::Unstarted(intent::read(&db, operation, &|| false)?)),
-        "recovered" => Ok(Target::Kept(intent::read(&db, operation, &|| false)?)),
-        "installing" | "cleanup" | "completed" => Ok(Target::Files(removal::Receipt::load(
+    if super::restored::hinted(&db, operation)? {
+        return Ok(Loaded::Restored(super::restored::Source::load(
             &db,
             operation,
             &|| false,
-        )?)),
-        _ => Err("この音声削除記録は自動採用できません。履歴と対象を保持します".into()),
+        )?));
     }
+    let target = match state.as_str() {
+        "prepared" => Target::Unstarted(intent::read(&db, operation, &|| false)?),
+        "recovered" => Target::Kept(intent::read(&db, operation, &|| false)?),
+        "installing" | "cleanup" | "completed" => {
+            Target::Files(removal::Receipt::load(&db, operation, &|| false)?)
+        }
+        _ => return Err("この音声削除記録は自動採用できません。履歴と対象を保持します".into()),
+    };
+    Ok(Loaded::Native(target))
 }
 pub(crate) fn listing(storage: &Storage) -> Result<Listing, String> {
     let rows = {
@@ -174,7 +215,7 @@ pub(crate) fn listing(storage: &Storage) -> Result<Listing, String> {
         let target = load(storage, &operation_id);
         items.push(match target {
             Ok(target) => Item {
-                meeting_id: Some(target.snapshot().scope.meeting_id),
+                meeting_id: Some(target.meeting()),
                 operation_id,
                 state,
                 review_allowed: true,
@@ -234,15 +275,31 @@ impl Prepared {
                 r.processed_files(),
                 r.completed(),
             ),
-            Target::Reconfirmation(r) => {
-                ("reconfirmation", None, Some(r.source_operation()), 0, true)
-            }
+            Target::Reconfirmation(r) => (
+                "reconfirmation",
+                None,
+                Some(r.source_operation()),
+                0,
+                !r.source_was_restored(),
+            ),
+            Target::Restored(_) => ("restored_unavailable", None, None, 0, false),
         };
         Ok(Preview {
             confirmation_id: Uuid::new_v4().to_string(),
             operation_id: operation.into(),
             meeting_id: s.scope.meeting_id.clone(),
             source_operation_id: source.map(str::to_owned),
+            reconfirmation_source_kind: match target {
+                Target::Reconfirmation(r) => Some(
+                    if r.source_was_restored() {
+                        "restored_audio_unavailable"
+                    } else {
+                        "native_audio_deletion"
+                    }
+                    .into(),
+                ),
+                _ => None,
+            },
             phase: phase.into(),
             pending: !matches!(target, Target::Fresh(_) | Target::Kept(_)),
             execute_allowed: false,
@@ -282,7 +339,10 @@ impl Prepared {
             Ok(()) => preview.execute_allowed = true,
             Err(reason) => preview.resume_reason = Some(reason),
         }
-        if matches!(&target, Target::Files(r) if r.completed()) && !preview.execute_allowed {
+        if (matches!(&target, Target::Files(r) if r.completed())
+            || matches!(&target, Target::Restored(_)))
+            && !preview.execute_allowed
+        {
             preview.reconfirmation_allowed =
                 reconfirmation::Review::capture(storage, &operation, lease, check).is_ok();
         }
@@ -328,7 +388,7 @@ impl Prepared {
         Self::build(
             storage,
             operation.into(),
-            load(storage, operation)?,
+            load(storage, operation)?.live(storage, lease, check)?,
             lease,
             check,
         )
@@ -382,7 +442,7 @@ impl Prepared {
                 Target::Reconfirmation(r) => Target::Reconfirmation(
                     reconfirmation::Review::capture(storage, r.source_operation(), lease, check)?,
                 ),
-                _ => load(storage, &self.preview.operation_id)?,
+                _ => load(storage, &self.preview.operation_id)?.live(storage, lease, check)?,
             };
         *self = Self::build(
             storage,
@@ -439,7 +499,9 @@ impl Prepared {
         }
         let result = self.execute_inner(storage, lease, include, check, progress);
         if result.is_err() {
-            if let Ok(target) = load(storage, &self.preview.operation_id) {
+            if let Ok(target) = load(storage, &self.preview.operation_id)
+                .and_then(|t| t.live(storage, lease, check))
+            {
                 self.target = target;
             }
             if let Ok(p) = Self::static_preview(&self.preview.operation_id, &self.target) {
@@ -551,7 +613,7 @@ impl Prepared {
             return Err("保持できるのは音声削除を開始していない記録だけです".into());
         }
         intent::keep_unstarted(storage, &self.preview.operation_id, lease, check)?;
-        self.target = load(storage, &self.preview.operation_id)?;
+        self.target = load(storage, &self.preview.operation_id)?.live(storage, lease, check)?;
         self.preview = Self::static_preview(&self.preview.operation_id, &self.target)?;
         self.preview.pending = false;
         Ok(self.receipt(storage, false))

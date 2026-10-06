@@ -4,7 +4,8 @@ export interface AudioDeletionTrack { id: string; kind: string; state: string; c
 export interface AudioDeletionRetained { analysisRevisions: number; utterances: number; minutesRevisions: number; drafts: number; editOperations: number; evidenceLinks: number; jobs: number; externalExportRecords: number }
 export interface AudioDeletionPreview {
   confirmationId: string; operationId: string; meetingId: string; sourceOperationId: string | null;
-  phase: "review" | "not_started" | "files" | "availability" | "awaiting_ack" | "reconfirmation" | "retained" | "completed";
+  reconfirmationSourceKind: "native_audio_deletion" | "restored_audio_unavailable" | null;
+  phase: "review" | "not_started" | "files" | "availability" | "awaiting_ack" | "restored_unavailable" | "reconfirmation" | "retained" | "completed";
   pending: boolean; executeAllowed: boolean; resumeReason: string | null; keepAllowed: boolean; reconfirmationAllowed: boolean;
   includeUnregisteredRecorded: boolean | null; pathCount: number; processedFiles: number; audioFiles: number; audioBytes: number;
   missingAudioFiles: number; changedAudioFiles: number; unregisteredAudioFiles: number; unclassifiedFiles: number;
@@ -21,20 +22,21 @@ const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 
 const fail = (): never => { throw Error("音声削除の状態が不正です。対象を再確認してください。"); };
 export function assertAudioDeletionPreview(p: AudioDeletionPreview): void {
   if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(id) || (p.sourceOperationId !== null && (!id(p.sourceOperationId) || p.sourceOperationId === p.operationId))
-    || !["review", "not_started", "files", "availability", "awaiting_ack", "reconfirmation", "retained", "completed"].includes(p.phase)
+    || !["review", "not_started", "files", "availability", "awaiting_ack", "restored_unavailable", "reconfirmation", "retained", "completed"].includes(p.phase)
     || ![p.pending, p.executeAllowed, p.keepAllowed, p.reconfirmationAllowed, p.priorDeletionCompleted].every(v => typeof v === "boolean")
     || (p.resumeReason !== null && !text(p.resumeReason)) || (p.executeAllowed && p.resumeReason !== null)
     || ![p.pathCount, p.processedFiles, p.audioFiles, p.audioBytes, p.missingAudioFiles, p.changedAudioFiles, p.unregisteredAudioFiles, p.unclassifiedFiles].every(count)
     || p.pathCount > 200000 || p.audioFiles + p.unclassifiedFiles > p.pathCount || p.processedFiles > p.audioFiles
     || p.missingAudioFiles + p.changedAudioFiles > p.audioFiles || p.unregisteredAudioFiles > p.audioFiles
-    || p.pending !== ["not_started", "files", "availability", "awaiting_ack", "reconfirmation"].includes(p.phase)
+    || p.pending !== ["not_started", "files", "availability", "awaiting_ack", "restored_unavailable", "reconfirmation"].includes(p.phase)
     || p.keepAllowed !== ["not_started", "retained"].includes(p.phase)
-    || (["review", "not_started", "reconfirmation", "retained"].includes(p.phase) && p.processedFiles !== 0)
+    || (["review", "not_started", "restored_unavailable", "reconfirmation", "retained"].includes(p.phase) && p.processedFiles !== 0)
     || (["retained", "completed"].includes(p.phase) && p.executeAllowed)
-    || (p.reconfirmationAllowed && (p.phase !== "awaiting_ack" || p.executeAllowed))
-    || (p.phase === "reconfirmation" && (!p.sourceOperationId || !p.priorDeletionCompleted))
+    || (p.reconfirmationAllowed && (!["awaiting_ack", "restored_unavailable"].includes(p.phase) || p.executeAllowed))
+    || (p.phase === "reconfirmation" ? (!p.sourceOperationId || !["native_audio_deletion", "restored_audio_unavailable"].includes(p.reconfirmationSourceKind!) || p.priorDeletionCompleted !== (p.reconfirmationSourceKind === "native_audio_deletion")) : p.reconfirmationSourceKind !== null)
+    || (p.phase === "restored_unavailable" && (p.executeAllowed || p.priorDeletionCompleted || p.sourceOperationId !== null))
     || (p.phase === "review" && (p.sourceOperationId !== null || p.priorDeletionCompleted))
-    || (["review", "reconfirmation"].includes(p.phase) ? p.includeUnregisteredRecorded !== null : typeof p.includeUnregisteredRecorded !== "boolean")) fail();
+    || (["review", "restored_unavailable", "reconfirmation"].includes(p.phase) ? p.includeUnregisteredRecorded !== null : typeof p.includeUnregisteredRecorded !== "boolean")) fail();
   const r = p.retained;
   if (!r || ![r.analysisRevisions, r.utterances, r.minutesRevisions, r.drafts, r.editOperations, r.evidenceLinks, r.jobs, r.externalExportRecords].every(count)
     || !Array.isArray(p.tracks) || p.tracks.length > 200000) fail();

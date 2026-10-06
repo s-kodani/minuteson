@@ -1026,3 +1026,6 @@ mod model_deletion_tests;
 
 #[cfg(all(test, unix))]
 mod audio_deletion_tests;
+
+#[cfg(all(test, unix))]
+pub(crate) mod restored_audio_synthetic;

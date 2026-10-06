@@ -14,6 +14,9 @@ use rusqlite::{config::DbConfig, TransactionBehavior};
 #[path = "restored_audio_reconfirmation_tests.rs"]
 mod reconfirmation;
 
+#[path = "restored_audio_controller_tests.rs"]
+mod controller;
+
 fn append_receipt(
     source: &Storage,
     target: &Storage,

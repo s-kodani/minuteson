@@ -341,6 +341,8 @@ impl Work {
                     },
                     Err(error) => Completion {
                         error: Some(error),
+                        attention: storage.data_write_blocked(),
+                        restart_required: storage.restart_required(),
                         cancelled: cancelled(),
                         ..Completion::default()
                     },

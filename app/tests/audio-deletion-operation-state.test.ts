@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 import { assertAudioDeletionListing, assertAudioDeletionPage, assertAudioDeletionPreview, type AudioDeletionPreview } from "../src/audio-deletion-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
-const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
+const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, reconfirmationSourceKind: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "audio_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, modelDeletionPreview: null, modelDeletionReceipt: null, audioDeletionPreview: preview(), audioDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 test("audio requests contain only native IDs and require separate unregistered consent", () => {
   const s = ready();
@@ -30,7 +30,7 @@ test("completed reappearance requires another operation linked to the old source
   const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "awaiting_ack", pending: true, includeUnregisteredRecorded: false, executeAllowed: false, resumeReason: "returned", reconfirmationAllowed: true, priorDeletionCompleted: true, processedFiles: 1 });
   Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });
   assert.doesNotThrow(() => dataRequest(s, "review_remaining"));
-  const next = ready(); Object.assign(next.audioDeletionPreview!, { phase: "reconfirmation", pending: true, sourceOperationId: id(6), priorDeletionCompleted: true, unregisteredAudioFiles: 1 });
+  const next = ready(); Object.assign(next.audioDeletionPreview!, { phase: "reconfirmation", pending: true, sourceOperationId: id(6), reconfirmationSourceKind: "native_audio_deletion", priorDeletionCompleted: true, unregisteredAudioFiles: 1 });
   assert.doesNotThrow(() => dataRequest(next, "delete_including_unregistered"));
   assert.throws(() => dataRequest(next, "publish"));
   assert.throws(() => assertAudioDeletionPreview({ ...next.audioDeletionPreview!, sourceOperationId: id(3) }));
@@ -86,4 +86,27 @@ test("old audio events cannot overwrite a refreshed confirmation", () => {
   const s = ready(), newer = { ...ready(), revision: 3, audioDeletionPreview: { ...preview(), confirmationId: id(6) } };
   assert.equal(acceptDataSnapshot(newer, s), newer);
   assert.throws(() => acceptDataSnapshot(s, { ...s, audioDeletionPreview: { ...preview(), confirmationId: id(6) } }));
+});
+test("restored baseline is a read-only source, not a deletion consent or completed deletion", () => {
+  const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "restored_unavailable", pending: true, executeAllowed: false, resumeReason: "no consent", reconfirmationAllowed: true });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  for (const action of ["refresh", "review_remaining"] as const) assert.doesNotThrow(() => dataRequest(s, action));
+  for (const action of ["publish", "keep", "recover", "delete_including_unregistered"] as const) assert.throws(() => dataRequest(s, action));
+  for (const change of [{ executeAllowed: true, resumeReason: null }, { priorDeletionCompleted: true }, { processedFiles: 1 }, { includeUnregisteredRecorded: true }, { reconfirmationSourceKind: "restored_audio_unavailable" }]) assert.throws(() => assertAudioDeletionPreview({ ...s.audioDeletionPreview!, ...change } as never));
+});
+test("restored new scope declares an unavailable source, never a previously completed deletion", () => {
+  const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "reconfirmation", pending: true, sourceOperationId: id(6), reconfirmationSourceKind: "restored_audio_unavailable", priorDeletionCompleted: false });
+  assert.equal(dataRequest(s, "publish").action, "publish");
+  for (const change of [{ reconfirmationSourceKind: null }, { reconfirmationSourceKind: "forged" }, { reconfirmationSourceKind: "native_audio_deletion" }, { priorDeletionCompleted: true }, { sourceOperationId: id(3) }]) assert.throws(() => assertAudioDeletionPreview({ ...s.audioDeletionPreview!, ...change } as never));
+});
+test("restored baseline cannot carry a success receipt or silently release its restart fence", () => {
+  const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "restored_unavailable", pending: true, executeAllowed: false, resumeReason: "no consent", reconfirmationAllowed: true });
+  Object.assign(s, { restartRequired: true });
+  assert.doesNotThrow(() => dataRequest(s, "review_remaining"));
+  assert.throws(() => assertDataSnapshot({ ...s, phase: "completed", retryAllowed: false, audioDeletionReceipt: { operationId: id(3), meetingId: id(4), audioDeleted: true, retained: false, historyRetained: true, restartRequired: true } }));
+});
+test("verified restored startup evidence is reviewable but invalid records are not", () => {
+  const listing = { items: [{ operationId: id(3), state: "completed", meetingId: id(4), reviewAllowed: true, errorMessage: null, startupReason: "restored_audio_scope_reappeared" }], writeBlocked: true, restartRequired: true, reason: "restart" };
+  assert.doesNotThrow(() => assertAudioDeletionListing(listing));
+  assert.throws(() => assertAudioDeletionListing({ ...listing, items: [{ ...listing.items[0], errorMessage: "invalid" }] }));
 });
