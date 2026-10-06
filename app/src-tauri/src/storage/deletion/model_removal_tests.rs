@@ -1,4 +1,6 @@
 //! Synthetic model bodies only. Child processes never execute a model engine.
+#[path = "model_renewal_tests.rs"]
+mod renewing;
 use super::*;
 use intent::removal;
 use std::{

@@ -6,10 +6,10 @@ use rusqlite::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// A v3 residual plan keeps the completed SQL state immutable. This predicate
+// Meeting/model v3 residual plans keep the completed SQL state immutable. This predicate
 // is only a conservative read/admission hint; typed receipt validation still
 // precedes every privileged writer and all file/row mutation.
-pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (kind='delete_meeting' AND state='completed' AND json_extract(progress_json,'$.version')=3))";
+pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (kind='delete_meeting' AND state='completed' AND json_extract(progress_json,'$.version')=3) OR (kind='delete_assets' AND state='completed' AND json_extract(progress_json,'$.version')=3 AND json_extract(progress_json,'$.phase')='removing'))";
 // These connection-local hints are not durable consent or a deletion permit.
 // Keep other_pending below restricted to actual unfinished operations: several
 // independent completed receipts can be reviewed one at a time under the real

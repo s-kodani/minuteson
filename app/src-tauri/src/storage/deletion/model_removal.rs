@@ -1,6 +1,6 @@
 //! Fixed model body removal. Immutable history and proof slots are retained.
 //! Normal names are never unlinked; only exact, journaled reserved names are.
-use super::super::{capture_locked, hash_file, present_inventory, usages, Entry, Observation};
+use super::super::{capture_locked, hash_file, usages, Entry, Observation};
 use super::{active, read_with_progress, Prepared};
 use crate::storage::deletion::fs::{Directory, Proof};
 use crate::{
@@ -10,6 +10,10 @@ use crate::{
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
+
+#[path = "model_renewal.rs"]
+pub(crate) mod renewal;
+use renewal::Plan;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +35,10 @@ struct Progress {
     census_hash: String,
     next: usize,
     pending: Option<Pending>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirmation: Option<renewal::Reference>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    previously_completed: bool,
 }
 impl Progress {
     fn encode(&self) -> Result<String, String> {
@@ -41,15 +49,16 @@ impl Progress {
         Ok(json)
     }
     fn state(&self) -> &'static str {
-        if self.phase == Phase::Completed {
+        if self.phase == Phase::Completed || self.previously_completed {
             "completed"
         } else {
             "installing"
         }
     }
-    fn validate(&self, saved: &Prepared) -> Result<(), String> {
-        let entries = &saved.snapshot.observations;
-        if self.version != 2
+    fn validate(&self, saved: &Prepared, plan: &Plan) -> Result<(), String> {
+        let entries = &plan.observations;
+        if !((self.version == 2 && self.confirmation.is_none() && !self.previously_completed)
+            || (self.version == 3 && self.confirmation.as_ref().is_some_and(|r| r.valid())))
             || self.census_hash != saved.header.census_hash
             || self.next > entries.len()
             || (self.phase == Phase::Completed
@@ -82,11 +91,21 @@ impl Progress {
         }
         Ok(())
     }
+    fn reserved(&self, operation: &str, index: usize) -> String {
+        match &self.confirmation {
+            Some(reference) => format!(
+                ".mon-delete-model-{operation}-g{}-{index}",
+                reference.generation
+            ),
+            None => format!(".mon-delete-model-{operation}-{index}"),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Receipt {
     saved: Prepared,
     progress: Progress,
+    plan: Plan,
 }
 impl Receipt {
     pub(in crate::storage::deletion) fn load(
@@ -105,8 +124,13 @@ impl Receipt {
             return Err("モデル削除の進捗が正規形式と一致しません".into());
         }
         let saved = read_with_progress(db, operation, Some((&state, &json)))?;
-        progress.validate(&saved)?;
-        Ok(Self { saved, progress })
+        let plan = renewal::active_plan(db, &saved, &progress)?;
+        progress.validate(&saved, &plan)?;
+        Ok(Self {
+            saved,
+            progress,
+            plan,
+        })
     }
     pub(in crate::storage::deletion) fn verify_saved(&self, db: &Connection) -> Result<(), String> {
         if Self::load(db, &self.saved.header.operation_id)? != *self {
@@ -124,18 +148,11 @@ impl Receipt {
         self.progress.phase == Phase::Completed
     }
     fn target(&self) -> Option<&Observation> {
-        self.saved
-            .snapshot
-            .observations
-            .iter()
-            .rev()
-            .nth(self.progress.next)
+        self.plan.observations.iter().rev().nth(self.progress.next)
     }
     fn reserved(&self, index: usize) -> String {
-        format!(
-            ".mon-delete-model-{}-{index}",
-            self.saved.header.operation_id
-        )
+        self.progress
+            .reserved(&self.saved.header.operation_id, index)
     }
     fn metadata(&self, storage: &Storage, db: &Connection) -> Result<(), String> {
         self.verify_anchor(storage)?;
@@ -170,7 +187,7 @@ impl Receipt {
         active(lease, check)?;
         self.verify_saved(db)?;
         self.metadata(storage, db)?;
-        next.validate(&self.saved)?;
+        next.validate(&self.saved, &self.plan)?;
         let valid = if next.next == self.progress.next + 1 {
             next.phase == Phase::Removing
                 && next.pending.is_none()
@@ -182,7 +199,7 @@ impl Receipt {
                         .is_some_and(|p| p.staged.is_some()))
         } else if next.next == self.progress.next && next.phase == Phase::Completed {
             self.progress.phase == Phase::Removing
-                && next.next == self.saved.snapshot.observations.len()
+                && next.next == self.plan.observations.len()
                 && next.pending.is_none()
                 && self.progress.pending.is_none()
         } else if next.next == self.progress.next && next.phase == Phase::Removing {
@@ -199,12 +216,14 @@ impl Receipt {
         if !valid
             || next.version != self.progress.version
             || next.census_hash != self.progress.census_hash
+            || next.confirmation != self.progress.confirmation
+            || next.previously_completed != self.progress.previously_completed
         {
             return Err("モデル削除の進捗遷移が不正です".into());
         }
         let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        if tx.execute("UPDATE maintenance_operations SET state=?2,progress_json=?3,updated_at=max(updated_at,?4) WHERE id=?1 AND kind='delete_assets' AND state='installing' AND progress_json=?5",params![self.saved.header.operation_id,next.state(),next.encode()?,storage::now_ms()?,self.progress.encode()?]).map_err(|e|e.to_string())?!=1 {
+        if tx.execute("UPDATE maintenance_operations SET state=?2,progress_json=?3,updated_at=max(updated_at,?4) WHERE id=?1 AND kind='delete_assets' AND state=?6 AND progress_json=?5",params![self.saved.header.operation_id,next.state(),next.encode()?,storage::now_ms()?,self.progress.encode()?,self.progress.state()]).map_err(|e|e.to_string())?!=1 {
             return Err("モデル削除進捗の確定対象が変更されています".into());
         }
         active(lease, check)?;
@@ -215,21 +234,11 @@ impl Receipt {
     }
 }
 
-fn parent(models: &Directory, saved: &Prepared, path: &str) -> Result<Option<Directory>, String> {
-    if path.is_empty() {
+fn parent(models: &Directory, plan: &Plan, path: &str) -> Result<Option<Directory>, String> {
+    if !path.contains('/') {
         return Ok(None);
-    } // package root uses models itself
-    let mut held = models
-        .child(&saved.header.package_id)?
-        .ok_or("モデルの親領域が消失しています")?;
-    let root = &saved.snapshot.observations[0];
-    held.verify_identity(
-        &root
-            .proof
-            .as_ref()
-            .ok_or("モデル親の確認実体がありません")?
-            .identity,
-    )?;
+    } // Exact selected root uses models itself.
+    let mut held: Option<Directory> = None;
     let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
     let mut relative = String::new();
     for component in parent.split('/').filter(|s| !s.is_empty()) {
@@ -238,13 +247,16 @@ fn parent(models: &Directory, saved: &Prepared, path: &str) -> Result<Option<Dir
         } else {
             format!("{relative}/{component}")
         };
-        let expected = saved
-            .snapshot
+        let expected = plan
             .observations
             .iter()
             .find(|o| o.entry.relative_path == relative)
             .ok_or("モデル親の確認対象がありません")?;
-        let child = held.child(component)?.ok_or("モデル親が消失しています")?;
+        let child = held
+            .as_ref()
+            .unwrap_or(models)
+            .child(component)?
+            .ok_or("モデル親が消失しています")?;
         child.verify_identity(
             &expected
                 .proof
@@ -252,16 +264,12 @@ fn parent(models: &Directory, saved: &Prepared, path: &str) -> Result<Option<Dir
                 .ok_or("モデル親の確認実体がありません")?
                 .identity,
         )?;
-        held = child;
+        held = Some(child);
     }
-    Ok(Some(held))
+    Ok(held)
 }
-fn leaf<'a>(saved: &'a Prepared, e: &'a Entry) -> &'a str {
-    if e.relative_path.is_empty() {
-        &saved.header.package_id
-    } else {
-        e.relative_path.rsplit('/').next().unwrap()
-    }
+fn leaf(e: &Entry) -> &str {
+    e.relative_path.rsplit('/').next().unwrap()
 }
 fn observed(dir: &Directory, name: &str, directory: bool) -> Result<Proof, String> {
     if directory {
@@ -301,45 +309,21 @@ fn verify_remaining(
     r.metadata(storage, db)?;
     let models = Directory::root(Path::new(&r.saved.header.models_root))?;
     models.verify_identity(&r.saved.snapshot.models_root)?;
-    let mut actual: BTreeMap<String, Observation> =
-        present_inventory(&models, &r.saved.snapshot.record, check)?
+    let roots = renewal::review_roots(&r.plan, &r.progress, &r.saved.header.operation_id)?;
+    let actual: BTreeMap<String, Observation> =
+        renewal::inventory(&models, &r.saved, &roots, check)?
             .into_iter()
-            .filter(|o| o.entry.present)
             .map(|o| (o.entry.relative_path.clone(), o))
             .collect();
-    // Package-root reservation is outside the original tree. Inspect exactly
-    // this derived sibling, never enumerate any other model root contents.
+    // Inspect only the model and exact historical/current reservation roots.
     let mut expected = BTreeMap::new();
-    for (index, o) in r.saved.snapshot.observations.iter().rev().enumerate() {
+    for (index, o) in r.plan.observations.iter().rev().enumerate() {
         let path = &o.entry.relative_path;
         let reserved = r.reserved(index);
         let reserved_path = path.rsplit_once('/').map_or_else(
             || reserved.clone(),
             |(parent, _)| format!("{parent}/{reserved}"),
         );
-        if path.is_empty() && models.optional_kind(&reserved)?.is_some() {
-            let child = models
-                .child(&reserved)?
-                .ok_or("モデル予約ルートが不正です")?;
-            if !child.names(super::super::MAX_ENTRIES)?.is_empty() {
-                return Err("モデル予約ルートに未知の内容があります".into());
-            }
-            actual.insert(
-                reserved_path.clone(),
-                Observation {
-                    entry: Entry {
-                        relative_path: reserved_path.clone(),
-                        directory: true,
-                        registered: false,
-                        present: true,
-                        bytes: None,
-                        sha256: None,
-                        changed: false,
-                    },
-                    proof: Some(child.proof()?),
-                },
-            );
-        }
         let original = actual.get(path);
         let staged = actual.get(&reserved_path);
         if index < r.progress.next || o.proof.is_none() {
@@ -435,8 +419,10 @@ pub(crate) fn start(
         census_hash: saved.header.census_hash.clone(),
         next: 0,
         pending: None,
+        confirmation: None,
+        previously_completed: false,
     };
-    progress.validate(&saved)?;
+    progress.validate(&saved, &Plan::original(&saved))?;
     for (index, o) in saved.snapshot.observations.iter().rev().enumerate() {
         let reserved = format!(".mon-delete-model-{operation}-{index}");
         let path = o
@@ -502,9 +488,9 @@ fn run_inner(
         active(lease, check)?;
         let models = verify_remaining(storage, &db, &r, &cancelled)?;
         if target.proof.is_some() {
-            let parent = parent(&models, &r.saved, &target.entry.relative_path)?;
+            let parent = parent(&models, &r.plan, &target.entry.relative_path)?;
             let dir = parent.as_ref().unwrap_or(&models);
-            let name = leaf(&r.saved, &target.entry).to_string();
+            let name = leaf(&target.entry).to_string();
             let reserved = r.reserved(r.progress.next);
             if r.progress.pending.is_none() {
                 if dir.optional_kind(&reserved)?.is_some() {
@@ -597,7 +583,9 @@ pub(in crate::storage) fn deleted(db: &Connection, package: &str) -> Result<bool
     }
     for id in &ids {
         let receipt = Receipt::load(db, id)?;
-        if !receipt.completed() || receipt.saved.header.package_id != package {
+        if !(receipt.completed() || receipt.progress.previously_completed)
+            || receipt.saved.header.package_id != package
+        {
             return Err("モデル削除の利用状態記録が不正です".into());
         }
     }
