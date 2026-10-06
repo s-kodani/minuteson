@@ -109,7 +109,6 @@ impl AnalysisController {
     }
 
     #[cfg(unix)]
-    #[allow(dead_code)] // Model deletion execution/recovery API follows.
     pub(crate) fn begin_model_deletion_maintenance(
         &self,
         storage: &Storage,

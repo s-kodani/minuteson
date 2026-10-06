@@ -10,6 +10,9 @@ const MAX_ENTRIES: usize = 256;
 const MAX_DEPTH: usize = 32;
 const MAX_PATH: usize = 4096;
 
+#[path = "model_operations.rs"]
+pub(crate) mod operations;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {
@@ -483,9 +486,7 @@ pub(crate) fn preview(
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
-// Kept internal until deletion execution and its recovery UI are connected.
-#[allow(dead_code)]
 #[path = "model_intent.rs"]
 pub(crate) mod intent;

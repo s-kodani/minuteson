@@ -236,6 +236,16 @@ fn source_hash(saved: &Prepared) -> Result<String, String> {
             .as_bytes(),
     ))
 }
+pub(super) fn recorded_policy(
+    db: &Connection,
+    saved: &Prepared,
+    progress: &Progress,
+) -> Result<bool, String> {
+    match &progress.confirmation {
+        Some(reference) => Ok(read_record(db, reference, saved)?.0.include_unregistered),
+        None => Ok(saved.include_unregistered()),
+    }
+}
 fn read_record(
     db: &Connection,
     reference: &Reference,
@@ -380,6 +390,26 @@ pub(crate) struct Review {
     census_hash: String,
 }
 impl Review {
+    pub(in crate::storage::deletion::models) fn previous(&self) -> &Receipt {
+        &self.receipt
+    }
+    pub(in crate::storage::deletion::models) fn roots(&self) -> Vec<String> {
+        self.plan.roots.clone()
+    }
+    pub(in crate::storage::deletion::models) fn verify_live(
+        &self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify(storage, &db, &|| check() || lease.cancelled())?;
+        active(lease, check)
+    }
     pub(crate) fn census_hash(&self) -> &str {
         &self.census_hash
     }

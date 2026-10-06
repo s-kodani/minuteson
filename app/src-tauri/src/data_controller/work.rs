@@ -9,7 +9,7 @@ pub(super) struct Admission {
 impl Admission {
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
         app.state::<Storage>().require_data_writable()?;
-        Self::acquire_worker(app, None)
+        Self::acquire_worker(app, None, false)
     }
     #[cfg(unix)]
     pub(super) fn acquire_deletion(
@@ -17,9 +17,21 @@ impl Admission {
         operation: Option<&str>,
     ) -> Result<Self, String> {
         deletion::authorize_review(&app.state::<Storage>(), operation)?;
-        Self::acquire_worker(app, operation)
+        Self::acquire_worker(app, operation, false)
     }
-    fn acquire_worker(app: &AppHandle, deletion_operation: Option<&str>) -> Result<Self, String> {
+    #[cfg(unix)]
+    pub(super) fn acquire_model_deletion(
+        app: &AppHandle,
+        operation: Option<&str>,
+    ) -> Result<Self, String> {
+        model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
+        Self::acquire_worker(app, operation, true)
+    }
+    fn acquire_worker(
+        app: &AppHandle,
+        deletion_operation: Option<&str>,
+        model: bool,
+    ) -> Result<Self, String> {
         let importing = app
             .state::<crate::import_controller::ImportController>()
             .snapshot()?;
@@ -31,19 +43,29 @@ impl Admission {
         let analysis = app.state::<AnalysisController>();
         #[cfg(unix)]
         let lease = if let Some(operation) = deletion_operation {
-            analysis.begin_deletion_maintenance(
-                &app.state::<Storage>(),
-                operation,
-                recording,
-                import_blocked,
-                &|| false,
-            )?
+            if model {
+                analysis.begin_model_deletion_maintenance(
+                    &app.state::<Storage>(),
+                    operation,
+                    recording,
+                    import_blocked,
+                    &|| false,
+                )?
+            } else {
+                analysis.begin_deletion_maintenance(
+                    &app.state::<Storage>(),
+                    operation,
+                    recording,
+                    import_blocked,
+                    &|| false,
+                )?
+            }
         } else {
             analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
         };
         #[cfg(not(unix))]
         let lease = {
-            let _ = deletion_operation;
+            let _ = (deletion_operation, model);
             analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
         };
         Ok(Self {
@@ -70,6 +92,12 @@ impl Drop for Admission {
     }
 }
 
+#[cfg(unix)]
+pub(crate) enum ModelTarget {
+    Fresh { package: String, review: String },
+    Pending(String),
+}
+
 pub(super) enum Work {
     Select(Kind, Result<Option<PathBuf>, String>, Option<Selection>),
     Request(Selection, Request),
@@ -78,6 +106,8 @@ pub(super) enum Work {
     PendingMove(Option<Selection>),
     #[cfg(unix)]
     Deletion(String, bool, Option<Selection>),
+    #[cfg(unix)]
+    ModelDeletion(PathBuf, ModelTarget, Option<Selection>),
 }
 
 #[derive(Default)]
@@ -89,6 +119,8 @@ pub(super) struct Completion {
     pub relocation: Option<MoveReceipt>,
     #[cfg(unix)]
     pub deletion: Option<deletion::Receipt>,
+    #[cfg(unix)]
+    pub model_deletion: Option<model_deletion::Receipt>,
     pub restart_required: bool,
     pub error: Option<String>,
     pub attention: bool,
@@ -253,6 +285,41 @@ impl Work {
     ) -> Completion {
         match self {
             #[cfg(unix)]
+            Self::ModelDeletion(root, target, previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    progress("verifying_model_delete_scope");
+                    let lease =
+                        admission.ok_or("モデル削除確認に必要な共有実行排他がありません")?;
+                    let p = match target {
+                        ModelTarget::Fresh { package, review } => model_deletion::Prepared::fresh(
+                            storage, &root, &package, &review, lease, cancelled,
+                        )?,
+                        ModelTarget::Pending(id) => model_deletion::Prepared::pending(
+                            storage, &root, &id, lease, cancelled,
+                        )?,
+                    };
+                    Ok::<_, String>(Selection::ModelDeletion(p))
+                }))
+                .unwrap_or_else(|_| {
+                    Err("モデル削除対象の検査が停止しました。対象を保持します".into())
+                });
+                match result {
+                    Ok(selection) => Completion {
+                        selection: Some(selection),
+                        restart_required: storage.restart_required(),
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        attention: storage.data_write_blocked(),
+                        cancelled: cancelled(),
+                        restart_required: storage.restart_required(),
+                        ..Completion::default()
+                    },
+                }
+            }
+            #[cfg(unix)]
             Self::Deletion(id, pending, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -329,6 +396,11 @@ impl Work {
                         Kind::Deletion => {
                             return Err("会議または未完了削除の一覧から確認してください".into())
                         }
+                        Kind::ModelDeletion => {
+                            return Err(
+                                "モデルまたは未完了モデル削除の一覧から確認してください".into()
+                            )
+                        }
                     };
                     if cancelled() {
                         return Err("データの確認を取り消しました".into());
@@ -351,6 +423,61 @@ impl Work {
                 }
             }
             Self::Request(mut selection, request) => {
+                #[cfg(unix)]
+                if let Selection::ModelDeletion(prepared) = &mut selection {
+                    let mut completion = Completion::default();
+                    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+                        let lease =
+                            admission.ok_or("モデル削除操作に必要な共有実行排他がありません")?;
+                        match request.action {
+                            Action::Refresh => {
+                                progress("verifying_model_delete_scope");
+                                prepared.refresh(storage, lease, cancelled)?;
+                            }
+                            Action::ReviewRemaining => {
+                                progress("verifying_model_delete_scope");
+                                prepared.review_remaining(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    cancelled,
+                                )?;
+                            }
+                            Action::Publish | Action::DeleteIncludingUnregistered => {
+                                completion.model_deletion = Some(prepared.execute(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    request.action == Action::DeleteIncludingUnregistered,
+                                    cancelled,
+                                    progress,
+                                )?);
+                            }
+                            Action::Keep => {
+                                completion.model_deletion = Some(prepared.keep(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    cancelled,
+                                )?)
+                            }
+                            _ => return Err("モデル削除確認と操作が一致しません".into()),
+                        }
+                        Ok(())
+                    }));
+                    match result {
+                        Ok(Ok(())) => {},
+                        Ok(Err(error)) => completion.error = Some(error),
+                        Err(_) => completion.error = Some("モデル削除が予期せず停止しました。既に消したファイルは復元せず、保存済み進捗を確認してください".into()),
+                    }
+                    completion.restart_required = storage.restart_required();
+                    completion.attention = completion.error.is_some()
+                        && (storage.data_write_blocked() || prepared.preview().pending);
+                    completion.cancelled =
+                        completion.model_deletion.is_none() && !completion.attention && cancelled();
+                    completion.selection = Some(selection);
+                    return completion;
+                }
                 #[cfg(unix)]
                 if let Selection::Deletion(prepared) = &mut selection {
                     let mut completion = Completion::default();

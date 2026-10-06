@@ -7,18 +7,18 @@ use std::{cell::Cell, path::PathBuf};
 #[path = "model_intent_tests.rs"]
 mod durable;
 
-struct Fixture {
+pub(crate) struct Fixture {
     _source: tempfile::TempDir,
     _meetings: tempfile::TempDir,
     _app_data: tempfile::TempDir,
     source: PathBuf,
-    root: PathBuf,
-    package: String,
-    review: String,
-    storage: Storage,
+    pub(crate) root: PathBuf,
+    pub(crate) package: String,
+    pub(crate) review: String,
+    pub(crate) storage: Storage,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let source = tempfile::tempdir().unwrap();
         let meetings = tempfile::tempdir().unwrap();
         let app_data = tempfile::tempdir().unwrap();
@@ -90,11 +90,57 @@ impl Fixture {
             &|| false,
         )
     }
-    fn evidence(&self) -> String {
+    pub(crate) fn evidence(&self) -> String {
         let db = self.storage.connection.lock().unwrap();
         db.query_row("SELECT json_array((SELECT json_group_array(json_array(id,manifest_json,manifest_hash,state)) FROM model_packages),(SELECT json_group_array(json_array(id,package_id,relative_path,actual_hash,state)) FROM model_files),(SELECT count(*) FROM maintenance_operations),(SELECT count(*) FROM model_compatibility_checks),(SELECT count(*) FROM meetings),(SELECT json_group_array(json_array(id,state,profile_snapshot_json)) FROM processing_jobs))",[],|r|r.get(0)).unwrap()
     }
-    fn path(&self, relative: &str) -> PathBuf {
+    pub(crate) fn operation_count(&self) -> i64 {
+        self.storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM maintenance_operations", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+    pub(crate) fn operation_state(&self, id: &str) -> String {
+        self.storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM maintenance_operations WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+    pub(crate) fn cold(self) -> Self {
+        let Self {
+            _source,
+            _meetings,
+            _app_data,
+            source,
+            root,
+            package,
+            review,
+            storage,
+        } = self;
+        drop(storage);
+        let storage = Storage::open(_meetings.path().into()).unwrap();
+        Self {
+            _source,
+            _meetings,
+            _app_data,
+            source,
+            root,
+            package,
+            review,
+            storage,
+        }
+    }
+    pub(crate) fn path(&self, relative: &str) -> PathBuf {
         if relative.is_empty() {
             self.root.join(&self.package)
         } else {

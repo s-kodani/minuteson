@@ -5,6 +5,8 @@ use crate::analysis_worker::AnalysisController;
 use crate::storage::backup::recovery;
 use crate::storage::backup::{archive::BackupReceipt, operations::*};
 #[cfg(unix)]
+use crate::storage::deletion::models::operations as model_deletion;
+#[cfg(unix)]
 use crate::storage::deletion::operations as deletion;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,8 @@ use uuid::Uuid;
 
 mod dialog;
 mod work;
+#[cfg(unix)]
+pub(crate) use work::ModelTarget;
 use work::{Completion, Work};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -29,6 +33,7 @@ pub(crate) enum Kind {
     Recovery,
     Relocation,
     Deletion,
+    ModelDeletion,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -98,6 +103,10 @@ pub(crate) struct Snapshot {
     pub deletion_preview: Option<deletion::Preview>,
     #[cfg(unix)]
     pub deletion_receipt: Option<deletion::Receipt>,
+    #[cfg(unix)]
+    pub model_deletion_preview: Option<model_deletion::Preview>,
+    #[cfg(unix)]
+    pub model_deletion_receipt: Option<model_deletion::Receipt>,
     pub restart_required: bool,
     pub error_message: Option<String>,
     pub attention_required: bool,
@@ -124,6 +133,10 @@ impl Default for Snapshot {
             deletion_preview: None,
             #[cfg(unix)]
             deletion_receipt: None,
+            #[cfg(unix)]
+            model_deletion_preview: None,
+            #[cfg(unix)]
+            model_deletion_receipt: None,
             restart_required: false,
             error_message: None,
             attention_required: false,
@@ -140,6 +153,8 @@ enum Selection {
     Relocation(crate::bootstrap::movement::Prepared),
     #[cfg(unix)]
     Deletion(deletion::Prepared),
+    #[cfg(unix)]
+    ModelDeletion(model_deletion::Prepared),
 }
 
 impl Selection {
@@ -152,6 +167,8 @@ impl Selection {
             Self::Relocation(p) => p.preview().confirmation_id,
             #[cfg(unix)]
             Self::Deletion(p) => p.preview().confirmation_id,
+            #[cfg(unix)]
+            Self::ModelDeletion(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -212,7 +229,8 @@ impl DataController {
         // Check an accepted request BEFORE its old confirmation: refreshing
         // mints a new ID, and a lost refresh response still has to be replayable.
         #[cfg(unix)]
-        let deletion_completed = s.snapshot.deletion_receipt.is_some();
+        let deletion_completed =
+            s.snapshot.deletion_receipt.is_some() || s.snapshot.model_deletion_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         if s.request.as_ref() == Some(request)
@@ -234,10 +252,19 @@ impl DataController {
             (Some(Selection::Deletion(_)), Action::Refresh)
         ) || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection,request.action),(Some(Selection::Deletion(p)),Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
+        #[cfg(unix)]
+        let deletion_resolution = deletion_resolution
+            || matches!(
+                (&s.selection, request.action),
+                (Some(Selection::ModelDeletion(_)), Action::Refresh)
+            )
+            || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::Keep) if p.preview().keep_allowed)
+            || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
         #[cfg(not(unix))]
         let deletion_resolution = false;
         #[cfg(unix)]
-        let deletion_resume = matches!(&s.selection, Some(Selection::Deletion(p)) if p.preview().pending)
+        let deletion_resume = (matches!(&s.selection, Some(Selection::Deletion(p)) if p.preview().pending)
+            || matches!(&s.selection, Some(Selection::ModelDeletion(p)) if p.preview().pending))
             && !deletion_completed;
         #[cfg(not(unix))]
         let deletion_resume = false;
@@ -305,6 +332,28 @@ impl DataController {
                 }
                 _ => false,
             };
+        #[cfg(unix)]
+        let allowed = allowed
+            || match (selection, request.action) {
+                (Selection::ModelDeletion(_), Action::Refresh) => true,
+                (Selection::ModelDeletion(p), Action::Keep) => p.preview().keep_allowed,
+                (Selection::ModelDeletion(p), Action::ReviewRemaining) => {
+                    p.preview().reconfirmation_allowed
+                }
+                (Selection::ModelDeletion(p), Action::Publish) => {
+                    let v = p.preview();
+                    v.execute_allowed
+                        && !(v.unregistered_count > 0
+                            && matches!(v.phase.as_str(), "review" | "reconfirmation"))
+                }
+                (Selection::ModelDeletion(p), Action::DeleteIncludingUnregistered) => {
+                    let v = p.preview();
+                    v.execute_allowed
+                        && v.unregistered_count > 0
+                        && matches!(v.phase.as_str(), "review" | "reconfirmation")
+                }
+                _ => false,
+            };
         if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
         }
@@ -314,7 +363,7 @@ impl DataController {
         {
             return Err("保存先変更の確認が失効しています。同じ対象を再確認してください".into());
         }
-        if s.snapshot.kind == Some(Kind::Deletion)
+        if matches!(s.snapshot.kind, Some(Kind::Deletion | Kind::ModelDeletion))
             && matches!(
                 request.action,
                 Action::Publish | Action::DeleteIncludingUnregistered
@@ -394,12 +443,14 @@ impl DataController {
         #[cfg(unix)]
         {
             s.snapshot.deletion_receipt = completion.deletion;
+            s.snapshot.model_deletion_receipt = completion.model_deletion;
         }
         s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
         #[cfg(unix)]
-        let deletion_completed = s.snapshot.deletion_receipt.is_some();
+        let deletion_completed =
+            s.snapshot.deletion_receipt.is_some() || s.snapshot.model_deletion_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         let published = s.snapshot.backup_receipt.is_some()
@@ -446,6 +497,10 @@ impl DataController {
                 Some(Selection::Deletion(p)) => Some(p.preview()),
                 _ => None,
             };
+            s.snapshot.model_deletion_preview = match &s.selection {
+                Some(Selection::ModelDeletion(p)) => Some(p.preview()),
+                _ => None,
+            };
         }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
@@ -459,7 +514,7 @@ impl DataController {
     }
 
     pub(crate) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Snapshot, String> {
-        if matches!(kind, Kind::Recovery | Kind::Deletion) {
+        if matches!(kind, Kind::Recovery | Kind::Deletion | Kind::ModelDeletion) {
             return Err("会議または要確認一覧から対象を選択してください".into());
         }
         let app = window.app_handle().clone();
@@ -515,6 +570,8 @@ impl DataController {
     pub(crate) fn start(app: &AppHandle, request: Request) -> Result<Snapshot, String> {
         #[cfg(unix)]
         let mut deletion_admission = None;
+        #[cfg(unix)]
+        let mut model_admission = None;
         {
             let controller = app.state::<Self>();
             let s = controller
@@ -535,9 +592,22 @@ impl DataController {
                     },
                 );
             }
+            #[cfg(unix)]
+            if let Some(Selection::ModelDeletion(p)) = &s.selection {
+                let v = p.preview();
+                model_admission = Some(
+                    if v.pending || app.state::<Storage>().data_write_blocked() {
+                        Some(v.operation_id)
+                    } else {
+                        None
+                    },
+                );
+            }
         }
         #[cfg(unix)]
-        let lease = if let Some(operation) = deletion_admission {
+        let lease = if let Some(operation) = model_admission {
+            work::Admission::acquire_model_deletion(app, operation.as_deref())?
+        } else if let Some(operation) = deletion_admission {
             work::Admission::acquire_deletion(app, operation.as_deref())?
         } else {
             work::Admission::acquire(app)?
@@ -592,6 +662,51 @@ impl DataController {
         match &s.selection {
             Some(Selection::Deletion(p)) => p.page(confirmation, offset),
             _ => Err("確認済みの削除対象がありません".into()),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn review_model_deletion(
+        app: &AppHandle,
+        root: PathBuf,
+        target: work::ModelTarget,
+    ) -> Result<Snapshot, String> {
+        let operation = match &target {
+            work::ModelTarget::Pending(id) => Some(id.as_str()),
+            work::ModelTarget::Fresh { .. } => None,
+        };
+        let lease = work::Admission::acquire_model_deletion(app, operation)?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::ModelDeletion)?;
+        let token = snapshot
+            .token
+            .clone()
+            .ok_or("モデル削除確認の操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(
+            app,
+            token,
+            cancel,
+            lease,
+            Work::ModelDeletion(root, target, previous),
+        );
+        Ok(snapshot)
+    }
+    #[cfg(unix)]
+    pub(crate) fn model_deletion_page(
+        &self,
+        confirmation: &str,
+        offset: usize,
+    ) -> Result<model_deletion::PathPage, String> {
+        let s = self
+            .state
+            .lock()
+            .map_err(|_| "モデル削除一覧のロックを取得できません")?;
+        if s.snapshot.busy {
+            return Err("モデル削除の検査・実行中です".into());
+        }
+        match &s.selection {
+            Some(Selection::ModelDeletion(p)) => p.page(confirmation, offset),
+            _ => Err("確認済みのモデル削除対象がありません".into()),
         }
     }
 
@@ -677,6 +792,12 @@ impl DataController {
                     #[cfg(unix)]
                     {
                         s.snapshot.deletion_receipt.is_none()
+                            && s.snapshot.model_deletion_receipt.is_none()
+                            && !s
+                                .snapshot
+                                .model_deletion_preview
+                                .as_ref()
+                                .is_some_and(|p| p.pending)
                             && !s
                                 .snapshot
                                 .deletion_preview
@@ -759,6 +880,10 @@ impl DataController {
             if s.snapshot.deletion_receipt.is_none() {
                 s.snapshot.deletion_preview = None;
             }
+            #[cfg(unix)]
+            if s.snapshot.model_deletion_receipt.is_none() {
+                s.snapshot.model_deletion_preview = None;
+            }
             if s.snapshot.relocation_receipt.is_none() {
                 s.snapshot.relocation_preview = None;
             }
@@ -774,3 +899,6 @@ mod tests;
 
 #[cfg(all(test, unix))]
 mod deletion_tests;
+
+#[cfg(all(test, unix))]
+mod model_deletion_tests;

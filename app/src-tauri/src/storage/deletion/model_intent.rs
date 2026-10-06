@@ -97,6 +97,15 @@ fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(),
     }
 }
 impl Prepared {
+    pub(in crate::storage::deletion::models) fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+    pub(in crate::storage::deletion::models) fn models_root(&self) -> &Path {
+        Path::new(&self.header.models_root)
+    }
+    pub(in crate::storage::deletion::models) fn include_unregistered(&self) -> bool {
+        self.header.include_unregistered
+    }
     fn validate(&self, db: &Connection) -> Result<(), String> {
         let h = &self.header;
         self.snapshot.validate()?;

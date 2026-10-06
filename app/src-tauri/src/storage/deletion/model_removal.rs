@@ -108,6 +108,50 @@ pub(crate) struct Receipt {
     plan: Plan,
 }
 impl Receipt {
+    pub(in crate::storage::deletion::models) fn recorded_policy(
+        &self,
+        storage: &Storage,
+    ) -> Result<bool, String> {
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify_saved(&db)?;
+        renewal::recorded_policy(&db, &self.saved, &self.progress)
+    }
+    pub(in crate::storage::deletion::models) fn confirmed(&self) -> &Prepared {
+        &self.saved
+    }
+    pub(in crate::storage::deletion::models) fn entries(&self) -> Vec<Entry> {
+        self.plan
+            .observations
+            .iter()
+            .map(|o| o.entry.clone())
+            .collect()
+    }
+    pub(in crate::storage::deletion::models) fn processed_paths(&self) -> usize {
+        self.progress.next
+    }
+    pub(in crate::storage::deletion::models) fn previously_completed(&self) -> bool {
+        self.completed() || self.progress.previously_completed
+    }
+    pub(in crate::storage::deletion::models) fn roots(&self) -> Result<Vec<String>, String> {
+        renewal::review_roots(&self.plan, &self.progress, &self.saved.header.operation_id)
+    }
+    pub(in crate::storage::deletion::models) fn verify_live(
+        &self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
+        active(lease, check)
+    }
     pub(in crate::storage::deletion) fn load(
         db: &Connection,
         operation: &str,

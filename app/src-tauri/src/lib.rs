@@ -483,6 +483,75 @@ async fn get_storage_bootstrap(window: WebviewWindow) -> Result<bootstrap::View,
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(unix)]
+#[tauri::command]
+async fn get_model_deletion_items(
+    window: WebviewWindow,
+) -> Result<storage::deletion::models::operations::Listing, String> {
+    let app = data_app(&window)?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::deletion::models::operations::listing(&app.state::<Storage>(), &root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_model_body_deletion(
+    window: WebviewWindow,
+    package_id: String,
+    expected_review_hash: String,
+) -> Result<data_controller::Snapshot, String> {
+    let app = data_app(&window)?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    DataController::review_model_deletion(
+        &app,
+        root,
+        data_controller::ModelTarget::Fresh {
+            package: package_id,
+            review: expected_review_hash,
+        },
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_pending_model_deletion(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    let app = data_app(&window)?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    DataController::review_model_deletion(
+        &app,
+        root,
+        data_controller::ModelTarget::Pending(operation_id),
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn get_model_deletion_paths(
+    window: WebviewWindow,
+    confirmation_id: String,
+    offset: usize,
+) -> Result<storage::deletion::models::operations::PathPage, String> {
+    data_app(&window)?
+        .state::<DataController>()
+        .model_deletion_page(&confirmation_id, offset)
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
@@ -1683,6 +1752,14 @@ pub fn run() {
             review_pending_deletion,
             #[cfg(unix)]
             get_deletion_paths,
+            #[cfg(unix)]
+            get_model_deletion_items,
+            #[cfg(unix)]
+            review_model_body_deletion,
+            #[cfg(unix)]
+            review_pending_model_deletion,
+            #[cfg(unix)]
+            get_model_deletion_paths,
             #[cfg(target_os = "macos")]
             get_storage_bootstrap,
             review_storage_move,
