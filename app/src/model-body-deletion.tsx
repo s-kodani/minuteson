@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
@@ -22,7 +23,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
   const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
   const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null), opener = useRef<HTMLElement | null>(null), focusBack = useRef(false);
+  const dialog = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null), opener = useRef<HTMLElement | null>(null);
   const s = operation.snapshot, preview = s?.kind === "model_deletion" ? s.modelDeletionPreview : null, receipt = s?.kind === "model_deletion" ? s.modelDeletionReceipt : null;
   const listing = operation.modelDeletionListing, protectedNow = rpcBusy || unknown;
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
@@ -121,14 +122,6 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
-  useEffect(() => {
-    if (open && dialog.current && !dialog.current.open) { focusBack.current = false; dialog.current.showModal(); heading.current?.focus(); }
-    else if (!open && dialog.current?.open) { dialog.current.close(); focusBack.current = true; }
-    if (!open && focusBack.current && !rpcBusy && !s?.busy && operation.connected) {
-      const target = opener.current?.isConnected && !opener.current.matches(":disabled") ? opener.current : document.getElementById("model-body-deletion-heading");
-      target?.focus(); focusBack.current = false;
-    }
-  }, [open, rpcBusy, s?.busy, operation.connected]);
   let canDelete = false;
   if (canResolve && open && understood && page && !pageBusy && !pageError && s && preview) {
     try { modelDeletionPublishRequest(s, preview.confirmationId, page, understoodId, includeUnknownId); canDelete = true; } catch { /* Fail closed on stale consent/page/phase. */ }
@@ -158,7 +151,7 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible }: { ope
       {c.toast && <p className="data-toast" role="status">{c.toast}<button type="button" className="small-secondary" onClick={() => c.setToast("")}>モデル削除通知を閉じる</button></p>}
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の応答は先に同じ操作で確認してください。</p><button type="button" disabled={c.protectedNow || !!s?.busy} onClick={() => void c.quit()}>モデル削除確認後に終了する（再起動は手動）</button></>}
     </section>}
-    <dialog ref={c.dialog} className="import-dialog data-dialog deletion-dialog" aria-labelledby="model-body-deletion-title" onCancel={e => { e.preventDefault(); void c.dismiss(); }}>
+    <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("model-body-deletion-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="model-body-deletion-title">
       <h2 id="model-body-deletion-title" ref={c.heading} tabIndex={-1}>{p?.phase === "reconfirmation" ? "モデル本体の残り範囲への再同意" : "モデル本体の削除を確認"}</h2>
       {p && <><h3>{p.modelName} / {p.modelVersion}</h3><p className="data-path">配置ID: {p.packageId}<br />モデル保存領域: {p.modelsRoot}</p>
         <p>確認したモデル本体を削除します。アプリ内では復元できません。会議音声・本文・議事録、モデル名とSHA、構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は再準備まで利用できません。</p><p>他モデル、外部の導入元、バックアップは削除しません。媒体上の安全消去は保証しません。</p>
@@ -175,9 +168,9 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible }: { ope
         {modelDeletionNewScope(p) && p.unregisteredCount > 0 && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={e => c.setIncludeUnknown(e.target.checked)} />確認時の一覧にある未登録パスもモデル本体の削除対象に含めます。</label>}
         <label><input type="checkbox" checked={c.understood} disabled={!c.canResolve || !p.executeAllowed} onChange={e => c.setUnderstood(e.target.checked)} />対象を確認し、モデル本体はアプリ内では復元できず、会議データと履歴は保持されることを理解しました。</label>
       </>}
-      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit("publish")}>{p?.phase === "reconfirmation" ? "新しいモデル範囲へ再同意して削除を続行" : p?.pending ? "照合してモデル本体削除を続行" : "モデル本体を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>モデル本体の残りを再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>モデル本体を未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.protectedNow || !!s?.busy} onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（モデル削除の未完了記録は残る）" : "モデル本体を削除せず閉じる"}</button></div>
+      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit("publish")}>{p?.phase === "reconfirmation" ? "新しいモデル範囲へ再同意して削除を続行" : p?.pending ? "照合してモデル本体削除を続行" : "モデル本体を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>モデル本体の残りを再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>モデル本体を未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.protectedNow || !!s?.busy} data-dialog-cancel onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（モデル削除の未完了記録は残る）" : "モデル本体を削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じモデル削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じモデル操作の安全な停止を要求</button></div>}
       {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
-    </dialog>
+    </CommonModal>
   </>;
 }

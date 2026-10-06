@@ -14,8 +14,9 @@ async (page) => {
   const body = await modal().innerText();
   check(body.includes("欠落 1 件") && body.includes("登録内容から変更 1 件") && body.includes("未登録ファイル 1 件"), "classifications hidden");
   check(body.includes("アプリ全体で 1 件") && body.includes("現在の利用中プロセス数や削除可否を示しません"), "reference counts presented as permission");
-  check(await modal().getByRole("button").count() === 3, "execution action exposed");
-  check(await modal().getByRole("heading").evaluate(e => e === document.activeElement), "modal heading not focused");
+  check(await modal().getByRole("button").count() === 4, "unexpected action exposed");
+  check(await modal().getByRole("button").evaluateAll(buttons => buttons.every(button => button.hasAttribute("data-dialog-cancel") || ["前の50件", "次の50件"].includes(button.textContent))), "execution action exposed");
+  check(await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "safe initial cancellation focus missing");
   await page.getByRole("button", { name: "削除せず閉じる", exact: true }).click(); await closed();
   check(await trigger().evaluate(e => e === document.activeElement), "opener focus not restored");
   await onlyReadCommands(); results.push("read-only classifications and historical counts; explicit close and focus");

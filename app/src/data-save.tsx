@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataPhaseLabel, dataRequest, type DataKind, type DataRequest, type DataSnapshot, type RestoreReceipt } from "./data-operation-state";
@@ -28,7 +29,6 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const review = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
-  const restoreFocus = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const [storage, setStorage] = useState<StorageView | null>(null);
   const [storageError, setStorageError] = useState("");
@@ -42,13 +42,6 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     return () => { disposed = true; };
   }, [visible, s?.revision]);
   useEffect(() => { onProtectionChange(rpcBusy || unknown); }, [rpcBusy, unknown, onProtectionChange]);
-  useEffect(() => {
-    if (open && dialog.current && !dialog.current.open) { restoreFocus.current = false; dialog.current.showModal(); heading.current?.focus(); }
-    else if (!open && dialog.current?.open) { dialog.current.close(); restoreFocus.current = true; }
-    if (!open && restoreFocus.current && !rpcBusy && !locked && !s?.busy && connected && availability?.available && opener.current?.isConnected && !opener.current.matches(":disabled")) {
-      opener.current.focus(); restoreFocus.current = false;
-    }
-  }, [open, rpcBusy, locked, s?.busy, connected, availability?.available]);
   const run = async (action: () => Promise<void>) => {
     if (rpcRunning.current) return;
     rpcRunning.current = true; setRpcBusy(true); setError("");
@@ -176,14 +169,14 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       {s?.restoreReceipt && <>{s.restoreReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.restoreReceipt.deletedAudioMeetingCount} 件・音声資産 {s.restoreReceipt.deletedAudioAssetCount} 件は、本文・根拠・下書きと欠落理由の履歴のみ復元しました。削除済み音声の再生・再解析はできません。</p>}<button type="button" disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
       {openError && <p role="alert">{openError}</p>}
     </section>}
-    <dialog ref={dialog} className="import-dialog data-dialog" aria-labelledby="data-confirm-title" onCancel={event => { event.preventDefault(); void dismiss(); }}>
+    <CommonModal ref={dialog} open={open} blocked={rpcBusy || unknown || !!s?.busy} onDismiss={dismiss} restoreReady={!rpcBusy && !locked && !s?.busy && connected && !!availability?.available} restoreTarget={() => opener.current} className="import-dialog data-dialog" aria-labelledby="data-confirm-title">
       <h2 id="data-confirm-title" ref={heading} tabIndex={-1}>{s?.kind === "relocation" ? moving?.pending ? "未完了移動の確認" : "会議保存先の変更確認" : s?.kind === "backup" ? "バックアップの保存先確認" : "バックアップから追加復元"}</h2>
       {moving && <><p>{moving.pending ? "続行する場合は元データ・所有台帳・途中コピーを再照合してから切り替えます。「保持して移動を中止」はファイルを消さず、旧保存先を引き続き使います。" : "会議DBと管理音声をコピーして全対象を照合し、保存先を切り替えます。"}切替後は終了して再起動が必要です。旧保存先は削除せず、モデルと起動設定は移動しません。</p><dl className="import-info"><dt>現在の会議保存先</dt><dd className="data-path">{moving.source}</dd><dt>{moving.pending ? "途中コピーの保存先" : "新規作成する保存先"}</dt><dd className="data-path">{moving.destination}</dd><dt>{moving.pending ? "旧保存先の現在の対象" : "対象"}</dt><dd>会議 {moving.meetingCount} 件・ファイル {moving.fileCount ?? "確認不可"} 件</dd>{moving.copiedPaths !== null && <><dt>照合済みパス</dt><dd>{moving.copiedPaths} / {moving.expectedPaths}</dd></>}{moving.fileCount !== null && <><dt>必要容量（余裕を含む）</dt><dd>{bytesLabel(moving.requiredBytes)}</dd><dt>移動先の空き容量</dt><dd>{bytesLabel(moving.availableBytes)}</dd></>}</dl>{moving.pending ? <p>不明な既存物を採用・削除しません。確認後に対象が変わった場合は再確認してください。</p> : <p>選んだ親フォルダーの下に非公開の新規フォルダーを作成します。既存物は上書きしません。確認後に編集した場合は再確認してください。</p>}{moving.resumeReason && <p role="alert">続行できません: {moving.resumeReason}。コピーを保持して移動を中止できます。</p>}{moving.availableBytes < moving.requiredBytes && <p role="alert">移動先の空き容量が不足しています。容量を確保して再確認してください。</p>}</>}
       {s?.backupPreview && <><p>{s.backupPreview.replacesExisting ? "次の既存ファイルを上書きします。元のファイルは置き換えられます。" : "次の保存先にバックアップを作成します。"}</p><p className="data-path">{s.backupPreview.destination}</p></>}
       {restore && <>{restore.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {restore.deletedAudioMeetingCount} 件・音声資産 {restore.deletedAudioAssetCount} 件を含みます。本文・根拠・下書きと欠落理由の履歴を追加しますが、削除済み音声の再生・再解析はできません。</p>}<p>会議 {restore.meetingTitles.length} 件を追加します。現在の会議は置き換えません。同じ会議も新しい別会議として復元されます。</p><dl className="import-info"><dt>必要容量（余裕を含む）</dt><dd>{bytesLabel(restore.requiredBytes)}</dd><dt>保存先の空き容量</dt><dd>{bytesLabel(restore.availableBytes)}</dd></dl><details><summary>追加する会議</summary><ul>{restore.meetingTitles.map((title, i) => <li key={i}>{title}</li>)}</ul></details><p>共通用語：追加予定 {restore.vocabularyAdded} 件、完全一致の重複 {restore.vocabularyDeduplicated} 件、既存を保持する競合 {restore.vocabularyConflicts.length} 件。AIモデル本体は追加しません。</p>{restore.vocabularyConflicts.length > 0 && <details><summary>競合予定の用語</summary><ul>{restore.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}{restore.availableBytes < restore.requiredBytes && <p role="alert">保存先の空き容量が不足しています。容量を確保して再検証してください。</p>}</>}
       {(error || operation.error || (s?.kind !== "deletion" && s?.errorMessage)) && <p className="action-error" role="alert">{error || operation.error || (s?.kind !== "deletion" && s?.errorMessage)}</p>}
       <p>編集内容の保存を待ってから実行します。公開後の結果は取消で削除しません。</p>
-      <div className="analysis-actions"><button type="button" disabled={!canPublish} onClick={() => void submit("publish")}>{s?.kind === "relocation" ? moving?.pending ? "照合して移動を続行" : "コピーして保存先を切替" : s?.kind === "backup" ? s.backupPreview?.replacesExisting ? "上書きして作成" : "作成する" : "追加して復元"}</button>{moving?.pending && <button type="button" className="secondary" disabled={!canAct || !requestReady || s?.phase !== "ready"} onClick={() => void submit("keep")}>保持して移動を中止</button>}{unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy || !!s?.busy || unknown} onClick={() => void dismiss()}>取り消して閉じる</button></div>
-    </dialog>
+      <div className="analysis-actions"><button type="button" disabled={!canPublish} onClick={() => void submit("publish")}>{s?.kind === "relocation" ? moving?.pending ? "照合して移動を続行" : "コピーして保存先を切替" : s?.kind === "backup" ? s.backupPreview?.replacesExisting ? "上書きして作成" : "作成する" : "追加して復元"}</button>{moving?.pending && <button type="button" className="secondary" disabled={!canAct || !requestReady || s?.phase !== "ready"} onClick={() => void submit("keep")}>保持して移動を中止</button>}{unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct || !requestReady} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy || !!s?.busy || unknown} data-dialog-cancel onClick={() => void dismiss()}>取り消して閉じる</button></div>
+    </CommonModal>
   </>;
 }

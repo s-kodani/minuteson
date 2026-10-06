@@ -21,7 +21,7 @@ async (page) => {
   await boot(); await review();
   check((await dialog().innerText()).includes("会議音声・本文・議事録") && (await dialog().innerText()).includes("構成履歴・ジョブ履歴・現在の設定は保持"), "history/scope missing");
   check(await publish().isDisabled() && !(await calls("start_data_operation")).length, "review executed");
-  check(await dialog().getByRole("heading", { name: "モデル本体の削除を確認" }).evaluate(e => e === document.activeElement), "heading focus missing");
+  check(await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "safe initial cancellation focus missing");
   await page.keyboard.press("Escape"); await dialog().waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.textContent === "本体削除の実行確認へ");
   check(!(await calls("start_data_operation")).length, "Escape executed"); results.push("scope, history retained, consent, Escape and opener focus");

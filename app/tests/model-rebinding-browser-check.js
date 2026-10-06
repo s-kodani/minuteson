@@ -67,7 +67,8 @@ async (page) => {
 
   await boot(); await fixture({ previewMode: "delay" });
   await page.getByRole("list", { name: "解析ジョブ", exact: true }).getByRole("button", { name: "再配置モデルで同条件の再試行を確認" }).click();
-  check(await page.getByRole("heading", { name: "再配置モデルによる同条件の再試行" }).evaluate(e => e === document.activeElement), "dialog did not receive focus");
+  await page.waitForFunction(() => document.querySelector('dialog[open] [aria-label="確認をキャンセル"]')?.disabled === false);
+  check(await page.getByRole("dialog").getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "safe initial cancellation focus missing");
   await page.getByRole("combobox", { name: "再配置先モデル" }).selectOption("11111111-1111-4111-8111-111111111111");
   await page.getByRole("button", { name: "元の固定条件と配置先を照合" }).click();
   await page.getByRole("button", { name: "照合・受付処理の取消を要求" }).click();

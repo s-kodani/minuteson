@@ -33,6 +33,14 @@ mockIPC(async (command, args) => {
   switch (command) {
     case "get_recording_snapshot": return { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
     case "capture_available": return false;
+    case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
+    case "get_analysis_flow": return null;
+    case "get_diarization_tracks": return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
+    case "get_diarization_preferences": {
+      const value = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
+      return { id: "sherpa_profiles", lockVersion: 0, payload: { standard: value, highAccuracy: value } };
+    }
+    case "get_speaker_reviews": return { analysisId: args.request.analysisId, contentHash: args.request.expectedContentHash, reviews: args.request.utteranceIds.map(utteranceId => ({ utteranceId, trackId: "microphone", estimatedState: "unknown", manualAssignment: false, segmentCount: 0, overlapCount: 0, page: args.request.page, pageCount: 1, segments: [], overlaps: [] })) };
     case "list_meetings": return meetings;
     case "get_meeting": return meetings.find((meeting) => meeting.id === args.id) ?? null;
     case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;

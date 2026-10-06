@@ -1,4 +1,5 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect,useRef,useState } from "react";
@@ -42,10 +43,6 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
     const timer=window.setInterval(refresh,1000);window.addEventListener("focus",refresh);
     return ()=>{disposed=true;mounted.current=false;stops.forEach(stop=>stop());window.clearInterval(timer);window.removeEventListener("focus",refresh);};
   },[]);
-  useEffect(()=>{
-    if(open){if(!dialog.current?.open)dialog.current?.showModal();}
-    else if(dialog.current?.open){dialog.current.close();opener.current?.focus();}
-  },[open]);
   useEffect(()=>{
     const id=snapshot?.saved?.meetingId;
     if(!id||delivered.current===id)return;
@@ -107,7 +104,7 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
     {!open&&(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
     {!open&&snapshot?.busy&&<p role="status">{importLabel(snapshot.phase)} <button type="button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button></p>}
     {!open&&openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
-    <dialog ref={dialog} className="import-dialog" aria-labelledby="import-title" onCancel={event=>{event.preventDefault();void close();}}>
+    <CommonModal ref={dialog} open={open} blocked={busy || !!snapshot?.busy} onDismiss={close} restoreReady={!busy && !snapshot?.busy} restoreTarget={() => opener.current} className="import-dialog" aria-labelledby="import-title">
       <h2 id="import-title">音声を取り込む</h2><p>原本を変更せず管理領域へコピーし、解析用音声を作成します。動画の音声抽出は対応しません。参加者の同意を得た音声を使ってください。</p>
       <p role="status">{snapshot?importLabel(snapshot.phase):"音声を選択しています"}</p>
       {snapshot?.info&&<dl className="import-info"><dt>ファイル名</dt><dd>{snapshot.fileName}</dd><dt>長さ</dt><dd>{formatElapsed(snapshot.info.durationUs/1000)}</dd><dt>形式</dt><dd>{snapshot.info.detectedFormat.toUpperCase()} · {snapshot.info.codec.toUpperCase()} · {snapshot.info.sampleRate.toLocaleString()} Hz · {snapshot.info.channels} ch</dd><dt>原本</dt><dd>{bytesLabel(snapshot.sourceBytes)}</dd><dt>保存に必要な容量</dt><dd>{bytesLabel(snapshot.requiredBytes)}（中間音声と余裕を含む）</dd><dt>保存先の空き容量</dt><dd>{bytesLabel(snapshot.availableBytes)}</dd></dl>}
@@ -123,7 +120,7 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
           {terms.length>50&&<nav aria-label="取り込み用語のページ"><button type="button" disabled={index===0} onClick={()=>setPage(index-1)}>前へ</button><span>{index+1} / {Math.ceil(terms.length/50)}</span><button type="button" disabled={(index+1)*50>=terms.length} onClick={()=>setPage(index+1)}>次へ</button></nav>}
         </details>
       </fieldset>
-      <div className="analysis-actions"><button type="button" disabled={disabled||!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)} onClick={()=>void start()}>取り込む</button><button type="button" className="small-secondary" disabled={disabled} onClick={()=>void select(null)}>音声を選び直す</button><button type="button" className="small-secondary" disabled={disabled} onClick={()=>{setError("");void loadCommon().catch(cause=>setError(String(cause)));}}>共通用語とAI設定を再確認</button>{snapshot?.busy&&<button type="button" className="stop-button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}<button type="button" className="small-secondary" disabled={busy||!!snapshot?.busy} onClick={()=>void close()}>閉じる</button></div>
-    </dialog>
+      <div className="analysis-actions"><button type="button" disabled={disabled||!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)} onClick={()=>void start()}>取り込む</button><button type="button" className="small-secondary" disabled={disabled} onClick={()=>void select(null)}>音声を選び直す</button><button type="button" className="small-secondary" disabled={disabled} onClick={()=>{setError("");void loadCommon().catch(cause=>setError(String(cause)));}}>共通用語とAI設定を再確認</button>{snapshot?.busy&&<button type="button" className="stop-button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}<button type="button" className="small-secondary" disabled={busy||!!snapshot?.busy} data-dialog-cancel onClick={()=>void close()}>閉じる</button></div>
+    </CommonModal>
   </>;
 }

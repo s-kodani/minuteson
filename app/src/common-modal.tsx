@@ -1,0 +1,105 @@
+import { useLayoutEffect, useRef, type ComponentPropsWithoutRef, type RefObject } from "react";
+import { outsideDialog } from "./modal-state";
+
+type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel" | "onClose" | "onClick" | "onPointerDown" | "onKeyDown"> & {
+  ref?: RefObject<HTMLDialogElement | null>;
+  open: boolean;
+  blocked?: boolean;
+  onDismiss: () => void | Promise<void>;
+  restoreTarget?: () => HTMLElement | null;
+  restoreReady?: boolean;
+};
+
+// Native top-layer dialogs supply an inert background. Explicit Tab wrapping
+// keeps focus inside even when a browser would cycle through its own chrome.
+// Controllers retain all command, identity, consent and unknown-result guards.
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, className = "", children, ...attributes }: Props) {
+  const ownRef = useRef<HTMLDialogElement>(null);
+  const ref = suppliedRef ?? ownRef;
+  const latest = useRef({ open, blocked, onDismiss, restoreTarget, restoreReady });
+  latest.current = { open, blocked, onDismiss, restoreTarget, restoreReady };
+  const opener = useRef<HTMLElement | null>(null);
+  const fallback = useRef<HTMLElement | null>(null);
+  const restorePending = useRef(false);
+  const downOutside = useRef(false);
+  const restoring = useRef(false);
+  const initialFocusPending = useRef(false);
+  const restore = () => {
+    if (restoring.current || !restorePending.current || latest.current.open || !latest.current.restoreReady) return;
+    restoring.current = true;
+    queueMicrotask(() => {
+      restoring.current = false;
+      if (!restorePending.current || latest.current.open || !latest.current.restoreReady || document.querySelector("dialog[open]")) return;
+      const candidate = latest.current.restoreTarget?.() ?? opener.current;
+      const usable = (target: HTMLElement | null): target is HTMLElement => !!target?.isConnected && !target.matches(":disabled") && !!target.getClientRects().length && !target.closest("[hidden], dialog:not([open])");
+      const target = usable(candidate) ? candidate : usable(fallback.current) ? fallback.current : null;
+      if (target) {
+        if (target === fallback.current) target.tabIndex = -1;
+        target.focus({ preventScroll: true }); restorePending.current = false;
+      }
+    });
+  };
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!open || !element) { restore(); return; }
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const panel = (latest.current.restoreTarget?.() ?? opener.current)?.closest("section");
+    fallback.current = panel?.querySelector<HTMLElement>("h2") ?? panel?.querySelector<HTMLElement>("h3") ?? null;
+    restorePending.current = false;
+    const attempt = () => {
+      if (!latest.current.open || !element.isConnected || element.open || document.querySelector("dialog[open]")) return;
+      element.showModal();
+      const cancel = element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)");
+      const heading = element.querySelector<HTMLElement>("h2, h3");
+      initialFocusPending.current = !cancel;
+      if (!cancel && heading) heading.tabIndex = -1;
+      (cancel ?? heading ?? element).focus({ preventScroll: true });
+      element.scrollTop = 0;
+    };
+    document.addEventListener("close", attempt, true);
+    attempt();
+    return () => {
+      document.removeEventListener("close", attempt, true);
+      if (element.open) { restorePending.current = true; element.close(); }
+      // Conditional reviews can still restore a surviving target on unmount.
+      queueMicrotask(() => {
+        if (!element.isConnected) { latest.current.open = false; restore(); }
+      });
+    };
+  }, [open, ref]);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!open || blocked || !initialFocusPending.current || !element?.open) return;
+    const active = document.activeElement;
+    if (active === element || active === element.querySelector("h2, h3")) {
+      element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)")?.focus({ preventScroll: true });
+      element.scrollTop = 0;
+    }
+    initialFocusPending.current = false;
+  }, [open, blocked, ref]);
+  useLayoutEffect(restore, [open, restoreReady]);
+  const dismiss = () => { if (!latest.current.blocked) void latest.current.onDismiss(); };
+  return <dialog {...attributes} ref={ref} className={`common-modal ${className}`} aria-modal="true"
+    onCancel={event => { event.preventDefault(); dismiss(); }}
+    onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}
+    onClick={event => {
+      const outside = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+      if (downOutside.current && outside) dismiss();
+      downOutside.current = false;
+    }}
+    onKeyDown={event => {
+      if (event.key === "Enter" && (event.target === event.currentTarget || (event.target instanceof HTMLElement && event.target.matches("h2, h3")))) event.preventDefault();
+      if (event.key !== "Tab") return;
+      const element = event.currentTarget;
+      const fields = Array.from(element.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], summary, [tabindex], [contenteditable="true"]'))
+        .filter(field => field.tabIndex >= 0 && !field.matches(":disabled") && !field.closest("[hidden], [inert]") && field.getClientRects().length)
+        .sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Number.MAX_SAFE_INTEGER) - (b.tabIndex > 0 ? b.tabIndex : Number.MAX_SAFE_INTEGER));
+      const first = fields[0], last = fields.at(-1);
+      if (!first) { event.preventDefault(); element.querySelector<HTMLElement>("h2, h3")?.focus({ preventScroll: true }); }
+      else if (event.shiftKey && (document.activeElement === first || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
+    }}>
+    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label="確認をキャンセル" data-dialog-cancel disabled={blocked} onClick={dismiss}>キャンセル</button></div>
+    {children}
+  </dialog>;
+}

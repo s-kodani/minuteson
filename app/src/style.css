@@ -175,3 +175,13 @@ dialog::backdrop { background: var(--backdrop); }
 .mini-shell:has(.theme-read-notice) { overflow: auto; }
 .topbar { gap: 12px; }
 select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Confirmation is a single native modal, including long frozen-scope reviews. */
+.common-modal { width: min(480px, calc(100% - 48px)); max-width: 560px; max-height: calc(100% - 48px); margin: auto; padding: 24px; border: 1px solid var(--input-border); border-radius: 12px; color: var(--text); overflow: auto; overflow-wrap: anywhere; }
+.common-modal .preview-columns { grid-template-columns: minmax(0, 1fr); }
+.common-modal .card-head { gap: 12px; flex-wrap: wrap; }
+.common-modal .analysis-actions { position: static; }
+.common-modal h2:focus, .common-modal h3:focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+.common-modal .import-info { grid-template-columns: minmax(0, 1fr); }
+.common-modal .model-application-changes { font-size: 12px; }
+.common-modal .model-application-changes th, .common-modal .model-application-changes td { padding: 6px; }
+.common-modal-dismiss-row { display: flex; justify-content: flex-end; position: sticky; top: -24px; padding: 8px 0; background: var(--surface); z-index: 2; }

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
@@ -23,7 +24,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const choice = useRef<{ id: string; pending: boolean; revision: number } | null>(null);
   const completed = useRef<string | null>(null), opened = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null);
-  const opener = useRef<HTMLElement | null>(null), focusBack = useRef(false);
+  const opener = useRef<HTMLElement | null>(null);
   const s = operation.snapshot, preview = s?.kind === "deletion" ? s.deletionPreview : null;
   const receipt = s?.kind === "deletion" ? s.deletionReceipt : null;
   const currentUnderstood = understood && understoodId === preview?.confirmationId;
@@ -133,14 +134,6 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
-  useEffect(() => {
-    if (open && dialog.current && !dialog.current.open) { focusBack.current = false; dialog.current.showModal(); heading.current?.focus(); }
-    else if (!open && dialog.current?.open) { dialog.current.close(); focusBack.current = true; }
-    if (!open && focusBack.current && !rpcBusy && !s?.busy && operation.connected) {
-      const target = opener.current?.isConnected && !opener.current.matches(":disabled") ? opener.current : document.getElementById("deletion-panel-heading");
-      target?.focus(); focusBack.current = false;
-    }
-  }, [open, rpcBusy, s?.busy, operation.connected]);
   const canDelete = canResolve && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
     rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, setToast, page, pageBusy, pageError, loadPage,
@@ -167,7 +160,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {c.toast && <p className="data-toast" role="status">{c.toast}<button type="button" className="small-secondary" onClick={() => c.setToast("")}>削除通知を閉じる</button></p>}
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">保留した起動時回復を行うため、通常利用にはアプリの再起動が必要です。未確認の完了応答がある場合は、先に残りの状態を再検査できます。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
     </section>}
-    <dialog ref={c.dialog} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title" onCancel={event => { event.preventDefault(); void c.dismiss(); }}>
+    <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("deletion-panel-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
       <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>{isDeletionReconfirmation(p?.phase) ? "変更後の残り範囲への再同意" : "会議の完全削除を確認"}</h2>
       {p && <><h3>{p.title}</h3><p className="data-path">会議ID: {p.meetingId}</p><p>管理音声、文字起こし、議事録、現在・直前・内部参照版、候補、下書き・手動編集、会議別用語と処理履歴を削除します。アプリ内では復元できません。</p><p>外部の元音声・書き出し・バックアップ、AIモデル・共通用語、旧保存先・保持コピー・会議ツリー外の一時領域は対象外です。媒体上の安全消去は保証しません。</p><dl className="import-info"><dt>確認時のファイル</dt><dd>{p.fileCount} 件 · 実在容量 {bytesLabel(p.bytes)}</dd><dt>欠落・登録時と変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd><dt>{p.rowPhaseCommitted ? "元の確認時のDB行（削除済み）" : "確認時のDB行"}</dt><dd>{p.rowCount} 件</dd><dt>{isDeletionReconfirmation(p.phase) ? "現在の確認段階" : "保存済み段階"}</dt><dd>{deletionPhaseLabel(p.phase)}</dd><dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}（フォルダー・欠落を含み、消したファイル数ではありません）</dd></dl>
       {p.pending && <p role="alert">途中まで削除している可能性があります。既に消したデータは復元しません。{isDeletionReconfirmation(p.phase) ? "この一覧は再同意前の確認です。再検査で確認IDが変わると、新しい範囲への同意をやり直します。" : "再検査は元の確認範囲を照合し、新しい未知物を自動採用しません。"}</p>}
@@ -182,9 +175,9 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={event => c.setIncludeUnknown(event.target.checked)} />確認時の一覧にある未登録ファイルも削除対象に含める。由来候補は所有証明ではないことを確認しました。</label>}
       <label><input type="checkbox" checked={c.understood} disabled={!c.canResolve || !p.executeAllowed} onChange={event => c.setUnderstood(event.target.checked)} />対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。</label>
       </>}
-      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit(c.includeUnknown && p && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{isDeletionReconfirmation(p?.phase) ? "新しい範囲へ再同意して削除を続行" : p?.pending ? "照合して残りの削除を続行" : "会議を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（未完了削除は残る）" : "削除せず閉じる"}</button></div>
+      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!c.canDelete} onClick={() => void c.submit(c.includeUnknown && p && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) ? "delete_including_unregistered" : "publish")}>{isDeletionReconfirmation(p?.phase) ? "新しい範囲へ再同意して削除を続行" : p?.pending ? "照合して残りの削除を続行" : "会議を削除する"}</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button>{p?.keepAllowed && p.pending && <button type="button" className="secondary" disabled={!c.canResolve} onClick={() => void c.submit("keep")}>未開始のまま保持して中止</button>}<button type="button" className="small-secondary" disabled={c.rpcBusy || !!s?.busy || c.unknown} data-dialog-cancel onClick={() => void c.dismiss()}>{p?.pending ? "閉じる（未完了削除は残る）" : "削除せず閉じる"}</button></div>
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ操作の安全な停止を要求</button></div>}
       {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
-    </dialog>
+    </CommonModal>
   </>;
 }

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
@@ -108,12 +109,6 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     return () => { disposed = true; for (const stop of stops) stop(); window.clearInterval(timer); };
   }, [meetingId]);
   useEffect(() => { void refreshRef.current(); }, [sourceEpoch]);
-  useEffect(() => {
-    if (!preview || !dialog.current) return;
-    const target = opener.current;
-    dialog.current.showModal();
-    return () => { dialog.current?.close(); window.setTimeout(() => { if (target?.isConnected) target.focus(); }, 0); };
-  }, [preview]);
   const run = async (action: () => Promise<void>) => {
     if (busyRef.current || locked) return;
     busyRef.current = true; setBusy(true); setError("");
@@ -233,13 +228,13 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     {exportNotice && <p role="status">{exportNotice}</p>}
     <details className="minutes-export-history"><summary>Markdown出力履歴（最新50件）</summary><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</details>
     {error && <p className="action-error" role="alert">{error}</p>}
-    {preview && <dialog ref={dialog} className="analysis-dialog" aria-labelledby="minutes-preview-title" onCancel={(e) => { if (disabled) e.preventDefault(); else setPreview(null); }}>
-      <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>
+    <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => opener.current} className="analysis-dialog" aria-labelledby="minutes-preview-title">{preview && <>
+      <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>
       <p>全項目の内容・根拠・担当者・期限を確認してください。SHA-256: <code>{preview.view.contentHash}</code></p>{preview.summary.inputUpdated && <p className="data-updated">元データ更新あり。この版の根拠は生成時の入力を保持しています。</p>}
       <details><summary>固定された議事録処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, inputAnalysisId: preview.view.inputAnalysisId, inputContentHash: preview.view.inputContentHash }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <MinutesDocument key={`current-${preview.current.id}`} view={preview.current} locked={disabled} content={preview.currentDraft?.payload ?? preview.current.content} title="比較する現在の議事録" /> : <section><h3>現在の議事録</h3><p>まだありません。</p></section>}<MinutesDocument key={preview.view.id} view={preview.view} locked={disabled} content={preview.draft?.payload ?? preview.view.content} title={preview.restoring ? "復元する議事録（保存済み編集を含む）" : "採用する議事録候補"} /></div>
       {error && <p className="action-error" role="alert">{error}</p>}
       <div className="analysis-actions"><button type="button" disabled={disabled} onClick={() => void apply()}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
-    </dialog>}
+    </>}</CommonModal>
   </section>;
 }

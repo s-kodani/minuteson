@@ -1,3 +1,4 @@
+import { CommonModal } from "./common-modal";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
 import type { AnalysisJob } from "./analysis-state";
@@ -60,12 +61,6 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
       if (token && isTauri()) void invoke("cancel_model_inspection", { token }).catch(() => {});
     };
   }, [key]);
-  useEffect(() => {
-    if (!open || !dialog.current) return;
-    const element = dialog.current;
-    element.showModal(); element.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
-    return () => { element.close(); if (opener.current?.isConnected) opener.current.focus(); };
-  }, [open]);
   useEffect(() => {
     if (!open || !restricted()) return;
     if (active.current && ["preview", "apply"].includes(active.current.kind)) void cancel();
@@ -171,8 +166,8 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
   return <>
     {(eligible || pending) && <button type="button" className="small-secondary" disabled={!!busy || (!pending && (locked || recordingActive))} onClick={e => show(e.currentTarget)}>{pending ? "モデル再試行の受付結果を確認" : "再配置モデルで同条件の再試行を確認"}</button>}
     {notice && <p role="status">{notice}</p>}
-    {open && <dialog ref={dialog} className="analysis-dialog model-rebinding-dialog" aria-labelledby={titleId} onCancel={e => { e.preventDefault(); if (!active.current) setOpen(false); }}>
-      <div className="card-head"><h2 id={titleId} tabIndex={-1}>再配置モデルによる同条件の再試行</h2><button type="button" className="small-secondary" disabled={!!busy} onClick={() => setOpen(false)}>閉じる</button></div>
+    {open && <CommonModal ref={dialog} open blocked={!!busy} onDismiss={() => { if (!active.current) setOpen(false); }} restoreTarget={() => opener.current} className="analysis-dialog model-rebinding-dialog" aria-labelledby={titleId}>
+      <div className="card-head"><h2 id={titleId} tabIndex={-1}>再配置モデルによる同条件の再試行</h2><button type="button" className="small-secondary" disabled={!!busy} data-dialog-cancel onClick={() => setOpen(false)}>閉じる</button></div>
       <p>元のジョブの音声・入力版・用語・人数・数値条件と保存済み途中結果を固定し、同じ構成・同じバイトのモデルだけを再照合します。モデル変更や設定変更による新規解析とは別の操作です。</p>
       {!review?.sent && <>
         <p>先に「モデルの手動検査」で配置と明示的なCPU互換性確認を完了してください。同じエンジンの成功記録だけを表示します。元モデルとの一致は下の確認時に照合します。自動選択・自動試行は行いません。</p>
@@ -200,6 +195,6 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
       {busy && ["preview", "apply"].includes(busy) && <button type="button" className="small-secondary" disabled={cancelling} onClick={() => void cancel()}>照合・受付処理の取消を要求</button>}
       {review?.sent && <p>応答が未確定でも操作IDと確認内容を保持します。別のモデル・新しい操作IDへ自動的に切り替えません。閉じた後も元ジョブから結果確認できます。</p>}
       {error && <p className="action-error" role="alert">{error}</p>}
-    </dialog>}
+    </CommonModal>}
   </>;
 }

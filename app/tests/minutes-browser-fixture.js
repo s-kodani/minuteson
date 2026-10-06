@@ -64,6 +64,7 @@ async (page) => {
     window.isTauri = true;
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_,id) => listeners.delete(id) };
     window.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
       transformCallback: fn => { const id=++sequence; callbacks.set(id,fn); return id; }, unregisterCallback: id=>callbacks.delete(id),
       invoke: async (cmd,args={}) => {
         data.calls.push({cmd,args:copy(args)});
@@ -73,6 +74,13 @@ async (page) => {
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
+        if (cmd === "get_ui_preferences") return { id: "ui_preferences", payload: { schemaVersion: 1, theme: "system" }, lockVersion: 0 };
+        if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
+        if (cmd === "get_data_operation_availability") return { available: true, reason: null };
+        if (cmd === "get_recovery_items") return { supported: true, root: "/mock", items: [] };
+        if (cmd === "list_restored_meeting_ids") return [];
+        if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
+        if (cmd === "get_analysis_flow") return null;
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : copy(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return copy(data.td); }

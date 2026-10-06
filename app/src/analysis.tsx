@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
@@ -121,12 +122,6 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     return () => { disposed = true; unlisten?.(); unlistenVersions?.();unlistenFlow?.(); window.clearInterval(timer); };
   }, [meetingId]);
 
-  useEffect(() => {
-    if (!preview || !dialog.current) return;
-    const focused = returnFocus.current;
-    dialog.current.showModal();
-    return () => { dialog.current?.close(); window.setTimeout(() => { if (focused?.isConnected) focused.focus(); }, 0); };
-  }, [preview]);
 
   const run = async (action: () => Promise<void>) => {
     if (busy || locked) return;
@@ -231,13 +226,13 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     <DiarizationPanel meetingId={meetingId} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     {error && <p className="action-error" role="alert">{error}</p>}
-    {preview && <dialog ref={dialog} className="analysis-dialog" aria-labelledby="analysis-preview-title" onCancel={(event) => { if (disabled) event.preventDefault(); else setPreview(null); }}>
-      <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => setPreview(null)}>閉じる</button></div>
-      <p>左右の発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
+    <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => returnFocus.current} className="analysis-dialog" aria-labelledby="analysis-preview-title">{preview && <>
+      <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>閉じる</button></div>
+      <p>比較する発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
       <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
       {error && <p className="action-error" role="alert">{error}</p>}
       <div className="analysis-actions"><button type="button" disabled={disabled} onClick={() => void applyPreview()}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
-    </dialog>}
+    </>}</CommonModal>
   </section>;
 }

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
@@ -24,7 +25,6 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   const heading = useRef<HTMLHeadingElement>(null);
   const panelHeading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);
-  const focusBack = useRef(false);
   const listEpoch = useRef(0);
   const readList = async () => {
     const epoch = ++listEpoch.current;
@@ -42,15 +42,6 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
     if (visible && isTauri()) void readList().catch(cause => setError(String(cause)));
     return () => { listEpoch.current++; };
   }, [visible, s?.kind === "recovery" && s.phase === "completed" ? s.revision : -1]);
-  useEffect(() => {
-    if (open && dialog.current && !dialog.current.open) { focusBack.current = false; dialog.current.showModal(); heading.current?.focus(); }
-    if (!open && dialog.current?.open) { dialog.current.close(); focusBack.current = true; }
-    if (!open && focusBack.current && visible && !rpcBusy && !locked && !s?.busy && operation.connected) {
-      const target = s?.kind === "recovery" && s.recoveryReceipt ? panelHeading.current
-        : opener.current?.isConnected && !opener.current.matches(":disabled") ? opener.current : panelHeading.current;
-      target?.focus(); focusBack.current = false;
-    }
-  }, [open, visible, rpcBusy, locked, s?.busy, s?.recoveryReceipt, operation.connected]);
   useEffect(() => {
     if (!s || s.kind !== "recovery") { setOpen(false); return; }
     if (s.busy || s.phase === "completed") setOpen(false);
@@ -115,13 +106,13 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
       {receipt && <p role={receipt.outcome === "attention" ? "alert" : "status"}>{recoveryOutcomeLabel(receipt)}{receipt.reason && ` ${receipt.reason}`}</p>}
       {(error || (s?.kind === "recovery" && s.errorMessage)) && <p className="action-error" role="alert">{error || s?.errorMessage}</p>}
     </section>}
-    <dialog ref={dialog} className="import-dialog data-dialog" aria-labelledby="recovery-confirm-title" onCancel={event => { event.preventDefault(); if (!unknown && !rpcBusy && !s?.busy) void cancel(); }}>
+    <CommonModal ref={dialog} open={open} blocked={unknown || rpcBusy || !!s?.busy} onDismiss={cancel} restoreReady={visible && !rpcBusy && !locked && !s?.busy && operation.connected} restoreTarget={() => s?.kind === "recovery" && s.recoveryReceipt ? panelHeading.current : opener.current?.isConnected && !opener.current.matches(":disabled") ? opener.current : panelHeading.current} className="import-dialog data-dialog" aria-labelledby="recovery-confirm-title">
       <h2 id="recovery-confirm-title" ref={heading} tabIndex={-1}>未確定データの解決方法を確認</h2>
       {preview && <><h3>{recoverySourceLabel(preview.item.source)}</h3><p>{preview.item.reason}</p><p>保存場所: <span className="data-path">{preview.root}</span></p>{preview.item.paths.map(path => <p className="data-path" key={path}>{path}</p>)}<p>登録対象 {preview.item.registeredPaths} 件 · 現在確認できたパス {preview.observedPaths} 件</p>{!preview.inspectionComplete && <p role="alert">リンクや読取不可の場所があり、内容をすべて検査できません。所有不明の対象は保持します。</p>}</>}
       <p>再検査は所有を確認できた未公開物だけを回収し、結果を再表示します。保持を選ぶとファイルは変更せず、確認記録を残して自動回収から保護します。会議の完全削除や外部バックアップの削除ではありません。</p>
-      <div className="analysis-actions"><button type="button" disabled={!ready} onClick={() => void submit("recover")}>再検査して回収</button><button type="button" className="secondary" disabled={!ready} onClick={() => void submit("keep")}>保持して確認を完了</button><button type="button" className="small-secondary" disabled={!canAct || !s?.retryAllowed} onClick={() => void submit("refresh")}>最新の対象を再確認</button><button type="button" className="small-secondary" disabled={rpcBusy || unknown || !!s?.busy} onClick={() => void cancel()}>取り消して閉じる</button></div>
+      <div className="analysis-actions"><button type="button" disabled={!ready} onClick={() => void submit("recover")}>再検査して回収</button><button type="button" className="secondary" disabled={!ready} onClick={() => void submit("keep")}>保持して確認を完了</button><button type="button" className="small-secondary" disabled={!canAct || !s?.retryAllowed} onClick={() => void submit("refresh")}>最新の対象を再確認</button><button type="button" className="small-secondary" disabled={rpcBusy || unknown || !!s?.busy} data-dialog-cancel onClick={() => void cancel()}>取り消して閉じる</button></div>
       {unknown && <div className="analysis-actions"><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ確認操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !!s?.busy} onClick={() => void cancel()}>同じ確認操作を取り消す</button></div>}
       {(error || s?.errorMessage) && <p role="alert">{error || s?.errorMessage}</p>}
-    </dialog>
+    </CommonModal>
   </>;
 }

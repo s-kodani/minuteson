@@ -6,7 +6,7 @@ const engine = { executablePath:"",modelPath:"",vadModelPath:null,threads:4,useG
 const diar = { executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:500,windowShiftMilli:100,minDurationOnMs:0,minDurationOffMs:0 };
 const llama = {executablePath:"",modelPath:"",threads:4,contextTokens:8192,predictionTokens:2048,gpuLayers:0,seed:1,promptBudget:5400};
 const f = window.monImportFixture = {
-  calls:[],failCancel:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,
+  calls:[],failCancel:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
   import:{revision:0,phase:"idle",busy:false,recordingBlocked:false,token:null,fileName:null,info:null,sourceBytes:null,requiredBytes:null,availableBytes:null,completed:0,saved:null,errorMessage:null},
   global:{id:"global",payload:[{id:crypto.randomUUID(),term:"MON",reading:null,note:null,enabled:true}],lockVersion:1},
   meetings:[{id:"existing",title:"既存会議",lifecycle:"draft",sourceType:"recording",createdAt:1791115200000,updatedAt:1791115200000,lockVersion:0}],books:{},
@@ -41,7 +41,7 @@ mockIPC(async(command,args)=>{
         const id=crypto.randomUUID();f.meetings.push({id,title:args.request.title,lifecycle:"imported",sourceType:"audio_import",createdAt:1791115200000,updatedAt:1791115200000,lockVersion:1});
         f.books[id]={id:`meeting:${id}`,payload:structuredClone(args.request.options.meetingVocabulary),lockVersion:1};
         await f.changed({phase:"saved",busy:false,saved:{id:f.import.token,meetingId:id,state:"ready"}});
-      },200);
+      },f.saveDelayMs);
       if(f.loseStart)throw Error("模擬開始応答喪失");
       return structuredClone(f.import);
     }

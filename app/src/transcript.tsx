@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
@@ -127,8 +128,6 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
     }
   };
 
-  useEffect(()=>{ if(adding) addDialog.current?.showModal(); else addDialog.current?.close(); },[adding]);
-  useEffect(()=>{if(splitting)splitDialog.current?.showModal();else splitDialog.current?.close();},[splitting]);
   // Structural operations get their own durable undo entry, after preceding
   // text/name edits have been acknowledged. Failure retains the queued change.
   const structuralEdit = async (edit:(current:DraftPayload)=>DraftPayload,message:string) => {
@@ -250,7 +249,7 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
       </>}
       {error && <p className="action-error" role="alert">{error}</p>}
       {saveError && <p className="action-error" role="alert">自動保存できませんでした。編集は画面に保持しています。内容を確認して保存を再試行してください: {saveError}</p>}
-      <dialog ref={splitDialog} className="analysis-dialog split-dialog" aria-label="発言の手動分割" onCancel={e=>{if(busy)e.preventDefault();else {audio.clear();setSplitting(null);}}}>
+      <CommonModal ref={splitDialog} open={!!splitting} blocked={busy} onDismiss={()=>{audio.clear();setSplitting(null);}} restoreReady={!busy} className="analysis-dialog split-dialog" aria-label="発言の手動分割">
         <h3>発言の手動分割</h3><p>音声を聞き、時刻と本文の切れ目をそれぞれ指定してください。単語時刻を自動推定していません。分割した部分の連結は元の本文と完全一致します。保存後は部分ごとに本文・話者を編集できます。</p>
         {splitting&&<><button type="button" disabled={busy||locked||audio.preparing} onClick={()=>void play(splitting)}>分割対象の音声を聞く</button><label>分割位置（発言先頭からの秒）<input type="text" inputMode="decimal" value={splitSeconds} disabled={busy||pendingSplit} onChange={e=>setSplitSeconds(e.target.value)}/></label><label>本文の切れ目（文字数）<input type="number" min={1} max={splitPieces.length-1} value={splitOffset} disabled={busy||pendingSplit} onChange={e=>setSplitOffset(Number(e.target.value))}/></label><div className="split-preview"><section><h4>前半</h4><p>{splitPieces.slice(0,splitOffset).join("")}</p></section><section><h4>後半</h4><p>{splitPieces.slice(splitOffset).join("")}</p></section></div>
         {[firstSpeaker,secondSpeaker].map((value,index)=><label key={index}>{index===0?"前半の話者":"後半の話者"}<select value={value} disabled={busy||pendingSplit} onChange={e=>(index===0?setFirstSpeaker:setSecondSpeaker)(e.target.value)}><option value="keep">現在の割り当てを維持</option><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>)}</>}
@@ -261,17 +260,17 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
           const selected=splitting,at=splitAt,ids:[string,string]=[`split:${crypto.randomUUID()}`,`split:${crypto.randomUUID()}`];
           const assigned:[string[],string[]]=[firstSpeaker,secondSpeaker].map(id=>id==="keep"?selected.speakerIds:id?[id]:[]) as [string[],string[]];
           void structuralEdit(p=>{const result=splitUtterance(analysis,p,selected.id,at,splitOffset,ids,assigned);setPendingSplit(true);return result;},"発言を分割して保存しました。本文・話者は部分ごとに編集できます。取り消しも可能です。").then(ok=>{if(ok){setSplitting(null);setSelection([]);}});
-        }}>分割して保存</button><button type="button" disabled={busy} onClick={()=>{audio.clear();setSplitting(null);}}>{pendingSplit?"閉じる（未保存の分割を保持）":"キャンセル"}</button></div>
+        }}>分割して保存</button><button type="button" disabled={busy} data-dialog-cancel onClick={()=>{audio.clear();setSplitting(null);}}>{pendingSplit?"閉じる（未保存の分割を保持）":"キャンセル"}</button></div>
         {saveError&&<button type="button" disabled={busy||locked} onClick={()=>{setBusy(true);setError("");void saveQueue.retry().then(()=>{if(pendingSplit){setSplitting(null);setSelection([]);setNotice("分割を保存しました。取り消しが可能です。");}else{setError("");setNotice("先行する編集を保存しました。分割内容を確認して保存してください。");}}).catch(cause=>setError(String(cause))).finally(()=>setBusy(false));}}>分割の保存を再試行</button>}
-      </dialog>
-      <dialog ref={addDialog} className="analysis-dialog speaker-add-dialog" aria-label="新しい話者" onCancel={e=>{if(busy)e.preventDefault();else setAdding(null);}}><h3>新しい話者</h3><p>{adding?.utteranceId?"この発言の割り当てを新しい話者1名に置き換えます。本文は保持します。":"話者を作成します。作成後に発言へ割り当ててください。"}</p><label>表示名 <input value={newName} maxLength={200} disabled={busy||pendingAdd} onChange={e=>setNewName(e.target.value)} autoFocus/></label><div className="transcript-actions"><button type="button" disabled={busy||pendingAdd||!editable} onClick={()=>{
+      </CommonModal>
+      <CommonModal ref={addDialog} open={!!adding} blocked={busy} onDismiss={()=>setAdding(null)} restoreReady={!busy} className="analysis-dialog speaker-add-dialog" aria-label="新しい話者"><h3>新しい話者</h3><p>{adding?.utteranceId?"この発言の割り当てを新しい話者1名に置き換えます。本文は保持します。":"話者を作成します。作成後に発言へ割り当ててください。"}</p><label>表示名 <input value={newName} maxLength={200} disabled={busy||pendingAdd} onChange={e=>setNewName(e.target.value)}/></label><div className="transcript-actions"><button type="button" disabled={busy||pendingAdd||!editable} onClick={()=>{
         if(!analysis||!adding)return;
         const id=`manual:${crypto.randomUUID()}`;
         void structuralEdit(p=>{const result=addSpeaker(analysis,p,id,newName,adding.utteranceId);setPendingAdd(true);return result;},"新しい話者を保存しました。直前の編集を取り消すことができます。").then(ok=>{if(ok)setAdding(null);});
-      }}>作成して保存</button><button type="button" disabled={busy} onClick={()=>setAdding(null)}>キャンセル</button></div>{error&&<p role="alert" className="action-error">{error}</p>}{saveError&&<button type="button" disabled={busy||locked} onClick={()=>{
+      }}>作成して保存</button><button type="button" disabled={busy} data-dialog-cancel onClick={()=>setAdding(null)}>キャンセル</button></div>{error&&<p role="alert" className="action-error">{error}</p>}{saveError&&<button type="button" disabled={busy||locked} onClick={()=>{
         setBusy(true);setError("");
         void saveQueue.retry().then(()=>{if(pendingAdd){setAdding(null);setNotice("新しい話者を保存しました。取り消しが可能です。");}else{setError("");setNotice("先行する編集を保存しました。作成内容を確認して保存してください。");}}).catch(cause=>setError(String(cause))).finally(()=>setBusy(false));
-      }}>追加話者の保存を再試行</button>}</dialog>
+      }}>追加話者の保存を再試行</button>}</CommonModal>
     </section>
   );
 }

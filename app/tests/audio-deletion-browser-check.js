@@ -22,7 +22,7 @@ async (page) => {
   await boot(); await review();
   check((await dialog().innerText()).includes("文字起こし・議事録・下書き・根拠テキスト") && (await dialog().innerText()).includes("音声の再生・解析・再解析") && (await dialog().innerText()).includes("会議名（一覧表示）: 既存会議"), "meeting identity or history/scope missing");
   check(await publish().isDisabled() && !(await calls("start_data_operation")).length, "review executed");
-  check(await dialog().getByRole("heading", { name: "音声だけの削除を確認" }).evaluate(e => e === document.activeElement), "heading focus missing");
+  check(await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "safe initial cancellation focus missing");
   await page.keyboard.press("Escape"); await dialog().waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.textContent === "音声だけを削除");
   check(!(await calls("start_data_operation")).length, "Escape executed"); results.push("audio scope, retained text/tracks, consent, Escape and opener focus");

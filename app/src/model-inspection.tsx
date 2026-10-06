@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "./model-inspection-state";
 import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, profileName, type ModelApplicationPreview, type ModelProfileName, type ModelProfileView } from "./model-profile-state";
@@ -57,27 +58,11 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   }, []);
   useEffect(() => { if (refreshEpoch > 0) void loadPlacements(); }, [refreshEpoch]);
   useEffect(() => {
-    if (!application || !dialog.current) return;
-    const element = dialog.current;
-    if (!element.open) element.showModal();
-    element.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
-    element.scrollTop = 0;
-    return () => { element.close(); if (opener.current?.isConnected) opener.current.focus(); };
-  }, [application]);
-  useEffect(() => {
     if (recordingActive && application && !busy) {
       setApplication(null);
       setError("録音状態が変わったため適用の確認を閉じました。録音停止後に再確認してください。");
     }
   }, [recordingActive, application, busy]);
-  useEffect(() => {
-    if (!deletionReview || !deletionDialog.current) return;
-    const element = deletionDialog.current;
-    if (!element.open) element.showModal();
-    element.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
-    element.scrollTop = 0;
-    return () => { element.close(); if (deletionOpener.current?.isConnected) deletionOpener.current.focus(); };
-  }, [deletionReview]);
   useEffect(() => {
     if ((recordingActive || locked) && deletionReview && !busy) {
       setDeletionReview(null);
@@ -250,7 +235,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>保存した管理モデルの選択を表示します。設定や最新の互換性記録との一致は、現在のファイル健全性・GPU互換性・AI準備完了を保証しません。会議の解析条件を手動変更した場合は不一致として表示し、再適用の確認時に現在の数値条件を維持します。</p>
       {!profiles ? <p>構成記録を読込できていません。配置・構成記録を再読込してください。</p> : profiles.map(view => <article key={view.name}><h4>{profileName(view.name)} · {view.id ? `構成版 #${view.profileVersion}` : "構成版なし"}</h4><p>{profileConfigurationLabel(view)}</p>{view.components.length > 0 && <ul>{view.components.map(component => <li key={component.engine}><strong>{component.engine}</strong> · {component.modelName} / {component.modelVersion}<p>{component.settingsMatch ? "保存設定と一致" : "現在の設定と不一致"} · {component.compatibilityCurrent ? "最新のCPU成功記録と一致" : "最新の互換性記録と不一致"}<br />配置ID: <code>{component.packageId}</code></p></li>)}</ul>}<p>不足: {(["whisper.cpp", "sherpa-onnx", "llama.cpp"] as const).filter(engine => !view.components.some(c => c.engine === engine)).join("、") || "なし（DB上の選択のみ）"}</p></article>)}
     </section>
-    {deletionReview && <dialog ref={deletionDialog} className="model-application-dialog model-deletion-dialog" aria-labelledby="model-deletion-title" onCancel={event => { event.preventDefault(); setDeletionReview(null); }}>
+    {deletionReview && <CommonModal ref={deletionDialog} open blocked={false} onDismiss={() => setDeletionReview(null)} restoreTarget={() => deletionOpener.current} className="model-application-dialog model-deletion-dialog" aria-labelledby="model-deletion-title">
       <h2 id="model-deletion-title" tabIndex={-1}>モデル削除の対象確認（読み取り専用）</h2>
       <p>{deletionReview.modelName} / {deletionReview.modelVersion}</p>
       <p>この画面は読み取り専用です。削除や設定変更はできません。削除の実行には別の本体削除確認画面での同意が必要です。検査結果のSHAは削除許可ではありません。</p>
@@ -260,10 +245,10 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>会議音声・本文・議事録・モデル名／SHA・構成履歴・ジョブ履歴・現在の設定は保持しています。他モデル、取り込み元、バックアップ、互換性試行ログは対象に含みません。リンク・特殊ファイル・検査中の変更を検出した場合は確認を拒否します。</p>
       <p>一覧 {deletionPage * 50 + 1}–{Math.min((deletionPage + 1) * 50, deletionReview.entries.length)} / {deletionReview.entries.length} 件</p>
       <ul className="model-deletion-paths" aria-label="モデル削除の検査対象">{deletionReview.entries.slice(deletionPage * 50, (deletionPage + 1) * 50).map(item => <li key={item.relativePath}><code>{item.relativePath || ".（対象フォルダー）"}</code> · {modelDeletionEntryLabel(item)}{item.bytes !== null && <> · {item.bytes.toLocaleString()} bytes</>}{item.sha256 && <details><summary>現在のファイルSHA</summary><code>{item.sha256}</code></details>}</li>)}</ul>
-      <div className="analysis-actions"><button type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)}>前の50件</button><button type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)}>次の50件</button><button type="button" onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
+      <div className="analysis-actions"><button type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)}>前の50件</button><button type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)}>次の50件</button><button type="button" data-dialog-cancel onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
       <details><summary>検査結果の識別子（削除許可ではありません）</summary><p>配置ID: <code>{deletionReview.packageId}</code><br />検査操作ID: <code>{deletionReview.inspectionId}</code><br />配置確認SHA: <code>{deletionReview.reviewHash}</code><br />今回の観測SHA: <code>{deletionReview.censusHash}</code></p></details>
-    </dialog>}
-    {application && <dialog ref={dialog} className="model-application-dialog" aria-labelledby="model-application-title" onCancel={event => { event.preventDefault(); if (!busy) setApplication(null); }}>
+    </CommonModal>}
+    {application && <CommonModal ref={dialog} open blocked={busy} onDismiss={() => setApplication(null)} restoreTarget={() => opener.current} className="model-application-dialog" aria-labelledby="model-application-title">
       <h2 id="model-application-title" tabIndex={-1}>{profileName(application.preview.profile)}へのモデル適用を確認</h2>
       <p>{application.entry.modelName} / {application.entry.modelVersion} · {application.preview.after.engine}</p>
       <p>構成版 #{application.preview.expectedProfileVersion} → #{application.preview.expectedProfileVersion + 1} · 解析設定版 #{application.preview.expectedPreferencesVersion}</p>
@@ -274,8 +259,8 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       {applicationError && <p className="action-error" role="alert">{applicationError}</p>}
       {error && <p className="action-error" role="alert">{error}</p>}
       {busy && <p role="status">{cancelling ? "取消要求済み。保存が先に確定する場合があります。処理終了後に構成記録を確認してください。" : applying ? "モデルと試行証拠を再照合して保存しています。" : "記録を確認しています。"}</p>}
-      <div className="analysis-actions"><button type="button" disabled={busy || locked || recordingActive} onClick={() => void applyApplication()}>{applicationUnknown ? "同じ操作で適用結果を確認" : "確認した内容で適用"}</button><button type="button" className="secondary" disabled={busy} onClick={() => setApplication(null)}>{applicationUnknown ? "閉じて構成記録を確認" : "適用せず閉じる"}</button>{applying && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>適用を取り消す</button>}</div>
-    </dialog>}
+      <div className="analysis-actions"><button type="button" disabled={busy || locked || recordingActive} onClick={() => void applyApplication()}>{applicationUnknown ? "同じ操作で適用結果を確認" : "確認した内容で適用"}</button><button type="button" className="secondary" disabled={busy} data-dialog-cancel onClick={() => setApplication(null)}>{applicationUnknown ? "閉じて構成記録を確認" : "適用せず閉じる"}</button>{applying && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>適用を取り消す</button>}</div>
+    </CommonModal>}
   </section>;
 }
 
