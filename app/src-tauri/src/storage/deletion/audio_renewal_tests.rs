@@ -36,6 +36,276 @@ fn finish(f: &Fixture, op: &str, lease: &DataMaintenanceLease) -> Receipt {
     super::super::run(&f.storage, op, lease, &|| false).unwrap();
     super::super::completion::finish(&f.storage, op, lease, &|| false).unwrap()
 }
+fn descendant(f: &Fixture, parent: &str, lease: &DataMaintenanceLease) -> String {
+    std::fs::write(&f.path, b"REGISTERED AUDIO RETURNED FOR NEW OPERATION").unwrap();
+    let review =
+        intent::reconfirmation::Review::capture(&f.storage, parent, lease, &|| false).unwrap();
+    let op = uuid::Uuid::new_v4().to_string();
+    intent::reconfirmation::accept(
+        &f.storage,
+        &op,
+        &review,
+        intent::Policy {
+            include_unregistered_audio: false,
+            retain_unclassified: true,
+        },
+        lease,
+        &|| false,
+    )
+    .unwrap();
+    super::super::start(&f.storage, &op, lease, &|| false).unwrap();
+    op
+}
+
+#[test]
+fn ancestral_unobserved_reservation_requires_new_choice_and_cold_resumes_exact_scope() {
+    let f = Fixture::new();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    finish(&f, &parent, &lease);
+    let old = fixed(&f, &parent);
+    let op = descendant(&f, &parent, &lease);
+    let original = fixed(&f, &op);
+    let returned = f.path.with_file_name(reserved(&parent, 0, 0));
+    let unrelated = f.path.with_file_name(reserved(&parent, 0, 999));
+    std::fs::write(&returned, b"ANCESTOR RESERVATION RETURNED LATE").unwrap();
+    std::fs::write(&unrelated, b"LOOKALIKE MUST SURVIVE").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    let relative = returned
+        .strip_prefix(f.storage.root())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(review.snapshot.historical_audio, BTreeSet::from([relative]));
+    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+    assert_eq!(f.operation_count(), 2);
+    let saved = accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    assert_eq!(fixed(&f, &op), original);
+    assert_eq!(fixed(&f, &parent), old);
+    assert_eq!(saved.progress.version, 3);
+    assert!(returned.exists() && unrelated.exists());
+    drop(lease);
+    let f = f.reopen();
+    let lease = AnalysisController::default()
+        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .unwrap();
+    let current = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    assert_eq!(current, saved);
+    finish(&f, &op, &lease);
+    assert!(!returned.exists() && !f.path.exists());
+    assert!(unrelated.exists());
+    assert_eq!(fixed(&f, &op), original);
+    assert_eq!(fixed(&f, &parent), old);
+    assert_eq!(f.operation_count(), 3);
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
+
+#[test]
+fn grandparent_paths_survive_multiple_completed_sources_and_repeated_remaining_reviews() {
+    let f = Fixture::new();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    std::fs::write(&f.path, b"CHANGED BEFORE PARENT RENEWAL").unwrap();
+    let review = Review::capture(&f.storage, &parent, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    finish(&f, &parent, &lease);
+    let middle = descendant(&f, &parent, &lease);
+    finish(&f, &middle, &lease);
+    let op = descendant(&f, &middle, &lease);
+    let returned = f.path.with_file_name(reserved(&parent, 1, 0));
+    std::fs::write(&returned, b"GRANDPARENT ONLY").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    assert_eq!(review.snapshot.historical_audio.len(), 1);
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    std::fs::write(&returned, b"GRANDPARENT CHANGED AGAIN").unwrap();
+    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    finish(&f, &op, &lease);
+    let source =
+        intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
+            .unwrap();
+    assert!(source.paths().contains(
+        returned
+            .strip_prefix(f.storage.root())
+            .unwrap()
+            .to_str()
+            .unwrap()
+    ));
+    assert!(!returned.exists());
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
+
+#[test]
+fn ancestral_remaining_history_survives_actual_full_meeting_purge_without_live_permission() {
+    use crate::storage::deletion::operations;
+    let f = Fixture::new();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    finish(&f, &parent, &lease);
+    let op = descendant(&f, &parent, &lease);
+    let returned = f.path.with_file_name(reserved(&parent, 0, 0));
+    std::fs::write(&returned, b"ANCESTOR RETURNED BEFORE FULL PURGE").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    finish(&f, &op, &lease);
+    let parent_record = fixed(&f, &parent);
+    let child_record = fixed(&f, &op);
+    let mut prepared = operations::Prepared::fresh(&f.storage, &f.meeting, &|| false).unwrap();
+    let preview = prepared.preview();
+    assert!(
+        prepared
+            .execute(
+                &f.storage,
+                &lease,
+                &preview.confirmation_id,
+                true,
+                &|| false,
+                &|_| {}
+            )
+            .unwrap()
+            .deleted
+    );
+    assert_eq!(fixed(&f, &parent), parent_record);
+    assert_eq!(fixed(&f, &op), child_record);
+    let db = f.storage.connection.lock().unwrap();
+    for id in [&parent, &op] {
+        assert_eq!(
+            db.query_row(
+                "SELECT meeting_id FROM maintenance_operations WHERE id=?1",
+                [id],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+            None
+        );
+        assert!(Receipt::load(&db, id, &|| false).is_err());
+        assert!(intent::reconfirmation::Source::load(&db, id, &|| false).is_err());
+        assert!(crate::storage::deletion::audio_supersession::superseded(
+            &db,
+            &f.storage.managed_anchor,
+            id,
+            &|| false
+        )
+        .unwrap());
+    }
+    assert!(audio::backup_deleted(&f.storage, &db, &|| false)
+        .unwrap()
+        .is_empty());
+    drop(db);
+    drop(lease);
+    let f = f.reopen();
+    assert!(!f.storage.data_write_blocked());
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
+    assert_eq!(fixed(&f, &parent), parent_record);
+    assert_eq!(fixed(&f, &op), child_record);
+}
+
+// Canonical corruption of a private fixture. No product permission is relaxed.
+fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut audio::Snapshot)) {
+    let db = f.storage.connection.lock().unwrap();
+    let receipt = Receipt::load(&db, op, &|| false).unwrap();
+    let mut reference = receipt.progress.confirmation.clone().unwrap();
+    let mut budget = receipt.saved.header.snapshot_bytes;
+    let (mut record, mut snapshot, _) =
+        read_record(&db, &reference, &receipt.saved, &mut budget, &|| false).unwrap();
+    mutate(&mut record, &mut snapshot);
+    let bytes = snapshot.encode().unwrap();
+    record.snapshot_bytes = bytes.len();
+    record.snapshot_hash = intent::hash(&bytes);
+    record.chunk_count = bytes.len().div_ceil(intent::CHUNK);
+    let json = record.encode().unwrap();
+    reference.intent_hash = intent::hash(json.as_bytes());
+    let mut progress = receipt.progress.clone();
+    progress.confirmation = Some(reference.clone());
+    db.authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        false,
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3 WHERE id=?1",
+        params![reference.operation_id, json, reference.intent_hash],
+    )
+    .unwrap();
+    db.execute(
+        "DELETE FROM maintenance_paths WHERE operation_id=?1",
+        [&reference.operation_id],
+    )
+    .unwrap();
+    for (index, part) in bytes.chunks(intent::CHUNK).enumerate() {
+        let json = intent::chunk_json(part).unwrap();
+        db.execute("INSERT INTO maintenance_paths(operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) VALUES(?1,?2,'file',?3,?4,?5,?6)", params![reference.operation_id,intent::slot(index),part.len() as i64,intent::hash(part),json,intent::hash(json.as_bytes())]).unwrap();
+    }
+    db.execute(
+        "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
+        params![op, progress.encode().unwrap()],
+    )
+    .unwrap();
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        true,
+    )
+    .unwrap();
+    f.storage.deletion_fence.arm(&db).unwrap();
+}
+
+#[test]
+fn forged_canonical_ancestral_membership_never_becomes_a_receipt_or_deletion_permit() {
+    let f = Fixture::new();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    finish(&f, &parent, &lease);
+    let op = descendant(&f, &parent, &lease);
+    let unknown = f.path.with_file_name(reserved(&parent, 0, 999));
+    std::fs::write(&unknown, b"UNOWNED LOOKALIKE").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let path = unknown
+        .strip_prefix(f.storage.root())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    rewrite_audit(&f, &op, |_, snapshot| {
+        snapshot.historical_audio.insert(path);
+    });
+    // The structural frame and recorded policy are internally valid. Only
+    // the oldest-first typed ancestry check can reject this forged membership.
+    assert!(Receipt::source_frame(&f.storage.connection.lock().unwrap(), &op, &|| false).is_ok());
+    assert!(Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).is_err());
+    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(unknown.exists() && f.path.exists() && f.storage.data_write_blocked());
+    drop(lease);
+    let f = f.reopen();
+    assert!(f.storage.data_write_blocked());
+    assert!(unknown.exists() && f.path.exists());
+}
+
+#[test]
+fn version_one_remaining_record_keeps_its_exact_original_classification() {
+    let f = Fixture::new();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    finish(&f, &parent, &lease);
+    let op = descendant(&f, &parent, &lease);
+    std::fs::write(&f.path, b"LEGACY CHANGED OWN AUDIO").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, false, &lease, &|| false).unwrap();
+    rewrite_audit(&f, &op, |record, _| {
+        record.version = 1;
+    });
+    finish(&f, &op, &lease);
+    intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
+        .unwrap();
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
 #[test]
 fn changed_remaining_requires_new_consent_preserves_original_and_exact_retry() {
     let f = Fixture::new();

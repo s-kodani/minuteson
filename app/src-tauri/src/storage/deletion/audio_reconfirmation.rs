@@ -24,14 +24,16 @@ pub(in crate::storage::deletion) struct Source {
     restored: Option<super::super::restored::Source>,
     paths: BTreeSet<String>,
     origin: Origin,
+    proof_bytes: usize,
 }
 impl Source {
     pub(super) fn load(
         db: &Connection,
         operation: &str,
-        check: &impl Fn() -> bool,
+        check: &dyn Fn() -> bool,
     ) -> Result<Self, String> {
-        let mut receipts: Vec<Receipt> = Vec::new();
+        let check = &|| check();
+        let mut receipts: Vec<super::removal::SourceFrame> = Vec::new();
         let mut next = operation.to_owned();
         let mut expected: Option<Origin> = None;
         let mut seen = BTreeSet::new();
@@ -67,10 +69,10 @@ impl Source {
                 restored = Some(baseline);
                 break;
             }
-            let receipt = Receipt::load(db, &next, check)?;
+            let receipt = Receipt::source_frame(db, &next, check)?;
             // Do not recurse through JSON-derived parents. Check the bounded
             // chain iteratively; this inner check examines availability only.
-            completion::verify_available_state_inner(db, &receipt, check)?;
+            receipt.verify_available(db, check)?;
             let saved = receipt.source_saved();
             let seal = receipt.source_seal(db)?;
             if expected
@@ -99,14 +101,19 @@ impl Source {
             next = parent.operation_id.clone();
         }
         let mut paths = restored.as_ref().map_or_else(BTreeSet::new, |r| r.paths());
-        for receipt in receipts.iter().rev() {
-            let saved = receipt.source_saved();
+        let mut validated = Vec::with_capacity(receipts.len());
+        for frame in receipts.into_iter().rev() {
+            let saved = frame.source_saved();
             validate_historical(&saved.snapshot, &paths)?;
+            let receipt = frame.validate(db, &paths, check)?;
             paths.extend(receipt.source_paths());
             if paths.len() > MAX_PATHS {
                 return Err("音声再同意の対象履歴が安全上限を超えています".into());
             }
+            validated.push(receipt);
         }
+        validated.reverse();
+        let receipts = validated;
         let origin = Origin {
             operation_id: operation.to_owned(),
             receipt_hash: match receipts.first() {
@@ -123,7 +130,14 @@ impl Source {
             restored,
             paths,
             origin,
+            proof_bytes: bytes,
         })
+    }
+    pub(super) fn paths(&self) -> BTreeSet<String> {
+        self.paths.clone()
+    }
+    pub(super) fn source_bytes(&self) -> usize {
+        self.proof_bytes
     }
     pub(super) fn for_prepared(
         db: &Connection,
@@ -222,6 +236,90 @@ fn validate_historical(snapshot: &Snapshot, paths: &BTreeSet<String>) -> Result<
         return Err("音声の履歴対象は元の型付き同意から導いた範囲に限定します".into());
     }
     Ok(())
+}
+// The full-meeting proof admits detached FKs for read-only metadata checking,
+// not live audio sources. Validate every renewal's ancestral membership in the
+// same oldest-first order, with identical cycle/count/aggregate-byte bounds.
+pub(super) fn validate_superseded(
+    db: &Connection,
+    operation: &str,
+    proof: &crate::storage::deletion::audio_supersession::Proof,
+    check: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let check = &|| check();
+    let mut frames: Vec<super::removal::SourceFrame> = Vec::new();
+    let mut next = operation.to_owned();
+    let mut expected: Option<Origin> = None;
+    let mut seen = BTreeSet::new();
+    let mut bytes = 0usize;
+    let mut paths = BTreeSet::new();
+    loop {
+        super::super::cancel(check)?;
+        if frames.len() >= MAX_GENERATIONS || !seen.insert(next.clone()) {
+            return Err("音声再同意の世代上限・循環を検出しました。履歴を保持します".into());
+        }
+        if super::super::restored::hinted(db, &next)? {
+            let child = frames.last().ok_or("復元履歴は削除同意ではありません")?;
+            let baseline = super::super::restored::superseded_baseline(
+                db,
+                &next,
+                proof,
+                &child.source_saved().snapshot,
+                check,
+            )?;
+            if expected
+                .as_ref()
+                .is_none_or(|e| e.operation_id != next || e.receipt_hash != baseline.seal)
+                || frames[0].source_saved().meeting() != baseline.meeting
+                || child.source_saved().consent < baseline.published
+            {
+                return Err("引き継ぐ復元元・会議・公開順序が一致しません".into());
+            }
+            bytes = bytes
+                .checked_add(baseline.bytes)
+                .ok_or("音声再同意の証拠容量が範囲外です")?;
+            if bytes > MAX_BYTES {
+                return Err("音声再同意の証拠合計が容量上限を超えています".into());
+            }
+            paths = baseline.paths;
+            break;
+        }
+        let frame = Receipt::superseded_frame(db, &next, proof, check)?;
+        let saved = frame.source_saved();
+        let seal = frame.source_seal(db)?;
+        if expected
+            .as_ref()
+            .is_some_and(|e| e.operation_id != next || e.receipt_hash != seal)
+            || frames
+                .first()
+                .is_some_and(|r| r.source_saved().meeting() != saved.meeting())
+            || frames
+                .last()
+                .is_some_and(|r| r.source_saved().consent < saved.consent)
+        {
+            return Err("引き継ぐ音声の元記録・会議・同意順序が一致しません".into());
+        }
+        bytes = bytes
+            .checked_add(frame.source_bytes())
+            .ok_or("音声再同意の証拠容量が範囲外です")?;
+        if bytes > MAX_BYTES {
+            return Err("音声再同意の証拠合計が容量上限を超えています".into());
+        }
+        expected = saved.header.origin.clone();
+        frames.push(frame);
+        let Some(parent) = &expected else { break };
+        next = parent.operation_id.clone();
+    }
+    for frame in frames.into_iter().rev() {
+        super::super::cancel(check)?;
+        validate_historical(&frame.source_saved().snapshot, &paths)?;
+        let receipt = frame.validate(db, &paths, check)?;
+        paths.extend(receipt.source_paths());
+        if paths.len() > MAX_PATHS {
+            return Err("音声再同意の対象履歴が安全上限を超えています".into());
+        }
+    }
+    super::super::cancel(check)
 }
 pub(super) fn capture(
     storage: &Storage,

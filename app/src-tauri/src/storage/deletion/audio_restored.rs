@@ -324,6 +324,60 @@ impl Source {
         Ok(())
     }
 }
+// Metadata only under a typed full-meeting supersession. The frozen first
+// native child's original observation supplies the exact restored asset IDs;
+// this value is deliberately not a live Source, Receipt or file capability.
+pub(in crate::storage::deletion::audio) struct SupersededBaseline {
+    pub(in crate::storage::deletion::audio) paths: BTreeSet<String>,
+    pub(in crate::storage::deletion::audio) seal: String,
+    pub(in crate::storage::deletion::audio) bytes: usize,
+    pub(in crate::storage::deletion::audio) published: i64,
+    pub(in crate::storage::deletion::audio) meeting: String,
+}
+pub(in crate::storage::deletion::audio) fn superseded_baseline(
+    db: &Connection,
+    operation: &str,
+    proof: &crate::storage::deletion::audio_supersession::Proof,
+    child: &super::Snapshot,
+    check: &impl Fn() -> bool,
+) -> Result<SupersededBaseline, String> {
+    let header = Receipt::read_header(db, operation, Some(proof), check)?;
+    if (header.root.clone(), header.database.clone()) != proof.identities()
+        || header.meeting != child.scope.meeting_id
+        || header.tables[2].rows != child.records.audio_assets.len() as u64
+        || child.records.audio_assets.iter().any(|(path, id)| {
+            !uuid(id) || *path != format!("meetings/{}/restored/{id}", header.meeting)
+        })
+    {
+        return Err("引き継ぐ復元音声の資産集合・管理領域が一致しません".into());
+    }
+    let paths: BTreeSet<_> = child.records.audio_assets.keys().cloned().collect();
+    let ids: BTreeSet<_> = child.records.audio_assets.values().collect();
+    if ids.len() != paths.len() || paths.len() > MAX_ASSETS {
+        return Err("引き継ぐ復元音声の資産IDが重複・範囲外です".into());
+    }
+    let row: (i64, i64) = db
+        .query_row(
+            "SELECT rowid,created_at FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec(&("restored_audio_unavailable_source", row, &header))
+        .map_err(|e| e.to_string())?;
+    let bytes = paths.iter().try_fold(json.len(), |n, path| {
+        n.checked_add(path.len())
+            .ok_or("復元音声の履歴容量が範囲外です")
+    })?;
+    cancel(check)?;
+    Ok(SupersededBaseline {
+        paths,
+        seal: format!("{:x}", Sha256::digest(&json)),
+        bytes,
+        published: row.1,
+        meeting: header.meeting,
+    })
+}
 pub(in crate::storage::deletion) fn validate_superseded(
     db: &Connection,
     operation: &str,

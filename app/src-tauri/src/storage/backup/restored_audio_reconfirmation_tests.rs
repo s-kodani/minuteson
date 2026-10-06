@@ -157,6 +157,72 @@ fn restored_audio_reconfirmation_native_descendants_derive_only_exact_reserved_n
 }
 
 #[test]
+fn restored_audio_reconfirmation_ancestral_renewal_full_purge_preserves_metadata_only_baseline() {
+    use crate::storage::deletion::operations;
+    let (_root, target, meeting, original) = native_fixture();
+    let path = audio_path(&target, &meeting);
+    std::fs::write(&path, b"FIRST NATIVE RETURN").unwrap();
+    let lease = owner(&target, &original);
+    let parent = consent(&target, &original, &lease);
+    execute(&target, &parent, &lease);
+    std::fs::write(&path, b"NEXT NATIVE RETURN").unwrap();
+    let child = consent(&target, &parent, &lease);
+    intent::removal::start(&target, &child, &lease, &|| false).unwrap();
+    let returned = path.with_file_name(format!(".mon-delete-audio-{parent}-0"));
+    std::fs::write(&returned, b"ANCESTRAL RESERVED RETURNED LATE").unwrap();
+    let review =
+        intent::removal::renewal::Review::capture(&target, &child, &lease, &|| false).unwrap();
+    intent::removal::renewal::accept(&target, &review, true, &lease, &|| false).unwrap();
+    intent::removal::run(&target, &child, &lease, &|| false).unwrap();
+    intent::removal::completion::finish(&target, &child, &lease, &|| false).unwrap();
+    assert!(!returned.exists());
+    let record = |id: &str| {
+        target.connection.lock().unwrap().query_row("SELECT json_array(rowid,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [id], |r|r.get::<_,String>(0)).unwrap()
+    };
+    let before: Vec<_> = [&original, &parent, &child].map(|id| record(id)).into();
+    let mut prepared = operations::Prepared::fresh(&target, &meeting, &|| false).unwrap();
+    let preview = prepared.preview();
+    assert!(
+        prepared
+            .execute(
+                &target,
+                &lease,
+                &preview.confirmation_id,
+                true,
+                &|| false,
+                &|_| {}
+            )
+            .unwrap()
+            .deleted
+    );
+    for (id, expected) in [&original, &parent, &child].iter().zip(&before) {
+        assert_eq!(&record(id), expected);
+        let db = target.connection.lock().unwrap();
+        assert!(audio::backup_deleted(&target, &db, &|| false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.query_row(
+                "SELECT consent_at FROM maintenance_operations WHERE id=?1",
+                [&original],
+                |r| r.get::<_, Option<i64>>(0)
+            )
+            .unwrap(),
+            None
+        );
+        drop(db);
+        assert!(intent::removal::start(&target, id, &lease, &|| false).is_err());
+        assert!(Review::capture(&target, id, &lease, &|| false).is_err());
+    }
+    drop(lease);
+    let storage_root = target.root.clone();
+    drop(target);
+    let target = Storage::open(storage_root).unwrap();
+    assert!(!target.data_write_blocked());
+    assert!(target.get_meeting(&meeting).unwrap().is_none());
+}
+
+#[test]
 fn restored_audio_reconfirmation_kept_new_consent_never_resolves_old_reappearance() {
     let (_root, target, meeting, original) = native_fixture();
     let path = audio_path(&target, &meeting);

@@ -144,7 +144,7 @@ fn read_record(
         return Err("残り音声への再同意の固定記録が不正です".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    if record.version != 1
+    if !matches!(record.version, 1 | 2)
         || record.subtype != "audioRemainingConfirmation"
         || record.source_operation != saved.operation()
         || record.source_hash != source_hash(saved)?
@@ -183,6 +183,7 @@ pub(super) fn load(
     db: &Connection,
     saved: &Prepared,
     progress: &Progress,
+    ancestors: Option<&BTreeSet<String>>,
     check: &impl Fn() -> bool,
 ) -> Result<Plan, String> {
     let mut plan = Plan {
@@ -216,13 +217,33 @@ pub(super) fn load(
         record
             .previous_progress
             .validate(saved, &super::targets(&plan.snapshot)?)?;
+        // Version 1 retains its original own-operation classification. Version
+        // 2 includes typed ancestors. The source-chain reader defers only that
+        // membership check until its oldest-to-newest validation pass; its
+        // provisional frame can never become a removal permit.
+        let mut paths = plan.paths.clone();
+        if record.version == 2 {
+            if let Some(ancestors) = ancestors {
+                paths.extend(ancestors.iter().cloned());
+                if paths.len() > MAX_PATHS {
+                    return Err("残り音声と祖先の履歴対象数が安全上限を超えています".into());
+                }
+            }
+        }
+        let own = historical(&next, &plan.paths);
+        let history_valid =
+            if record.version == 1 || ancestors.is_some() || saved.header.origin.is_none() {
+                next.historical_audio == historical(&next, &paths)
+            } else {
+                own.is_subset(&next.historical_audio)
+            };
         if record.previous_progress.confirmation != previous
             || consent < latest
             || next.scope != saved.snapshot.scope
             || next.records != saved.snapshot.records
             || next.manifest.root != saved.snapshot.manifest.root
             || next.manifest.database != saved.snapshot.manifest.database
-            || next.historical_audio != historical(&next, &plan.paths)
+            || !history_valid
         {
             return Err("残り音声の固定範囲・保持履歴・同意順序が一致しません".into());
         }
@@ -304,7 +325,14 @@ fn capture_snapshot(
         records: audio::records(db, receipt.saved.meeting(), check)?,
         historical_audio: BTreeSet::new(),
     };
-    snapshot.historical_audio = historical(&snapshot, &receipt.historical_paths);
+    let mut paths = receipt.historical_paths.clone();
+    if let Some(source) = &source {
+        paths.extend(source.paths());
+        if paths.len() > MAX_PATHS {
+            return Err("残り音声と祖先の履歴対象数が安全上限を超えています".into());
+        }
+    }
+    snapshot.historical_audio = historical(&snapshot, &paths);
     snapshot.validate(db)?;
     if snapshot.scope != receipt.saved.snapshot.scope
         || snapshot.records != receipt.saved.snapshot.records
@@ -438,7 +466,7 @@ fn accept_inner(
         .as_ref()
         .map_or(1, |r| r.generation + 1);
     let record = Record {
-        version: 1,
+        version: 2,
         subtype: "audioRemainingConfirmation".into(),
         source_operation: old.saved.operation().into(),
         source_hash: source_hash(&old.saved)?,
@@ -544,7 +572,7 @@ fn accept_inner(
 }
 pub(in crate::storage::deletion) fn audit_source(json: &str) -> Result<String, String> {
     let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if record.version != 1
+    if !matches!(record.version, 1 | 2)
         || record.subtype != "audioRemainingConfirmation"
         || !audio::uuid(&record.source_operation)
         || record.encode()? != json

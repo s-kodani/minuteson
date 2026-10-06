@@ -128,13 +128,101 @@ fn targets(snapshot: &super::super::Snapshot) -> Result<Vec<Entry>, String> {
         })
         .collect()
 }
+// Provisional canonical metadata, not a removal receipt. Source ancestry must
+// be verified oldest-first before this private frame can yield a Receipt.
+pub(super) struct SourceFrame(Receipt);
+impl SourceFrame {
+    pub(super) fn source_saved(&self) -> &Prepared {
+        &self.0.saved
+    }
+    pub(super) fn source_seal(&self, db: &Connection) -> Result<String, String> {
+        self.0.source_seal(db)
+    }
+    pub(super) fn source_bytes(&self) -> usize {
+        self.0.proof_bytes
+    }
+    pub(super) fn verify_available(
+        &self,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        completion::verify_available_state_inner(db, &self.0, check)
+    }
+    pub(super) fn verify_superseded(
+        &self,
+        proof: &crate::storage::deletion::audio_supersession::Proof,
+    ) -> Result<(), String> {
+        let manifest = &self.0.saved.snapshot.manifest;
+        if !self.0.completed()
+            || (manifest.root.clone(), manifest.database.clone()) != proof.identities()
+        {
+            return Err("引き継ぐ音声削除の完了状態・管理領域が一致しません".into());
+        }
+        Ok(())
+    }
+    pub(super) fn validate(
+        self,
+        db: &Connection,
+        ancestors: &BTreeSet<String>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Receipt, String> {
+        let verified = renewal::load(db, &self.0.saved, &self.0.progress, Some(ancestors), check)?;
+        if verified.snapshot != self.0.plan
+            || verified.policy != self.0.policy
+            || verified.paths != self.0.historical_paths
+            || verified.audits != self.0.audits
+            || verified.bytes != self.0.proof_bytes
+        {
+            return Err("祖先の確認中に残り音声の固定記録が変更されました".into());
+        }
+        Ok(self.0)
+    }
+}
 impl Receipt {
     pub(in crate::storage::deletion) fn load(
         db: &Connection,
         operation: &str,
-        check: &impl Fn() -> bool,
+        check: &dyn Fn() -> bool,
     ) -> Result<Self, String> {
-        Self::load_frame(db, operation, None, check)
+        // One callback type for the substantial metadata reader. Every check
+        // still calls the original cancellation probe; only code duplication
+        // across hundreds of caller-specific closures is avoided.
+        let check = &|| check();
+        let frame = Self::source_frame(db, operation, check)?;
+        let source = frame
+            .0
+            .saved
+            .header
+            .origin
+            .as_ref()
+            .map(|_| super::reconfirmation::Source::for_prepared(db, &frame.0.saved, check))
+            .transpose()?;
+        let ancestors = source.as_ref().map_or_else(BTreeSet::new, |s| s.paths());
+        if source.as_ref().is_some_and(|s| {
+            s.source_bytes()
+                .checked_add(frame.source_bytes())
+                .is_none_or(|n| n > super::MAX_BYTES)
+        }) {
+            return Err("音声再同意の証拠合計が容量上限を超えています".into());
+        }
+        frame.validate(db, &ancestors, check)
+    }
+    pub(super) fn source_frame(
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<SourceFrame, String> {
+        Ok(SourceFrame(Self::load_frame(db, operation, None, check)?))
+    }
+    pub(super) fn superseded_frame(
+        db: &Connection,
+        operation: &str,
+        proof: &crate::storage::deletion::audio_supersession::Proof,
+        check: &impl Fn() -> bool,
+    ) -> Result<SourceFrame, String> {
+        let frame = SourceFrame(Self::load_frame(db, operation, Some(proof), check)?);
+        frame.verify_superseded(proof)?;
+        Ok(frame)
     }
     fn load_frame(
         db: &Connection,
@@ -157,7 +245,7 @@ impl Receipt {
                 super::read_frame(db, operation, Some((&state, &json)), Some(proof), check)?
             }
         };
-        let plan = renewal::load(db, &saved, &progress, check)?;
+        let plan = renewal::load(db, &saved, &progress, None, check)?;
         let targets = targets(&plan.snapshot)?;
         progress.validate(&saved, &targets)?;
         Ok(Self {
@@ -362,14 +450,7 @@ pub(in crate::storage::deletion) fn validate_superseded(
     proof: &crate::storage::deletion::audio_supersession::Proof,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let receipt = Receipt::load_frame(db, operation, Some(proof), check)?;
-    let manifest = &receipt.saved.snapshot.manifest;
-    if !receipt.completed()
-        || (manifest.root.clone(), manifest.database.clone()) != proof.identities()
-    {
-        return Err("引き継ぐ音声削除の完了状態・管理領域が一致しません".into());
-    }
-    super::super::cancel(check)
+    super::reconfirmation::validate_superseded(db, operation, proof, check)
 }
 
 pub(in crate::storage::deletion) fn superseded_audit_member(
@@ -378,6 +459,7 @@ pub(in crate::storage::deletion) fn superseded_audit_member(
     audit: &str,
     proof: &crate::storage::deletion::audio_supersession::Proof,
 ) -> Result<bool, String> {
+    super::reconfirmation::validate_superseded(db, operation, proof, &|| false)?;
     let receipt = Receipt::load_frame(db, operation, Some(proof), &|| false)?;
     if !receipt.completed() {
         return Err("再同意元の音声履歴が完了していません".into());
@@ -674,7 +756,7 @@ pub(crate) fn start(
         final_audio: None,
         confirmation: None,
     };
-    let plan = renewal::load(&db, &saved, &progress, check)?;
+    let plan = renewal::load(&db, &saved, &progress, None, check)?;
     let r = Receipt {
         saved,
         progress,

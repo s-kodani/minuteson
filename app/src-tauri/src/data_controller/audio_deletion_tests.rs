@@ -451,6 +451,106 @@ fn audio_controller_cancel_after_completion_does_not_erase_committed_receipt() {
     assert!(done.audio_deletion_receipt.unwrap().audio_deleted);
     assert_eq!(f.count(), 1);
 }
+
+#[test]
+fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_choice() {
+    let mut f = Fixture::new();
+    let parent = f
+        .run(&f.ready(), Action::Publish)
+        .audio_deletion_receipt
+        .unwrap()
+        .operation_id;
+    let parent_original = f.original(&parent);
+    std::fs::write(&f.audio.path, b"CHILD ORIGINAL SCOPE").unwrap();
+    let reviewed = f.run(&f.pending(&parent), Action::ReviewRemaining);
+    let stopped = f.stop_at(&reviewed, Action::Publish, "deleting_audio_files");
+    let op = stopped
+        .audio_deletion_preview
+        .as_ref()
+        .unwrap()
+        .operation_id
+        .clone();
+    assert_ne!(op, parent);
+    let original = f.original(&op);
+    let returned = f
+        .audio
+        .path
+        .with_file_name(format!(".mon-delete-audio-{parent}-0"));
+    let unrelated = f
+        .audio
+        .path
+        .with_file_name(format!(".mon-delete-audio-{parent}-999"));
+    std::fs::write(
+        &returned,
+        b"ANCESTRAL PATH ABSENT FROM CHILD ORIGINAL CONSENT",
+    )
+    .unwrap();
+    std::fs::write(&unrelated, b"LOOKALIKE RETAIN").unwrap();
+    let pending = f.run(&stopped, Action::Refresh);
+    let reviewed = f.run(&pending, Action::ReviewRemaining);
+    let preview = reviewed.audio_deletion_preview.as_ref().unwrap();
+    assert_eq!(
+        preview.phase, "reconfirmation",
+        "{:?}",
+        reviewed.error_message
+    );
+    assert_eq!(preview.source_operation_id.as_deref(), Some(op.as_str()));
+    assert_eq!(preview.operation_id, op);
+    assert_eq!(
+        preview.reconfirmation_source_kind.as_deref(),
+        Some("native_audio_pending")
+    );
+    assert_eq!(preview.unregistered_audio_files, 1);
+    let page = f
+        .controller
+        .audio_deletion_page(&preview.confirmation_id, 0)
+        .unwrap();
+    let relative = returned
+        .strip_prefix(f.audio.storage.root())
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(page.entries.iter().any(|e| e.relative_path == relative
+        && matches!(
+            e.disposition,
+            crate::storage::deletion::audio::Disposition::HistoricalAudio
+        )));
+    assert!(f
+        .controller
+        .begin_request(f.request(&reviewed, Action::Publish))
+        .is_err());
+    let saved = f.stop_at(
+        &reviewed,
+        Action::DeleteIncludingUnregistered,
+        "audio_delete_scope_fixed",
+    );
+    assert_eq!(f.count(), 3);
+    assert!(returned.exists() && unrelated.exists());
+    assert_eq!(f.original(&parent), parent_original);
+    assert_eq!(f.original(&op), original);
+    f.audio = f.audio.reopen();
+    f.controller = DataController::default();
+    f.analysis.require_storage_restart();
+    let pending = f.pending(&op);
+    assert_eq!(
+        pending
+            .audio_deletion_preview
+            .as_ref()
+            .unwrap()
+            .include_unregistered_recorded,
+        Some(true)
+    );
+    let done = f.run(&pending, Action::Publish);
+    assert_eq!(done.phase, "completed", "{:?}", done.error_message);
+    assert_eq!(done.audio_deletion_receipt.unwrap().operation_id, op);
+    assert!(!returned.exists() && !f.audio.path.exists() && unrelated.exists());
+    assert_eq!(f.original(&parent), parent_original);
+    assert_eq!(f.original(&op), original);
+    assert_eq!(f.count(), 3);
+    assert_eq!(saved.audio_deletion_preview.unwrap().operation_id, op);
+    f.audio = f.audio.reopen();
+    assert!(!f.audio.storage.data_write_blocked());
+}
 #[test]
 fn audio_controller_modified_unfinished_scope_requires_readonly_review_and_separate_consent() {
     let f = Fixture::new();
