@@ -27,6 +27,9 @@ struct NativeFixture {
 }
 impl NativeFixture {
     fn new(kept: bool, full: bool) -> Self {
+        Self::with_audio_path(kept, full, false)
+    }
+    fn with_audio_path(kept: bool, full: bool, long: bool) -> Self {
         let base = tempfile::tempdir().unwrap();
         let parent = base.path().canonicalize().unwrap();
         let config = parent.join("config");
@@ -37,7 +40,21 @@ impl NativeFixture {
             .create_meeting("SYNTHETIC NATIVE HISTORY")
             .unwrap()
             .id;
-        let audio = format!("meetings/{meeting}/audio/source.flac");
+        let audio = if long {
+            let prefix = format!("meetings/{meeting}/audio/");
+            let leaf = "/source-long.flac";
+            let remaining = 256 - prefix.len() - leaf.len();
+            let padding = format!(
+                "{}{}",
+                "あ".repeat(remaining / 3),
+                "a".repeat(remaining % 3)
+            );
+            let relative = format!("{prefix}{padding}{leaf}");
+            assert_eq!(relative.len(), 256);
+            relative
+        } else {
+            format!("meetings/{meeting}/audio/source.flac")
+        };
         let file = storage.root().join(&audio);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"SYNTHETIC AUDIO").unwrap();
@@ -191,6 +208,7 @@ impl NativeFixture {
 }
 
 mod audio_reconfirmation;
+mod audio_remaining_relocation;
 mod model_reconfirmation;
 mod reconfirmation;
 mod repeated;
