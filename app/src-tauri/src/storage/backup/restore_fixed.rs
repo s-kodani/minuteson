@@ -374,7 +374,29 @@ impl<'p, 's> FixedData<'p, 's> {
             return Err("復元取り込みmanifestの会議・形式が不正です".into());
         }
         let (file_name,info,source_size,source_hash,audio_id):(String,String,i64,String,String)=self.ids.source().database.query_row("SELECT i.original_file_name,p.info_json,p.source_size,p.source_hash,i.converted_asset_id FROM audio_imports i JOIN audio_import_commits p ON p.import_id=i.id AND p.meeting_id=i.meeting_id WHERE i.id=?1 AND i.meeting_id=?2 AND i.state='ready'",params![manifest.import_id,meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;
-        let (audio_size,audio_hash):(i64,String)=self.ids.source().database.query_row("SELECT size_bytes,content_hash FROM file_assets WHERE id=?1 AND meeting_id=?2 AND state='ready'",params![audio_id,meeting],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+        let source = self.ids.source();
+        let (audio_size,audio_hash,audio_state,media):(i64,String,String,String)=source.database.query_row("SELECT size_bytes,content_hash,state,media_type FROM file_assets WHERE id=?1 AND meeting_id=?2",params![audio_id,meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
+        if source.deleted_audio.contains(meeting) {
+            source
+                .deleted_audio
+                .verify_meeting(&source.database, meeting)?;
+            let missing = source
+                .deleted_audio
+                .asset(meeting, &audio_id)
+                .ok_or("取り込み変換音声の検査済み欠落履歴がありません")?;
+            if audio_state != "missing"
+                || audio_size != missing.size
+                || audio_hash != missing.hash
+                || media != missing.media
+            {
+                return Err("取り込み変換音声と検査済み欠落履歴が一致しません".into());
+            }
+        } else if audio_state != "ready" {
+            return Err("取り込み変換音声が利用可能ではありません".into());
+        }
+        if !deleted_audio::audio_media(&media) || audio_size < 0 || source_size < 0 {
+            return Err("取り込み音声の容量・種別が不正です".into());
+        }
         if manifest.original_file_name != file_name
             || manifest.info
                 != serde_json::from_str::<crate::audio_import::AudioInfo>(&info)
@@ -417,8 +439,44 @@ impl<'p, 's> FixedData<'p, 's> {
         path: &Path,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(u64, String), String> {
+        if self.ids.source().deleted_audio.asset(meeting, id).is_some() {
+            return Err("削除済み音声を実ファイルとして登録しません".into());
+        }
         let (size, hash) = digest_file(path, cancelled)?;
         self.register_asset(meeting, id, size, hash)
+    }
+
+    // Register only immutable absence metadata. No path/body or ready state is
+    // produced, and ordinary body registration cannot adopt this missing input.
+    pub(super) fn absent_source_asset(&self, meeting: &str, id: &str) -> Result<(), String> {
+        let source = self.ids.source();
+        let missing = source
+            .deleted_audio
+            .asset(meeting, id)
+            .ok_or("音声資産の検査済み欠落履歴がありません")?;
+        let current: (String,i64,String,String) = source.database.query_row(
+            "SELECT media_type,size_bytes,content_hash,state FROM file_assets WHERE id=?1 AND meeting_id=?2",
+            params![id,meeting], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+        ).map_err(|e|e.to_string())?;
+        if current
+            != (
+                missing.media.clone(),
+                missing.size,
+                missing.hash.clone(),
+                "missing".into(),
+            )
+        {
+            return Err("音声資産と検査済み欠落履歴が一致しません".into());
+        }
+        self.ids.get("file_assets", meeting, id)?;
+        self.remember_asset(
+            meeting,
+            id,
+            &missing.hash,
+            missing.size,
+            missing.hash.clone(),
+        )?;
+        Ok(())
     }
 
     fn register_asset(
@@ -428,6 +486,9 @@ impl<'p, 's> FixedData<'p, 's> {
         size: u64,
         new: String,
     ) -> Result<(u64, String), String> {
+        if self.ids.source().deleted_audio.asset(meeting, id).is_some() {
+            return Err("削除済み音声を実ファイルとして登録しません".into());
+        }
         let (old,old_size,media): (String,i64,String) = self
             .ids
             .source()
@@ -440,10 +501,21 @@ impl<'p, 's> FixedData<'p, 's> {
             .map_err(|e| e.to_string())?;
         self.ids.get("file_assets", meeting, id)?;
         let size = i64::try_from(size).map_err(|_| "復元ファイル容量が範囲外です")?;
-        if media.starts_with("audio/") && (new != old || size != old_size) {
+        if deleted_audio::audio_media(&media) && (new != old || size != old_size) {
             return Err("復元で音声本体が変更されています".into());
         }
-        self.remember("file_assets", meeting, id, &old, &new)?;
+        self.remember_asset(meeting, id, &old, size, new)
+    }
+
+    fn remember_asset(
+        &self,
+        meeting: &str,
+        id: &str,
+        old: &str,
+        size: i64,
+        new: String,
+    ) -> Result<(u64, String), String> {
+        self.remember("file_assets", meeting, id, old, &new)?;
         self.registry
             .execute(
                 "INSERT INTO assets VALUES(?1,?2,?3,?4,?5) ON CONFLICT(meeting,old_id) DO NOTHING",

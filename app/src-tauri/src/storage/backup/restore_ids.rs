@@ -11,6 +11,11 @@ const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 
 mod replay;
 
+enum PreparationScope {
+    Standard,
+    HistoricalConstruction,
+}
+
 pub(crate) enum BatchPreparation<'a> {
     Pending(RestoreIds<'a>),
     AlreadyPublished {
@@ -148,7 +153,39 @@ impl<'a> RestoreIds<'a> {
         batch: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        Self::prepare_inner(archive, parent, batch, None, cancelled)
+        Self::prepare_inner(
+            archive,
+            parent,
+            batch,
+            None,
+            PreparationScope::Standard,
+            cancelled,
+        )
+    }
+
+    // Private construction only. Publication independently refuses deleted
+    // source histories until the native unavailable-record pass is connected.
+    pub(in crate::storage::backup) fn prepare_historical(
+        archive: &'a VerifiedArchive,
+        parent: &Path,
+        batch: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        if archive.deleted_audio.is_empty() {
+            return Err("削除済み音声の履歴構築には検査済み履歴が必要です".into());
+        }
+        archive.verify_validation_database(cancelled)?;
+        archive
+            .deleted_audio
+            .verify_omissions(&archive.manifest.omitted_assets)?;
+        Self::prepare_inner(
+            archive,
+            parent,
+            batch,
+            None,
+            PreparationScope::HistoricalConstruction,
+            cancelled,
+        )
     }
 
     fn prepare_inner(
@@ -156,6 +193,7 @@ impl<'a> RestoreIds<'a> {
         parent: &Path,
         batch: &str,
         destination: Option<&Connection>,
+        preparation_scope: PreparationScope,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         if !Uuid::parse_str(batch).is_ok_and(|id| id.to_string() == batch) {
@@ -165,7 +203,9 @@ impl<'a> RestoreIds<'a> {
         // Portable format 3 is validated and can retain text/history today;
         // native unavailable-history publication is the next construction pass.
         // Never fall through to ready-source reconstruction for such an archive.
-        if !archive.deleted_audio.is_empty() {
+        if matches!(preparation_scope, PreparationScope::Standard)
+            && !archive.deleted_audio.is_empty()
+        {
             return Err("削除済み音声を含むバックアップの追加復元はまだ未接続です。本文・根拠・音声削除履歴はアーカイブに保存されています".into());
         }
         let logical_bytes = archive

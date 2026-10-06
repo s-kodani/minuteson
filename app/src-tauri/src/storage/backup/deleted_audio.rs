@@ -134,8 +134,42 @@ pub(in crate::storage) struct Verified {
     // previously checked meeting ID alone cannot authorize historical reads
     // after the logical database has changed.
     proofs: BTreeMap<String, Vec<TableProof>>,
+    assets: BTreeMap<String, MissingSourceAsset>,
+}
+pub(super) struct MissingSourceAsset {
+    meeting: String,
+    pub(super) media: String,
+    pub(super) size: i64,
+    pub(super) hash: String,
 }
 impl Verified {
+    pub(super) fn verify_omissions(&self, omitted: &[archive::OmittedAsset]) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+        for item in omitted {
+            if let Some(asset) = self.asset(&item.meeting_id, &item.asset_id) {
+                if item.reason != archive::OmittedReason::SourceAudioDeleted
+                    || item.source_size != asset.size as u64
+                    || item.source_sha256 != asset.hash
+                    || !seen.insert(item.asset_id.clone())
+                {
+                    return Err("検査済み音声削除履歴と除外理由・由来が一致しません".into());
+                }
+            } else if item.reason == archive::OmittedReason::SourceAudioDeleted
+                || (item.reason == archive::OmittedReason::RecreatablePcm
+                    && self.contains(&item.meeting_id))
+            {
+                return Err("音声削除履歴のない欠落・再生成可能PCMは採用しません".into());
+            }
+        }
+        if seen.len() != self.assets.len() {
+            return Err("検査済み音声削除履歴の全資産が除外記録にありません".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn asset(&self, meeting: &str, id: &str) -> Option<&MissingSourceAsset> {
+        self.assets.get(id).filter(|a| a.meeting == meeting)
+    }
     pub(super) fn contains(&self, meeting: &str) -> bool {
         self.proofs.contains_key(meeting)
     }
@@ -170,6 +204,7 @@ pub(super) fn verify(
     }
     let mut meetings = BTreeSet::new();
     let mut expected = BTreeMap::new();
+    let mut assets = BTreeMap::new();
     for item in descriptors {
         check_cancelled(check)?;
         item.validate_shape()?;
@@ -180,13 +215,33 @@ pub(super) fn verify(
         if fingerprints(db, &item.meeting_id, check)? != item.tables {
             return Err("音声削除の持ち運び用履歴とDBが一致しません".into());
         }
-        let mut statement = db.prepare("SELECT id FROM file_assets WHERE meeting_id=?1 AND media_type LIKE 'audio/%' ORDER BY id").map_err(|e| e.to_string())?;
+        let mut statement = db.prepare("SELECT id,media_type,size_bytes,content_hash FROM file_assets WHERE meeting_id=?1 AND media_type LIKE 'audio/%' ORDER BY id").map_err(|e| e.to_string())?;
         let ids = statement
-            .query_map([&item.meeting_id], |r| r.get::<_, String>(0))
+            .query_map([&item.meeting_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
             .map_err(|e| e.to_string())?;
         for id in ids {
             check_cancelled(check)?;
-            expected.insert(id.map_err(|e| e.to_string())?, item.meeting_id.clone());
+            let (id, media, size, hash) = id.map_err(|e| e.to_string())?;
+            if size < 0 || !portable::valid_hash(&hash) {
+                return Err("削除済み音声の容量・ハッシュが不正です".into());
+            }
+            expected.insert(id.clone(), item.meeting_id.clone());
+            assets.insert(
+                id,
+                MissingSourceAsset {
+                    meeting: item.meeting_id.clone(),
+                    media,
+                    size,
+                    hash,
+                },
+            );
         }
     }
     let mut actual = BTreeMap::new();
@@ -210,6 +265,7 @@ pub(super) fn verify(
     }
     check_cancelled(check)?;
     Ok(Verified {
+        assets,
         proofs: descriptors
             .iter()
             .map(|d| (d.meeting_id.clone(), d.tables.clone()))

@@ -171,6 +171,13 @@ impl FixedData<'_, '_> {
             .find(|a| a.asset_id == id)
         {
             let reason = match role {
+                Role::TemporaryPcm if source.deleted_audio.asset(meeting, id).is_some() => {
+                    let missing = source.deleted_audio.asset(meeting, id).unwrap();
+                    if missing.size != size || missing.hash != hash || missing.media != media {
+                        return Err("PCMと検査済み音声削除履歴が一致しません".into());
+                    }
+                    archive::OmittedReason::SourceAudioDeleted
+                }
                 Role::TemporaryPcm => archive::OmittedReason::RecreatablePcm,
                 Role::DiarizationLog => archive::OmittedReason::NativeLog,
                 _ => return Err("永続的な途中成果物が欠損しています".into()),

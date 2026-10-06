@@ -158,6 +158,12 @@ impl Storage {
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         check_cancelled(check)?;
+        if !ids.source().deleted_audio.is_empty() {
+            return Err(
+                "削除済み音声の利用不可記録の公開が未接続のため、履歴構築をライブDBへ公開しません"
+                    .into(),
+            );
+        }
         sealed.matches_ids(ids, check)?;
         // Maintenance is declared first and drops after the mutex/transaction.
         let maintenance = self.backup_maintenance()?;

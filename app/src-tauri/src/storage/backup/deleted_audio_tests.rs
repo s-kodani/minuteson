@@ -3,6 +3,9 @@ use super::*;
 use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
 use serde_json::{json, Value};
 
+#[path = "deleted_audio_workspace_tests.rs"]
+mod workspace;
+
 fn deleted(storage: &Storage, meeting: &str) -> String {
     let lease = AnalysisController::default()
         .begin_data_maintenance(false, false, &|| false)

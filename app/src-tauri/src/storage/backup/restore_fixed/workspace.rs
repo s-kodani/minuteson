@@ -188,6 +188,12 @@ impl FixedWorkspace {
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
         let source = fixed.ids.source();
+        if !source.deleted_audio.is_empty() {
+            source.verify_validation_database(cancelled)?;
+        }
+        source
+            .deleted_audio
+            .verify_omissions(&source.manifest.omitted_assets)?;
         let entries: std::collections::BTreeMap<_, _> = source
             .manifest
             .entries
@@ -220,6 +226,14 @@ impl FixedWorkspace {
                 .map_err(|e| e.to_string())?;
             let import_manifest: bool = row.get(5).map_err(|e| e.to_string())?;
             let foundation: bool = row.get(6).map_err(|e| e.to_string())?;
+            if source.deleted_audio.asset(&meeting, &id).is_some() {
+                fixed.absent_source_asset(&meeting, &id)?;
+                // Seal walks all minted parents, including missing assets. Make
+                // only private owned directories, never dummy audio bodies.
+                let destination = self.stage.path().join(&relative);
+                scratch::directories(destination.parent().ok_or("復元先フォルダーがありません")?)?;
+                continue;
+            }
             if !import_manifest && !foundation {
                 // Includes omitted PCM/logs and durable native results. They
                 // must be handled by their codecs before any seal/publication.
