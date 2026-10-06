@@ -5,6 +5,8 @@ use crate::analysis_worker::AnalysisController;
 use crate::storage::backup::recovery;
 use crate::storage::backup::{archive::BackupReceipt, operations::*};
 #[cfg(unix)]
+use crate::storage::deletion::audio::operations as audio_deletion;
+#[cfg(unix)]
 use crate::storage::deletion::models::operations as model_deletion;
 #[cfg(unix)]
 use crate::storage::deletion::operations as deletion;
@@ -22,6 +24,8 @@ use uuid::Uuid;
 mod dialog;
 mod work;
 #[cfg(unix)]
+pub(crate) use work::AudioTarget;
+#[cfg(unix)]
 pub(crate) use work::ModelTarget;
 use work::{Completion, Work};
 
@@ -34,6 +38,7 @@ pub(crate) enum Kind {
     Relocation,
     Deletion,
     ModelDeletion,
+    AudioDeletion,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -107,6 +112,10 @@ pub(crate) struct Snapshot {
     pub model_deletion_preview: Option<model_deletion::Preview>,
     #[cfg(unix)]
     pub model_deletion_receipt: Option<model_deletion::Receipt>,
+    #[cfg(unix)]
+    pub audio_deletion_preview: Option<audio_deletion::Preview>,
+    #[cfg(unix)]
+    pub audio_deletion_receipt: Option<audio_deletion::Receipt>,
     pub restart_required: bool,
     pub error_message: Option<String>,
     pub attention_required: bool,
@@ -137,6 +146,10 @@ impl Default for Snapshot {
             model_deletion_preview: None,
             #[cfg(unix)]
             model_deletion_receipt: None,
+            #[cfg(unix)]
+            audio_deletion_preview: None,
+            #[cfg(unix)]
+            audio_deletion_receipt: None,
             restart_required: false,
             error_message: None,
             attention_required: false,
@@ -155,6 +168,8 @@ enum Selection {
     Deletion(deletion::Prepared),
     #[cfg(unix)]
     ModelDeletion(model_deletion::Prepared),
+    #[cfg(unix)]
+    AudioDeletion(audio_deletion::Prepared),
 }
 
 impl Selection {
@@ -169,6 +184,8 @@ impl Selection {
             Self::Deletion(p) => p.preview().confirmation_id,
             #[cfg(unix)]
             Self::ModelDeletion(p) => p.preview().confirmation_id,
+            #[cfg(unix)]
+            Self::AudioDeletion(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -229,8 +246,9 @@ impl DataController {
         // Check an accepted request BEFORE its old confirmation: refreshing
         // mints a new ID, and a lost refresh response still has to be replayable.
         #[cfg(unix)]
-        let deletion_completed =
-            s.snapshot.deletion_receipt.is_some() || s.snapshot.model_deletion_receipt.is_some();
+        let deletion_completed = s.snapshot.deletion_receipt.is_some()
+            || s.snapshot.model_deletion_receipt.is_some()
+            || s.snapshot.audio_deletion_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         if s.request.as_ref() == Some(request)
@@ -260,11 +278,20 @@ impl DataController {
             )
             || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection, request.action), (Some(Selection::ModelDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
+        #[cfg(unix)]
+        let deletion_resolution = deletion_resolution
+            || matches!(
+                (&s.selection, request.action),
+                (Some(Selection::AudioDeletion(_)), Action::Refresh)
+            )
+            || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::Keep) if p.preview().keep_allowed)
+            || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
         #[cfg(not(unix))]
         let deletion_resolution = false;
         #[cfg(unix)]
         let deletion_resume = (matches!(&s.selection, Some(Selection::Deletion(p)) if p.preview().pending)
-            || matches!(&s.selection, Some(Selection::ModelDeletion(p)) if p.preview().pending))
+            || matches!(&s.selection, Some(Selection::ModelDeletion(p)) if p.preview().pending)
+            || matches!(&s.selection, Some(Selection::AudioDeletion(p)) if p.preview().pending))
             && !deletion_completed;
         #[cfg(not(unix))]
         let deletion_resume = false;
@@ -354,6 +381,28 @@ impl DataController {
                 }
                 _ => false,
             };
+        #[cfg(unix)]
+        let allowed = allowed
+            || match (selection, request.action) {
+                (Selection::AudioDeletion(_), Action::Refresh) => true,
+                (Selection::AudioDeletion(p), Action::Keep) => p.preview().keep_allowed,
+                (Selection::AudioDeletion(p), Action::ReviewRemaining) => {
+                    p.preview().reconfirmation_allowed
+                }
+                (Selection::AudioDeletion(p), Action::Publish) => {
+                    let v = p.preview();
+                    v.execute_allowed
+                        && !(v.unregistered_audio_files > 0
+                            && matches!(v.phase.as_str(), "review" | "reconfirmation"))
+                }
+                (Selection::AudioDeletion(p), Action::DeleteIncludingUnregistered) => {
+                    let v = p.preview();
+                    v.execute_allowed
+                        && v.unregistered_audio_files > 0
+                        && matches!(v.phase.as_str(), "review" | "reconfirmation")
+                }
+                _ => false,
+            };
         if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
         }
@@ -363,12 +412,13 @@ impl DataController {
         {
             return Err("保存先変更の確認が失効しています。同じ対象を再確認してください".into());
         }
-        if matches!(s.snapshot.kind, Some(Kind::Deletion | Kind::ModelDeletion))
-            && matches!(
-                request.action,
-                Action::Publish | Action::DeleteIncludingUnregistered
-            )
-            && s.snapshot.phase != "ready"
+        if matches!(
+            s.snapshot.kind,
+            Some(Kind::Deletion | Kind::ModelDeletion | Kind::AudioDeletion)
+        ) && matches!(
+            request.action,
+            Action::Publish | Action::DeleteIncludingUnregistered
+        ) && s.snapshot.phase != "ready"
         {
             return Err("削除確認が失効しています。残りの状態を再検査してください".into());
         }
@@ -444,13 +494,15 @@ impl DataController {
         {
             s.snapshot.deletion_receipt = completion.deletion;
             s.snapshot.model_deletion_receipt = completion.model_deletion;
+            s.snapshot.audio_deletion_receipt = completion.audio_deletion;
         }
         s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
         s.snapshot.error_message = completion.error;
         #[cfg(unix)]
-        let deletion_completed =
-            s.snapshot.deletion_receipt.is_some() || s.snapshot.model_deletion_receipt.is_some();
+        let deletion_completed = s.snapshot.deletion_receipt.is_some()
+            || s.snapshot.model_deletion_receipt.is_some()
+            || s.snapshot.audio_deletion_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         let published = s.snapshot.backup_receipt.is_some()
@@ -501,6 +553,10 @@ impl DataController {
                 Some(Selection::ModelDeletion(p)) => Some(p.preview()),
                 _ => None,
             };
+            s.snapshot.audio_deletion_preview = match &s.selection {
+                Some(Selection::AudioDeletion(p)) => Some(p.preview()),
+                _ => None,
+            };
         }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
@@ -514,7 +570,10 @@ impl DataController {
     }
 
     pub(crate) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Snapshot, String> {
-        if matches!(kind, Kind::Recovery | Kind::Deletion | Kind::ModelDeletion) {
+        if matches!(
+            kind,
+            Kind::Recovery | Kind::Deletion | Kind::ModelDeletion | Kind::AudioDeletion
+        ) {
             return Err("会議または要確認一覧から対象を選択してください".into());
         }
         let app = window.app_handle().clone();
@@ -572,6 +631,8 @@ impl DataController {
         let mut deletion_admission = None;
         #[cfg(unix)]
         let mut model_admission = None;
+        #[cfg(unix)]
+        let mut audio_admission = None;
         {
             let controller = app.state::<Self>();
             let s = controller
@@ -603,9 +664,15 @@ impl DataController {
                     },
                 );
             }
+            #[cfg(unix)]
+            if let Some(Selection::AudioDeletion(p)) = &s.selection {
+                audio_admission = Some(p.admission_operation().map(str::to_owned));
+            }
         }
         #[cfg(unix)]
-        let lease = if let Some(operation) = model_admission {
+        let lease = if let Some(operation) = audio_admission {
+            work::Admission::acquire_audio_deletion(app, operation.as_deref())?
+        } else if let Some(operation) = model_admission {
             work::Admission::acquire_model_deletion(app, operation.as_deref())?
         } else if let Some(operation) = deletion_admission {
             work::Admission::acquire_deletion(app, operation.as_deref())?
@@ -710,6 +777,50 @@ impl DataController {
         }
     }
 
+    #[cfg(unix)]
+    pub(crate) fn review_audio_deletion(
+        app: &AppHandle,
+        target: work::AudioTarget,
+    ) -> Result<Snapshot, String> {
+        let operation = match &target {
+            work::AudioTarget::Pending(id) => Some(id.as_str()),
+            _ => None,
+        };
+        let lease = work::Admission::acquire_audio_deletion(app, operation)?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::AudioDeletion)?;
+        let token = snapshot
+            .token
+            .clone()
+            .ok_or("音声削除確認の操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(
+            app,
+            token,
+            cancel,
+            lease,
+            Work::AudioDeletion(target, previous),
+        );
+        Ok(snapshot)
+    }
+    #[cfg(unix)]
+    pub(crate) fn audio_deletion_page(
+        &self,
+        confirmation: &str,
+        offset: usize,
+    ) -> Result<audio_deletion::PathPage, String> {
+        let s = self
+            .state
+            .lock()
+            .map_err(|_| "音声削除一覧のロックを取得できません")?;
+        if s.snapshot.busy {
+            return Err("音声削除の検査・実行中です".into());
+        }
+        match &s.selection {
+            Some(Selection::AudioDeletion(p)) => p.page(confirmation, offset),
+            _ => Err("確認済みの音声削除対象がありません".into()),
+        }
+    }
+
     fn launch(
         app: &AppHandle,
         token: String,
@@ -793,6 +904,12 @@ impl DataController {
                     {
                         s.snapshot.deletion_receipt.is_none()
                             && s.snapshot.model_deletion_receipt.is_none()
+                            && s.snapshot.audio_deletion_receipt.is_none()
+                            && !s
+                                .snapshot
+                                .audio_deletion_preview
+                                .as_ref()
+                                .is_some_and(|p| p.pending)
                             && !s
                                 .snapshot
                                 .model_deletion_preview
@@ -884,6 +1001,10 @@ impl DataController {
             if s.snapshot.model_deletion_receipt.is_none() {
                 s.snapshot.model_deletion_preview = None;
             }
+            #[cfg(unix)]
+            if s.snapshot.audio_deletion_receipt.is_none() {
+                s.snapshot.audio_deletion_preview = None;
+            }
             if s.snapshot.relocation_receipt.is_none() {
                 s.snapshot.relocation_preview = None;
             }
@@ -902,3 +1023,6 @@ mod deletion_tests;
 
 #[cfg(all(test, unix))]
 mod model_deletion_tests;
+
+#[cfg(all(test, unix))]
+mod audio_deletion_tests;

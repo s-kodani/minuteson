@@ -152,6 +152,15 @@ impl Prepared {
     pub(crate) fn kept(&self) -> bool {
         self.kept
     }
+    pub(super) fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+    pub(super) fn policy(&self) -> &Policy {
+        &self.header.policy
+    }
+    pub(super) fn origin_operation(&self) -> Option<&str> {
+        self.header.origin.as_ref().map(|o| o.operation_id.as_str())
+    }
     fn capture_scope(
         &self,
         db: &Connection,

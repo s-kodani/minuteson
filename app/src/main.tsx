@@ -138,7 +138,7 @@ function MainWindow() {
   const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || deletion.protectedNow, withSavedEdits,
     onProtectionChange: setModelDeletionPending, onDeleted: async () => { setModelCatalogEpoch(epoch => epoch + 1); } });
   const navigationLocked = navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
-  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending;
+  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const writeLocked = navigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   useEffect(() => {
     if (!isTauri()) return;
@@ -169,8 +169,8 @@ function MainWindow() {
         }
         const data = await invoke<DataSnapshot>("get_data_operation");
         assertDataSnapshot(data);
-        if (data.busy || data.retryAllowed || data.deletionPreview?.pending || data.modelDeletionPreview?.pending) {
-          if (!window.confirm(data.kind === "model_deletion" ? "モデル本体削除の停止を待って終了しますか？ 未完了記録・残りの対象と履歴を保持します。既に消した本体は復元しません。" : data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
+        if (data.busy || data.retryAllowed || data.deletionPreview?.pending || data.modelDeletionPreview?.pending || data.audioDeletionPreview?.pending) {
+          if (!window.confirm(data.kind === "audio_deletion" ? "音声削除の停止を待って終了しますか？ 未完了記録・残りの音声・文字起こし・議事録を保持します。既に消した音声は復元しません。" : data.kind === "model_deletion" ? "モデル本体削除の停止を待って終了しますか？ 未完了記録・残りの対象と履歴を保持します。既に消した本体は復元しません。" : data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
           if (data.token) await invoke("cancel_data_operation", { token: data.token });
         }
         await invoke("finish_main_close", { quit: event.payload.quit });

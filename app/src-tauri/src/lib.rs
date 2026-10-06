@@ -552,6 +552,52 @@ fn get_model_deletion_paths(
         .model_deletion_page(&confirmation_id, offset)
 }
 
+#[cfg(unix)]
+#[tauri::command]
+async fn get_audio_deletion_items(
+    window: WebviewWindow,
+) -> Result<storage::deletion::audio::operations::Listing, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::deletion::audio::operations::listing(&app.state::<Storage>())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_meeting_audio_deletion(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_audio_deletion(
+        &data_app(&window)?,
+        data_controller::AudioTarget::Fresh(meeting_id),
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn review_pending_audio_deletion(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_audio_deletion(
+        &data_app(&window)?,
+        data_controller::AudioTarget::Pending(operation_id),
+    )
+}
+#[cfg(unix)]
+#[tauri::command]
+fn get_audio_deletion_paths(
+    window: WebviewWindow,
+    confirmation_id: String,
+    offset: usize,
+) -> Result<storage::deletion::audio::operations::PathPage, String> {
+    data_app(&window)?
+        .state::<DataController>()
+        .audio_deletion_page(&confirmation_id, offset)
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
@@ -1759,6 +1805,14 @@ pub fn run() {
             review_pending_model_deletion,
             #[cfg(unix)]
             get_model_deletion_paths,
+            #[cfg(unix)]
+            get_audio_deletion_items,
+            #[cfg(unix)]
+            review_meeting_audio_deletion,
+            #[cfg(unix)]
+            review_pending_audio_deletion,
+            #[cfg(unix)]
+            get_audio_deletion_paths,
             #[cfg(target_os = "macos")]
             get_storage_bootstrap,
             review_storage_move,

@@ -209,6 +209,23 @@ impl Receipt {
     pub(crate) fn processed_files(&self) -> usize {
         self.progress.next
     }
+    pub(in crate::storage::deletion::audio) fn confirmed(&self) -> &Prepared {
+        &self.saved
+    }
+    pub(in crate::storage::deletion::audio) fn verify_live(
+        &self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
+        active(lease, check)
+    }
     fn reserved(&self, index: usize) -> String {
         format!(".mon-delete-audio-{}-{index}", self.saved.operation())
     }

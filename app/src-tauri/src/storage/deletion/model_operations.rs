@@ -238,7 +238,9 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         storage.managed_anchor.verify()?;
-        let mut q=db.prepare(&format!("SELECT id,state FROM maintenance_operations WHERE kind='delete_assets' AND {} ORDER BY created_at,id LIMIT 101",super::super::fence::predicate(&db)?)).map_err(|e|e.to_string())?;
+        // Routing only: audio rows remain visible in the audio list, including
+        // invalid/restored receipts. No hint exempts them from the global fence.
+        let mut q=db.prepare(&format!("SELECT id,state FROM maintenance_operations WHERE kind='delete_assets' AND {} AND coalesce(CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 AND json_valid(target_manifest_json) THEN json_extract(target_manifest_json,'$.subtype') ELSE NULL END,'') NOT IN ('audioOnlyDeletion','restoredAudioUnavailable') ORDER BY created_at,id LIMIT 101",super::super::fence::predicate(&db)?)).map_err(|e|e.to_string())?;
         let result = q
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(|e| e.to_string())?
@@ -257,7 +259,14 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
                     .connection
                     .lock()
                     .map_err(|_| "DBロックを取得できません")?;
-                super::super::startup::reason(&db, &operation_id)?
+                super::super::startup::reason(&db, &operation_id)?.filter(|reason| {
+                    matches!(
+                        reason.as_str(),
+                        "model_completed_scope_reappeared"
+                            | "model_completed_receipt_invalid"
+                            | "model_completed_scope_uninspectable"
+                    )
+                })
             };
             Ok(match load(storage, root, &operation_id) {
                 Ok(target) => Item {

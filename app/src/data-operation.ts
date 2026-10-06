@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { acceptDataSnapshot, type DataAvailability, type DataSnapshot } from "./data-operation-state";
 import { assertDeletionListing, type DeletionListing } from "./deletion-state";
 import { assertModelBodyDeletionListing, type ModelBodyDeletionListing } from "./model-deletion-operation-state";
+import { assertAudioDeletionListing, type AudioDeletionListing } from "./audio-deletion-operation-state";
 
 export function useDataOperation() {
   const current = useRef<DataSnapshot | null>(null);
@@ -15,6 +16,8 @@ export function useDataOperation() {
   const [deletionSupported, setDeletionSupported] = useState(false);
   const [modelDeletionListing, setModelDeletionListing] = useState<ModelBodyDeletionListing | null>(null);
   const [modelDeletionSupported, setModelDeletionSupported] = useState(false);
+  const [audioDeletionListing, setAudioDeletionListing] = useState<AudioDeletionListing | null>(null);
+  const [audioDeletionSupported, setAudioDeletionSupported] = useState(false);
   const readEpoch = useRef(0);
   const accept = (next: DataSnapshot) => {
     const value = acceptDataSnapshot(current.current, next);
@@ -33,7 +36,10 @@ export function useDataOperation() {
       const modelSupported = Object.hasOwn(next, "modelDeletionPreview");
       const modelListing = modelSupported ? await invoke<ModelBodyDeletionListing>("get_model_deletion_items") : null;
       if (modelListing) assertModelBodyDeletionListing(modelListing);
-      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setConnected(true); setError(""); }
+      const audioSupported = Object.hasOwn(next, "audioDeletionPreview");
+      const audioListing = audioSupported ? await invoke<AudioDeletionListing>("get_audio_deletion_items") : null;
+      if (audioListing) assertAudioDeletionListing(audioListing);
+      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setConnected(true); setError(""); }
     } catch (cause) {
       if (epoch === readEpoch.current) { setAvailability(null); setConnected(false); setError(String(cause)); }
       throw cause;
@@ -60,6 +66,6 @@ export function useDataOperation() {
     window.addEventListener("focus", poll);
     return () => { disposed = true; unlisten?.(); window.clearInterval(timer); window.removeEventListener("focus", poll); };
   }, []);
-  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, error, accept, refresh, getSnapshot: () => current.current };
+  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, audioDeletionListing, audioDeletionSupported, error, accept, refresh, getSnapshot: () => current.current };
 }
 export type DataOperation = ReturnType<typeof useDataOperation>;

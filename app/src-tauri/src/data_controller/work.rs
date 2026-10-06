@@ -5,11 +5,16 @@ pub(super) struct Admission {
     app: AppHandle,
     lease: Option<crate::analysis_worker::data_maintenance::DataMaintenanceLease>,
 }
+enum DeletionLane {
+    Meeting,
+    Model,
+    Audio,
+}
 
 impl Admission {
     pub(super) fn acquire(app: &AppHandle) -> Result<Self, String> {
         app.state::<Storage>().require_data_writable()?;
-        Self::acquire_worker(app, None, false)
+        Self::acquire_worker(app, None, DeletionLane::Meeting)
     }
     #[cfg(unix)]
     pub(super) fn acquire_deletion(
@@ -17,7 +22,7 @@ impl Admission {
         operation: Option<&str>,
     ) -> Result<Self, String> {
         deletion::authorize_review(&app.state::<Storage>(), operation)?;
-        Self::acquire_worker(app, operation, false)
+        Self::acquire_worker(app, operation, DeletionLane::Meeting)
     }
     #[cfg(unix)]
     pub(super) fn acquire_model_deletion(
@@ -25,12 +30,20 @@ impl Admission {
         operation: Option<&str>,
     ) -> Result<Self, String> {
         model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
-        Self::acquire_worker(app, operation, true)
+        Self::acquire_worker(app, operation, DeletionLane::Model)
+    }
+    #[cfg(unix)]
+    pub(super) fn acquire_audio_deletion(
+        app: &AppHandle,
+        operation: Option<&str>,
+    ) -> Result<Self, String> {
+        audio_deletion::authorize_review(&app.state::<Storage>(), operation)?;
+        Self::acquire_worker(app, operation, DeletionLane::Audio)
     }
     fn acquire_worker(
         app: &AppHandle,
         deletion_operation: Option<&str>,
-        model: bool,
+        lane: DeletionLane,
     ) -> Result<Self, String> {
         let importing = app
             .state::<crate::import_controller::ImportController>()
@@ -43,7 +56,15 @@ impl Admission {
         let analysis = app.state::<AnalysisController>();
         #[cfg(unix)]
         let lease = if let Some(operation) = deletion_operation {
-            if model {
+            if matches!(lane, DeletionLane::Audio) {
+                analysis.begin_audio_deletion_maintenance(
+                    &app.state::<Storage>(),
+                    operation,
+                    recording,
+                    import_blocked,
+                    &|| false,
+                )?
+            } else if matches!(lane, DeletionLane::Model) {
                 analysis.begin_model_deletion_maintenance(
                     &app.state::<Storage>(),
                     operation,
@@ -65,7 +86,7 @@ impl Admission {
         };
         #[cfg(not(unix))]
         let lease = {
-            let _ = (deletion_operation, model);
+            let _ = (deletion_operation, lane);
             analysis.begin_data_maintenance(recording, import_blocked, &|| false)?
         };
         Ok(Self {
@@ -97,6 +118,11 @@ pub(crate) enum ModelTarget {
     Fresh { package: String, review: String },
     Pending(String),
 }
+#[cfg(unix)]
+pub(crate) enum AudioTarget {
+    Fresh(String),
+    Pending(String),
+}
 
 pub(super) enum Work {
     Select(Kind, Result<Option<PathBuf>, String>, Option<Selection>),
@@ -108,6 +134,8 @@ pub(super) enum Work {
     Deletion(String, bool, Option<Selection>),
     #[cfg(unix)]
     ModelDeletion(PathBuf, ModelTarget, Option<Selection>),
+    #[cfg(unix)]
+    AudioDeletion(AudioTarget, Option<Selection>),
 }
 
 #[derive(Default)]
@@ -121,6 +149,8 @@ pub(super) struct Completion {
     pub deletion: Option<deletion::Receipt>,
     #[cfg(unix)]
     pub model_deletion: Option<model_deletion::Receipt>,
+    #[cfg(unix)]
+    pub audio_deletion: Option<audio_deletion::Receipt>,
     pub restart_required: bool,
     pub error: Option<String>,
     pub attention: bool,
@@ -285,6 +315,38 @@ impl Work {
     ) -> Completion {
         match self {
             #[cfg(unix)]
+            Self::AudioDeletion(target, previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    progress("verifying_audio_delete_scope");
+                    let lease = admission.ok_or("音声削除確認に必要な共有実行排他がありません")?;
+                    let p = match target {
+                        AudioTarget::Fresh(meeting) => {
+                            audio_deletion::Prepared::fresh(storage, &meeting, lease, cancelled)?
+                        }
+                        AudioTarget::Pending(id) => {
+                            audio_deletion::Prepared::pending(storage, &id, lease, cancelled)?
+                        }
+                    };
+                    Ok::<_, String>(Selection::AudioDeletion(p))
+                }))
+                .unwrap_or_else(|_| {
+                    Err("音声削除対象の検査が停止しました。対象を保持します".into())
+                });
+                match result {
+                    Ok(selection) => Completion {
+                        selection: Some(selection),
+                        restart_required: storage.restart_required(),
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        cancelled: cancelled(),
+                        ..Completion::default()
+                    },
+                }
+            }
+            #[cfg(unix)]
             Self::ModelDeletion(root, target, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -401,6 +463,11 @@ impl Work {
                                 "モデルまたは未完了モデル削除の一覧から確認してください".into()
                             )
                         }
+                        Kind::AudioDeletion => {
+                            return Err(
+                                "会議または音声削除の確認待ち一覧から選択してください".into()
+                            )
+                        }
                     };
                     if cancelled() {
                         return Err("データの確認を取り消しました".into());
@@ -423,6 +490,60 @@ impl Work {
                 }
             }
             Self::Request(mut selection, request) => {
+                #[cfg(unix)]
+                if let Selection::AudioDeletion(prepared) = &mut selection {
+                    let mut completion = Completion::default();
+                    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+                        let lease =
+                            admission.ok_or("音声削除操作に必要な共有実行排他がありません")?;
+                        match request.action {
+                            Action::Refresh => {
+                                progress("verifying_audio_delete_scope");
+                                prepared.refresh(storage, lease, cancelled)?;
+                            }
+                            Action::ReviewRemaining => {
+                                progress("verifying_audio_delete_scope");
+                                prepared.review_remaining(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    cancelled,
+                                )?;
+                            }
+                            Action::Publish | Action::DeleteIncludingUnregistered => {
+                                completion.audio_deletion = Some(prepared.execute(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    request.action == Action::DeleteIncludingUnregistered,
+                                    cancelled,
+                                    progress,
+                                )?);
+                            }
+                            Action::Keep => {
+                                completion.audio_deletion = Some(prepared.keep(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    cancelled,
+                                )?)
+                            }
+                            _ => return Err("音声削除確認と操作が一致しません".into()),
+                        }
+                        Ok(())
+                    }));
+                    match result {
+                        Ok(Ok(())) => {}, Ok(Err(error)) => completion.error = Some(error),
+                        Err(_) => completion.error = Some("音声削除が予期せず停止しました。既に消した音声は復元せず、保存済み進捗を確認してください".into()),
+                    }
+                    completion.restart_required = storage.restart_required();
+                    completion.attention = completion.error.is_some()
+                        && (storage.data_write_blocked() || prepared.preview().pending);
+                    completion.cancelled =
+                        completion.audio_deletion.is_none() && !completion.attention && cancelled();
+                    completion.selection = Some(selection);
+                    return completion;
+                }
                 #[cfg(unix)]
                 if let Selection::ModelDeletion(prepared) = &mut selection {
                     let mut completion = Completion::default();

@@ -204,6 +204,26 @@ pub(crate) struct Review {
     snapshot: Snapshot,
 }
 impl Review {
+    pub(in crate::storage::deletion::audio) fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+    pub(in crate::storage::deletion::audio) fn source_operation(&self) -> &str {
+        &self.source.origin.operation_id
+    }
+    pub(in crate::storage::deletion::audio) fn verify_live(
+        &self,
+        storage: &Storage,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        let db = storage
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.verify(storage, &db, &|| check() || lease.cancelled())?;
+        active(lease, check)
+    }
     pub(crate) fn capture(
         storage: &Storage,
         operation: &str,

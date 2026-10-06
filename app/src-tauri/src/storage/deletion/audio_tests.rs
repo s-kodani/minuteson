@@ -2,17 +2,84 @@ use super::*;
 use crate::storage::{analysis::tests as analysis_fixture, minutes_ui::tests as minutes_fixture};
 use std::{cell::Cell, path::PathBuf};
 
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     pub(super) base: tempfile::TempDir,
-    pub(super) storage: Storage,
-    pub(super) meeting: String,
+    pub(crate) storage: Storage,
+    pub(crate) meeting: String,
     pub(super) session: String,
     pub(super) track: String,
     pub(super) asset: String,
-    pub(super) path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 impl Fixture {
-    pub(super) fn new() -> Self {
+    pub(crate) fn corrupt_operation_header(&self, operation: &str, header: &str) {
+        let db = self.storage.connection.lock().unwrap();
+        // Fault injection on this fixture's private DB only. Restore the real
+        // readonly fence before exposing the corrupt record to product code.
+        db.authorizer(
+            None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+        )
+        .unwrap();
+        db.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+            false,
+        )
+        .unwrap();
+        db.execute_batch("PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        db.execute(
+            "UPDATE maintenance_operations SET target_manifest_json=?2 WHERE id=?1",
+            params![operation, header],
+        )
+        .unwrap();
+        db.execute_batch("PRAGMA ignore_check_constraints=OFF")
+            .unwrap();
+        db.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+            true,
+        )
+        .unwrap();
+        self.storage.deletion_fence.arm(&db).unwrap();
+    }
+    pub(crate) fn reopen(self) -> Self {
+        let Self {
+            base,
+            storage,
+            meeting,
+            session,
+            track,
+            asset,
+            path,
+        } = self;
+        let root = storage.root().to_path_buf();
+        drop(storage);
+        let storage = Storage::open(root).unwrap();
+        Self {
+            base,
+            storage,
+            meeting,
+            session,
+            track,
+            asset,
+            path,
+        }
+    }
+    pub(crate) fn unregistered_audio(&self) -> PathBuf {
+        self.file(&format!("audio/{}/system.caf", self.session), None)
+    }
+    pub(crate) fn operation_count(&self) -> i64 {
+        self.storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM maintenance_operations WHERE kind='delete_assets'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+    pub(crate) fn new() -> Self {
         let base = tempfile::tempdir().unwrap();
         let storage = Storage::open(base.path().join("root")).unwrap();
         let meeting = storage.create_meeting("PRIVATE MEETING TITLE").unwrap().id;
@@ -43,10 +110,10 @@ impl Fixture {
             path,
         }
     }
-    pub(super) fn directory(&self) -> PathBuf {
+    pub(crate) fn directory(&self) -> PathBuf {
         self.storage.root().join("meetings").join(&self.meeting)
     }
-    pub(super) fn file(&self, path: &str, media: Option<&str>) -> PathBuf {
+    pub(crate) fn file(&self, path: &str, media: Option<&str>) -> PathBuf {
         let full = self.directory().join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(&full, b"PRIVATE FILE CONTENT").unwrap();
@@ -74,7 +141,7 @@ impl Fixture {
             .preview(&uuid::Uuid::new_v4().to_string())
             .unwrap()
     }
-    pub(super) fn documents(&self) {
+    pub(crate) fn documents(&self) {
         let mut input = analysis_fixture::input();
         for segment in &mut input.segments {
             segment.track_id = self.track.clone();

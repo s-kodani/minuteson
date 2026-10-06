@@ -85,6 +85,8 @@ struct Records {
 
 #[path = "audio_intent.rs"]
 pub(crate) mod intent;
+#[path = "audio_operations.rs"]
+pub(crate) mod operations;
 #[path = "audio_restored.rs"]
 pub(in crate::storage) mod restored;
 
@@ -585,4 +587,4 @@ impl Census {
 
 #[cfg(test)]
 #[path = "audio_tests.rs"]
-mod tests;
+pub(crate) mod tests;

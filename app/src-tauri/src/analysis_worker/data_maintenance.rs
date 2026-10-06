@@ -109,7 +109,6 @@ impl AnalysisController {
     }
 
     #[cfg(unix)]
-    #[allow(dead_code)] // Audio-only consent is internal; native commands follow.
     pub(crate) fn begin_audio_deletion_maintenance(
         &self,
         storage: &Storage,
