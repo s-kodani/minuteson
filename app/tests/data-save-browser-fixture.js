@@ -54,7 +54,7 @@ export const dataSaveIPC = async (command, args) => {
       if (f.previewMode === "cancel") return f.changed({ phase: "idle", busy: false });
       await f.changed({ phase: "ready", busy: false, retryAllowed: true,
         backupPreview: args.kind === "backup" ? { confirmationId, destination: "/safe/会議.monbackup", replacesExisting: f.replacesExisting } : null,
-        restorePreview: args.kind === "restore" ? { confirmationId, batchId: crypto.randomUUID(), archiveId: f.archiveId, meetingTitles: ["点検会議", "計画会議"], requiredBytes: 32 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, vocabularyAdded: 1, vocabularyDeduplicated: 1, vocabularyConflicts: ["点検日"] } : null,
+        restorePreview: args.kind === "restore" ? { confirmationId, batchId: crypto.randomUUID(), archiveId: f.archiveId, meetingTitles: ["点検会議", "計画会議"], deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, requiredBytes: 32 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, vocabularyAdded: 1, vocabularyDeduplicated: 1, vocabularyConflicts: ["点検日"] } : null,
         relocationPreview: args.kind === "relocation" ? { confirmationId, operationId: crypto.randomUUID(), source: "/safe/root", destination: "/safe/chosen/MON-meetings-new", meetingCount: 3, fileCount: 8, requiredBytes: 64 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, pending: false, resumeAllowed: true, resumeReason: null, copiedPaths: null, expectedPaths: null } : null });
     };
     if (f.previewMode === "delay") f.complete = ready;
@@ -124,7 +124,7 @@ export const dataSaveIPC = async (command, args) => {
       else {
         const ids = p.meetingTitles.map(title => { const id = crypto.randomUUID(); f.meetings.push({ id, title, lifecycle: "imported", sourceType: "audio_import", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 1 }); return id; });
         f.restored.push(...ids);
-        await f.changed({ phase: "completed", busy: false, restoreReceipt: { batchId: p.batchId, archiveId: p.archiveId, meetingIds: ids, alreadyPublished: f.mode === "unknownStats", vocabularyAdded: f.mode === "unknownStats" ? null : 1, vocabularyDeduplicated: f.mode === "unknownStats" ? null : 1, vocabularyConflicts: f.mode === "unknownStats" ? null : ["点検日"] } });
+        await f.changed({ phase: "completed", busy: false, restoreReceipt: { batchId: p.batchId, archiveId: p.archiveId, meetingIds: ids, deletedAudioMeetingCount: p.deletedAudioMeetingCount, deletedAudioAssetCount: p.deletedAudioAssetCount, alreadyPublished: f.mode === "unknownStats", vocabularyAdded: f.mode === "unknownStats" ? null : 1, vocabularyDeduplicated: f.mode === "unknownStats" ? null : 1, vocabularyConflicts: f.mode === "unknownStats" ? null : ["点検日"] } });
       }
     };
     if (["delay", "cancelRace"].includes(f.mode)) f.complete = finish;

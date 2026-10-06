@@ -53,14 +53,7 @@ impl<'a> RestoreIds<'a> {
         destination: &Connection,
         cancelled: &impl Fn() -> bool,
     ) -> Result<BatchPreparation<'a>, String> {
-        let ids = Self::prepare_inner(
-            archive,
-            parent,
-            batch,
-            Some(destination),
-            PreparationScope::Standard,
-            cancelled,
-        )?;
+        let ids = Self::prepare_inner(archive, parent, batch, Some(destination), cancelled)?;
         ids.verify_saved_destination(destination, cancelled)?;
         // Verify again before returning: callbacks must not turn an inspected
         // prepared batch into a different/published record during the replay.

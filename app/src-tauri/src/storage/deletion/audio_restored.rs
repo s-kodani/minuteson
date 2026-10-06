@@ -340,3 +340,30 @@ pub(in crate::storage) fn retain(
     }
     cancel(check)
 }
+
+// Final publication recheck after every metadata pass, with the same private
+// sealed input. Neither a route hint nor a loose meeting flag is sufficient.
+pub(in crate::storage) fn verify_retained(
+    tx: &Transaction<'_>,
+    anchor: &RootAnchor,
+    seed: &Seed,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    for m in seed.meetings() {
+        cancel(check)?;
+        let receipt = Receipt::load(tx, &m.operation, check)?;
+        let h = &receipt.header;
+        if h.restore_batch != seed.batch()
+            || h.source_archive != seed.archive()
+            || h.archive_fingerprint != seed.fingerprint()
+            || h.source_meeting != m.source
+            || h.meeting != m.target
+            || receipt.history.tables != m.history.tables
+            || receipt.history.assets != m.history.assets
+            || !receipt.absent(anchor, check)?
+        {
+            return Err("確定直前の音声利用不可記録が封印した履歴と一致しません".into());
+        }
+    }
+    cancel(check)
+}

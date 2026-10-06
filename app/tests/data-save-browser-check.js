@@ -39,13 +39,39 @@ async (page) => {
   const deletedWarning = region().getByRole("alert").filter({ hasText: "音声削除済みの会議" });
   await deletedWarning.waitFor();
   const deletedText = await deletedWarning.innerText();
-  check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("本文・根拠の履歴") && deletedText.includes("音声本体は含みません") && deletedText.includes("追加復元は現在実装中"), "deleted-source counts or restore limitation missing");
+  check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("本文・根拠の履歴") && deletedText.includes("音声本体は含みません") && deletedText.includes("削除済み音声の再生・再解析はできません"), "deleted-source counts or restore limitation missing");
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await deletedWarning.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `output/playwright/deleted-audio-backup-${width}.png` });
   }
-  results.push("deleted source: explicit history-only counts and not-yet-connected restore warning");
+  results.push("deleted source: explicit history-only counts and no audio replay/reanalysis claim");
+
+  await boot(); await set({ deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4 }); await choose("restore"); await ready();
+  const historyWarning = page.getByRole("dialog").getByRole("alert").filter({ hasText: "音声削除済みの会議" });
+  await historyWarning.waitFor();
+  const historyText = await historyWarning.innerText();
+  check(historyText.includes("会議 1 件") && historyText.includes("音声資産 4 件") && historyText.includes("本文・根拠・下書き") && historyText.includes("再生・再解析はできません"), "history-only restore confirmation missing");
+  check((await calls("start_data_operation")).length === 0, "history-only preview published before confirmation");
+  for (const width of [1200, 900]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.screenshot({ path: `output/playwright/deleted-audio-restore-confirm-${width}.png` });
+  }
+  await set({ mode: "lost", suppressEvents: true }); await confirm(); await done();
+  const restoredWarning = region().getByRole("alert").filter({ hasText: "履歴のみ復元しました" });
+  await restoredWarning.waitFor();
+  check((await restoredWarning.innerText()).includes("音声資産 4 件"), "published history-only receipt lost counts");
+  check((await calls("start_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.published) === 1, "history-only restore duplicated on lost reply");
+  for (const width of [1200, 900]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await restoredWarning.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `output/playwright/deleted-audio-restore-result-${width}.png` });
+  }
+  results.push("history-only restore: confirmation and terminal warning, lost-reply polling without duplicate admission");
+
+  await boot(); await set({ deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4, mode: "unknownStats" }); await choose("restore"); await ready(); await confirm(); await done();
+  check((await region().innerText()).includes("記録不明") && (await region().innerText()).includes("音声資産 4 件"), "terminal replay fabricated counts or omitted unavailable warning");
+  results.push("history-only terminal replay: exact unavailable counts and unknown historical merge stats");
 
   await boot(); await set({ replacesExisting: true }); await choose("backup");
   await page.getByRole("dialog").waitFor();

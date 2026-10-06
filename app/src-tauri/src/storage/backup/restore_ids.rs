@@ -11,11 +11,6 @@ const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 
 mod replay;
 
-enum PreparationScope {
-    Standard,
-    HistoricalConstruction,
-}
-
 pub(crate) enum BatchPreparation<'a> {
     Pending(RestoreIds<'a>),
     AlreadyPublished {
@@ -153,18 +148,11 @@ impl<'a> RestoreIds<'a> {
         batch: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        Self::prepare_inner(
-            archive,
-            parent,
-            batch,
-            None,
-            PreparationScope::Standard,
-            cancelled,
-        )
+        Self::prepare_inner(archive, parent, batch, None, cancelled)
     }
 
-    // Private construction only. Publication independently refuses deleted
-    // source histories until the native unavailable-record pass is connected.
+    // Internal compatibility entry for tests exercising historical construction.
+    // It uses the same verified identity planner as user-facing restoration.
     pub(in crate::storage::backup) fn prepare_historical(
         archive: &'a VerifiedArchive,
         parent: &Path,
@@ -178,14 +166,7 @@ impl<'a> RestoreIds<'a> {
         archive
             .deleted_audio
             .verify_omissions(&archive.manifest.omitted_assets)?;
-        Self::prepare_inner(
-            archive,
-            parent,
-            batch,
-            None,
-            PreparationScope::HistoricalConstruction,
-            cancelled,
-        )
+        Self::prepare_inner(archive, parent, batch, None, cancelled)
     }
 
     pub(in crate::storage::backup) fn prepare_historical_for_batch(
@@ -202,14 +183,7 @@ impl<'a> RestoreIds<'a> {
         archive
             .deleted_audio
             .verify_omissions(&archive.manifest.omitted_assets)?;
-        let ids = Self::prepare_inner(
-            archive,
-            parent,
-            batch,
-            Some(destination),
-            PreparationScope::HistoricalConstruction,
-            cancelled,
-        )?;
+        let ids = Self::prepare_inner(archive, parent, batch, Some(destination), cancelled)?;
         ids.verify_saved_destination(destination, cancelled)?;
         if super::ledger::saved_batch(destination, batch, archive, cancelled)? != ids.saved {
             return Err("履歴再構築中に保存済み復元バッチが変更されています".into());
@@ -222,20 +196,24 @@ impl<'a> RestoreIds<'a> {
         parent: &Path,
         batch: &str,
         destination: Option<&Connection>,
-        preparation_scope: PreparationScope,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         if !Uuid::parse_str(batch).is_ok_and(|id| id.to_string() == batch) {
             return Err("復元バッチIDが不正です".into());
         }
         check_cancelled(cancelled)?;
-        // Portable format 3 is validated and can retain text/history today;
-        // native unavailable-history publication is the next construction pass.
-        // Never fall through to ready-source reconstruction for such an archive.
-        if matches!(preparation_scope, PreparationScope::Standard)
-            && !archive.deleted_audio.is_empty()
-        {
-            return Err("削除済み音声を含むバックアップの追加復元はまだ未接続です。本文・根拠・音声削除履歴はアーカイブに保存されています".into());
+        // A checked historical capability is mandatory; missing flags or raw
+        // descriptors never select a relaxed ready-source reconstruction.
+        if !archive.deleted_audio.is_empty() {
+            #[cfg(not(unix))]
+            return Err("Windowsの削除済み音声の追加復元は保留中です".into());
+            #[cfg(unix)]
+            {
+                archive.verify_validation_database(cancelled)?;
+                archive
+                    .deleted_audio
+                    .verify_omissions(&archive.manifest.omitted_assets)?;
+            }
         }
         let logical_bytes = archive
             .manifest

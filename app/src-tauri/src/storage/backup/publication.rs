@@ -162,11 +162,9 @@ impl Storage {
         check: &impl Fn() -> bool,
     ) -> Result<Publication, String> {
         check_cancelled(check)?;
+        #[cfg(not(unix))]
         if !ids.source().deleted_audio.is_empty() {
-            return Err(
-                "削除済み音声の利用不可記録の公開が未接続のため、履歴構築をライブDBへ公開しません"
-                    .into(),
-            );
+            return Err("Windowsの削除済み音声の追加復元は保留中です".into());
         }
         sealed.matches_ids(ids, check)?;
         // Maintenance is declared first and drops after the mutex/transaction.
@@ -212,6 +210,12 @@ impl Storage {
             return Ok(Publication::AlreadyPublished);
         }
         sealed.verify(check)?;
+        #[cfg(unix)]
+        let unavailable = if ids.source().deleted_audio.is_empty() {
+            None
+        } else {
+            Some(super::restored_audio::Seed::prepare(sealed, ids, check)?)
+        };
         ids.check_publication_destination(&tx, sealed.connection(), check)?;
         let merge = sealed.global_merge(&tx, check)?;
         let required = required_bytes(&tx, sealed, ids)?;
@@ -276,6 +280,15 @@ impl Storage {
                 return Err("復元バッチの同時公開を確定できません".into());
             }
             installed.completed(&tx)?;
+            #[cfg(unix)]
+            if let Some(seed) = &unavailable {
+                crate::storage::deletion::audio::restored::retain(
+                    &tx,
+                    &self.managed_anchor,
+                    seed,
+                    check,
+                )?;
+            }
             super::exclusions::retain(&tx, ids, check)?;
             crate::storage::model_metadata::retain(
                 &tx,
@@ -285,6 +298,15 @@ impl Storage {
             )?;
             if let Some(catalog) = &ids.source().manifest.model_catalog {
                 catalog.retain(&tx, check, &|id| ids.unused_identity(id))?;
+            }
+            #[cfg(unix)]
+            if let Some(seed) = &unavailable {
+                crate::storage::deletion::audio::restored::verify_retained(
+                    &tx,
+                    &self.managed_anchor,
+                    seed,
+                    check,
+                )?;
             }
             check_cancelled(check)?;
             Ok(vocabulary)
@@ -366,6 +388,11 @@ fn metadata_bytes(ids: &RestoreIds<'_>) -> Result<u64, String> {
         .map_err(|e| e.to_string())?;
     (json.len() as u64)
         .checked_mul(8)
+        .and_then(|n| {
+            n.checked_add(
+                (ids.source().deleted_audio.meetings().count() as u64).checked_mul(65_536 * 8)?,
+            )
+        })
         .and_then(|n| {
             n.checked_add((manifest.file_references.len() as u64).checked_mul(16 * 1024)?)
         })

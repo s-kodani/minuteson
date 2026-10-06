@@ -4,7 +4,7 @@ import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot 
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "restore", phase: "ready", busy: false,
   backupPreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, errorMessage: null, retryAllowed: true,
-  restorePreview: { confirmationId: id(2), batchId: id(3), archiveId: id(4), meetingTitles: ["会議"], requiredBytes: 32, availableBytes: 64, vocabularyAdded: 1, vocabularyDeduplicated: 2, vocabularyConflicts: ["点検日"] } });
+  restorePreview: { confirmationId: id(2), batchId: id(3), archiveId: id(4), meetingTitles: ["会議"], deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, requiredBytes: 32, availableBytes: 64, vocabularyAdded: 1, vocabularyDeduplicated: 2, vocabularyConflicts: ["点検日"] } });
 
 test("data requests retain server-issued token and confirmation, never paths or batch substitutions", () => {
   const s = ready();
@@ -34,7 +34,7 @@ test("failed or cancelled restore requires refreshed confirmation before publica
 });
 test("completed restore can report unknown historic merge counts without fabricating them", () => {
   const s = { ...ready(), phase: "completed", retryAllowed: false,
-    restoreReceipt: { batchId: id(3), archiveId: id(4), meetingIds: [id(5)], alreadyPublished: true, vocabularyAdded: null, vocabularyDeduplicated: null, vocabularyConflicts: null } };
+    restoreReceipt: { batchId: id(3), archiveId: id(4), meetingIds: [id(5)], deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, alreadyPublished: true, vocabularyAdded: null, vocabularyDeduplicated: null, vocabularyConflicts: null } };
   assert.doesNotThrow(() => assertDataSnapshot(s));
   assert.throws(() => dataRequest(s, "publish"));
   assert.throws(() => assertDataSnapshot({ ...s, restoreReceipt: { ...s.restoreReceipt, batchId: id(6) } }));
@@ -63,6 +63,26 @@ test("deleted source counts are explicit and cannot be confused with recreatable
   for (const change of [{ deletedAudioMeetingCount: -1 }, { deletedAudioMeetingCount: 3 }, { deletedAudioMeetingCount: 0 }, { deletedAudioAssetCount: 1.5 }, { deletedAudioAssetCount: undefined }]) {
     assert.throws(() => assertDataSnapshot({ ...base, backupReceipt: { ...base.backupReceipt!, ...change } }));
   }
+});
+
+test("deleted-audio restore preview requires bounded explicit counts, never silent defaults", () => {
+  const s = ready(); Object.assign(s.restorePreview!, { deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4 });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  assert.doesNotThrow(() => dataRequest(s, "publish"));
+  for (const change of [{ deletedAudioMeetingCount: -1 }, { deletedAudioMeetingCount: 2 }, { deletedAudioMeetingCount: 0 }, { deletedAudioAssetCount: 1.5 }, { deletedAudioAssetCount: undefined }, { deletedAudioAssetCount: Number.MAX_SAFE_INTEGER + 1 }]) {
+    assert.throws(() => assertDataSnapshot({ ...s, restorePreview: { ...s.restorePreview!, ...change } }));
+  }
+});
+test("deleted-audio restore terminal replay keeps the preview's exact unavailable counts", () => {
+  const s = ready(); Object.assign(s.restorePreview!, { deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4 });
+  Object.assign(s, { phase: "completed", retryAllowed: false,
+    restoreReceipt: { batchId: id(3), archiveId: id(4), meetingIds: [id(5)], alreadyPublished: true, deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4, vocabularyAdded: null, vocabularyDeduplicated: null, vocabularyConflicts: null } });
+  assert.doesNotThrow(() => assertDataSnapshot(s));
+  for (const change of [{ deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0 }, { deletedAudioAssetCount: 3 }, { deletedAudioMeetingCount: 2 }, { deletedAudioAssetCount: undefined }]) {
+    assert.throws(() => assertDataSnapshot({ ...s, restoreReceipt: { ...s.restoreReceipt!, ...change } }));
+  }
+  assert.doesNotThrow(() => assertDataSnapshot({ ...s, restorePreview: null }));
+  assert.throws(() => assertDataSnapshot({ ...s, restorePreview: null, restoreReceipt: { ...s.restoreReceipt!, deletedAudioMeetingCount: 0 } }));
 });
 
 const relocation = (): DataSnapshot => ({ ...ready(), kind: "relocation", restorePreview: null,

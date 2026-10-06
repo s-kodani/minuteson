@@ -7,6 +7,7 @@ export interface MoveReceipt { operationId: string; source: string; destination:
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
 export interface RestorePreview {
   confirmationId: string; batchId: string; archiveId: string; meetingTitles: string[];
+  deletedAudioMeetingCount: number; deletedAudioAssetCount: number;
   requiredBytes: number; availableBytes: number;
   vocabularyAdded: number; vocabularyDeduplicated: number; vocabularyConflicts: string[];
 }
@@ -16,6 +17,7 @@ export interface BackupReceipt {
 }
 export interface RestoreReceipt {
   batchId: string; archiveId: string; meetingIds: string[]; alreadyPublished: boolean;
+  deletedAudioMeetingCount: number; deletedAudioAssetCount: number;
   vocabularyAdded: number | null; vocabularyDeduplicated: number | null; vocabularyConflicts: string[] | null;
 }
 export interface DataSnapshot {
@@ -50,7 +52,9 @@ export function assertDataSnapshot(s: DataSnapshot): void {
   if (s.restorePreview !== null) {
     const p = s.restorePreview;
     if (!p || s.kind !== "restore" || ![p.confirmationId, p.batchId, p.archiveId].every(id => typeof id === "string" && uuid.test(id))
-      || !texts(p.meetingTitles) || !integer(p.requiredBytes) || !integer(p.availableBytes) || !integer(p.vocabularyAdded) || !integer(p.vocabularyDeduplicated) || !texts(p.vocabularyConflicts)) fail();
+      || !texts(p.meetingTitles) || !integer(p.requiredBytes) || !integer(p.availableBytes) || !integer(p.vocabularyAdded) || !integer(p.vocabularyDeduplicated) || !texts(p.vocabularyConflicts)
+      || ![p.deletedAudioMeetingCount, p.deletedAudioAssetCount].every(integer) || p.deletedAudioMeetingCount > p.meetingTitles.length
+      || (p.deletedAudioMeetingCount === 0 && p.deletedAudioAssetCount !== 0)) fail();
   }
   if (s.backupReceipt !== null) {
     const r = s.backupReceipt;
@@ -61,9 +65,12 @@ export function assertDataSnapshot(s: DataSnapshot): void {
     const r = s.restoreReceipt;
     if (!r || s.kind !== "restore" || !uuid.test(r.batchId) || !uuid.test(r.archiveId) || !texts(r.meetingIds) || !r.meetingIds.every(id => uuid.test(id))
       || new Set(r.meetingIds).size !== r.meetingIds.length || typeof r.alreadyPublished !== "boolean"
+      || ![r.deletedAudioMeetingCount, r.deletedAudioAssetCount].every(integer) || r.deletedAudioMeetingCount > r.meetingIds.length
+      || (r.deletedAudioMeetingCount === 0 && r.deletedAudioAssetCount !== 0)
       || (r.vocabularyAdded !== null && !integer(r.vocabularyAdded)) || (r.vocabularyDeduplicated !== null && !integer(r.vocabularyDeduplicated))
       || (r.vocabularyConflicts !== null && !texts(r.vocabularyConflicts))
-      || (s.restorePreview && (r.batchId !== s.restorePreview.batchId || r.archiveId !== s.restorePreview.archiveId))) fail();
+      || (s.restorePreview && (r.batchId !== s.restorePreview.batchId || r.archiveId !== s.restorePreview.archiveId
+        || r.deletedAudioMeetingCount !== s.restorePreview.deletedAudioMeetingCount || r.deletedAudioAssetCount !== s.restorePreview.deletedAudioAssetCount))) fail();
   }
   if (s.recoveryPreview !== null) { assertRecoveryPreview(s.recoveryPreview); if (s.kind !== "recovery") fail(); }
   if (s.recoveryReceipt !== null) {

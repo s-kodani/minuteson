@@ -3,6 +3,8 @@ use super::*;
 use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
 use serde_json::{json, Value};
 
+#[path = "deleted_audio_publication_tests.rs"]
+mod publication_tests;
 #[path = "restored_audio_tests.rs"]
 mod restored;
 #[path = "deleted_audio_workspace_tests.rs"]
@@ -586,27 +588,45 @@ fn deleted_audio_rehashed_logical_rows_cannot_revive_or_rewrite_audio_history() 
 }
 
 #[test]
-fn deleted_audio_restore_stops_before_minting_native_ids_until_unavailable_publication_is_connected(
-) {
+fn deleted_audio_restore_raw_manifest_edits_cannot_erase_checked_unavailable_history() {
     let (_root, storage, meeting) = fixture();
     deleted(&storage, &meeting);
     let output = tempfile::tempdir().unwrap();
     let (mut archive, _) = write(&storage, output.path());
-    let before = std::fs::read_dir(output.path()).unwrap().count();
     // A raw manifest edit cannot erase the reader's private validated view.
     archive.manifest.deleted_audio.clear();
     archive.manifest.format_version = 2;
-    let error = match super::super::restore_ids::RestoreIds::prepare(
+    let ids = super::super::restore_ids::RestoreIds::prepare(
         &archive,
         output.path(),
         &Uuid::new_v4().to_string(),
         &|| false,
-    ) {
-        Ok(_) => panic!("deleted source was treated as available"),
-        Err(e) => e,
-    };
-    assert!(error.contains("追加復元はまだ未接続"));
-    assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), before);
+    )
+    .unwrap();
+    let fixed =
+        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
+        &fixed,
+        output.path(),
+        &|| false,
+    )
+    .unwrap();
+    let seed = super::super::restored_audio::Seed::prepare(&sealed, &ids, &|| false).unwrap();
+    assert_eq!(seed.meetings().len(), 1);
+    let missing = archive
+        .manifest
+        .omitted_assets
+        .iter()
+        .find(|a| a.reason == OmittedReason::SourceAudioDeleted)
+        .unwrap();
+    assert!(fixed
+        .asset_bytes(&meeting, &missing.asset_id, b"fake ready source")
+        .is_err());
+    assert!(crate::storage::transcription::read_audio_plan(
+        sealed.connection(),
+        &ids.get("meetings", "", &meeting).unwrap()
+    )
+    .is_err());
 }
 
 #[test]

@@ -147,6 +147,10 @@ impl Verified {
         self.proofs.keys().map(String::as_str)
     }
 
+    pub(super) fn asset_count(&self) -> usize {
+        self.assets.len()
+    }
+
     pub(super) fn verify_omissions(&self, omitted: &[archive::OmittedAsset]) -> Result<(), String> {
         let mut seen = BTreeSet::new();
         for item in omitted {

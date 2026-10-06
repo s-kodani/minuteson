@@ -23,6 +23,11 @@ pub(super) fn retain(
     if db.is_autocommit() {
         return Err("復元の除外記録は公開と同時に確定してください".into());
     }
+    ids.source()
+        .deleted_audio
+        .verify_omissions(&ids.source().manifest.omitted_assets)?;
+    #[cfg(unix)]
+    let mut checked_deleted = std::collections::BTreeSet::new();
     for item in &ids.source().manifest.omitted_assets {
         check_cancelled(cancelled)?;
         let asset = ids.get("file_assets", &item.meeting_id, &item.asset_id)?;
@@ -31,7 +36,32 @@ pub(super) fn retain(
             archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
             archive::OmittedReason::NativeLog => "native_log",
             archive::OmittedReason::SourceAudioDeleted => {
-                return Err("削除済み元音声を再生成可能な除外キャッシュとして登録しません".into())
+                #[cfg(not(unix))]
+                return Err("Windowsの削除済み音声の追加復元は保留中です".into());
+                #[cfg(unix)]
+                {
+                    if checked_deleted.insert(item.meeting_id.clone()) {
+                        let op = ids.get(
+                            "operation",
+                            &item.meeting_id,
+                            &super::restored_audio::operation_key(
+                                &ids.archive_id,
+                                &item.meeting_id,
+                            ),
+                        )?;
+                        crate::storage::deletion::audio::restored::deleted(db, &op, &meeting)?;
+                    }
+                    let matches: bool = db.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM file_assets WHERE id=?1 AND meeting_id=?2 AND state='missing' AND media_type LIKE 'audio/%' AND relative_path=?3 AND size_bytes=?4 AND content_hash=?5)",
+                        params![asset,meeting,format!("meetings/{meeting}/restored/{asset}"),i64::try_from(item.source_size).map_err(|_| "除外音声容量が範囲外です")?,item.source_sha256],|r|r.get(0),
+                    ).map_err(|e|e.to_string())?;
+                    if !matches {
+                        return Err("音声削除の欠落資産と公開済み記録が一致しません".into());
+                    }
+                    // A typed persisted unavailable record, never a recreatable
+                    // cache entry. Do not put original source audio in v23.
+                    continue;
+                }
             }
         };
         db.execute(

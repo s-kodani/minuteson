@@ -1,4 +1,4 @@
-//! Private real reconstruction, not a live restore or a quality benchmark.
+//! Owned historical reconstruction and real publication, not a quality benchmark.
 use super::*;
 use crate::storage::backup::{
     restore_fixed::workspace::seal::SealedWorkspace, restore_fixed::FixedData,
@@ -47,8 +47,7 @@ fn assert_missing_sources(a: &VerifiedArchive, ids: &RestoreIds<'_>, sealed: &Se
 }
 
 #[test]
-fn deleted_audio_workspace_seals_fixed_jobs_drafts_minutes_and_missing_sources_without_native_publication(
-) {
+fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sources_atomically() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().join("root")).unwrap();
     let meeting = tests::meeting(&storage, "deleted-fixed-workspace");
@@ -145,13 +144,10 @@ fn deleted_audio_workspace_seals_fixed_jobs_drafts_minutes_and_missing_sources_w
     deleted(&storage, &meeting);
     let output = tempfile::tempdir().unwrap();
     let (source, _) = write(&storage, output.path());
-    assert!(
-        RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
-            false
-        })
-        .is_err()
-    );
-    let ids = historical_ids(&source, output.path());
+    let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
+        false
+    })
+    .unwrap();
     let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
     let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
     sealed.verify(&|| false).unwrap();
@@ -205,19 +201,41 @@ fn deleted_audio_workspace_seals_fixed_jobs_drafts_minutes_and_missing_sources_w
     );
     drop(tx);
     let target = Storage::open(root.path().join("target")).unwrap();
-    let error = target
-        .publish_restore(&sealed, &ids, &|| false)
-        .unwrap_err();
-    assert!(error.contains("利用不可記録"));
-    let db = target.connection.lock().unwrap();
-    for table in ["meetings", "restore_batches", "maintenance_operations"] {
-        assert_eq!(
-            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-    }
+    assert!(matches!(
+        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        crate::storage::backup::publication::Publication::Published { .. }
+    ));
+    assert!(matches!(
+        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
+        crate::storage::backup::publication::Publication::AlreadyPublished
+    ));
+    assert_eq!(target.list_meetings().unwrap().len(), 2);
+    assert!(target.recorded_audio_plan(&new_meeting).is_err());
+    assert!(target
+        .load_transcript_draft(&new_meeting)
+        .unwrap()
+        .is_some());
+    assert!(target
+        .load_minutes_draft(&new_meeting, Some(&new_minutes))
+        .unwrap()
+        .is_some());
+    let mut db = target.connection.lock().unwrap();
+    let tx = db.transaction().unwrap();
+    let published = crate::storage::minutes::read_content(&tx, &new_meeting, &new_minutes)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        published.content.items[0].body,
+        old_content.content.items[0].body
+    );
+    assert_eq!(
+        published.content.evidence[0].quote_text,
+        old_content.content.evidence[0].quote_text
+    );
+    assert_eq!(tx.query_row("SELECT count(*) FROM maintenance_operations WHERE kind='delete_assets' AND state='completed'", [], |r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(tx.query_row("SELECT count(*) FROM restore_omitted_assets WHERE meeting_id=?1 AND reason='recreatable_pcm'", [&new_meeting], |r|r.get::<_,i64>(0)).unwrap(),0);
+    drop(tx);
+    drop(db);
     assert!(storage.recorded_audio_plan(&neighbor).is_ok());
     assert!(storage.recorded_audio_plan(&meeting).is_err());
 }
@@ -296,6 +314,11 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
     let original: Value =
         serde_json::from_slice(&std::fs::read(&source.assets[old_result]).unwrap()).unwrap();
     assert_eq!(restored["transcription"], original["transcription"]);
+    let target = Storage::open(storage.root.parent().unwrap().join("target-whisper")).unwrap();
+    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    let new_meeting = ids.get("meetings", "", &meeting).unwrap();
+    assert!(target.recorded_audio_plan(&new_meeting).is_err());
+    assert!(target.acquire_local_inference_job().unwrap().is_none());
     assert_eq!(std::fs::read(calls).unwrap(), before);
 }
 

@@ -1,5 +1,5 @@
 //! Owned native databases and synthetic files. Test-only append exercises the
-//! receipt boundary; the user-facing publication gate remains closed.
+//! receipt boundary; real publication is exercised by publication_tests.
 use super::*;
 use crate::storage::backup::{
     ledger::BatchPlan,
