@@ -190,6 +190,7 @@ impl NativeFixture {
     }
 }
 
+mod audio_reconfirmation;
 mod model_reconfirmation;
 mod reconfirmation;
 mod repeated;

@@ -1,5 +1,6 @@
 //! Owned synthetic files and SQLite only; no user audio or native IPC.
 use super::*;
+use crate::storage::deletion::database::Scope;
 use crate::{
     analysis_worker::AnalysisController,
     storage::{

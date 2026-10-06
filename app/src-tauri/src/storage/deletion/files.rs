@@ -557,6 +557,45 @@ impl Census {
         reserved: Option<&str>,
         reservation_roots: &[String],
     ) -> Result<Self, String> {
+        Self::capture_scoped_locked(
+            storage,
+            db,
+            meeting,
+            check,
+            reserved,
+            reservation_roots,
+            &|| Scope::capture(db, meeting, omitted_operation, check),
+        )
+    }
+    pub(super) fn capture_audio_reconfirmation_locked(
+        storage: &Storage,
+        db: &Connection,
+        source: &super::audio::intent::reconfirmation::Source,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+    ) -> Result<Self, String> {
+        source.verify_review_anchor(storage, db, check)?;
+        Self::capture_scoped_locked(storage, db, source.meeting(), check, reserved, &[], &|| {
+            Scope::capture_audio_reconfirmation(
+                db,
+                source.meeting(),
+                omitted_operation,
+                source,
+                check,
+            )
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn capture_scoped_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+        reservation_roots: &[String],
+        capture_scope: &impl Fn() -> Result<Scope, String>,
+    ) -> Result<Self, String> {
         if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
             return Err("予約パスが安全上限を超えています".into());
         }
@@ -570,7 +609,7 @@ impl Census {
             return Err("保存領域の操作または書込停止が既に進行中です".into());
         }
         let (root, database) = storage.managed_anchor.identity()?;
-        let scope = Scope::capture(db, meeting, omitted_operation, check)?;
+        let scope = capture_scope()?;
         let records = Records::read(db, meeting)?;
         // Enumerate through the startup descriptor, never reopen a path and
         // temporarily treat its replacement as the original root.
@@ -591,7 +630,7 @@ impl Census {
             reserved,
             reservation_roots,
         )? != entries
-            || Scope::capture(db, meeting, omitted_operation, check)? != scope
+            || capture_scope()? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {
             return Err("確認中に削除対象が変更されました".into());

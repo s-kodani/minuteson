@@ -26,6 +26,7 @@ pub(crate) enum Disposition {
     RegisteredAudio,
     ProducerAudioLeftover,
     AnalysisPcm,
+    HistoricalAudio,
     Retain,
     Unclassified,
 }
@@ -118,6 +119,8 @@ struct Snapshot {
     scope: Scope,
     manifest: Manifest,
     records: Records,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    historical_audio: BTreeSet<String>,
 }
 impl Snapshot {
     fn validate(&self, db: &Connection) -> Result<(), String> {
@@ -177,7 +180,7 @@ impl Snapshot {
                 Ok(Entry {
                     relative_path: entry.path.clone(),
                     asset_id: entry.registered.as_ref().map(|asset| asset.id.clone()),
-                    disposition: disposition(entry, &self.records)?,
+                    disposition: self.disposition(entry)?,
                     present: entry.proof.is_some(),
                     bytes: entry.proof.as_ref().map(|proof| proof.size),
                     sha256: entry.sha256.clone(),
@@ -205,6 +208,12 @@ impl Snapshot {
             return Err("音声だけの削除対象に登録資産の欠落があります".into());
         }
         Ok(entries)
+    }
+    fn disposition(&self, entry: &FileEntry) -> Result<Disposition, String> {
+        if entry.registered.is_none() && self.historical_audio.contains(&entry.path) {
+            return Ok(Disposition::HistoricalAudio);
+        }
+        disposition(entry, &self.records)
     }
     fn retained(&self) -> Result<Retained, String> {
         let rows = |name: &str| {
@@ -378,6 +387,7 @@ fn audio(disposition: &Disposition) -> bool {
         Disposition::RegisteredAudio
             | Disposition::ProducerAudioLeftover
             | Disposition::AnalysisPcm
+            | Disposition::HistoricalAudio
     )
 }
 
@@ -501,6 +511,7 @@ impl Census {
             scope: self.meeting.scope().clone(),
             manifest: self.meeting.manifest().clone(),
             records: self.records.clone(),
+            historical_audio: BTreeSet::new(),
         }
     }
     fn hash(&self) -> Result<String, String> {

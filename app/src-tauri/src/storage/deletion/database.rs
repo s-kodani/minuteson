@@ -478,6 +478,31 @@ impl Scope {
         omitted_operation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::capture_inner(db, meeting, omitted_operation, check, true)
+    }
+    // Read-only current observations under a typed, completed unavailable-audio
+    // source. The caller owns the live maintenance lease; crash-stale work is
+    // retained, not silently recovered while startup has deferred writes.
+    pub(super) fn capture_audio_reconfirmation(
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        source: &super::audio::intent::reconfirmation::Source,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        source.verify_saved(db, check)?;
+        if source.meeting() != meeting {
+            return Err("音声再同意の会議が一致しません".into());
+        }
+        Self::capture_inner(db, meeting, omitted_operation, check, false)
+    }
+    fn capture_inner(
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+        require_stopped: bool,
+    ) -> Result<Self, String> {
         cancel(check)?;
         if !uuid(meeting) || (!omitted_operation.is_empty() && !uuid(omitted_operation)) {
             return Err("削除対象の識別子が不正です".into());
@@ -493,7 +518,9 @@ impl Scope {
         if !exists {
             return Err("削除する会議が見つかりません".into());
         }
-        stopped(db)?;
+        if require_stopped {
+            stopped(db)?;
+        }
         closed_scope(db, meeting, check)?;
         let tables = TARGETS
             .iter()

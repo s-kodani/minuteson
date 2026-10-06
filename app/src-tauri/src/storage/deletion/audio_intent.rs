@@ -13,6 +13,8 @@ const MAX_CHUNKS: usize = MAX_BYTES.div_ceil(CHUNK);
 const INITIAL: &str = r#"{"version":1,"phase":"audioNotStarted"}"#;
 const KEPT: &str = r#"{"version":1,"phase":"audioKeptUnstarted"}"#;
 
+#[path = "audio_reconfirmation.rs"]
+pub(crate) mod reconfirmation;
 #[path = "audio_removal.rs"]
 pub(crate) mod removal;
 
@@ -34,6 +36,8 @@ struct Header {
     snapshot_bytes: usize,
     chunk_count: usize,
     policy: Policy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<reconfirmation::Origin>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,7 +110,13 @@ impl Prepared {
         let bytes = self.snapshot.encode()?;
         let h = &self.header;
         let entries = self.snapshot.entries()?;
-        if h.version != 1
+        if !matches!((h.version, h.origin.is_some()), (1, false) | (2, true))
+            || h.origin.as_ref().is_some_and(|origin| {
+                !super::uuid(&origin.operation_id)
+                    || origin.operation_id == h.operation_id
+                    || !hash_valid(&origin.receipt_hash)
+            })
+            || (h.version == 1 && !self.snapshot.historical_audio.is_empty())
             || h.subtype != "audioOnlyDeletion"
             || !super::uuid(&h.operation_id)
             || !super::uuid(&h.meeting_id)
@@ -141,6 +151,22 @@ impl Prepared {
     }
     pub(crate) fn kept(&self) -> bool {
         self.kept
+    }
+    fn capture_scope(
+        &self,
+        db: &Connection,
+        meeting: &str,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<crate::storage::deletion::database::Scope, String> {
+        if self.header.origin.is_some() {
+            let source = reconfirmation::Source::for_prepared(db, self, check)?;
+            crate::storage::deletion::database::Scope::capture_audio_reconfirmation(
+                db, meeting, operation, &source, check,
+            )
+        } else {
+            crate::storage::deletion::database::Scope::capture(db, meeting, operation, check)
+        }
     }
     #[cfg(target_os = "macos")]
     pub(in crate::storage::deletion) fn verify_kept_history_anchor(
@@ -192,13 +218,16 @@ impl Prepared {
     ) -> Result<(), String> {
         active(lease, check)?;
         self.verify_anchor(storage)?;
-        if self.kept
-            || Census::capture_locked(storage, db, self.meeting(), self.operation(), &|| {
+        let current = if self.header.origin.is_some() {
+            let source = reconfirmation::Source::for_prepared(db, self, check)?;
+            reconfirmation::capture(storage, db, &source, self.operation(), check)?
+        } else {
+            Census::capture_locked(storage, db, self.meeting(), self.operation(), &|| {
                 check() || lease.cancelled()
             })?
             .snapshot()
-                != self.snapshot
-        {
+        };
+        if self.kept || current != self.snapshot {
             return Err(
                 "音声削除の確認後に音声・保持履歴が変更されています。再確認してください".into(),
             );
@@ -292,7 +321,10 @@ fn read_frame(
         || created < 0
         || updated < created
         || header.operation_id != operation
-        || header.version != 1
+        || !matches!(
+            (header.version, header.origin.is_some()),
+            (1, false) | (2, true)
+        )
         || header.subtype != "audioOnlyDeletion"
         || serde_json::to_string(&header).map_err(|e| e.to_string())? != json
         || hash(json.as_bytes()) != digest
@@ -372,7 +404,16 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
         )
         .map_err(|e| e.to_string())?;
     if matches!(state.as_str(), "installing" | "cleanup" | "completed") {
-        removal::Receipt::load(&db, operation, &|| false)?.verify_anchor(storage)?;
+        let receipt = removal::Receipt::load(&db, operation, &|| false)?;
+        if receipt.completed() {
+            reconfirmation::Source::load(&db, operation, &|| false)?.verify_review_anchor(
+                storage,
+                &db,
+                &|| false,
+            )?;
+        } else {
+            receipt.verify_anchor(storage)?;
+        }
     } else {
         read(&db, operation, &|| false)?.verify_anchor(storage)?;
     }
@@ -432,6 +473,7 @@ fn prepare_inner(
         return Ok(saved);
     }
     storage.require_data_writable()?;
+    super::require_source(&db, &snapshot.scope.meeting_id)?;
     if super::super::fence::other_pending(&db, None)? {
         return Err("別の保守操作が未完了です".into());
     }
@@ -450,6 +492,7 @@ fn prepare_inner(
             snapshot_bytes: bytes.len(),
             chunk_count: bytes.len().div_ceil(CHUNK),
             policy,
+            origin: None,
         },
         snapshot,
         consent: crate::storage::now_ms()?,

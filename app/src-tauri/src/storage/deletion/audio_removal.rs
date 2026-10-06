@@ -1,6 +1,6 @@
 //! Audio files only, retaining every directory, text and historical row.
 //! FilesRemoved is NOT operation completion: the durable write fence remains.
-use super::super::{audio, disposition, MeetingCensus};
+use super::super::{audio, MeetingCensus};
 use super::{active, read_with_progress, Prepared};
 use crate::analysis_worker::data_maintenance::DataMaintenanceLease;
 use crate::storage::{
@@ -110,7 +110,7 @@ fn targets(saved: &Prepared) -> Result<Vec<Entry>, String> {
         .entries
         .iter()
         .filter(|e| !e.directory)
-        .filter_map(|e| match disposition(e, &saved.snapshot.records) {
+        .filter_map(|e| match saved.snapshot.disposition(e) {
             Ok(d) if audio(&d) => Some(Ok(e.clone())),
             Ok(_) => None,
             Err(e) => Some(Err(e)),
@@ -176,6 +176,36 @@ impl Receipt {
     pub(crate) fn completed(&self) -> bool {
         self.progress.phase == Phase::AudioDeletionCompleted
     }
+    pub(super) fn source_saved(&self) -> &Prepared {
+        &self.saved
+    }
+    pub(super) fn source_paths(&self) -> BTreeSet<String> {
+        self.targets
+            .iter()
+            .enumerate()
+            .flat_map(|(index, entry)| [entry.path.clone(), self.reserved_path(index)])
+            .collect()
+    }
+    pub(super) fn source_seal(&self, db: &Connection) -> Result<String, String> {
+        let row: (i64, i64) = db
+            .query_row(
+                "SELECT rowid,updated_at FROM maintenance_operations WHERE id=?1",
+                params![self.saved.operation()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(super::hash(
+            &serde_json::to_vec(&(
+                "completed_audio_source",
+                row,
+                &self.saved.header,
+                &self.saved.snapshot,
+                self.saved.consent,
+                &self.progress,
+            ))
+            .map_err(|e| e.to_string())?,
+        ))
+    }
     pub(crate) fn processed_files(&self) -> usize {
         self.progress.next
     }
@@ -197,12 +227,10 @@ impl Receipt {
     ) -> Result<(), String> {
         self.verify_anchor(storage)?;
         if crate::storage::deletion::fence::other_pending(db, Some(self.saved.operation()))?
-            || crate::storage::deletion::database::Scope::capture(
-                db,
-                self.saved.meeting(),
-                self.saved.operation(),
-                check,
-            )? != self.saved.snapshot.scope
+            || self
+                .saved
+                .capture_scope(db, self.saved.meeting(), self.saved.operation(), check)?
+                != self.saved.snapshot.scope
         {
             return Err("保持する音声・文書・依存履歴が変更されています".into());
         }
@@ -315,15 +343,33 @@ fn verify_tree(
         .pending
         .as_ref()
         .map(|_| r.reserved_path(r.progress.next));
-    let current = MeetingCensus::capture_removal_locked(
-        storage,
-        db,
-        r.saved.meeting(),
-        r.saved.operation(),
-        check,
-        reserved.as_deref(),
-        &[],
-    )?;
+    let source = r
+        .saved
+        .header
+        .origin
+        .as_ref()
+        .map(|_| super::reconfirmation::Source::for_prepared(db, &r.saved, check))
+        .transpose()?;
+    let current = if let Some(source) = &source {
+        MeetingCensus::capture_audio_reconfirmation_locked(
+            storage,
+            db,
+            source,
+            r.saved.operation(),
+            check,
+            reserved.as_deref(),
+        )?
+    } else {
+        MeetingCensus::capture_removal_locked(
+            storage,
+            db,
+            r.saved.meeting(),
+            r.saved.operation(),
+            check,
+            reserved.as_deref(),
+            &[],
+        )?
+    };
     if current.scope() != scope {
         return Err("音声削除の保持範囲が変更されています".into());
     }

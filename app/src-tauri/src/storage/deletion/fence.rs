@@ -232,6 +232,19 @@ pub(super) fn write_audio_prepared<'a>(
 }
 
 #[cfg(unix)]
+pub(super) fn write_audio_reconfirmation<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    review: &super::audio::intent::reconfirmation::Review,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    review.verify(storage, db, check)?;
+    Writer::begin(storage, db, has_pending(db)?)
+}
+
+#[cfg(unix)]
 pub(super) fn write_audio_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,

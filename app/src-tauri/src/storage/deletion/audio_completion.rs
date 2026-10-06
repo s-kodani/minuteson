@@ -6,7 +6,7 @@ use crate::{
     analysis_worker::data_maintenance::DataMaintenanceLease,
     storage::{
         deletion::{
-            database::{self, Scope, Table},
+            database::{self, Table},
             fs::RootAnchor,
         },
         Storage,
@@ -38,7 +38,18 @@ pub(super) fn validate_tables(saved: &Prepared, tables: &[Table]) -> Result<(), 
     }
     Ok(())
 }
-pub(super) fn verify_available_state(
+pub(in crate::storage::deletion::audio::intent) fn verify_available_state(
+    db: &Connection,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    verify_available_state_inner(db, r, check)?;
+    if r.saved.header.origin.is_some() {
+        super::super::reconfirmation::Source::for_prepared(db, &r.saved, check)?;
+    }
+    Ok(())
+}
+pub(in crate::storage::deletion::audio::intent) fn verify_available_state_inner(
     db: &Connection,
     r: &Receipt,
     check: &impl Fn() -> bool,
@@ -320,7 +331,9 @@ fn finish_inner(
     )
     .map_err(|e| e.to_string())?;
     event("audioTracksUnavailable");
-    let changed = Scope::capture(&tx, r.saved.meeting(), operation, &cancelled)?;
+    let changed = r
+        .saved
+        .capture_scope(&tx, r.saved.meeting(), operation, &cancelled)?;
     if changed.schema_hash != r.saved.snapshot.scope.schema_hash
         || changed.maintenance_hash != r.saved.snapshot.scope.maintenance_hash
         || changed
@@ -350,6 +363,7 @@ fn finish_inner(
     super::verify_tree(storage, &tx, &r, &changed, true, &cancelled)?;
     active(lease, check)?;
     done.verify_anchor(storage)?;
+    super::super::reconfirmation::clear_resolved_attention(storage, &tx, &done.saved, &cancelled)?;
     tx.commit().map_err(|e| e.to_string())?;
     // The commit wins a racing cancellation. Drop restores the normal fence
     // or the mandatory restart barrier BEFORE any post-commit callback.
