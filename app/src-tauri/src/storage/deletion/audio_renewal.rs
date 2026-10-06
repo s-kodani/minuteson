@@ -297,26 +297,13 @@ fn capture_snapshot(
         .map(|_| intent::reconfirmation::Source::for_prepared(db, &receipt.saved, check))
         .transpose()?;
     let census = || {
-        if let Some(source) = &source {
-            audio::MeetingCensus::capture_audio_reconfirmation_locked(
-                storage,
-                db,
-                source,
-                receipt.saved.operation(),
-                check,
-                reserved.as_deref(),
-            )
-        } else {
-            audio::MeetingCensus::capture_removal_locked(
-                storage,
-                db,
-                receipt.saved.meeting(),
-                receipt.saved.operation(),
-                check,
-                reserved.as_deref(),
-                &[],
-            )
-        }
+        audio::MeetingCensus::capture_audio_remaining_locked(
+            storage,
+            db,
+            receipt,
+            check,
+            reserved.as_deref(),
+        )
     };
     let first = census()?;
     let mut snapshot = audio::Snapshot {

@@ -281,11 +281,23 @@ impl Receipt {
     pub(crate) fn completed(&self) -> bool {
         self.progress.phase == Phase::AudioDeletionCompleted
     }
-    pub(super) fn source_saved(&self) -> &Prepared {
+    pub(in crate::storage::deletion) fn source_saved(&self) -> &Prepared {
         &self.saved
     }
-    pub(super) fn source_paths(&self) -> BTreeSet<String> {
+    pub(in crate::storage::deletion) fn source_paths(&self) -> BTreeSet<String> {
         self.historical_paths.clone()
+    }
+    pub(in crate::storage::deletion) fn reconfirmation_source(
+        &self,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<Option<super::reconfirmation::Source>, String> {
+        self.saved
+            .header
+            .origin
+            .as_ref()
+            .map(|_| super::reconfirmation::Source::for_prepared(db, &self.saved, check))
+            .transpose()
     }
     pub(super) fn source_bytes(&self) -> usize {
         self.proof_bytes
@@ -524,33 +536,8 @@ fn verify_tree(
         .pending
         .as_ref()
         .map(|_| r.reserved_path(r.progress.next));
-    let source = r
-        .saved
-        .header
-        .origin
-        .as_ref()
-        .map(|_| super::reconfirmation::Source::for_prepared(db, &r.saved, check))
-        .transpose()?;
-    let current = if let Some(source) = &source {
-        MeetingCensus::capture_audio_reconfirmation_locked(
-            storage,
-            db,
-            source,
-            r.saved.operation(),
-            check,
-            reserved.as_deref(),
-        )?
-    } else {
-        MeetingCensus::capture_removal_locked(
-            storage,
-            db,
-            r.saved.meeting(),
-            r.saved.operation(),
-            check,
-            reserved.as_deref(),
-            &[],
-        )?
-    };
+    let current =
+        MeetingCensus::capture_audio_remaining_locked(storage, db, r, check, reserved.as_deref())?;
     if current.scope() != scope {
         return Err("音声削除の保持範囲が変更されています".into());
     }

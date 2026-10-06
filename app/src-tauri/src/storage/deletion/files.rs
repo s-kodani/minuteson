@@ -129,6 +129,41 @@ pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
         && s.split('/')
             .all(|p| !p.is_empty() && !matches!(p, "." | ".."))
 }
+// Syntax is not authority. Exact membership must come from a typed source or
+// removal receipt before these paths are used for a filesystem observation.
+pub(super) fn valid_audio_reservation_path(path: &str, meeting: &str) -> bool {
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        return false;
+    };
+    let Some(name) = name.strip_prefix(".mon-delete-audio-") else {
+        return false;
+    };
+    path.len() <= 512
+        && valid_path(parent, meeting)
+        && valid_reservation_root(&format!("meetings/.mon-delete-{name}"))
+}
+pub(super) struct LongAudioPaths(BTreeSet<String>);
+impl LongAudioPaths {
+    pub(super) fn from_history(paths: &BTreeSet<String>, meeting: &str) -> Result<Self, String> {
+        if paths.len() > MAX_ENTRIES {
+            return Err("音声の履歴パス数が安全上限を超えています".into());
+        }
+        let mut long = BTreeSet::new();
+        for path in paths.iter().filter(|p| p.len() > 256) {
+            if !valid_audio_reservation_path(path, meeting) {
+                return Err("長い音声予約パスの形式が不正です".into());
+            }
+            long.insert(path.clone());
+        }
+        Ok(Self(long))
+    }
+    pub(super) fn contains(&self, path: &str) -> bool {
+        self.0.contains(path)
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 fn hash(s: &[u8]) -> String {
     format!("{:x}", Sha256::digest(s))
 }
@@ -290,6 +325,7 @@ fn walk(
     records: &Records,
     check: &impl Fn() -> bool,
     reserved: Option<&str>,
+    long_audio: Option<&LongAudioPaths>,
 ) -> Result<(), String> {
     cancel(check)?;
     if depth > MAX_DEPTH
@@ -314,12 +350,16 @@ fn walk(
     for name in &names {
         cancel(check)?;
         let child_path = format!("{path}/{name}");
-        if (child_path.len() > 256 && Some(child_path.as_str()) != reserved)
+        let long_allowed = long_audio.is_some_and(|p| p.contains(&child_path));
+        if (child_path.len() > 256 && Some(child_path.as_str()) != reserved && !long_allowed)
             || entries.len() >= MAX_ENTRIES
         {
             return Err("削除対象のパス・件数が安全上限を超えています".into());
         }
         if dir.kind(name)? {
+            if long_allowed {
+                return Err("長い音声予約パスへフォルダーを採用しません".into());
+            }
             let child = dir
                 .child(name)?
                 .ok_or("検査中に対象フォルダーが消失しました")?;
@@ -331,6 +371,7 @@ fn walk(
                 records,
                 check,
                 reserved,
+                long_audio,
             )?;
         } else {
             let mut file = dir.regular(name)?;
@@ -384,6 +425,7 @@ fn inventory(
     check: &impl Fn() -> bool,
     reserved: Option<&str>,
     reservation_roots: &[String],
+    long_audio: Option<&LongAudioPaths>,
 ) -> Result<Vec<Entry>, String> {
     if reservation_roots.len() > MAX_RESERVATION_ROOTS
         || reservation_roots.iter().any(|p| !valid_reservation_root(p))
@@ -403,6 +445,7 @@ fn inventory(
                 records,
                 check,
                 reserved,
+                long_audio,
             )?;
         }
         // Never enumerate siblings. Only canonical, exact plan-derived names
@@ -421,6 +464,7 @@ fn inventory(
                     &Records::default(),
                     check,
                     reserved,
+                    long_audio,
                 )?;
             }
         }
@@ -492,6 +536,7 @@ impl Census {
             check,
             reserved,
             reservation_roots,
+            None,
         )?;
         if inventory(
             directory,
@@ -500,6 +545,7 @@ impl Census {
             check,
             reserved,
             reservation_roots,
+            None,
         )? != entries
         {
             return Err("削除済み範囲の再確認中に対象が変更されました".into());
@@ -564,6 +610,7 @@ impl Census {
             check,
             reserved,
             reservation_roots,
+            None,
             &|| Scope::capture(db, meeting, omitted_operation, check),
         )
     }
@@ -576,15 +623,61 @@ impl Census {
         reserved: Option<&str>,
     ) -> Result<Self, String> {
         source.verify_review_anchor(storage, db, check)?;
-        Self::capture_scoped_locked(storage, db, source.meeting(), check, reserved, &[], &|| {
-            Scope::capture_audio_reconfirmation(
-                db,
-                source.meeting(),
-                omitted_operation,
-                source,
-                check,
-            )
-        })
+        let long = LongAudioPaths::from_history(&source.paths(), source.meeting())?;
+        Self::capture_scoped_locked(
+            storage,
+            db,
+            source.meeting(),
+            check,
+            reserved,
+            &[],
+            Some(&long),
+            &|| {
+                Scope::capture_audio_reconfirmation(
+                    db,
+                    source.meeting(),
+                    omitted_operation,
+                    source,
+                    check,
+                )
+            },
+        )
+    }
+    pub(super) fn capture_audio_remaining_locked(
+        storage: &Storage,
+        db: &Connection,
+        receipt: &super::audio::intent::removal::Receipt,
+        check: &impl Fn() -> bool,
+        reserved: Option<&str>,
+    ) -> Result<Self, String> {
+        receipt.verify_saved(db, check)?;
+        let saved = receipt.source_saved();
+        let source = receipt.reconfirmation_source(db, check)?;
+        let mut paths = receipt.source_paths();
+        if let Some(source) = &source {
+            source.verify_review_anchor(storage, db, check)?;
+            paths.extend(source.paths());
+        }
+        let long = LongAudioPaths::from_history(&paths, saved.meeting())?;
+        Self::capture_scoped_locked(
+            storage,
+            db,
+            saved.meeting(),
+            check,
+            reserved,
+            &[],
+            Some(&long),
+            &|| match &source {
+                Some(source) => Scope::capture_audio_reconfirmation(
+                    db,
+                    saved.meeting(),
+                    saved.operation(),
+                    source,
+                    check,
+                ),
+                None => Scope::capture(db, saved.meeting(), saved.operation(), check),
+            },
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn capture_scoped_locked(
@@ -594,6 +687,7 @@ impl Census {
         check: &impl Fn() -> bool,
         reserved: Option<&str>,
         reservation_roots: &[String],
+        long_audio: Option<&LongAudioPaths>,
         capture_scope: &impl Fn() -> Result<Scope, String>,
     ) -> Result<Self, String> {
         if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
@@ -621,6 +715,7 @@ impl Census {
             check,
             reserved,
             reservation_roots,
+            long_audio,
         )?;
         if inventory(
             root_directory,
@@ -629,6 +724,7 @@ impl Census {
             check,
             reserved,
             reservation_roots,
+            long_audio,
         )? != entries
             || capture_scope()? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())

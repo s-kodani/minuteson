@@ -141,13 +141,35 @@ fn grandparent_paths_survive_multiple_completed_sources_and_repeated_remaining_r
 
 #[test]
 fn ancestral_remaining_history_survives_actual_full_meeting_purge_without_live_permission() {
+    ancestral_full_meeting_purge(false);
+}
+
+#[test]
+fn long_audio_ancestral_remaining_history_survives_full_meeting_purge_without_live_permission() {
+    ancestral_full_meeting_purge(true);
+}
+
+fn ancestral_full_meeting_purge(long: bool) {
     use crate::storage::deletion::operations;
-    let f = Fixture::new();
+    let mut f = Fixture::new();
+    if long {
+        f.use_long_audio_path();
+    }
     let lease = owner();
     let parent = started(&f, &lease);
     finish(&f, &parent, &lease);
     let op = descendant(&f, &parent, &lease);
     let returned = f.path.with_file_name(reserved(&parent, 0, 0));
+    assert_eq!(
+        returned
+            .strip_prefix(f.storage.root())
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .len()
+            > 256,
+        long
+    );
     std::fs::write(&returned, b"ANCESTOR RETURNED BEFORE FULL PURGE").unwrap();
     let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
     accept(&f.storage, &review, true, &lease, &|| false).unwrap();
@@ -493,6 +515,259 @@ fn staged_reservation_is_exact_history_and_old_pending_proof_is_preserved() {
     finish(&f, &op, &lease);
     assert!(!staged.exists());
     assert_eq!(std::fs::read(near).unwrap(), b"KEEP LOOKALIKE");
+}
+
+#[test]
+fn long_audio_unchanged_reserved_rename_cold_resumes_without_another_consent() {
+    let mut f = Fixture::new();
+    f.use_long_audio_path();
+    let lease = owner();
+    let op = started(&f, &lease);
+    let original = fixed(&f, &op);
+    let stop = Cell::new(false);
+    assert!(
+        super::super::run_inner(&f.storage, &op, &lease, &|| stop.get(), &|e| {
+            if e == "audioRenamed" {
+                stop.set(true);
+            }
+        })
+        .is_err()
+    );
+    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let staged = f.storage.root().join(old.reserved_path(0));
+    assert!(old.reserved_path(0).len() > 256 && staged.exists() && !f.path.exists());
+    assert!(old.progress.pending.as_ref().unwrap().staged.is_none());
+    drop(lease);
+    let f = f.reopen();
+    let lease = AnalysisController::default()
+        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .unwrap();
+    finish(&f, &op, &lease);
+    assert!(!staged.exists() && !f.path.exists());
+    assert_eq!(fixed(&f, &op), original);
+    assert_eq!(f.operation_count(), 1);
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
+
+#[test]
+fn long_audio_reservation_grammar_is_canonical_and_utf8_bounded() {
+    use crate::storage::deletion::files::{valid_audio_reservation_path, valid_path};
+    let meeting = "11111111-1111-4111-8111-111111111111";
+    let operation = "21111111-1111-4111-8111-111111111111";
+    let parent = format!("meetings/{meeting}/audio/a-{}", "あ".repeat(65));
+    assert!(parent.len() <= 256);
+    for (generation, index) in [(0, 0), (1, 199999), (32, 199999)] {
+        let path = format!("{parent}/{}", reserved(operation, generation, index));
+        assert!(path.len() > 256 && !valid_path(&path, meeting));
+        assert!(valid_audio_reservation_path(&path, meeting));
+    }
+    for leaf in [
+        format!(".mon-delete-audio-{operation}-r0-0"),
+        format!(".mon-delete-audio-{operation}-r33-0"),
+        format!(".mon-delete-audio-{operation}-r01-0"),
+        format!(".mon-delete-audio-{operation}-00"),
+        format!(".mon-delete-audio-{operation}-200000"),
+        format!(".mon-delete-audio-{operation}-0\n"),
+        "ordinary.caf".into(),
+    ] {
+        assert!(!valid_audio_reservation_path(
+            &format!("{parent}/{leaf}"),
+            meeting
+        ));
+    }
+    let leaf = reserved(operation, 0, 0);
+    for parent in [
+        format!("meetings/{operation}/audio"),
+        format!("meetings/{meeting}/../audio"),
+        format!("meetings/{meeting}//audio"),
+        format!("meetings/{meeting}/{}", "あ".repeat(80)),
+    ] {
+        assert!(!valid_audio_reservation_path(
+            &format!("{parent}/{leaf}"),
+            meeting
+        ));
+    }
+}
+
+#[test]
+fn long_audio_changed_staged_path_requires_new_choice_and_keeps_previous_pending_proof() {
+    let mut f = Fixture::new();
+    f.use_long_audio_path();
+    let lease = owner();
+    let op = started(&f, &lease);
+    let original = fixed(&f, &op);
+    let stop = Cell::new(false);
+    assert!(
+        super::super::run_inner(&f.storage, &op, &lease, &|| stop.get(), &|e| {
+            if e == "audioStaged" {
+                stop.set(true);
+            }
+        })
+        .is_err()
+    );
+    let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+    let staged = f.storage.root().join(old.reserved_path(0));
+    assert!(old.reserved_path(0).len() > 256);
+    std::fs::write(&staged, b"CHANGED LONG RESERVED AUDIO").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    assert_eq!(
+        review.snapshot.historical_audio,
+        BTreeSet::from([old.reserved_path(0)])
+    );
+    assert!(accept(&f.storage, &review, false, &lease, &|| false).is_err());
+    let saved = accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let mut budget = saved.saved.header.snapshot_bytes;
+    let (record, _, _) = read_record(
+        &f.storage.connection.lock().unwrap(),
+        saved.progress.confirmation.as_ref().unwrap(),
+        &saved.saved,
+        &mut budget,
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(record.previous_progress, old.progress);
+    assert_eq!(fixed(&f, &op), original);
+    drop(lease);
+    let f = f.reopen();
+    let lease = AnalysisController::default()
+        .begin_audio_deletion_maintenance(&f.storage, &op, false, false, &|| false)
+        .unwrap();
+    finish(&f, &op, &lease);
+    assert!(!staged.exists());
+    assert_eq!(fixed(&f, &op), original);
+    assert_eq!(f.operation_count(), 2);
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
+
+#[test]
+fn long_audio_completed_and_ancestral_reservations_need_distinct_and_remaining_consents() {
+    let mut f = Fixture::new();
+    f.use_long_audio_path();
+    let lease = owner();
+    let parent = started(&f, &lease);
+    let old = finish(&f, &parent, &lease);
+    let returned = f.storage.root().join(old.reserved_path(0));
+    std::fs::write(&returned, b"COMPLETED LONG RESERVATION RETURNED").unwrap();
+    let review =
+        intent::reconfirmation::Review::capture(&f.storage, &parent, &lease, &|| false).unwrap();
+    let op = uuid::Uuid::new_v4().to_string();
+    intent::reconfirmation::accept(
+        &f.storage,
+        &op,
+        &review,
+        intent::Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    super::super::start(&f.storage, &op, &lease, &|| false).unwrap();
+    std::fs::write(&returned, b"CHANGED AGAIN WHILE CHILD WAS UNFINISHED").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    finish(&f, &op, &lease);
+    assert!(!returned.exists());
+    let source =
+        intent::reconfirmation::Source::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
+            .unwrap();
+    assert!(source.paths().contains(&old.reserved_path(0)));
+    drop(lease);
+    assert!(!f.reopen().storage.data_write_blocked());
+}
+
+#[test]
+fn long_audio_lookalike_links_and_directories_never_become_observation_or_removal_permission() {
+    for variant in 0..3 {
+        let mut f = Fixture::new();
+        f.use_long_audio_path();
+        let lease = owner();
+        let op = started(&f, &lease);
+        let old = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).unwrap();
+        let path = if variant == 0 {
+            f.path.with_file_name(reserved(&op, 0, 999))
+        } else {
+            f.storage.root().join(old.reserved_path(0))
+        };
+        let external = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(external.path(), b"NEVER DELETE OUTSIDE").unwrap();
+        if variant == 0 {
+            std::fs::write(&path, b"UNPLANNED LONG NAME").unwrap();
+        } else if variant == 1 {
+            std::os::unix::fs::symlink(external.path(), &path).unwrap();
+        } else {
+            std::fs::create_dir(&path).unwrap();
+        }
+        assert!(Review::capture(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+        assert!(path.symlink_metadata().is_ok() && f.path.exists());
+        assert_eq!(
+            std::fs::read(external.path()).unwrap(),
+            b"NEVER DELETE OUTSIDE"
+        );
+        assert_eq!(f.operation_count(), 1);
+    }
+}
+
+#[test]
+fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
+    let mut f = Fixture::new();
+    f.use_long_audio_path();
+    let lease = owner();
+    let op = started(&f, &lease);
+    std::fs::write(&f.path, b"OWN AUDIO CHANGED").unwrap();
+    let review = Review::capture(&f.storage, &op, &lease, &|| false).unwrap();
+    accept(&f.storage, &review, true, &lease, &|| false).unwrap();
+    let unknown = f.path.with_file_name(reserved(&op, 0, 999));
+    std::fs::write(&unknown, b"UNOWNED LONG RESERVATION").unwrap();
+    let path = unknown
+        .strip_prefix(f.storage.root())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let mut forged = Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false)
+        .unwrap()
+        .plan;
+    {
+        let snapshot = &mut forged;
+        let mut entry = snapshot
+            .manifest
+            .entries
+            .iter()
+            .find(|e| !e.directory && e.registered.is_some())
+            .unwrap()
+            .clone();
+        entry.path = path.clone();
+        entry.registered = None;
+        entry.stage_hint = None;
+        entry.proof =
+            Some(crate::storage::deletion::fs::Proof::read(&unknown.metadata().unwrap()).unwrap());
+        entry.sha256 = Some(intent::hash(b"UNOWNED LONG RESERVATION"));
+        snapshot.manifest.entries.push(entry);
+        snapshot
+            .manifest
+            .entries
+            .sort_by(|a, b| a.path.cmp(&b.path));
+        snapshot.historical_audio.insert(path);
+        let db = f.storage.connection.lock().unwrap();
+        snapshot.validate(&db).unwrap();
+        assert!(crate::storage::deletion::intent::validate_observations(
+            &db,
+            &snapshot.scope,
+            &snapshot.manifest
+        )
+        .is_err());
+    }
+    rewrite_audit(&f, &op, |_, snapshot| *snapshot = forged);
+    assert!(Receipt::load(&f.storage.connection.lock().unwrap(), &op, &|| false).is_err());
+    assert!(super::super::run(&f.storage, &op, &lease, &|| false).is_err());
+    assert!(unknown.exists() && f.path.exists());
+    drop(lease);
+    assert!(f.reopen().storage.data_write_blocked());
 }
 #[test]
 fn two_reconfirmations_keep_processed_cursor_and_all_historical_reservations() {

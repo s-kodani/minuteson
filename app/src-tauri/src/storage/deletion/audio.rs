@@ -126,7 +126,15 @@ struct Snapshot {
 }
 impl Snapshot {
     fn validate(&self, db: &Connection) -> Result<(), String> {
-        super::intent::validate_observations(db, &self.scope, &self.manifest)?;
+        let long = super::files::LongAudioPaths::from_history(
+            &self.historical_audio,
+            &self.scope.meeting_id,
+        )?;
+        if long.is_empty() {
+            super::intent::validate_observations(db, &self.scope, &self.manifest)?;
+        } else {
+            super::intent::validate_audio_observations(db, &self.scope, &self.manifest, &long)?;
+        }
         if self.records.tracks.len() > MAX_ENTRIES
             || self.records.audio_assets.len() > MAX_ENTRIES
             || self.records.tracks.windows(2).any(|w| w[0].id >= w[1].id)

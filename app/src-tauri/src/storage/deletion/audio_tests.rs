@@ -12,6 +12,30 @@ pub(crate) struct Fixture {
     pub(crate) path: PathBuf,
 }
 impl Fixture {
+    pub(crate) fn use_long_audio_path(&mut self) {
+        let prefix = format!("meetings/{}/long/", self.meeting);
+        let remaining = 256 - prefix.len() - "/a.caf".len();
+        let padding = format!(
+            "{}{}",
+            "あ".repeat(remaining / 3),
+            "a".repeat(remaining % 3)
+        );
+        let relative = format!("{prefix}{padding}/a.caf");
+        assert_eq!(relative.len(), 256);
+        let next = self.storage.root().join(&relative);
+        std::fs::create_dir_all(next.parent().unwrap()).unwrap();
+        std::fs::rename(&self.path, &next).unwrap();
+        self.storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE file_assets SET relative_path=?2 WHERE id=?1",
+                params![self.asset, relative],
+            )
+            .unwrap();
+        self.path = next;
+    }
     // Read-only fixture evidence; keep Storage's connection private to storage.
     pub(crate) fn original_deletion_record(
         &self,

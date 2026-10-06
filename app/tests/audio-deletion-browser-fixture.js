@@ -9,7 +9,7 @@ f.snapshot = { ...f.snapshot, deletionPreview: null, deletionReceipt: null, mode
 const idle = structuredClone(f.snapshot), changed = f.changed;
 f.changed = patch => changed(patch.kind && patch.kind !== "audio_deletion" ? { ...patch, audioDeletionPreview: null, audioDeletionReceipt: null } : patch);
 const d = window.audioDeletionFixture = {
-  mode: "success", fileCount: 2, unknownCount: 0, blocked: false, cold: false, restart: false, listFail: false, pageFail: false,
+  mode: "success", fileCount: 2, unknownCount: 0, longPath: false, blocked: false, cold: false, restart: false, listFail: false, pageFail: false,
   foreignPage: false, pathsDelay: false, releasePage: null, reviewLost: false, items: [], deleted: 0, kept: 0, last: null, complete: () => {}, analysisReads: 0, draftReads: 0,
   pending: (phase = "not_started", altered = false) => {
     d.blocked = true; d.cold = true;
@@ -70,6 +70,10 @@ mockIPC(async (command, args) => {
     const page = { confirmationId: p.confirmationId, offset: args.offset, total: p.pathCount, nextOffset: args.offset + 50 < p.pathCount ? args.offset + 50 : null,
       entries: Array.from({ length: Math.min(50, p.pathCount - args.offset) }, (_, i) => {
         const n = args.offset + i, meeting = d.foreignPage ? crypto.randomUUID() : p.meetingId;
+        if (d.longPath && n === 0 && p.unregisteredAudioFiles > 0) return {
+          relativePath: `meetings/${meeting}/audio/a-${"あ".repeat(65)}/.mon-delete-audio-31111111-1111-4111-8111-111111111111-r32-199999`,
+          assetId: null, disposition: "historical_audio", present: true, changed: false, bytes: 20, sha256: "b".repeat(64),
+        };
         return { relativePath: `meetings/${meeting}/audio/file-${String(n).padStart(6, "0")}.caf`, assetId: n >= p.unregisteredAudioFiles && n < p.audioFiles ? crypto.randomUUID() : null,
           disposition: n === p.audioFiles ? "unclassified" : n < p.unregisteredAudioFiles ? "producer_audio_leftover" : "registered_audio", present: true, changed: false, bytes: 20, sha256: "b".repeat(64) };
       }) };

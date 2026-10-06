@@ -20,6 +20,16 @@ const id = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const text = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !v.includes("\0");
 const fail = (): never => { throw Error("音声削除の状態が不正です。対象を再確認してください。"); };
+// Display syntax only. Native typed history, not this name or a page payload,
+// proves exact membership and grants any later consent/removal admission.
+function longAudioReservation(e: AudioDeletionEntry, p: AudioDeletionPreview): boolean {
+  const slash = e.relativePath.lastIndexOf("/"), parent = e.relativePath.slice(0, slash), leaf = e.relativePath.slice(slash + 1);
+  const match = /^\.mon-delete-audio-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-r([1-9][0-9]?))?-(0|[1-9][0-9]{0,5})$/u.exec(leaf);
+  return new TextEncoder().encode(e.relativePath).length <= 512 && new TextEncoder().encode(parent).length <= 256
+    && e.disposition === "historical_audio" && e.present === true && e.assetId === null && e.changed === false
+    && p.phase !== "review" && p.phase !== "restored_unavailable"
+    && !!match && match[0] === leaf && (match[2] === undefined || Number(match[2]) <= 32) && Number(match[3]) < 200000;
+}
 export function assertAudioDeletionPreview(p: AudioDeletionPreview): void {
   if (!p || ![p.confirmationId, p.operationId, p.meetingId].every(id) || (p.sourceOperationId !== null && !id(p.sourceOperationId))
     || (p.sourceOperationId === p.operationId && !(p.phase === "reconfirmation" && p.reconfirmationSourceKind === "native_audio_pending"))
@@ -65,7 +75,7 @@ export function assertAudioDeletionPage(page: AudioDeletionPage, p: AudioDeletio
     || !Array.isArray(page.entries) || page.entries.length !== Math.min(50, p.pathCount - offset) || page.nextOffset !== (offset + page.entries.length < p.pathCount ? offset + page.entries.length : null)) fail();
   let previous: Uint8Array | null = null;
   for (const e of page.entries) {
-    if (!e || !text(e.relativePath) || !e.relativePath.startsWith(`meetings/${p.meetingId}/`) || new TextEncoder().encode(e.relativePath).length > 256
+    if (!e || !text(e.relativePath) || !e.relativePath.startsWith(`meetings/${p.meetingId}/`) || (new TextEncoder().encode(e.relativePath).length > 256 && !longAudioReservation(e, p))
       || e.relativePath.includes("\\") || e.relativePath.split("/").some(x => !x || x === "." || x === "..")
       || (e.assetId !== null && !id(e.assetId)) || !["registered_audio", "producer_audio_leftover", "analysis_pcm", "historical_audio", "retain", "unclassified"].includes(e.disposition)
       || typeof e.present !== "boolean" || typeof e.changed !== "boolean" || (!e.present && !e.assetId)

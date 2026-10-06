@@ -454,7 +454,19 @@ fn audio_controller_cancel_after_completion_does_not_erase_committed_receipt() {
 
 #[test]
 fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_choice() {
+    ancestral_remaining_path(false);
+}
+
+#[test]
+fn long_audio_controller_ancestral_remaining_path_is_paged_and_cold_resumed() {
+    ancestral_remaining_path(true);
+}
+
+fn ancestral_remaining_path(long: bool) {
     let mut f = Fixture::new();
+    if long {
+        f.audio.use_long_audio_path();
+    }
     let parent = f
         .run(&f.ready(), Action::Publish)
         .audio_deletion_receipt
@@ -485,7 +497,11 @@ fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_
         b"ANCESTRAL PATH ABSENT FROM CHILD ORIGINAL CONSENT",
     )
     .unwrap();
-    std::fs::write(&unrelated, b"LOOKALIKE RETAIN").unwrap();
+    // An unplanned long name must block the census, as separately tested by
+    // the native rejection cases. The short variant can retain that sibling.
+    if !long {
+        std::fs::write(&unrelated, b"LOOKALIKE RETAIN").unwrap();
+    }
     let pending = f.run(&stopped, Action::Refresh);
     let reviewed = f.run(&pending, Action::ReviewRemaining);
     let preview = reviewed.audio_deletion_preview.as_ref().unwrap();
@@ -510,6 +526,7 @@ fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_
         .unwrap()
         .to_str()
         .unwrap();
+    assert_eq!(relative.len() > 256, long);
     assert!(page.entries.iter().any(|e| e.relative_path == relative
         && matches!(
             e.disposition,
@@ -525,7 +542,7 @@ fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_
         "audio_delete_scope_fixed",
     );
     assert_eq!(f.count(), 3);
-    assert!(returned.exists() && unrelated.exists());
+    assert!(returned.exists() && unrelated.exists() != long);
     assert_eq!(f.original(&parent), parent_original);
     assert_eq!(f.original(&op), original);
     f.audio = f.audio.reopen();
@@ -543,7 +560,7 @@ fn audio_controller_ancestral_remaining_path_is_paged_and_requires_new_explicit_
     let done = f.run(&pending, Action::Publish);
     assert_eq!(done.phase, "completed", "{:?}", done.error_message);
     assert_eq!(done.audio_deletion_receipt.unwrap().operation_id, op);
-    assert!(!returned.exists() && !f.audio.path.exists() && unrelated.exists());
+    assert!(!returned.exists() && !f.audio.path.exists() && unrelated.exists() != long);
     assert_eq!(f.original(&parent), parent_original);
     assert_eq!(f.original(&op), original);
     assert_eq!(f.count(), 3);

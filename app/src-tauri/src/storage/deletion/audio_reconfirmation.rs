@@ -133,7 +133,7 @@ impl Source {
             proof_bytes: bytes,
         })
     }
-    pub(super) fn paths(&self) -> BTreeSet<String> {
+    pub(in crate::storage::deletion) fn paths(&self) -> BTreeSet<String> {
         self.paths.clone()
     }
     pub(super) fn source_bytes(&self) -> usize {

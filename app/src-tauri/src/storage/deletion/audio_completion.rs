@@ -354,7 +354,10 @@ fn finish_inner(
     event("beforeAudioCompletionCommit");
     done.verify_saved(&tx, &cancelled)?;
     verify_available_state(&tx, &done, &cancelled)?;
-    super::verify_tree(storage, &tx, &r, &changed, true, &cancelled)?;
+    // The journal has now transitioned to completed inside this transaction.
+    // Observe with that exact receipt, not the superseded cleanup progress;
+    // the typed census still verifies the saved receipt before using paths.
+    super::verify_tree(storage, &tx, &done, &changed, true, &cancelled)?;
     active(lease, check)?;
     done.verify_anchor(storage)?;
     super::super::reconfirmation::clear_resolved_attention(storage, &tx, &done.saved, &cancelled)?;

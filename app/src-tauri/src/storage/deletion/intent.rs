@@ -113,7 +113,15 @@ impl PathRow {
         })
     }
     fn entry(&self, manifest: &Manifest) -> Result<Entry, String> {
-        if !manifest.valid_observed_path(&self.path)
+        self.entry_with_long_audio(manifest, None)
+    }
+    fn entry_with_long_audio(
+        &self,
+        manifest: &Manifest,
+        long_audio: Option<&files::LongAudioPaths>,
+    ) -> Result<Entry, String> {
+        let long_allowed = long_audio.is_some_and(|p| p.contains(&self.path));
+        if (!manifest.valid_observed_path(&self.path) && !long_allowed)
             || self.observation.len() > MAX_OBSERVATION
             || hash(self.observation.as_bytes()) != self.observation_hash
         {
@@ -121,6 +129,14 @@ impl PathRow {
         }
         let observed: Observation =
             serde_json::from_str(&self.observation).map_err(|e| e.to_string())?;
+        if long_allowed
+            && (self.kind != "file"
+                || observed.proof.is_none()
+                || observed.registered.is_some()
+                || observed.stage_hint.is_some())
+        {
+            return Err("長い音声予約パスに登録所有・フォルダー・欠落を採用しません".into());
+        }
         if !files::valid_path(&self.path, &manifest.meeting_id)
             && (observed.registered.is_some() || observed.stage_hint.is_some())
         {
@@ -235,6 +251,13 @@ impl Intent {
         Ok(())
     }
     fn manifest(&self, rows: &[PathRow]) -> Result<Manifest, String> {
+        self.manifest_with_long_audio(rows, None)
+    }
+    fn manifest_with_long_audio(
+        &self,
+        rows: &[PathRow],
+        long_audio: Option<&files::LongAudioPaths>,
+    ) -> Result<Manifest, String> {
         if self.path_count != rows.len() || paths_hash(rows)? != self.paths_hash {
             return Err("削除対象のパス一覧が変更または欠落しています".into());
         }
@@ -245,7 +268,10 @@ impl Intent {
                 return Err("削除対象の順序・重複が不正です".into());
             }
             previous = Some(&row.path);
-            let entry = row.entry(&manifest)?;
+            let entry = match long_audio {
+                Some(_) => row.entry_with_long_audio(&manifest, long_audio)?,
+                None => row.entry(&manifest)?,
+            };
             manifest.entries.push(entry);
         }
         if hash(encode(&manifest, 64 * 1024 * 1024)?.as_bytes()) != self.file_manifest_hash {
@@ -262,6 +288,25 @@ pub(super) fn validate_observations(
     scope: &Scope,
     manifest: &Manifest,
 ) -> Result<(), String> {
+    validate_observations_inner(db, scope, manifest, None)
+}
+// The audio snapshot supplies a bounded structural exception only. Its exact
+// historical membership is still required by typed renewal/source loading;
+// neither these observations nor an arbitrary serialized set grant unlink.
+pub(super) fn validate_audio_observations(
+    db: &Connection,
+    scope: &Scope,
+    manifest: &Manifest,
+    long_audio: &files::LongAudioPaths,
+) -> Result<(), String> {
+    validate_observations_inner(db, scope, manifest, Some(long_audio))
+}
+fn validate_observations_inner(
+    db: &Connection,
+    scope: &Scope,
+    manifest: &Manifest,
+    long_audio: Option<&files::LongAudioPaths>,
+) -> Result<(), String> {
     if manifest.version != 1 || !manifest.reservation_roots.is_empty() {
         return Err("新しい確認に削除予約ルートを採用しません".into());
     }
@@ -272,7 +317,7 @@ pub(super) fn validate_observations(
         .collect::<Result<Vec<_>, _>>()?;
     let intent = Intent::from_parts(scope, manifest, &rows)?;
     intent.validate(db)?;
-    if intent.manifest(&rows)? != *manifest {
+    if intent.manifest_with_long_audio(&rows, long_audio)? != *manifest {
         return Err("保存するファイル観測が正規形式と一致しません".into());
     }
     Ok(())
