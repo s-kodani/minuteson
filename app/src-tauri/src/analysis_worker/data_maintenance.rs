@@ -109,6 +109,25 @@ impl AnalysisController {
     }
 
     #[cfg(unix)]
+    #[allow(dead_code)] // Audio-only consent is internal; native commands follow.
+    pub(crate) fn begin_audio_deletion_maintenance(
+        &self,
+        storage: &Storage,
+        operation: &str,
+        recording_active: bool,
+        import_blocked: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<DataMaintenanceLease, String> {
+        crate::storage::deletion::audio::intent::authorize_review(storage, operation)?;
+        self.begin_data_maintenance_inner(
+            recording_active,
+            import_blocked,
+            cancelled,
+            storage.deletion_resume_restart_required(),
+        )
+    }
+
+    #[cfg(unix)]
     pub(crate) fn begin_model_deletion_maintenance(
         &self,
         storage: &Storage,

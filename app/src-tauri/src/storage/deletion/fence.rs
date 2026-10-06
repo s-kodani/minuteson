@@ -219,6 +219,19 @@ pub(super) fn write_prepared<'a>(
 }
 
 #[cfg(unix)]
+pub(super) fn write_audio_prepared<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    confirmed: &super::audio::intent::Prepared,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    confirmed.verify_saved(db, check)?;
+    Writer::begin(storage, db, true)
+}
+
+#[cfg(unix)]
 pub(super) fn write_model_prepared<'a>(
     storage: &'a Storage,
     db: &'a Connection,

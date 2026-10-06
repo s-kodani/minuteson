@@ -203,13 +203,16 @@ impl PathRow {
 }
 impl Intent {
     fn from_census(census: &Census, rows: &[PathRow]) -> Result<Self, String> {
-        let mut header = census.manifest().clone();
+        Self::from_parts(census.scope(), census.manifest(), rows)
+    }
+    fn from_parts(scope: &Scope, manifest: &Manifest, rows: &[PathRow]) -> Result<Self, String> {
+        let mut header = manifest.clone();
         header.entries.clear();
         Ok(Self {
             version: 1,
-            scope: census.scope().clone(),
+            scope: scope.clone(),
             file_header: header,
-            file_manifest_hash: census.hash()?,
+            file_manifest_hash: hash(encode(manifest, 64 * 1024 * 1024)?.as_bytes()),
             path_count: rows.len(),
             paths_hash: paths_hash(rows)?,
         })
@@ -250,6 +253,29 @@ impl Intent {
         }
         Ok(manifest)
     }
+}
+
+// Share canonical observation validation, not a Prepared whole-meeting permit.
+// Audio-only receipts must retain their own discriminator, policy and admission.
+pub(super) fn validate_observations(
+    db: &Connection,
+    scope: &Scope,
+    manifest: &Manifest,
+) -> Result<(), String> {
+    if manifest.version != 1 || !manifest.reservation_roots.is_empty() {
+        return Err("新しい確認に削除予約ルートを採用しません".into());
+    }
+    let rows = manifest
+        .entries
+        .iter()
+        .map(PathRow::from_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    let intent = Intent::from_parts(scope, manifest, &rows)?;
+    intent.validate(db)?;
+    if intent.manifest(&rows)? != *manifest {
+        return Err("保存するファイル観測が正規形式と一致しません".into());
+    }
+    Ok(())
 }
 
 // Reconfirmation uses the same bounded path observations but a separate,

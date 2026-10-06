@@ -1,14 +1,17 @@
 //! Audio-only review, not a whole-meeting deletion permit. Inspection never
 //! changes rows or removes files. Consent and durable removal follow separately.
-use super::files::{Census as MeetingCensus, Entry as FileEntry, MAX_ENTRIES};
+use super::{
+    database::Scope,
+    files::{Census as MeetingCensus, Entry as FileEntry, Manifest, MAX_ENTRIES},
+};
 use crate::storage::Storage;
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Track {
     pub id: String,
     pub kind: String,
@@ -72,10 +75,157 @@ pub(crate) struct Preview {
     pub execute_allowed: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Records {
     tracks: Vec<Track>,
     audio_assets: BTreeMap<String, String>,
+}
+
+#[path = "audio_intent.rs"]
+pub(crate) mod intent;
+
+// This saved observation is not a file-removal capability. No external path,
+// transcript body, document payload or whole-meeting Prepared is serialized.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Snapshot {
+    scope: Scope,
+    manifest: Manifest,
+    records: Records,
+}
+impl Snapshot {
+    fn validate(&self, db: &Connection) -> Result<(), String> {
+        super::intent::validate_observations(db, &self.scope, &self.manifest)?;
+        if self.records.tracks.len() > MAX_ENTRIES
+            || self.records.audio_assets.len() > MAX_ENTRIES
+            || self.records.tracks.windows(2).any(|w| w[0].id >= w[1].id)
+            || self.records.tracks.iter().any(|track| {
+                !uuid(&track.id)
+                    || !matches!(
+                        track.kind.as_str(),
+                        "mic" | "system" | "imported" | "processed"
+                    )
+                    || !matches!(track.state.as_str(), "ready" | "interrupted" | "failed")
+                    || track.chunks > MAX_ENTRIES as u64
+                    || track.duration_us < 0
+            })
+            || self.records.audio_assets.iter().any(|(path, id)| {
+                !uuid(id) || !super::files::valid_path(path, &self.scope.meeting_id)
+            })
+        {
+            return Err("音声だけの削除の保存されたトラック・資産が不正です".into());
+        }
+        let mut parents = BTreeMap::new();
+        let root = format!("meetings/{}", self.scope.meeting_id);
+        for entry in &self.manifest.entries {
+            if entry.proof.is_some() && entry.path != root {
+                let parent = entry
+                    .path
+                    .rsplit_once('/')
+                    .ok_or("音声観測の親がありません")?
+                    .0;
+                if !parents
+                    .get(parent)
+                    .is_some_and(|value: &&FileEntry| value.directory && value.proof.is_some())
+                {
+                    return Err("音声だけの削除の保存された実体・親観測が不正です".into());
+                }
+            }
+            if entry.path == root && !entry.directory {
+                return Err("音声観測の会議ルートが不正です".into());
+            }
+            parents.insert(entry.path.as_str(), entry);
+        }
+        self.entries()?;
+        self.hash()?;
+        self.encode()?;
+        Ok(())
+    }
+    fn entries(&self) -> Result<Vec<Entry>, String> {
+        let entries = self
+            .manifest
+            .entries
+            .iter()
+            .filter(|entry| !entry.directory)
+            .map(|entry| {
+                Ok(Entry {
+                    relative_path: entry.path.clone(),
+                    asset_id: entry.registered.as_ref().map(|asset| asset.id.clone()),
+                    disposition: disposition(entry, &self.records)?,
+                    present: entry.proof.is_some(),
+                    bytes: entry.proof.as_ref().map(|proof| proof.size),
+                    sha256: entry.sha256.clone(),
+                    changed: entry.registered.as_ref().is_some_and(|asset| {
+                        entry.proof.as_ref().is_some_and(|proof| {
+                            u64::try_from(asset.size).ok() != Some(proof.size)
+                                || entry.sha256.as_deref() != Some(asset.sha256.as_str())
+                        })
+                    }),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let represented = entries
+            .iter()
+            .filter(|entry| entry.disposition == Disposition::RegisteredAudio)
+            .map(|entry| entry.relative_path.as_str())
+            .collect::<BTreeSet<_>>();
+        if represented.len() != self.records.audio_assets.len()
+            || self
+                .records
+                .audio_assets
+                .keys()
+                .any(|path| !represented.contains(path.as_str()))
+        {
+            return Err("音声だけの削除対象に登録資産の欠落があります".into());
+        }
+        Ok(entries)
+    }
+    fn retained(&self) -> Result<Retained, String> {
+        let rows = |name: &str| {
+            self.scope
+                .tables
+                .iter()
+                .find(|table| table.name == name)
+                .map(|table| table.rows)
+                .ok_or_else(|| format!("保持する{name}の検査証拠がありません"))
+        };
+        Ok(Retained {
+            analysis_revisions: rows("analysis_revisions")?,
+            utterances: rows("utterances")?,
+            minutes_revisions: rows("minutes_revisions")?,
+            drafts: rows("working_drafts")?,
+            edit_operations: rows("edit_operations")?,
+            evidence_links: rows("evidence_links")?,
+            jobs: rows("processing_jobs")?,
+            external_export_records: rows("export_records")?,
+        })
+    }
+    fn encode(&self) -> Result<Vec<u8>, String> {
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err("音声だけの削除の保存観測が容量上限を超えています".into());
+        }
+        Ok(bytes)
+    }
+    fn hash(&self) -> Result<String, String> {
+        let manifest = serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?;
+        // Preserve the original read-only review fingerprint across persistence.
+        let encoded = serde_json::to_vec(&(
+            1,
+            "audio_only",
+            format!("{:x}", Sha256::digest(manifest)),
+            &self.scope,
+            &self.records,
+            self.entries()?,
+            self.retained()?,
+        ))
+        .map_err(|e| e.to_string())?;
+        if encoded.len() > 64 * 1024 * 1024 {
+            return Err("音声だけの削除の検査証拠が容量上限を超えています".into());
+        }
+        Ok(format!("{:x}", Sha256::digest(encoded)))
+    }
 }
 fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
     if check() {
@@ -226,13 +376,28 @@ impl Census {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        let result = Self::capture_locked(storage, &db, meeting, "", check)?;
+        storage.require_data_writable()?;
+        Ok(result)
+    }
+    fn capture_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        cancel(check)?;
         // Do not rely only on the cached fence flag: a newly persisted intent
         // or a different kind of maintenance also invalidates a fresh review.
-        if super::fence::other_pending(&db, None)? {
+        if super::fence::other_pending(
+            db,
+            (!omitted_operation.is_empty()).then_some(omitted_operation),
+        )? {
             return Err("未完了の保存領域操作があります。音声の対象確認を開始できません".into());
         }
-        let census = MeetingCensus::capture_locked(storage, &db, meeting, "", check)?;
-        let records = records(&db, meeting, check)?;
+        let census = MeetingCensus::capture_locked(storage, db, meeting, omitted_operation, check)?;
+        let records = records(db, meeting, check)?;
         let mut entries = Vec::new();
         for entry in &census.manifest().entries {
             cancel(check)?;
@@ -290,14 +455,14 @@ impl Census {
             jobs: rows("processing_jobs")?,
             external_export_records: rows("export_records")?,
         };
-        let current = MeetingCensus::capture_locked(storage, &db, meeting, "", check)?;
+        let current =
+            MeetingCensus::capture_locked(storage, db, meeting, omitted_operation, check)?;
         if current.hash()? != census.hash()?
             || current.scope() != census.scope()
-            || self::records(&db, meeting, check)? != records
+            || self::records(db, meeting, check)? != records
         {
             return Err("音声だけの削除の検査中に対象・保持履歴が変更されました".into());
         }
-        storage.require_data_writable()?;
         cancel(check)?;
         Ok(Self {
             meeting: census,
@@ -305,6 +470,13 @@ impl Census {
             entries,
             retained,
         })
+    }
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            scope: self.meeting.scope().clone(),
+            manifest: self.meeting.manifest().clone(),
+            records: self.records.clone(),
+        }
     }
     fn hash(&self) -> Result<String, String> {
         // Typed discriminator prevents reuse as a whole-meeting/model review.

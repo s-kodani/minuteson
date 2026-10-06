@@ -2,17 +2,17 @@ use super::*;
 use crate::storage::{analysis::tests as analysis_fixture, minutes_ui::tests as minutes_fixture};
 use std::{cell::Cell, path::PathBuf};
 
-struct Fixture {
-    base: tempfile::TempDir,
-    storage: Storage,
-    meeting: String,
-    session: String,
-    track: String,
-    asset: String,
-    path: PathBuf,
+pub(super) struct Fixture {
+    pub(super) base: tempfile::TempDir,
+    pub(super) storage: Storage,
+    pub(super) meeting: String,
+    pub(super) session: String,
+    pub(super) track: String,
+    pub(super) asset: String,
+    pub(super) path: PathBuf,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let base = tempfile::tempdir().unwrap();
         let storage = Storage::open(base.path().join("root")).unwrap();
         let meeting = storage.create_meeting("PRIVATE MEETING TITLE").unwrap().id;
@@ -43,10 +43,10 @@ impl Fixture {
             path,
         }
     }
-    fn directory(&self) -> PathBuf {
+    pub(super) fn directory(&self) -> PathBuf {
         self.storage.root().join("meetings").join(&self.meeting)
     }
-    fn file(&self, path: &str, media: Option<&str>) -> PathBuf {
+    pub(super) fn file(&self, path: &str, media: Option<&str>) -> PathBuf {
         let full = self.directory().join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(&full, b"PRIVATE FILE CONTENT").unwrap();
@@ -61,20 +61,20 @@ impl Fixture {
         }
         full
     }
-    fn job(&self, kind: &str) -> String {
+    pub(super) fn job(&self, kind: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.storage.connection.lock().unwrap().execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES(?1,?2,?3,'failed',?1,?4,'{}','{}',?4,1,1)",params![id,self.meeting,kind,"a".repeat(64)]).unwrap();
         id
     }
-    fn census(&self) -> Census {
+    pub(super) fn census(&self) -> Census {
         Census::capture(&self.storage, &self.meeting, &|| false).unwrap()
     }
-    fn preview(&self) -> Preview {
+    pub(super) fn preview(&self) -> Preview {
         self.census()
             .preview(&uuid::Uuid::new_v4().to_string())
             .unwrap()
     }
-    fn documents(&self) {
+    pub(super) fn documents(&self) {
         let mut input = analysis_fixture::input();
         for segment in &mut input.segments {
             segment.track_id = self.track.clone();
