@@ -103,6 +103,20 @@ struct Receipt {
 }
 impl Receipt {
     fn load(db: &Connection, operation: &str, check: &impl Fn() -> bool) -> Result<Self, String> {
+        let header = Self::read_header(db, operation, None, check)?;
+        let history = History::capture(db, &header.meeting, check)?;
+        if history.tables != header.tables {
+            return Err("復元音声の資産・区間・トラック履歴が変更されています".into());
+        }
+        cancel(check)?;
+        Ok(Self { header, history })
+    }
+    fn read_header(
+        db: &Connection,
+        operation: &str,
+        supersession: Option<&crate::storage::deletion::audio_supersession::Proof>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Header, String> {
         cancel(check)?;
         database::trusted_schema(db)?;
         let (meeting,kind,state,batch,json,hash,consent,progress,error,created,updated):
@@ -127,7 +141,10 @@ impl Receipt {
             || !hash_valid(&header.archive_fingerprint)
             || serde_json::to_string(&header).map_err(|e| e.to_string())? != json
             || digest(&json) != hash
-            || meeting.as_deref() != Some(&header.meeting)
+            || !match supersession {
+                None => meeting.as_deref() == Some(&header.meeting),
+                Some(proof) => meeting.is_none() && proof.authorizes(operation, &header.meeting),
+            }
             || kind != "delete_assets"
             || state != "completed"
             || batch.is_some()
@@ -137,6 +154,14 @@ impl Receipt {
             || created < 0
             || updated != created
             || header.parents.len() != 3
+            || header.tables.len() != 3
+            || header
+                .tables
+                .iter()
+                .zip(["audio_chunks", "audio_tracks", "file_assets"])
+                .any(|(t, name)| {
+                    t.name != name || t.rows > MAX_ASSETS as u64 || !hash_valid(&t.sha256)
+                })
         {
             return Err("復元音声の利用不可記録が不正です。削除同意として採用しません".into());
         }
@@ -168,12 +193,8 @@ impl Receipt {
         if published != created {
             return Err("復元音声履歴の公開時刻が一致しません".into());
         }
-        let history = History::capture(db, &header.meeting, check)?;
-        if history.tables != header.tables {
-            return Err("復元音声の資産・区間・トラック履歴が変更されています".into());
-        }
         cancel(check)?;
-        Ok(Self { header, history })
+        Ok(header)
     }
     fn absent(&self, anchor: &RootAnchor, check: &impl Fn() -> bool) -> Result<bool, String> {
         let h = &self.header;
@@ -213,6 +234,18 @@ impl Receipt {
         }
         unreachable!()
     }
+}
+pub(in crate::storage::deletion) fn validate_superseded(
+    db: &Connection,
+    operation: &str,
+    proof: &crate::storage::deletion::audio_supersession::Proof,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let header = Receipt::read_header(db, operation, Some(proof), check)?;
+    if (header.root, header.database) != proof.identities() {
+        return Err("引き継ぐ復元音声履歴の管理領域が一致しません".into());
+    }
+    cancel(check)
 }
 
 // Route hints never grant admission: every caller follows this with typed load.

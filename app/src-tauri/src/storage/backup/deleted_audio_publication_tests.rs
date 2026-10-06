@@ -34,6 +34,146 @@ fn native_record(target: &Storage, meeting: &str) -> String {
     op
 }
 
+fn fully_delete(storage: &Storage, meeting: &str) -> String {
+    use crate::{analysis_worker::AnalysisController, storage::deletion::operations};
+    let mut prepared = operations::Prepared::fresh(storage, meeting, &|| false).unwrap();
+    let preview = prepared.preview();
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let done = prepared
+        .execute(
+            storage,
+            &lease,
+            &preview.confirmation_id,
+            true,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert!(done.deleted);
+    done.operation_id
+}
+
+#[test]
+fn audio_supersession_full_deletion_of_native_history_excludes_it_from_real_backup_and_keeps_neighbors(
+) {
+    let (_root, source, meeting) = fixture();
+    let available = tests::meeting(&source, "KEEP AVAILABLE");
+    let history = tests::meeting(&source, "KEEP DELETED AUDIO HISTORY");
+    deleted(&source, &history);
+    let op = deleted(&source, &meeting);
+    fully_delete(&source, &meeting);
+    assert!(source.get_meeting(&meeting).unwrap().is_none());
+    let db = source.connection.lock().unwrap();
+    assert_eq!(
+        audio::backup_deleted(&source, &db, &|| false).unwrap(),
+        std::collections::BTreeSet::from([history.clone()])
+    );
+    assert!(db
+        .query_row(
+            "SELECT meeting_id FROM maintenance_operations WHERE id=?1",
+            [&op],
+            |r| r.get::<_, Option<String>>(0)
+        )
+        .unwrap()
+        .is_none());
+    drop(db);
+    let output = tempfile::tempdir().unwrap();
+    let (archive, backup) = write(&source, output.path());
+    assert_eq!(backup.meeting_count, 2);
+    assert_eq!(backup.deleted_audio_meeting_count, 1);
+    assert!(historical_plan(&archive, &history).is_ok());
+    assert!(crate::storage::transcription::read_audio_plan(&archive.database, &available).is_ok());
+    assert_eq!(
+        archive
+            .database
+            .query_row(
+                "SELECT count(*) FROM meetings WHERE id=?1",
+                [&meeting],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(!serde_json::to_string(&archive.manifest)
+        .unwrap()
+        .contains("audioHistorySupersession"));
+}
+
+#[test]
+fn audio_supersession_real_restored_history_full_deletion_keeps_original_no_consent_record_and_three_reexports(
+) {
+    let (root, source, meeting) = fixture();
+    deleted(&source, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("input.monbackup");
+    source.create_backup_archive(&path, &|| false).unwrap();
+    let target_root = root.path().join("retirement-target");
+    let target = Storage::open(target_root.clone()).unwrap();
+    let available = tests::meeting(&target, "KEEP AVAILABLE");
+    let selected = target
+        .prepare_additive_restore(&path, &|| false, &|_| {})
+        .unwrap();
+    let preview = selected.preview();
+    let restored_meeting = selected
+        .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+        .unwrap()
+        .meeting_ids[0]
+        .clone();
+    let op = native_record(&target, &restored_meeting);
+    let record = |db: &Connection| {
+        db.query_row("SELECT json_array(target_manifest_json,target_hash,progress_json,consent_at,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [&op], |r|r.get::<_,String>(0)).unwrap()
+    };
+    let before = record(&target.connection.lock().unwrap());
+    fully_delete(&target, &restored_meeting);
+    assert_eq!(record(&target.connection.lock().unwrap()), before);
+    drop(selected);
+    drop(target);
+    let mut target = Storage::open(target_root).unwrap();
+    assert!(!target.data_write_blocked());
+    assert!(target.recorded_audio_plan(&restored_meeting).is_err());
+    assert_eq!(record(&target.connection.lock().unwrap()), before);
+    for round in 0..3 {
+        let path = output
+            .path()
+            .join(format!("retired-round-{round}.monbackup"));
+        let backup = target.create_backup_archive(&path, &|| false).unwrap();
+        assert_eq!(backup.meeting_count, 1);
+        assert_eq!(backup.deleted_audio_meeting_count, 0);
+        let archive = read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+        assert!(!serde_json::to_string(&archive.manifest)
+            .unwrap()
+            .contains("audioHistorySupersession"));
+        assert_eq!(
+            archive
+                .database
+                .query_row(
+                    "SELECT count(*) FROM meetings WHERE id=?1",
+                    [&restored_meeting],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let next = Storage::open(root.path().join(format!("retired-round-{round}"))).unwrap();
+        let selected = next
+            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .unwrap();
+        let preview = selected.preview();
+        assert_eq!(preview.deleted_audio_meeting_count, 0);
+        let published = selected
+            .publish(&next, &preview.confirmation_id, &|| false, &|_| {})
+            .unwrap();
+        assert_eq!(published.meeting_ids.len(), 1);
+        assert!(next.recorded_audio_plan(&published.meeting_ids[0]).is_ok());
+        target = next;
+    }
+    assert!(source.get_meeting(&meeting).unwrap().is_some());
+    assert_ne!(meeting, restored_meeting);
+    assert!(!available.is_empty());
+}
+
 #[test]
 fn deleted_audio_publication_selection_preview_is_read_only_replay_restart_and_three_reexports_keep_history(
 ) {

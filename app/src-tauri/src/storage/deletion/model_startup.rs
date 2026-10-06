@@ -55,6 +55,9 @@ pub(in crate::storage) fn inspect(
             let progress: Option<String> = row.get(2).map_err(|e| e.to_string())?;
             let json = json.ok_or("モデル削除履歴が容量上限を超えています")?;
             let progress = progress.ok_or("モデル削除進捗が容量上限を超えています")?;
+            if super::super::audio_supersession::startup_parent(db, anchor, &operation)?.is_some() {
+                return Ok(None);
+            }
             if crate::storage::deletion::audio::restored::hinted(db, &operation)? {
                 return crate::storage::deletion::audio::restored::inspect_one(
                     db, anchor, &operation,

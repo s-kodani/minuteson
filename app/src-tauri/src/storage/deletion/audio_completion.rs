@@ -205,6 +205,23 @@ pub(in crate::storage) fn backup_deleted(
     }
     let mut meetings = std::collections::BTreeSet::new();
     for id in ids {
+        if crate::storage::deletion::audio_supersession::hinted(db, &id)? {
+            crate::storage::deletion::audio_supersession::inspect(
+                db,
+                &storage.managed_anchor,
+                &id,
+                check,
+            )?;
+            continue;
+        }
+        if crate::storage::deletion::audio_supersession::superseded(
+            db,
+            &storage.managed_anchor,
+            &id,
+            check,
+        )? {
+            continue;
+        }
         if crate::storage::deletion::audio::restored::hinted(db, &id)? {
             meetings.insert(crate::storage::deletion::audio::restored::backup_meeting(
                 db,

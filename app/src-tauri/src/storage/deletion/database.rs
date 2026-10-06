@@ -311,27 +311,11 @@ fn table(
         hash.update([0xff]);
         let mut bytes = 0;
         for i in 0..columns {
-            match row.get_ref(i).map_err(|e| e.to_string())? {
-                ValueRef::Null => hash.update([0]),
-                ValueRef::Integer(n) => {
-                    hash.update([1]);
-                    hash.update(n.to_le_bytes());
-                }
-                ValueRef::Real(n) if n.is_finite() => {
-                    hash.update([2]);
-                    hash.update(n.to_bits().to_le_bytes());
-                }
-                ValueRef::Text(s) if s.len() <= MAX_CELL && std::str::from_utf8(s).is_ok() => {
-                    bytes += s.len();
-                    if bytes > MAX_CELL {
-                        return Err("削除対象のDB行が容量上限を超えています".into());
-                    }
-                    hash.update([3]);
-                    hash.update((s.len() as u64).to_le_bytes());
-                    hash.update(s);
-                }
-                _ => return Err("削除対象に未対応のDB値があります".into()),
-            }
+            hash_cell(
+                &mut hash,
+                row.get_ref(i).map_err(|e| e.to_string())?,
+                &mut bytes,
+            )?;
         }
     }
     Ok(Table {
@@ -339,6 +323,82 @@ fn table(
         rows: count,
         sha256: format!("{:x}", hash.finalize()),
     })
+}
+
+fn hash_cell(hash: &mut Sha256, value: ValueRef<'_>, bytes: &mut usize) -> Result<(), String> {
+    match value {
+        ValueRef::Null => hash.update([0]),
+        ValueRef::Integer(n) => {
+            hash.update([1]);
+            hash.update(n.to_le_bytes());
+        }
+        ValueRef::Real(n) if n.is_finite() => {
+            hash.update([2]);
+            hash.update(n.to_bits().to_le_bytes());
+        }
+        ValueRef::Text(s) if s.len() <= MAX_CELL && std::str::from_utf8(s).is_ok() => {
+            *bytes += s.len();
+            if *bytes > MAX_CELL {
+                return Err("削除対象のDB行が容量上限を超えています".into());
+            }
+            hash.update([3]);
+            hash.update((s.len() as u64).to_le_bytes());
+            hash.update(s);
+        }
+        _ => return Err("削除対象に未対応のDB値があります".into()),
+    }
+    Ok(())
+}
+
+// Reconstruct the confirmation's complete maintenance fingerprint after the
+// meeting FK was detached by ON DELETE SET NULL. This is a hash-only view: no
+// row is rewritten, and every other cell remains byte-for-byte bound to Scope.
+#[cfg(unix)]
+pub(super) fn detached_maintenance_hash(
+    db: &Connection,
+    meeting: &str,
+    ids: &[String],
+    check: &impl Fn() -> bool,
+) -> Result<String, String> {
+    trusted_schema(db)?;
+    if !uuid(meeting) || ids.len() > 1024 {
+        return Err("保持する保守履歴の範囲が不正です".into());
+    }
+    let mut q = db
+        .prepare("SELECT * FROM maintenance_operations WHERE id=?1")
+        .map_err(|e| e.to_string())?;
+    let columns = q.column_count();
+    let fk = q.column_index("meeting_id").map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    hash.update(b"maintenance_operations");
+    hash.update(serde_json::to_vec(&q.column_names()).map_err(|e| e.to_string())?);
+    let mut seen = std::collections::BTreeSet::new();
+    for id in ids {
+        cancel(check)?;
+        if !uuid(id) || !seen.insert(id) {
+            return Err("保持する保守履歴のIDが不正です".into());
+        }
+        let mut rows = q.query([id]).map_err(|e| e.to_string())?;
+        let row = rows
+            .next()
+            .map_err(|e| e.to_string())?
+            .ok_or("保持する保守履歴が欠落しています")?;
+        if !matches!(row.get_ref(fk).map_err(|e| e.to_string())?, ValueRef::Null) {
+            return Err("完全削除後の会議参照が再接続されています".into());
+        }
+        hash.update([0xff]);
+        let mut bytes = 0;
+        for i in 0..columns {
+            let value = if i == fk {
+                ValueRef::Text(meeting.as_bytes())
+            } else {
+                row.get_ref(i).map_err(|e| e.to_string())?
+            };
+            hash_cell(&mut hash, value, &mut bytes)?;
+        }
+    }
+    cancel(check)?;
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 // Check every declared incoming FK, not just today's common rows. A valid

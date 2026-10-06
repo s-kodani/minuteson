@@ -304,9 +304,18 @@ fn run_locked(
         let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_live(storage, &tx, check)?;
+        let supersession = super::audio_supersession::retain(
+            &tx,
+            &storage.managed_anchor,
+            &receipt.confirmed,
+            check,
+        )?;
         database::erase_rows(&tx, receipt.confirmed.scope(), check)?;
         event("rowsErased");
         let next = save_phase(&tx, receipt, Phase::RowsDeleted)?;
+        if let Some(operation) = supersession {
+            super::audio_supersession::inspect(&tx, &storage.managed_anchor, &operation, check)?;
+        }
         event("beforeRowsCommit");
         cancel(check)?;
         receipt

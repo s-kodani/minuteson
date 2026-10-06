@@ -217,6 +217,15 @@ fn read_with_progress(
     admitted: Option<(&str, &str)>,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
+    read_frame(db, operation, admitted, None, check)
+}
+fn read_frame(
+    db: &Connection,
+    operation: &str,
+    admitted: Option<(&str, &str)>,
+    supersession: Option<&crate::storage::deletion::audio_supersession::Proof>,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
     super::cancel(check)?;
     if !super::uuid(operation) {
         return Err("音声削除の操作IDが不正です".into());
@@ -244,7 +253,11 @@ fn read_with_progress(
     let header: Header = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let kept = state == "recovered";
     let consent = consent.ok_or("音声削除の同意時刻がありません")?;
-    if meeting.as_deref() != Some(header.meeting_id.as_str())
+    let meeting_valid = match supersession {
+        None => meeting.as_deref() == Some(header.meeting_id.as_str()),
+        Some(proof) => meeting.is_none() && proof.authorizes(operation, &header.meeting_id),
+    };
+    if !meeting_valid
         || kind != "delete_assets"
         || batch.is_some()
         || !match admitted {

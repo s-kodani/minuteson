@@ -1,0 +1,315 @@
+//! Full-meeting deletion supersedes checked audio history, never its consent.
+//! Original receipts and paths are retained unchanged except the schema's FK
+//! detachment. The complete original maintenance fingerprint binds membership.
+use super::{
+    database,
+    fs::{Identity, RootAnchor},
+    intent::Prepared,
+    renewal, startup,
+};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+const SUBTYPE: &str = "audioHistorySupersession";
+const PROGRESS: &str = "{\"version\":1,\"audioHistorySuperseded\":true}";
+fn uuid(s: &str) -> bool {
+    uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s)
+}
+fn hash(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(b"mon/audio-history-supersession/v1\0");
+    h.update(s.as_bytes());
+    format!("{:x}", h.finalize())
+}
+fn valid_hash(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
+    if check() {
+        Err("音声履歴の引継ぎ検査を取り消しました".into())
+    } else {
+        Ok(())
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Header {
+    version: u32,
+    subtype: String,
+    operation: String,
+    delete_operation: String,
+    meeting: String,
+    scope_hash: String,
+    root: Identity,
+    database: Identity,
+    // Original row order is bound by Scope's native table fingerprint.
+    maintenance_ids: Vec<String>,
+    audio_operations: Vec<String>,
+}
+// Non-serializable read-only capability. Cannot authorize an unlink, row erase,
+// source read, relaxed ready state, or an arbitrary detached meeting FK.
+pub(super) struct Proof {
+    header: Header,
+}
+impl Proof {
+    pub(super) fn authorizes(&self, operation: &str, meeting: &str) -> bool {
+        self.header.meeting == meeting
+            && self
+                .header
+                .audio_operations
+                .iter()
+                .any(|id| id == operation)
+    }
+    pub(super) fn identities(&self) -> (Identity, Identity) {
+        (self.header.root.clone(), self.header.database.clone())
+    }
+    fn load(
+        db: &Connection,
+        anchor: &RootAnchor,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        let proof = Self::load_metadata(db, anchor, operation, check)?;
+        let (original, files) =
+            startup::supersession_source(db, &proof.header.delete_operation, check)?;
+        let roots = renewal::reconfirmation_roots(db, &original, &files, check)?;
+        if !startup::absent(anchor, &proof.header.meeting, &roots)? {
+            return Err("完全削除済みの会議範囲が再出現しています".into());
+        }
+        cancel(check)?;
+        Ok(proof)
+    }
+    // The parent full-meeting operation owns physical-scope startup attention;
+    // its persistent fence also covers unfinished purge/reconfirmation. This
+    // metadata-only read grants no backup, file/source or deletion permission.
+    fn load_metadata(
+        db: &Connection,
+        anchor: &RootAnchor,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        cancel(check)?;
+        database::trusted_schema(db)?;
+        let (fk,kind,state,batch,json,sha,consent,progress,error,created,updated):(Option<String>,String,String,Option<String>,Option<String>,String,Option<i64>,Option<String>,Option<String>,i64,i64)=db.query_row("SELECT meeting_id,kind,state,restore_batch_id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,target_hash,consent_at,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?))).map_err(|e|e.to_string())?;
+        let json = json.ok_or("音声履歴引継ぎの容量が上限を超えています")?;
+        let h: Header = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        let ids: BTreeSet<_> = h.maintenance_ids.iter().collect();
+        let audio: BTreeSet<_> = h.audio_operations.iter().collect();
+        if h.version != 1
+            || h.subtype != SUBTYPE
+            || h.operation != operation
+            || !uuid(operation)
+            || !uuid(&h.delete_operation)
+            || !uuid(&h.meeting)
+            || !valid_hash(&h.scope_hash)
+            || fk.is_some()
+            || kind != "delete_assets"
+            || state != "completed"
+            || batch.is_some()
+            || consent.is_some()
+            || error.is_some()
+            || progress.as_deref() != Some(PROGRESS)
+            || created < 0
+            || updated != created
+            || serde_json::to_string(&h).map_err(|e| e.to_string())? != json
+            || hash(&json) != sha
+            || ids.len() != h.maintenance_ids.len()
+            || ids.len() > 1024
+            || audio.is_empty()
+            || audio.len() != h.audio_operations.len()
+            || audio.len() > 256
+            || ids.iter().any(|id| !uuid(id))
+            || !audio.is_subset(&ids)
+            || ids.contains(&h.operation)
+            || ids.contains(&h.delete_operation)
+        {
+            return Err("音声履歴の引継ぎ記録が不正です".into());
+        }
+        h.root.validate(true)?;
+        h.database.validate(false)?;
+        if anchor.identity()? != (h.root.clone(), h.database.clone()) {
+            return Err("音声履歴引継ぎの保存領域が一致しません".into());
+        }
+        let paths: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_paths WHERE operation_id=?1)",
+                [operation],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if paths {
+            return Err("音声履歴引継ぎへ削除対象を登録しません".into());
+        }
+        let duplicates: i64 = db.query_row(
+            "SELECT count(*) FROM (SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND json_extract(target_manifest_json,'$.subtype')='audioHistorySupersession' AND json_extract(target_manifest_json,'$.deleteOperation')=?1 LIMIT 2)",
+            [&h.delete_operation], |r| r.get(0),
+        ).map_err(|e| e.to_string())?;
+        if duplicates != 1 {
+            return Err("完全削除に対応する音声履歴の引継ぎが重複・欠落しています".into());
+        }
+        let (original, files) = startup::supersession_source(db, &h.delete_operation, check)?;
+        let m = original.manifest();
+        if original.scope().meeting_id != h.meeting
+            || original.scope().hash()? != h.scope_hash
+            || m.root != h.root
+            || m.database != h.database
+            || database::detached_maintenance_hash(db, &h.meeting, &h.maintenance_ids, check)?
+                != original.scope().maintenance_hash
+        {
+            return Err("完全削除の確認対象と元の保守履歴が一致しません".into());
+        }
+        renewal::reconfirmation_roots(db, &original, &files, check)?;
+        let proof = Self { header: h };
+        let mut expected = BTreeSet::new();
+        for id in &proof.header.maintenance_ids {
+            cancel(check)?;
+            let (kind, state): (String, String) = db
+                .query_row(
+                    "SELECT kind,state FROM maintenance_operations WHERE id=?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(|e| e.to_string())?;
+            if kind == "delete_assets" && state == "completed" {
+                expected.insert(id);
+            }
+        }
+        if expected != proof.header.audio_operations.iter().collect() {
+            return Err("完全削除が引き継ぐ音声履歴の集合が一致しません".into());
+        }
+        for id in &proof.header.audio_operations {
+            cancel(check)?;
+            if super::audio::restored::hinted(db, id)? {
+                super::audio::restored::validate_superseded(db, id, &proof, check)?;
+            } else {
+                super::audio::intent::removal::validate_superseded(db, id, &proof, check)?;
+            }
+        }
+        cancel(check)?;
+        Ok(proof)
+    }
+}
+
+pub(super) fn hinted(db: &Connection, operation: &str) -> Result<bool, String> {
+    let json:Option<String>=db.query_row("SELECT CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END FROM maintenance_operations WHERE id=?1",[operation],|r|r.get(0)).optional().map_err(|e|e.to_string())?.flatten();
+    Ok(json
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .is_some_and(|v| v["subtype"] == SUBTYPE))
+}
+pub(super) fn inspect(
+    db: &Connection,
+    anchor: &RootAnchor,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    Proof::load(db, anchor, operation, check).map(|_| ())
+}
+pub(super) fn superseded(
+    db: &Connection,
+    anchor: &RootAnchor,
+    audio: &str,
+    check: &impl Fn() -> bool,
+) -> Result<bool, String> {
+    match marker_for(db, audio)? {
+        None => Ok(false),
+        Some(id) => Proof::load(db, anchor, &id, check).map(|_| true),
+    }
+}
+fn marker_for(db: &Connection, audio: &str) -> Result<Option<String>, String> {
+    let ids=db.prepare("SELECT m.id FROM maintenance_operations m WHERE kind='delete_assets' AND state='completed' AND json_extract(target_manifest_json,'$.subtype')='audioHistorySupersession' AND EXISTS(SELECT 1 FROM json_each(target_manifest_json,'$.audioOperations') j WHERE j.value=?1) LIMIT 2").map_err(|e|e.to_string())?.query_map([audio],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    if ids.len() > 1 {
+        return Err("音声履歴の引継ぎ元が重複しています".into());
+    }
+    Ok(ids.into_iter().next())
+}
+pub(super) fn startup_parent(
+    db: &Connection,
+    anchor: &RootAnchor,
+    operation: &str,
+) -> Result<Option<String>, String> {
+    let marker = if hinted(db, operation)? {
+        Some(operation.to_owned())
+    } else {
+        marker_for(db, operation)?
+    };
+    marker
+        .map(|id| {
+            Proof::load_metadata(db, anchor, &id, &|| false).map(|p| p.header.delete_operation)
+        })
+        .transpose()
+}
+
+// Called inside the exact fully confirmed row-deletion transaction, while all
+// original audio metadata/FKs still exist. Not a client-supplied JSON input.
+pub(super) fn retain(
+    db: &Connection,
+    anchor: &RootAnchor,
+    original: &Prepared,
+    check: &impl Fn() -> bool,
+) -> Result<Option<String>, String> {
+    cancel(check)?;
+    if db.is_autocommit() {
+        return Err("音声履歴の引継ぎはDB削除と同時に確定してください".into());
+    }
+    let meeting = &original.scope().meeting_id;
+    let all:Vec<(String,String,String)>=db.prepare("SELECT id,kind,state FROM maintenance_operations WHERE meeting_id=?1 AND id!=?2 ORDER BY rowid LIMIT 1025").map_err(|e|e.to_string())?.query_map(params![meeting,original.operation()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.collect::<Result<_,_>>().map_err(|e|e.to_string())?;
+    if all.len() > 1024 {
+        return Err("音声履歴の引継ぎ対象が安全上限を超えています".into());
+    }
+    let mut audio = Vec::new();
+    for (id, kind, state) in &all {
+        cancel(check)?;
+        if kind != "delete_assets" || state != "completed" {
+            continue;
+        }
+        if super::audio::restored::hinted(db, id)? {
+            if super::audio::restored::backup_meeting(db, anchor, id, check)? != *meeting {
+                return Err("引継ぐ音声履歴の会議が一致しません".into());
+            }
+        } else if super::audio::intent::removal::completion::inspect_one(db, anchor, id)?.is_some()
+        {
+            return Err("引継ぐ音声削除の完了証拠を検証できません".into());
+        }
+        audio.push(id.clone());
+    }
+    if audio.is_empty() {
+        return Ok(None);
+    }
+    let (root, database) = anchor.identity()?;
+    if (root.clone(), database.clone())
+        != (
+            original.manifest().root.clone(),
+            original.manifest().database.clone(),
+        )
+    {
+        return Err("引継ぎと完全削除の管理領域が一致しません".into());
+    }
+    let operation = uuid::Uuid::new_v4().to_string();
+    let header = Header {
+        version: 1,
+        subtype: SUBTYPE.into(),
+        operation: operation.clone(),
+        delete_operation: original.operation().into(),
+        meeting: meeting.clone(),
+        scope_hash: original.scope().hash()?,
+        root,
+        database,
+        maintenance_ids: all.into_iter().map(|r| r.0).collect(),
+        audio_operations: audio,
+    };
+    let json = serde_json::to_string(&header).map_err(|e| e.to_string())?;
+    if json.len() > 65536 || header.audio_operations.len() > 256 {
+        return Err("音声履歴引継ぎが容量上限を超えています".into());
+    }
+    let now = crate::storage::now_ms()?;
+    db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,'delete_assets','completed',?2,?3,?4,?5,?5)",params![operation,json,hash(&json),PROGRESS,now]).map_err(|e|e.to_string())?;
+    cancel(check)?;
+    Ok(Some(operation))
+}
+
+#[cfg(test)]
+#[path = "audio_supersession_tests.rs"]
+mod tests;

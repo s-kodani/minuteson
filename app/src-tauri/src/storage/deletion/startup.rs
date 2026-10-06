@@ -111,7 +111,7 @@ fn source(db: &Connection, operation: &str) -> Result<(Prepared, removal::Progre
         Ok((receipt.confirmed().clone(), receipt.file_progress().clone()))
     }
 }
-fn absent(anchor: &RootAnchor, meeting: &str, roots: &[String]) -> Result<bool, String> {
+pub(super) fn absent(anchor: &RootAnchor, meeting: &str, roots: &[String]) -> Result<bool, String> {
     anchor.verify()?;
     let Some(meetings) = anchor.directory_ref()?.child("meetings")? else {
         return Ok(true);
@@ -131,6 +131,23 @@ fn absent(anchor: &RootAnchor, meeting: &str, roots: &[String]) -> Result<bool, 
     }
     anchor.verify()?;
     Ok(true)
+}
+
+// Typed row-phase evidence, including a subsequent explicitly accepted v3
+// file reconfirmation. A raw completed/version label is never sufficient.
+pub(super) fn supersession_source(
+    db: &Connection,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<(Prepared, removal::Progress), String> {
+    let (original, files) = source(db, operation)?;
+    let committed = files.database_phase.is_some_and(|p| p.rows_committed())
+        || completion::Receipt::load(db, operation, check)?.row_phase_committed();
+    if !committed {
+        return Err("音声履歴の引継ぎより先に会議DB削除を確定してください".into());
+    }
+    database::verify_rows_absent(db, original.scope(), check)?;
+    Ok((original, files))
 }
 
 pub(in crate::storage) fn inspect(

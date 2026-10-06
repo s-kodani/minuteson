@@ -123,6 +123,14 @@ impl Receipt {
         operation: &str,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        Self::load_frame(db, operation, None, check)
+    }
+    fn load_frame(
+        db: &Connection,
+        operation: &str,
+        supersession: Option<&crate::storage::deletion::audio_supersession::Proof>,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
         super::super::cancel(check)?;
         let (state,json,len):(String,String,i64)=db.query_row("SELECT state,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '' END,length(CAST(progress_json AS BLOB)) FROM maintenance_operations WHERE id=?1",params![operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
         if !(1..=4096).contains(&len) {
@@ -132,7 +140,12 @@ impl Receipt {
         if progress.state() != state || progress.encode()? != json {
             return Err("音声削除進捗が正規形式ではありません".into());
         }
-        let saved = read_with_progress(db, operation, Some((&state, &json)), check)?;
+        let saved = match supersession {
+            None => read_with_progress(db, operation, Some((&state, &json)), check)?,
+            Some(proof) => {
+                super::read_frame(db, operation, Some((&state, &json)), Some(proof), check)?
+            }
+        };
         let targets = targets(&saved)?;
         progress.validate(&saved, &targets)?;
         Ok(Self {
@@ -251,6 +264,23 @@ impl Receipt {
         self.progress = next;
         Ok(())
     }
+}
+// Only a typed full-meeting supersession can admit a detached historical FK.
+// This does not expose a Receipt or any deletion/available-source capability.
+pub(in crate::storage::deletion) fn validate_superseded(
+    db: &Connection,
+    operation: &str,
+    proof: &crate::storage::deletion::audio_supersession::Proof,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let receipt = Receipt::load_frame(db, operation, Some(proof), check)?;
+    let manifest = &receipt.saved.snapshot.manifest;
+    if !receipt.completed()
+        || (manifest.root.clone(), manifest.database.clone()) != proof.identities()
+    {
+        return Err("引き継ぐ音声削除の完了状態・管理領域が一致しません".into());
+    }
+    super::super::cancel(check)
 }
 
 // Compare the complete fixed tree, not only the next audio path. Only exact
