@@ -8,6 +8,16 @@ async (page) => {
   const open = async () => { await trigger().click(); await modal().waitFor(); await page.waitForFunction(() => window.monImportFixture.import.phase === "ready"); await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).waitFor(); await page.waitForFunction(() => !document.querySelector('dialog[open] [aria-label="確認をキャンセル"]')?.disabled); };
   const closed = async () => { await modal().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "音声を取り込む"); };
   await boot(); await open();
+  for (const label of ["取り込み後の解析", "取り込みの用語"]) {
+    const before = await page.evaluate(() => JSON.stringify(window.monImportFixture.import));
+    const icon = modal().getByRole("button", { name: `${label}の説明を開く`, exact: true });
+    await icon.click(); const help = page.getByRole("dialog", { name: label, exact: true }); await help.waitFor();
+    await page.keyboard.press("Escape"); await help.waitFor({ state: "hidden" });
+    check(await modal().isVisible() && await icon.evaluate(e => e === document.activeElement), "import help Escape closed selection or lost focus");
+    check(await page.evaluate(() => JSON.stringify(window.monImportFixture.import)) === before && await count("start_audio_import") === 0 && await count("cancel_audio_import") === 0, "import help changed native selection");
+    check((await modal().innerText()).includes("参加者の同意を得た音声"), "consent warning hidden inside help");
+    results.push(`${label}: help-only Escape, same selection and visible consent, no import/cancel command`);
+  }
   await page.evaluate(() => { window.monImportFixture.confirmations = []; window.confirm = message => { window.monImportFixture.confirmations.push(message); return false; }; });
   await page.keyboard.press("Escape");
   check(await modal().isVisible() && await count("cancel_audio_import") === 0 && await count("start_audio_import") === 0, "declined discard changed import");

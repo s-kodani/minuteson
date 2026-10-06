@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ComponentPropsWithoutRef, type RefObject } from "react";
 import { outsideDialog } from "./modal-state";
+import { closeInfoPopovers } from "./info-popover";
 
 type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel" | "onClose" | "onClick" | "onPointerDown" | "onKeyDown"> & {
   ref?: RefObject<HTMLDialogElement | null>;
@@ -48,6 +49,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     restorePending.current = false;
     const attempt = () => {
       if (!latest.current.open || !element.isConnected || element.open || document.querySelector("dialog[open]")) return;
+      closeInfoPopovers();
       element.showModal();
       const cancel = element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)");
       const heading = element.querySelector<HTMLElement>("h2, h3");

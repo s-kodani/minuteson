@@ -1,5 +1,6 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
-import { useEffect,useRef,useState } from "react";
+import { InfoPopover } from "./info-popover";
+import { useEffect,useId,useRef,useState } from "react";
 import { DraftSaveQueue,registerPendingEdits,type VersionedDraft } from "./draft-save";
 import { canRetryJob,jobLabel,type AnalysisJob,type VersionState } from "./analysis-state";
 import { JobModelRebinding } from "./model-rebinding";
@@ -9,6 +10,7 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
   meetingId:string;recorded:boolean;recordingActive:boolean;locked:boolean;jobs:AnalysisJob[];versions:VersionState|null;
   withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;refresh:()=>Promise<void>;
 }) {
+  const profileSelectId = useId();
   const [queue] = useState(()=>new DraftSaveQueue<DiarizationPreferences,Preferences>(
     (_id,expectedLockVersion,payload)=>invoke("save_diarization_preferences",{expectedLockVersion,payload}),payload=>structuredClone(payload)));
   const [settings,setSettings]=useState(()=>queue.snapshot());
@@ -67,11 +69,10 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
   const jobAction=(command:string,jobId:string)=>run(async()=>{await invoke(command,{jobId});await refresh();});
   const current=versions?.versions.find(v=>v.id===versions.currentId);
   return <section className="diarization-panel" aria-label="話者分離操作">
-    <h3>話者分離と人数指定</h3>
-    <p>採用済み文字起こしと保存済み編集を固定し、同じ音声から新しい候補を作ります。本文・名前・手動割り当て（話者不明を含む）は保持します。トラック間の同じ番号を同一人物とは扱いません。</p>
+    <div className="heading-with-info"><h3>話者分離と人数指定</h3><InfoPopover label="話者分離">採用済み文字起こしと編集を固定し、新しい候補を作ります。本文・名前・手動割り当ては保持します。トラック間の同じ番号は同一人物を意味しません。</InfoPopover></div>
     <details className="analysis-settings"><summary>sherpa-onnx 設定（端末内に保存）</summary>
       <p>導入済みCLI・区間モデル・埋め込みモデルを指定します。CPUで処理します。品質・10話者・16GB端末・4時間の推論は未検証で、プロファイル名だけで精度を保証しません。</p>
-      <label>話者分離プロファイル<select value={profile} disabled={disabled} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></label>
+      <div className="info-field"><div className="heading-with-info"><label htmlFor={profileSelectId}>話者分離プロファイル</label><InfoPopover label="話者分離の標準／高精度">モデルと数値設定を別々に保存するプロファイルです。CPUで処理し、負荷はモデルと設定に依存します。品質・10話者・16GB端末・4時間の推論は未検証です。</InfoPopover></div><select id={profileSelectId} value={profile} disabled={disabled} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></div>
       {engine?<fieldset disabled={disabled}>
         <label>話者分離CLIの絶対パス<input value={engine.executablePath} maxLength={4096} onChange={e=>update({executablePath:e.target.value})}/></label>
         <label>区間モデルの絶対パス<input value={engine.segmentationModelPath} maxLength={4096} onChange={e=>update({segmentationModelPath:e.target.value})}/></label>
@@ -83,7 +84,7 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
       <div className="analysis-actions"><span role="status">{!engine?"話者分離設定は未読込":settings.error?"話者分離設定の保存に失敗":settings.saving?"話者分離設定を保存中":settings.dirty?"話者分離設定は未保存":"話者分離設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled||settings.saving||!settings.dirty} onClick={()=>void run(()=>queue.retry())}>話者分離設定を保存・再試行</button><button type="button" className="small-secondary" disabled={disabled||settings.saving||(!engine&&!error)} onClick={reloadSettings}>話者分離設定を再読込</button></div>
       {settings.error&&<p className="action-error" role="alert">{settings.error} 入力は保持しています。</p>}
     </details>
-    <p>人数は下記トラックに適用します。各トラックの通常値は自動推定です。指定は今回の開始条件として保存され、会議全体の参加者総数とは区別します。受付上限100人は精度の検証済み範囲ではありません。</p>
+    <div className="heading-with-info"><h3>話者の人数</h3><InfoPopover label="話者の人数">人数はトラックごとに指定し、通常は自動推定です。会議全体の参加者総数とは異なります。今回の開始条件に固定され、受付上限100人は精度の検証済み範囲ではありません。</InfoPopover></div>
     <fieldset disabled={disabled||pending||recordingActive} className="diarization-tracks">
       {tracks.map(t=><div key={t.id}><label>{trackLabel(t.kind)} 人数<select value={(counts[t.id]??"auto")==="auto"?"auto":"fixed"} onChange={e=>setCounts(c=>({...c,[t.id]:e.target.value==="auto"?"auto":"3"}))}><option value="auto">自動推定</option><option value="fixed">人数を指定</option></select></label>{(counts[t.id]??"auto")!=="auto"&&<label>{trackLabel(t.kind)}の指定人数<input type="number" min={1} max={100} step={1} value={counts[t.id]} onChange={e=>setCounts(c=>({...c,[t.id]:e.target.value}))}/></label>}</div>)}
     </fieldset>

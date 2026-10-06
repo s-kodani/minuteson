@@ -20,8 +20,9 @@ async (page) => {
   const confirm = () => page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).click();
   const ready = async () => { await page.getByRole("dialog").waitFor(); await page.getByRole("heading", { name: "バックアップから追加復元", exact: true }).waitFor(); };
 
-  await boot(); await page.getByLabel("バックアップと追加復元の説明").click();
-  const info = await region().innerText();
+  await boot(); await page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true }).click();
+  await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).getByRole("link", { name: "詳しい説明", exact: true }).click();
+  const info = await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).innerText();
   check(info.includes("AIモデル本体") && info.includes("独自暗号化やクラウド同期ではありません") && info.includes("新しい別会議"), "data scope explanation missing");
   results.push("scope info: no model-body, encryption or replace-existing claim");
 

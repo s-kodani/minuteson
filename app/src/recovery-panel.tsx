@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -94,7 +95,7 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   const ready = canAct && s?.phase === "ready" && s.retryAllowed && !!preview;
   return <>
     {visible && <section className="analysis-card recovery-panel" aria-label="中断したデータ操作の確認">
-      <div className="card-head"><h2 ref={panelHeading} tabIndex={-1}>中断したデータ操作の確認</h2><details className="data-info"><summary aria-label="要確認データの説明">info</summary><p>未公開の復元追加物と構築用コピーだけが対象です。既存会議・公開済みデータ・元バックアップは変更しません。所有不明のファイルは削除しません。「保持して確認を完了」は回収ではなく、今後の自動回収からも保護する確認記録です。</p></details></div>
+      <div className="heading-with-info"><h2 ref={panelHeading} tabIndex={-1}>中断したデータ操作の確認</h2><InfoPopover label="要確認データ" details={<p>未公開の復元追加物と構築用コピーだけが対象です。既存会議・公開済みデータ・元バックアップは変更しません。所有不明のファイルは削除しません。「保持して確認を完了」は回収ではなく、今後の自動回収からも保護する確認記録です。</p>}>未公開の追加復元物と移動途中のコピーを確認します。既存会議は変更しません。保持の確認と、対象を削除する回収は別の操作です。</InfoPopover></div>
       <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(async () => { await latest.current.refresh(); await readList(); })}>要確認一覧を再読込</button>
       {!listing && <p role="status">一覧を確認できるまで回収・保持確認はできません。</p>}
       {listing && !listing.supported && <p role="status">このOSの回収操作は保留中です。</p>}

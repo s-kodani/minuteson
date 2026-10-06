@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
@@ -333,7 +334,7 @@ function MainWindow() {
           <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
           <section className="status-card" aria-label="録音状態">
-            <div className="card-head"><h2>録音セッション</h2><span className="state-pill">{phaseLabel(state)}</span></div>
+            <div className="card-head"><div className="heading-with-info"><h2>録音セッション</h2><InfoPopover label="録音セッション" details={<p>マイクとPC音声を別々のトラックに保存します。PC音声の対象範囲はOSのキャプチャ機能と権限に依存し、会議アプリだけに限定されるとは限りません。参加者の同意を得て、不要なアプリの音声を止めてください。保存後は準備済みモデルで文字起こし・話者分離を順に進め、結果を候補として保存します。モデル未準備でも音声は保持します。録音品質・長時間と10話者の正式評価は保留中です。</p>}>マイクとPC音声を別々に保存します。PC音声には会議以外の音が含まれる場合があります。同意を確認し、不要な音を止めてください。保存後の解析結果は確認待ちの候補です。</InfoPopover></div><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
             <div className="card-actions">

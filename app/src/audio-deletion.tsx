@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -139,7 +140,7 @@ export function AudioDeletionPanel({ operation, control: c, visible, meetingTitl
   const trackState = (state: string) => ({ ready: "保存済み", interrupted: "中断", failed: "失敗" } as Record<string, string>)[state] ?? state;
   return <>
     {(visible || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="音声だけの削除と中断対応">
-      <div className="card-head"><h2 id="audio-deletion-heading" tabIndex={-1}>音声だけの削除と中断対応</h2><details className="data-info"><summary aria-label="音声だけの削除の説明">info</summary><p>会議の管理音声だけを削除します。文字起こし・議事録・下書き・根拠テキスト・編集履歴・ジョブ・外部出力の記録は保持します。音声の再生・解析・再解析と、根拠からの音声再生はできなくなります。外部の原本やバックアップは対象外です。</p></details></div>
+      <div className="heading-with-info"><h2 id="audio-deletion-heading" tabIndex={-1}>音声だけの削除と中断対応</h2><InfoPopover label="音声だけの削除" details={<p>会議の管理音声だけを削除します。文字起こし・議事録・下書き・根拠テキスト・編集履歴・ジョブ・外部出力の記録は保持します。音声の再生・解析・再解析と、根拠からの音声再生はできなくなります。外部の原本やバックアップは対象外です。</p>}>文書・根拠テキスト・編集履歴を残して管理音声を削除します。音声の再生と再解析はできなくなります。実行前に範囲を確認します。</InfoPopover></div>
       {!operation.audioDeletionSupported && operation.connected && <p>この環境の音声削除は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>音声削除と書込停止の状態を再読込</button>

@@ -1,5 +1,6 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { InfoPopover } from "./info-popover";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect,useRef,useState } from "react";
@@ -111,9 +112,11 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
       {(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
       {openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
       {snapshot?.busy&&snapshot.completed>0&&<p>{snapshot.phase==="copying"?`コピー済み ${bytesLabel(snapshot.completed)} / ${bytesLabel(snapshot.sourceBytes)}`:`処理済み ${snapshot.completed.toLocaleString()} フレーム`}</p>}
+      <div className="heading-with-info"><h3>取り込み後の解析</h3><InfoPopover label="取り込み後の解析">保存後に選択した標準／高精度設定で文字起こし・話者分離を進めます。負荷はモデルに依存し、品質は未検証です。モデル未準備でも音声を先に保存できます。結果の自動採用・議事録生成は行いません。</InfoPopover></div>
+      <div className="heading-with-info"><h3>会議の用語</h3><InfoPopover label="取り込みの用語" details={<p>開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。登録は認識ヒントであり、自動置換・精度向上の保証ではありません。実際の解析開始時の用語をジョブに固定し、後からの編集は過去の結果を変更しません。</p>}>登録した用語を会議別の認識ヒントとして保存します。自動置換・精度向上の保証ではありません。後からの編集は過去の結果を変更しません。</InfoPopover></div>
       <fieldset disabled={disabled||!!snapshot?.saved}><label>会議名<input value={title} maxLength={200} onChange={e=>setTitle(e.target.value)}/></label><label>解析プロファイル<select value={profile} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="high_accuracy">高精度</option></select></label>
         <p>{configured?"保存後、選択した設定で文字起こしと話者分離を開始します。推定品質は未検証です。":"選択したAI設定は未準備です。音声を先に保存し、会議詳細で設定してから解析できます。"} 結果は候補として保存し、自動採用・議事録生成は行いません。</p>
-        <details className="analysis-settings"><summary>会議の用語（任意）</summary><details><summary>用語の使い方と共通用語</summary><p>開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。登録は認識ヒントであり、自動置換・精度向上の保証ではありません。実際の解析開始時の用語をジョブに固定し、後からの編集は過去の結果を変更しません。</p></details>
+        <details className="analysis-settings"><summary>会議の用語（任意）</summary><p>共通用語は有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件 · 適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件</p>
           <button type="button" className="small-secondary" disabled={terms.length>=500} onClick={()=>{setTerms(items=>[...items,{id:crypto.randomUUID(),term:"",reading:null,note:null,enabled:true}]);setPage(Math.floor(terms.length/50));}}>会議の用語を追加</button>
           {terms.slice(index*50,(index+1)*50).map((entry,i)=><article key={entry.id} className="import-term" aria-label={`取り込み用語 ${index*50+i+1}`}><label>用語<input value={entry.term} maxLength={200} onChange={e=>update(entry.id,{term:e.target.value})}/></label><label>読み<input value={entry.reading??""} maxLength={200} onChange={e=>update(entry.id,{reading:e.target.value||null})}/></label><label>補足<textarea value={entry.note??""} maxLength={1000} onChange={e=>update(entry.id,{note:e.target.value||null})}/></label><label><input type="checkbox" checked={entry.enabled} onChange={e=>update(entry.id,{enabled:e.target.checked})}/>有効</label><button type="button" className="small-secondary" onClick={()=>{if(window.confirm(`用語「${entry.term||"空欄"}」を削除しますか？ この入力は復元できません。`))setTerms(items=>items.filter(e=>e.id!==entry.id));}}>用語を削除</button></article>)}
           {!validVocabulary(terms)&&<p role="status">空欄・重複・文字数を修正してから取り込んでください。入力は保持しています。</p>}

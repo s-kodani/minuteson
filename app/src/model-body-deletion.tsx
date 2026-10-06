@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -137,7 +138,7 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible }: { ope
   const s = operation.snapshot, p = c.preview, active = s?.kind === "model_deletion", needed = !!c.listing?.writeBlocked || !!p?.pending;
   return <>
     {(visible || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="モデル本体削除と中断対応">
-      <div className="card-head"><h2 id="model-body-deletion-heading" tabIndex={-1}>モデル本体削除と中断対応</h2><details className="data-info"><summary aria-label="モデル本体削除の説明">info</summary><p>端末内の指定モデル本体だけを削除します。会議音声・本文・議事録・モデル名とSHA・構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は、再準備まで利用できません。外部の導入元、他モデル、バックアップは対象外です。</p></details></div>
+      <div className="heading-with-info"><h2 id="model-body-deletion-heading" tabIndex={-1}>モデル本体削除と中断対応</h2><InfoPopover label="モデル本体削除" details={<p>端末内の指定モデル本体だけを削除します。会議音声・本文・議事録・モデル名とSHA・構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は、再準備まで利用できません。外部の導入元、他モデル、バックアップは対象外です。</p>}>指定した管理モデル本体だけを削除します。会議と構成履歴は残りますが、対応するAI処理にはモデルの再準備が必要です。</InfoPopover></div>
       {!operation.modelDeletionSupported && operation.connected && <p>この環境のモデル本体削除は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>モデル削除と書込停止の状態を再読込</button>

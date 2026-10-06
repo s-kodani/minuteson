@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { InfoPopover } from "./info-popover";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataPhaseLabel, dataRequest, type DataKind, type DataRequest, type DataSnapshot, type RestoreReceipt } from "./data-operation-state";
@@ -147,7 +148,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); });
   return <>
     {visible && <section className="analysis-card data-save" aria-label="データと保存">
-      <div className="card-head"><h2>データと保存</h2><details className="data-info"><summary aria-label="バックアップと追加復元の説明">info</summary><p>会議・管理音声・文字起こし・議事録・下書き・用語を保存します。AIモデル本体・一時PCM・ログ・端末固有の設定は含みません。追加復元は現在の会議を置き換えず、同じ会議も新しい別会議として追加します。独自暗号化やクラウド同期ではありません。内容を含むファイルは安全な場所へ保管してください。</p></details></div>
+      <div className="heading-with-info"><h2>データと保存</h2><InfoPopover label="バックアップと追加復元" details={<p>会議・管理音声・文字起こし・議事録・下書き・用語を保存します。AIモデル本体・一時PCM・ログ・端末固有の設定は含みません。追加復元は現在の会議を置き換えず、同じ会議も新しい別会議として追加します。独自暗号化やクラウド同期ではありません。内容を含むファイルは安全な場所へ保管してください。</p>}>会議と管理音声・文書・用語を保存します。復元は別会議として追加し、現在の会議を置き換えません。AIモデル本体は含みません。</InfoPopover></div>
       <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={() => void choose("backup")}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={() => void choose("restore")}>バックアップから追加復元</button></div>
       {storage && <><p>会議保存先: <span className="data-path">{storage.meetingRoot}</span></p><p>AIモデル保存先（移動しません）: <span className="data-path">{storage.modelsRoot}</span></p><button type="button" className="secondary" disabled={!canAct || !!storage.pendingOperationId} onClick={() => void choose("relocation")}>会議保存先を変更</button>{storage.pendingOperationId && <><p role="alert">未完了の保存先変更があります。旧保存先と途中コピーを保持しています。新たな保存先変更は開始しません。途中コピー: <span className="data-path">{storage.pendingTarget}</span></p><button type="button" disabled={!canAct} onClick={() => void choose("relocation", true)}>未完了移動を確認</button></>}{storage.keptMoves.length > 0 && <details><summary>保持した途中コピー（{storage.keptMoves.length} 件）</summary><p>利用中の会議ではありません。ファイルを削除・採用しません。別の保存先変更を開始しても残ります。</p><ul>{storage.keptMoves.map(m => <li key={m.operationId}><span className="data-path">{m.destination}</span> — {m.decisionPending ? "保持判断を保存済み。未完了移動を確認して中止を完了してください。" : "保持して中止済み"}</li>)}</ul></details>}</>}
       {storageError && <p role="status">保存先の確認・変更は利用できません: {storageError}</p>}

@@ -1,7 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
 import { timeLabel, type Analysis, type Draft } from "./transcript";
@@ -51,6 +52,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
 }) {
+  const profileSelectId = useId();
   const [queue] = useState(() => new DraftSaveQueue<AnalysisPreferences, Preferences>(
     (_id, expectedLockVersion, payload) => invoke("save_analysis_preferences", { expectedLockVersion, payload }),
     (payload) => structuredClone(payload),
@@ -197,11 +199,10 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
 
   return <section className="analysis-card" aria-label="解析操作">
     <AnalysisFlowStatus flow={flow} recorded={recorded} disabled={disabled||recordingActive} versions={versions?.versions??[]} start={()=>void run(()=>saved(async()=>{await invoke("start_analysis_flow",{meetingId});await refreshRef.current();}))} resume={f=>void run(()=>saved(async()=>{await invoke("continue_analysis_flow",{meetingId,expectedLockVersion:f.lockVersion});await refreshRef.current();}))} review={(summary,opener)=>void openPreview(summary,false,opener)}/>
-    <div className="card-head"><h2>ローカル文字起こし</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>状態を再読込</button></div>
-    <p>結果は候補として保存します。内容を確認して採用するまで、現在版と編集内容は変更しません。話者分離は採用済み文字起こしから下の操作で開始できます。トラック間の時刻補正は未検証です。</p>
+    <div className="card-head"><div className="heading-with-info"><h2>ローカル文字起こし</h2><InfoPopover label="ローカル文字起こし">結果は候補として保存し、採用まで現在版と編集内容を変更しません。話者分離は採用済み文字起こしから開始します。トラック間の時刻補正は未検証です。</InfoPopover></div><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>状態を再読込</button></div>
     <details className="analysis-settings"><summary>エンジン設定（端末内に保存）</summary>
       <p>導入済みの whisper.cpp 実行ファイルと多言語モデルの絶対パスを指定してください。モデル品質・速度は未検証です。開始時にファイルのハッシュを固定します。</p>
-      <label>プロファイル<select value={profile} disabled={disabled} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></label>
+      <div className="info-field"><div className="heading-with-info"><label htmlFor={profileSelectId}>プロファイル</label><InfoPopover label="文字起こしの標準／高精度">標準と高精度は、別々に保存したモデルと数値設定の組です。開始時に条件とファイルのハッシュを固定します。品質・速度は未検証で、高精度の負荷は選んだモデルに依存します。</InfoPopover></div><select id={profileSelectId} value={profile} disabled={disabled} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></div>
       {engine ? <fieldset disabled={disabled}>
         <label>whisper-cli の絶対パス<input value={engine.executablePath} maxLength={4096} onChange={(event) => updateEngine({ executablePath: event.target.value })} placeholder="/absolute/path/whisper-cli" /></label>
         <label>多言語モデルの絶対パス<input value={engine.modelPath} maxLength={4096} onChange={(event) => updateEngine({ modelPath: event.target.value })} placeholder="/absolute/path/ggml-model.bin" /></label>

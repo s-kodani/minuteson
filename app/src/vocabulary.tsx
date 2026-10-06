@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { useEffect, useState, type MutableRefObject } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { effectiveVocabulary, validVocabulary, type VocabularyEntry, type VocabularyStamp } from "./vocabulary-state";
@@ -64,7 +65,6 @@ export function VocabularyEditor({ meetingId, locked, stampRef }: {
   const currentPage = Math.min(page, Math.max(0, Math.ceil(items.length / 50) - 1));
   const count = effectiveVocabulary(common?.payload ?? [], items).length;
   const editor = <>
-    <p>用語・読み・補足を認識ヒントとして渡します。自動置換や精度向上の保証ではありません。編集は次回の新しい解析に反映し、実行中・同じ条件の再試行・過去の結果は変更しません。</p>
     {meetingId && <details className="vocabulary-info"><summary>共通用語の適用情報：有効 {common?.payload.filter((e) => e.enabled).length ?? "—"} 件 · この会議の適用候補 {count} 件</summary><p>共通用語は設定画面で編集できます。同じ表記は有効な会議別用語を優先し、無効な会議別用語は共通用語を除外しません。開始時に保存済みの両リストを固定します。</p><ul>{common?.payload.filter((e) => e.enabled).map((e) => <li key={e.id}>{e.term}{e.reading ? `（${e.reading}）` : ""}{e.note ? ` — ${e.note}` : ""}</li>)}</ul></details>}
     <div className="analysis-actions"><button type="button" className="small-secondary" disabled={disabled || items.length >= 500} onClick={() => { queue.edit((value) => [...value, { id: crypto.randomUUID(), term: "", reading: null, note: null, enabled: true }]); setPage(Math.floor(items.length / 50)); }}>用語を追加</button><button type="button" className="small-secondary" disabled={locked || loading || state.saving} onClick={() => void reload()}>用語を再読込</button><button type="button" className="small-secondary" disabled={disabled || state.saving || !state.dirty} onClick={() => void queue.retry().catch(() => {})}>{state.error ? "用語保存を再試行" : "用語を保存"}</button><span role="status">{loading ? "用語を読込中" : state.error ? "用語の保存に失敗" : state.saving ? "用語を保存中" : state.dirty ? "用語は未保存" : state.draft ? "用語は保存済み" : "用語を読込できていません"} · {items.length} / 500 件</span></div>
     {items.length === 0 && <p>登録用語はありません。登録は任意です。</p>}
@@ -78,5 +78,6 @@ export function VocabularyEditor({ meetingId, locked, stampRef }: {
     {items.length > 50 && <nav aria-label="用語のページ" className="transcript-pages"><button type="button" disabled={currentPage === 0 || locked} onClick={() => setPage(currentPage - 1)}>前へ</button><span>{currentPage + 1} / {Math.ceil(items.length / 50)}</span><button type="button" disabled={(currentPage + 1) * 50 >= items.length || locked} onClick={() => setPage(currentPage + 1)}>次へ</button></nav>}
     {(state.error || error) && <p className="action-error" role="alert">{state.error || error} 入力は保持しています。空欄・重複を修正して保存を再試行してください。競合時は入力を控えてから再読込してください。</p>}
   </>;
-  return meetingId ? <details className="analysis-settings"><summary>会議別用語（任意）</summary>{editor}</details> : <section className="analysis-card" aria-label="共通用語"><h2>共通用語</h2>{editor}</section>;
+  const help = <InfoPopover label={meetingId ? "会議の用語" : "共通用語"} details={<p>用語・読み・補足を認識ヒントとして渡します。自動置換や精度向上の保証ではありません。編集は次回の新しい解析に反映し、実行中・同じ条件の再試行・過去の結果は変更しません。共通用語は設定画面で編集できます。同じ表記は有効な会議別用語を優先し、無効な会議別用語は共通用語を除外しません。開始時に保存済みの両リストを固定します。</p>}>用語は自動置換ではなく認識ヒントです。編集は次回の新しい解析に反映し、実行中・同じ条件の再試行・過去の結果は変更しません。</InfoPopover>;
+  return meetingId ? <section><div className="heading-with-info"><h3>会議の用語</h3>{help}</div><details className="analysis-settings"><summary>会議別用語（任意）</summary>{editor}</details></section> : <section className="analysis-card" aria-label="共通用語"><div className="heading-with-info"><h2>共通用語</h2>{help}</div>{editor}</section>;
 }

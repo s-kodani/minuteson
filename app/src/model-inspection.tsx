@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { InfoPopover } from "./info-popover";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "./model-inspection-state";
 import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, profileName, type ModelApplicationPreview, type ModelProfileName, type ModelProfileView } from "./model-profile-state";
@@ -191,8 +192,8 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     catch (cause) { if (mounted.current) setError(`取消要求を送信できませんでした。処理終了を待ってください: ${String(cause)}`); }
   };
   return <section className="analysis-card model-inspection" aria-label="AIモデルの事前検査">
-    <h2>AIモデル</h2>
-    <p>手動取り込みの事前検査・管理領域へのコピー・CPU互換性確認と、標準／高精度へのモデル選択を利用できます。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・コピー・適用では起動しません。ダウンロードは開発中です。</p>
+    <div className="heading-with-info"><h2>AIモデル</h2><InfoPopover label="AIモデル" details={<p>手動取り込みの事前検査・管理領域へのコピー・CPU互換性確認と、標準／高精度へのモデル選択を利用できます。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・コピー・適用では起動しません。ダウンロードは開発中です。</p>}>モデルを手動取り込みし、互換性確認後に標準／高精度へ選択できます。検査・コピー・適用では実行ファイルを起動しません。ダウンロードは開発中です。</InfoPopover></div>
+    <p>AI処理・録音・取り込みを止めてから準備を開始してください。</p>
     <details className="analysis-settings"><summary>検査するフォルダーの準備方法</summary>
       <p>実行ファイルと、そのエンジン用のモデルを同じフォルダーへ置き、直下に <code>mon-model.json</code> を作成してください。ファイルのパスはフォルダー内の相対パスです。下記はmacOS Apple Silicon向けwhisper.cppの例です。版・ライセンス参照・ファイル名は実際の配布情報に合わせてください。対象Windowsの検証は保留中です。</p>
       <pre>{JSON.stringify({ schemaVersion: 1, engine: "whisper.cpp", engineVersion: "配布元の版", modelName: "モデル名", modelVersion: "モデルの版", quantization: null, licenseRef: "配布元のライセンス参照", target: "macos_aarch64", files: [{ relativePath: "whisper-cli", role: "executable", expectedSize: null, expectedHash: null }, { relativePath: "model.bin", role: "asr", expectedSize: null, expectedHash: null }] }, null, 2)}</pre>
@@ -215,9 +216,8 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>この検査結果は今回の読み取り時点の記録です。ファイルを変更した場合は再検査が必要です。この結果でAI処理を開始することはできません。コピーはOSのアプリデータ領域へ保存し、会議保存先と分離します。未完了の配置は自動削除しません。</p>
       <button type="button" className="secondary" disabled={busy || locked || recordingActive || !isTauri()} onClick={() => void place()}>管理領域へコピー</button>
     </div>}
-    <section aria-label="モデル配置記録"><h3>モデル配置記録</h3><button type="button" className="small-secondary" disabled={busy || locked || catalogLoading || !isTauri()} onClick={() => void loadPlacements()}>配置・構成記録を再読込</button>
+    <section aria-label="モデル配置記録"><div className="heading-with-info"><h3>モデル配置記録</h3><InfoPopover label="モデル配置記録" details={<p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>}>コピーと最後のCPU互換性試行の記録です。合成入力の成功は実会議の精度・速度を保証しません。バックアップにモデル本体は含まず、復元後は再準備が必要です。</InfoPopover></div><button type="button" className="small-secondary" disabled={busy || locked || catalogLoading || !isTauri()} onClick={() => void loadPlacements()}>配置・構成記録を再読込</button>
       {catalogLoading && <p role="status">配置とプロファイル構成を再読込しています。</p>}
-      <p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>
       {catalogError && <p className="action-error" role="alert">{catalogError}</p>}
       {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}>
         <strong>{entry.modelName}</strong> / {entry.modelVersion} · {entry.engine} / {entry.engineVersion}
@@ -231,8 +231,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
         </div>
       </li>)}</ul>}
     </section>
-    <section aria-label="プロファイル構成記録"><h3>プロファイル構成記録</h3>
-      <p>保存した管理モデルの選択を表示します。設定や最新の互換性記録との一致は、現在のファイル健全性・GPU互換性・AI準備完了を保証しません。会議の解析条件を手動変更した場合は不一致として表示し、再適用の確認時に現在の数値条件を維持します。</p>
+    <section aria-label="プロファイル構成記録"><div className="heading-with-info"><h3>プロファイル構成記録</h3><InfoPopover label="プロファイル構成記録" details={<p>保存した管理モデルの選択を表示します。設定や最新の互換性記録との一致は、現在のファイル健全性・GPU互換性・AI準備完了を保証しません。会議の解析条件を手動変更した場合は不一致として表示し、再適用の確認時に現在の数値条件を維持します。</p>}>保存したモデル選択を表示します。設定・試行記録との一致だけではAI準備完了を保証しません。再適用時は現在の数値条件を維持します。</InfoPopover></div>
       {!profiles ? <p>構成記録を読込できていません。配置・構成記録を再読込してください。</p> : profiles.map(view => <article key={view.name}><h4>{profileName(view.name)} · {view.id ? `構成版 #${view.profileVersion}` : "構成版なし"}</h4><p>{profileConfigurationLabel(view)}</p>{view.components.length > 0 && <ul>{view.components.map(component => <li key={component.engine}><strong>{component.engine}</strong> · {component.modelName} / {component.modelVersion}<p>{component.settingsMatch ? "保存設定と一致" : "現在の設定と不一致"} · {component.compatibilityCurrent ? "最新のCPU成功記録と一致" : "最新の互換性記録と不一致"}<br />配置ID: <code>{component.packageId}</code></p></li>)}</ul>}<p>不足: {(["whisper.cpp", "sherpa-onnx", "llama.cpp"] as const).filter(engine => !view.components.some(c => c.engine === engine)).join("、") || "なし（DB上の選択のみ）"}</p></article>)}
     </section>
     {deletionReview && <CommonModal ref={deletionDialog} open blocked={false} onDismiss={() => setDeletionReview(null)} restoreTarget={() => deletionOpener.current} className="model-application-dialog model-deletion-dialog" aria-labelledby="model-deletion-title">

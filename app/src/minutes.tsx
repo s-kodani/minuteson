@@ -1,7 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { InfoPopover } from "./info-popover";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { canRetryJob, jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { JobModelRebinding } from "./model-rebinding";
@@ -18,6 +19,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
 }) {
+  const profileSelectId = useId();
   const [queue] = useState(() => new DraftSaveQueue<MinutesPreferences, Preferences>(
     (_id, expectedLockVersion, payload) => invoke("save_minutes_preferences", { expectedLockVersion, payload }),
     (value) => structuredClone(value),
@@ -200,11 +202,10 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   const previous = versions?.versions.find((v) => v.id === versions.previousId);
   const currentSummary = versions?.versions.find((v) => v.id === current?.id);
   return <section className="analysis-card minutes-card" aria-label="議事録生成と候補確認">
-    <div className="card-head"><h2>議事録</h2><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>議事録を再読込</button></div>
-    <p>修正済みの文字起こし・話者を生成開始時に固定します。生成結果の正しさは未確認です。内容と根拠を照合してから採用してください。</p>
+    <div className="card-head"><div className="heading-with-info"><h2>議事録</h2><InfoPopover label="議事録">修正済みの文字起こし・話者を生成開始時に固定します。生成結果の正しさは未確認です。内容と根拠を照合してから採用してください。</InfoPopover></div><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>議事録を再読込</button></div>
     <details className="analysis-settings"><summary>議事録エンジン設定（端末内に保存）</summary>
       <p>導入済みの llama.cpp <code>llama-completion</code> と日本語対応GGUFの絶対パスを指定してください。対話用 llama-cli は使用しません。標準・高精度のモデル品質と性能は未検証です。</p>
-      <label>議事録プロファイル<select disabled={disabled} value={profile} onChange={(e) => setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></label>
+      <div className="info-field"><div className="heading-with-info"><label htmlFor={profileSelectId}>議事録プロファイル</label><InfoPopover label="議事録の標準／高精度">別々のモデルと数値設定を保存します。大きなモデルや入力上限はメモリ・処理時間に影響します。標準・高精度の品質と性能は未検証で、プロファイル名だけで精度を保証しません。</InfoPopover></div><select id={profileSelectId} disabled={disabled} value={profile} onChange={(e) => setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></div>
       {engine ? <fieldset disabled={disabled}>
         <label>llama-completion の絶対パス<input value={engine.executablePath} maxLength={4096} onChange={(e) => update({ executablePath: e.target.value })} /></label>
         <label>GGUFモデルの絶対パス<input value={engine.modelPath} maxLength={4096} onChange={(e) => update({ modelPath: e.target.value })} /></label>

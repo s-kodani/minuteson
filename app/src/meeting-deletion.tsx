@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -146,7 +147,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
   const needed = !!c.listing?.writeBlocked || !!p?.pending;
   return <>
     {(visible || active || needed || c.error || c.unknown || c.rpcBusy || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="会議削除の確認と中断対応">
-      <div className="card-head"><h2 id="deletion-panel-heading" tabIndex={-1}>会議削除の確認と中断対応</h2><details className="data-info"><summary aria-label="会議削除の説明">info</summary><p>現在の保存領域にある会議の管理音声・文字起こし・議事録・下書き・版・処理履歴を削除します。外部の元音声・書き出し・バックアップ、AIモデル、共通用語、旧保存先や保持コピーは消しません。媒体の安全消去ではありません。</p></details></div>
+      <div className="heading-with-info"><h2 id="deletion-panel-heading" tabIndex={-1}>会議削除の確認と中断対応</h2><InfoPopover label="会議削除" details={<p>現在の保存領域にある会議の管理音声・文字起こし・議事録・下書き・版・処理履歴を削除します。外部の元音声・書き出し・バックアップ、AIモデル、共通用語、旧保存先や保持コピーは消しません。媒体の安全消去ではありません。</p>}>会議の管理音声・文書・履歴を完全削除する操作です。実行前に対象と消失範囲を確認します。外部の原本やバックアップは対象外です。</InfoPopover></div>
       {!operation.deletionSupported && operation.connected && <p>この環境の会議削除操作は保留中です。</p>}
       {!operation.connected && <p role="alert">データ操作の状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>削除と書込停止の状態を再読込</button>

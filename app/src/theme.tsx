@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isTheme, resolveTheme, ThemeController } from "./theme-state";
+import { InfoPopover } from "./info-popover";
 
 const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -49,11 +50,9 @@ export function ThemeSelection({ locked = false, compact = false, describedBy }:
 }
 export function ThemeSettingsPanel({ locked }: { locked: boolean }) {
   const { controller, state } = useTheme();
-  const explanationId = useId();
   return <section className="status-card theme-settings" aria-label="表示設定">
-    <h2>表示設定</h2>
-    <p id={explanationId}>システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</p>
-    <ThemeSelection locked={locked} describedBy={explanationId} />
+    <div className="heading-with-info"><h2>表示設定</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
+    <ThemeSelection locked={locked} />
     {state.error && <p className="action-error" role="alert">{state.error}</p>}
     <div className="analysis-actions">
       {state.pendingTheme && !state.busy && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { InfoPopover } from "./info-popover";
 import { useEffect, useRef, useState } from "react";
 import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
 import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
@@ -160,7 +161,8 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
         <button type="button" className="small-secondary" onClick={clear} disabled={locked}>再生を閉じる</button>
       </div>
       <input type="range" aria-label="発言内の再生位置" min={0} max={info.totalFrames} step={Math.max(1, Math.floor(info.sampleRate / 10))} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={preparing || locked} />
-      <p>{info.trackKind === "mic" ? "マイク音声" : info.trackKind === "system" ? "PC音声" : "保存音声"} · 発言の元トラックを再生します。{info.alignment === "unverified" && "会議時間軸との同期精度は未検証です。"}</p>
+      <div className="heading-with-info"><span>{info.trackKind === "mic" ? "マイク音声" : info.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label="発言の音声再生">発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。</InfoPopover></div>
+      {info.alignment === "unverified" && <p>会議時間軸との同期精度は未検証です。</p>}
       {snapshot.buffering && <p role="status">音声を読み込んでいます。</p>}
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}
