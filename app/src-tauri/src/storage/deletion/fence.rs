@@ -232,6 +232,20 @@ pub(super) fn write_audio_prepared<'a>(
 }
 
 #[cfg(unix)]
+pub(super) fn write_audio_removal<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    receipt: &super::audio::intent::removal::Receipt,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    receipt.verify_saved(db, check)?;
+    receipt.verify_anchor(storage)?;
+    Writer::begin(storage, db, true)
+}
+
+#[cfg(unix)]
 pub(super) fn write_model_prepared<'a>(
     storage: &'a Storage,
     db: &'a Connection,

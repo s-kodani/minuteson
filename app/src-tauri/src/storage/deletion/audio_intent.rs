@@ -13,6 +13,9 @@ const MAX_CHUNKS: usize = MAX_BYTES.div_ceil(CHUNK);
 const INITIAL: &str = r#"{"version":1,"phase":"audioNotStarted"}"#;
 const KEPT: &str = r#"{"version":1,"phase":"audioKeptUnstarted"}"#;
 
+#[path = "audio_removal.rs"]
+pub(crate) mod removal;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Policy {
@@ -206,6 +209,14 @@ pub(crate) fn read(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
+    read_with_progress(db, operation, None, check)
+}
+fn read_with_progress(
+    db: &Connection,
+    operation: &str,
+    admitted: Option<(&str, &str)>,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
     super::cancel(check)?;
     if !super::uuid(operation) {
         return Err("音声削除の操作IDが不正です".into());
@@ -236,8 +247,15 @@ pub(crate) fn read(
     if meeting.as_deref() != Some(header.meeting_id.as_str())
         || kind != "delete_assets"
         || batch.is_some()
-        || !(state == "prepared" || kept)
-        || progress != if kept { KEPT } else { INITIAL }
+        || !match admitted {
+            None => (state == "prepared" || kept) && progress == if kept { KEPT } else { INITIAL },
+            Some((expected_state, expected_progress)) => {
+                matches!(expected_state, "installing" | "cleanup")
+                    && state == expected_state
+                    && progress == expected_progress
+                    && !kept
+            }
+        }
         || error.is_some()
         || created != consent
         || created < 0
@@ -315,7 +333,18 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
-    read(&db, operation, &|| false)?.verify_anchor(storage)?;
+    let state: String = db
+        .query_row(
+            "SELECT state FROM maintenance_operations WHERE id=?1",
+            params![operation],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if matches!(state.as_str(), "installing" | "cleanup") {
+        removal::Receipt::load(&db, operation, &|| false)?.verify_anchor(storage)?;
+    } else {
+        read(&db, operation, &|| false)?.verify_anchor(storage)?;
+    }
     if super::super::fence::other_pending(&db, Some(operation))? {
         return Err("別の未完了保守操作を先に確認してください".into());
     }

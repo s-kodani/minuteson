@@ -1,0 +1,611 @@
+//! Audio files only, retaining every directory, text and historical row.
+//! FilesRemoved is NOT operation completion: the durable write fence remains.
+use super::super::{audio, disposition, MeetingCensus};
+use super::{active, read_with_progress, Prepared};
+use crate::analysis_worker::data_maintenance::DataMaintenanceLease;
+use crate::storage::{
+    deletion::{
+        files::{Entry, MAX_ENTRIES},
+        fs::{Directory, Proof},
+    },
+    Storage,
+};
+use rusqlite::{params, Connection, TransactionBehavior};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Read,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Pending {
+    before: Proof,
+    staged: Option<Proof>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Phase {
+    RemovingAudio,
+    AudioFilesRemoved,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Progress {
+    version: u32,
+    phase: Phase,
+    census_hash: String,
+    next: usize,
+    pending: Option<Pending>,
+}
+impl Progress {
+    fn state(&self) -> &'static str {
+        if self.phase == Phase::AudioFilesRemoved {
+            "cleanup"
+        } else {
+            "installing"
+        }
+    }
+    fn encode(&self) -> Result<String, String> {
+        let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        if json.len() > 4096 {
+            return Err("音声削除の進捗が容量上限を超えています".into());
+        }
+        Ok(json)
+    }
+    fn validate(&self, saved: &Prepared, targets: &[Entry]) -> Result<(), String> {
+        if self.version != 2
+            || self.census_hash != saved.header.census_hash
+            || self.next > targets.len()
+            || (self.phase == Phase::AudioFilesRemoved
+                && (self.next != targets.len() || self.pending.is_some()))
+        {
+            return Err("音声削除の固定対象・進捗が不正です".into());
+        }
+        if let Some(p) = &self.pending {
+            let original = targets
+                .get(self.next)
+                .and_then(|t| t.proof.as_ref())
+                .ok_or("欠落音声を移動対象へ採用しません")?;
+            p.before.validate(false)?;
+            if &p.before != original {
+                return Err("移動前の音声実体が同意と一致しません".into());
+            }
+            if let Some(staged) = &p.staged {
+                staged.validate(false)?;
+                if !staged.matches_after_rename(&p.before) {
+                    return Err("予約音声の実体が不正です".into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Receipt {
+    saved: Prepared,
+    progress: Progress,
+    targets: Vec<Entry>,
+}
+fn targets(saved: &Prepared) -> Result<Vec<Entry>, String> {
+    saved
+        .snapshot
+        .manifest
+        .entries
+        .iter()
+        .filter(|e| !e.directory)
+        .filter_map(|e| match disposition(e, &saved.snapshot.records) {
+            Ok(d) if audio(&d) => Some(Ok(e.clone())),
+            Ok(_) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .collect()
+}
+impl Receipt {
+    pub(in crate::storage::deletion) fn load(
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        super::super::cancel(check)?;
+        let (state,json,len):(String,String,i64)=db.query_row("SELECT state,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '' END,length(CAST(progress_json AS BLOB)) FROM maintenance_operations WHERE id=?1",params![operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
+        if !(1..=4096).contains(&len) {
+            return Err("音声削除進捗の容量が不正です".into());
+        }
+        let progress: Progress = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        if progress.state() != state || progress.encode()? != json {
+            return Err("音声削除進捗が正規形式ではありません".into());
+        }
+        let saved = read_with_progress(db, operation, Some((&state, &json)), check)?;
+        let targets = targets(&saved)?;
+        progress.validate(&saved, &targets)?;
+        Ok(Self {
+            saved,
+            progress,
+            targets,
+        })
+    }
+    pub(in crate::storage::deletion) fn verify_saved(
+        &self,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if Self::load(db, self.saved.operation(), check)? != *self {
+            return Err("音声削除の保存進捗が変更されています".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage::deletion) fn verify_anchor(
+        &self,
+        storage: &Storage,
+    ) -> Result<(), String> {
+        self.saved.verify_anchor(storage)
+    }
+    pub(crate) fn files_removed(&self) -> bool {
+        self.progress.phase == Phase::AudioFilesRemoved
+    }
+    pub(crate) fn processed_files(&self) -> usize {
+        self.progress.next
+    }
+    fn reserved(&self, index: usize) -> String {
+        format!(".mon-delete-audio-{}-{index}", self.saved.operation())
+    }
+    fn reserved_path(&self, index: usize) -> String {
+        format!(
+            "{}/{}",
+            self.targets[index].path.rsplit_once('/').unwrap().0,
+            self.reserved(index)
+        )
+    }
+    fn metadata(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        self.verify_anchor(storage)?;
+        if crate::storage::deletion::fence::other_pending(db, Some(self.saved.operation()))?
+            || crate::storage::deletion::database::Scope::capture(
+                db,
+                self.saved.meeting(),
+                self.saved.operation(),
+                check,
+            )? != self.saved.snapshot.scope
+        {
+            return Err("保持する音声・文書・依存履歴が変更されています".into());
+        }
+        Ok(())
+    }
+    fn save(
+        &mut self,
+        storage: &Storage,
+        db: &Connection,
+        next: Progress,
+        lease: &DataMaintenanceLease,
+        check: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        active(lease, check)?;
+        self.verify_saved(db, check)?;
+        self.metadata(storage, db, check)?;
+        next.validate(&self.saved, &self.targets)?;
+        let valid = if next.next == self.progress.next + 1 {
+            next.phase == Phase::RemovingAudio
+                && next.pending.is_none()
+                && (self
+                    .targets
+                    .get(self.progress.next)
+                    .is_some_and(|e| e.proof.is_none())
+                    || self
+                        .progress
+                        .pending
+                        .as_ref()
+                        .is_some_and(|p| p.staged.is_some()))
+        } else if next.next == self.progress.next && next.phase == Phase::AudioFilesRemoved {
+            self.progress.phase == Phase::RemovingAudio
+                && next.next == self.targets.len()
+                && next.pending.is_none()
+                && self.progress.pending.is_none()
+        } else if next.next == self.progress.next && next.phase == Phase::RemovingAudio {
+            match (&self.progress.pending, &next.pending) {
+                (None, Some(p)) => p.staged.is_none(),
+                (Some(old), Some(p)) => {
+                    old.before == p.before && old.staged.is_none() && p.staged.is_some()
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if !valid
+            || next.version != self.progress.version
+            || next.census_hash != self.progress.census_hash
+        {
+            return Err("音声削除の進捗遷移が不正です".into());
+        }
+        let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        if tx.execute("UPDATE maintenance_operations SET state=?2,progress_json=?3,updated_at=max(updated_at,?4) WHERE id=?1 AND kind='delete_assets' AND state=?5 AND progress_json=?6",params![self.saved.operation(),next.state(),next.encode()?,crate::storage::now_ms()?,self.progress.state(),self.progress.encode()?]).map_err(|e|e.to_string())?!=1 { return Err("音声削除の進捗確定対象が変更されています".into()); }
+        active(lease, check)?;
+        self.verify_anchor(storage)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.progress = next;
+        Ok(())
+    }
+}
+
+// Compare the complete fixed tree, not only the next audio path. Only exact
+// journaled leaf moves may alter direct parent directory timestamps/size.
+fn verify_remaining(
+    storage: &Storage,
+    db: &Connection,
+    r: &Receipt,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    r.verify_saved(db, check)?;
+    r.metadata(storage, db, check)?;
+    let reserved = r
+        .progress
+        .pending
+        .as_ref()
+        .map(|_| r.reserved_path(r.progress.next));
+    let current = MeetingCensus::capture_removal_locked(
+        storage,
+        db,
+        r.saved.meeting(),
+        r.saved.operation(),
+        check,
+        reserved.as_deref(),
+        &[],
+    )?;
+    if current.scope() != &r.saved.snapshot.scope {
+        return Err("音声削除の保持範囲が変更されています".into());
+    }
+    let actual: BTreeMap<_, _> = current
+        .manifest()
+        .entries
+        .iter()
+        .map(|e| (e.path.clone(), e.clone()))
+        .collect();
+    let mut expected: BTreeMap<_, _> = r
+        .saved
+        .snapshot
+        .manifest
+        .entries
+        .iter()
+        .map(|e| (e.path.clone(), e.clone()))
+        .collect();
+    let mut touched = BTreeSet::new();
+    for (index, target) in r.targets.iter().enumerate() {
+        let staged_path = r.reserved_path(index);
+        let original = actual.get(&target.path).filter(|e| e.proof.is_some());
+        let staged = actual.get(&staged_path).filter(|e| e.proof.is_some());
+        let mut missing = target.clone();
+        missing.proof = None;
+        missing.sha256 = None;
+        missing.stage_hint = None;
+        let mut absent = || {
+            if missing.registered.is_some() {
+                expected.insert(target.path.clone(), missing.clone());
+            } else {
+                expected.remove(&target.path);
+            }
+        };
+        if index < r.progress.next || target.proof.is_none() {
+            if original.is_some() || staged.is_some() {
+                return Err("削除済み・欠落音声が再出現しています".into());
+            }
+            absent();
+        } else if index == r.progress.next {
+            if let Some(p) = &r.progress.pending {
+                if let Some(staged) = staged {
+                    let proof = staged.proof.as_ref().ok_or("予約音声の証拠がありません")?;
+                    if original.is_some()
+                        || !p
+                            .staged
+                            .as_ref()
+                            .map_or_else(|| proof.matches_after_rename(&p.before), |s| s == proof)
+                    {
+                        return Err("音声の予約実体・元パスが変更されています".into());
+                    }
+                    absent();
+                    let mut moved = target.clone();
+                    moved.path = staged_path.clone();
+                    moved.registered = None;
+                    moved.stage_hint = None;
+                    moved.proof = Some(proof.clone());
+                    expected.insert(staged_path, moved);
+                } else if original.is_some() && p.staged.is_none() {
+                    // Original exact proof and hash remain in expected.
+                } else if original.is_none() && p.staged.is_some() {
+                    absent(); // Unlink committed before cursor advancement.
+                } else {
+                    return Err("未確定の音声移動対象が消失・再出現しています".into());
+                }
+            }
+        }
+        if target.proof.is_some()
+            && (index < r.progress.next
+                || (index == r.progress.next && r.progress.pending.is_some()))
+        {
+            touched.insert(target.path.rsplit_once('/').unwrap().0.to_string());
+        }
+    }
+    for path in touched {
+        let original = expected.get_mut(&path).ok_or("音声の親観測がありません")?;
+        let live = actual.get(&path).ok_or("音声の親が消失しています")?;
+        if !original.directory
+            || !live.directory
+            || original.proof.as_ref().map(|p| &p.identity)
+                != live.proof.as_ref().map(|p| &p.identity)
+        {
+            return Err("音声の親フォルダーが置換されています".into());
+        }
+        original.proof = live.proof.clone();
+    }
+    if actual != expected {
+        return Err(
+            "音声削除の確認後に音声・保持ファイルが追加・変更・消失しました。対象を保持します"
+                .into(),
+        );
+    }
+    r.verify_anchor(storage)
+}
+fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, String> {
+    let root = storage.managed_anchor.directory_ref()?;
+    let meetings = root.child("meetings")?.ok_or("会議領域がありません")?;
+    let mut dir = meetings
+        .child(r.saved.meeting())?
+        .ok_or("対象会議領域がありません")?;
+    let mut relative = format!("meetings/{}", r.saved.meeting());
+    let root_entry = r
+        .saved
+        .snapshot
+        .manifest
+        .entries
+        .iter()
+        .find(|e| e.path == relative)
+        .ok_or("会議ルート観測がありません")?;
+    dir.verify_identity(
+        &root_entry
+            .proof
+            .as_ref()
+            .ok_or("会議ルート実体がありません")?
+            .identity,
+    )?;
+    let rest = path
+        .strip_prefix(&format!("{relative}/"))
+        .ok_or("会議外の音声パスです")?;
+    if let Some((parents, _)) = rest.rsplit_once('/') {
+        for component in parents.split('/') {
+            relative = format!("{relative}/{component}");
+            let e = r
+                .saved
+                .snapshot
+                .manifest
+                .entries
+                .iter()
+                .find(|e| e.path == relative)
+                .ok_or("音声親の観測がありません")?;
+            dir = dir.child(component)?.ok_or("音声の親がありません")?;
+            dir.verify_identity(&e.proof.as_ref().ok_or("音声親の実体がありません")?.identity)?;
+        }
+    }
+    Ok(dir)
+}
+fn inspect(
+    dir: &Directory,
+    name: &str,
+    target: &Entry,
+    proof: &Proof,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    super::super::cancel(check)?;
+    let mut file = dir.regular(name)?;
+    if Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != *proof {
+        return Err("音声の実体が変更されています".into());
+    }
+    let mut digest = Sha256::new();
+    let mut bytes = 0u64;
+    let mut buffer = vec![0u8; 128 * 1024];
+    loop {
+        super::super::cancel(check)?;
+        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        bytes = bytes.checked_add(n as u64).ok_or("音声容量が範囲外です")?;
+        if bytes > proof.size {
+            return Err("音声が検査中に拡張されました".into());
+        }
+        digest.update(&buffer[..n]);
+    }
+    dir.verify_file(name, &file)?;
+    if bytes != proof.size
+        || Proof::read(&file.metadata().map_err(|e| e.to_string())?)? != *proof
+        || target.sha256.as_deref() != Some(format!("{:x}", digest.finalize()).as_str())
+    {
+        return Err("音声内容・容量・実体が確認と一致しません".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn start(
+    storage: &Storage,
+    operation: &str,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Receipt, String> {
+    active(lease, check)?;
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let saved = super::read(&db, operation, &|| check() || lease.cancelled())?;
+    saved.verify_locked(storage, &db, lease, check)?;
+    let targets = targets(&saved)?;
+    // Renaming a registered file adds a missing original and a staged entry.
+    if saved.snapshot.manifest.entries.len() >= MAX_ENTRIES
+        && targets
+            .iter()
+            .any(|e| e.proof.is_some() && e.registered.is_some())
+    {
+        return Err("音声削除予約の観測容量を確保できません".into());
+    }
+    let progress = Progress {
+        version: 2,
+        phase: Phase::RemovingAudio,
+        census_hash: saved.header.census_hash.clone(),
+        next: 0,
+        pending: None,
+    };
+    let r = Receipt {
+        saved,
+        progress,
+        targets,
+    };
+    r.progress.validate(&r.saved, &r.targets)?;
+    let observed_paths: BTreeSet<_> = r
+        .saved
+        .snapshot
+        .manifest
+        .entries
+        .iter()
+        .map(|e| e.path.as_str())
+        .collect();
+    for index in 0..r.targets.len() {
+        active(lease, check)?;
+        let path = r.reserved_path(index);
+        if observed_paths.contains(path.as_str()) {
+            return Err("音声削除予約名が既に存在します".into());
+        }
+    }
+    let _writer = crate::storage::deletion::fence::write_audio_prepared(
+        storage, &db, &r.saved, lease, check,
+    )?;
+    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    r.saved.verify_saved(&tx, check)?;
+    r.saved.verify_locked(storage, &tx, lease, check)?;
+    if tx.execute("UPDATE maintenance_operations SET state='installing',progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND state='prepared' AND progress_json=?4",params![operation,r.progress.encode()?,crate::storage::now_ms()?,super::INITIAL]).map_err(|e|e.to_string())?!=1 {return Err("音声削除の開始状態が変更されています".into());}
+    active(lease, check)?;
+    r.verify_anchor(storage)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Receipt::load(&db, operation, check)
+}
+pub(crate) fn run(
+    storage: &Storage,
+    operation: &str,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Receipt, String> {
+    run_inner(storage, operation, lease, check, &|_| {})
+}
+fn run_inner(
+    storage: &Storage,
+    operation: &str,
+    lease: &DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<Receipt, String> {
+    active(lease, check)?;
+    let db = storage
+        .connection
+        .lock()
+        .map_err(|_| "DBロックを取得できません")?;
+    let mut r = Receipt::load(&db, operation, &|| check() || lease.cancelled())?;
+    let cancelled = || check() || lease.cancelled();
+    let _writer =
+        crate::storage::deletion::fence::write_audio_removal(storage, &db, &r, lease, &cancelled)?;
+    if r.files_removed() {
+        verify_remaining(storage, &db, &r, &cancelled)?;
+        return Ok(r);
+    }
+    while let Some(target) = r.targets.get(r.progress.next).cloned() {
+        active(lease, check)?;
+        verify_remaining(storage, &db, &r, &cancelled)?;
+        if let Some(before) = &target.proof {
+            let dir = parent(storage, &r, &target.path)?;
+            let name = target.path.rsplit('/').next().unwrap();
+            let reserved = r.reserved(r.progress.next);
+            if r.progress.pending.is_none() {
+                inspect(&dir, name, &target, before, &cancelled)?;
+                let mut next = r.progress.clone();
+                next.pending = Some(Pending {
+                    before: before.clone(),
+                    staged: None,
+                });
+                r.save(storage, &db, next, lease, check)?;
+                event("audioArmed");
+            }
+            let pending = r.progress.pending.clone().unwrap();
+            if pending.staged.is_none() {
+                if dir.optional_kind(name)?.is_some() {
+                    event("beforeAudioRename");
+                    active(lease, check)?;
+                    verify_remaining(storage, &db, &r, &cancelled)?;
+                    inspect(&dir, name, &target, &pending.before, &cancelled)?;
+                    r.metadata(storage, &db, &cancelled)?;
+                    active(lease, check)?;
+                    dir.rename_exclusive(name, &reserved)?;
+                    event("audioRenamed");
+                } else if dir.optional_kind(&reserved)?.is_none() {
+                    return Err("未確定音声が消失しています".into());
+                }
+                let staged = Proof::read(
+                    &dir.regular(&reserved)?
+                        .metadata()
+                        .map_err(|e| e.to_string())?,
+                )?;
+                if !staged.matches_after_rename(&pending.before) {
+                    return Err("移動した音声実体が一致しません。削除せず保持します".into());
+                }
+                inspect(&dir, &reserved, &target, &staged, &cancelled)?;
+                let mut next = r.progress.clone();
+                next.pending.as_mut().unwrap().staged = Some(staged);
+                r.save(storage, &db, next, lease, check)?;
+                event("audioStaged");
+            }
+            event("beforeAudioUnlink");
+            active(lease, check)?;
+            verify_remaining(storage, &db, &r, &cancelled)?;
+            let staged = r
+                .progress
+                .pending
+                .as_ref()
+                .unwrap()
+                .staged
+                .as_ref()
+                .unwrap();
+            if dir.optional_kind(&reserved)?.is_some() {
+                inspect(&dir, &reserved, &target, staged, &cancelled)?;
+                r.metadata(storage, &db, &cancelled)?;
+                active(lease, check)?;
+                dir.unlink_staged(&reserved, false, staged)?;
+            } else {
+                dir.sync()?;
+            }
+            event("audioUnlinked");
+        }
+        // Detect callback/external changes before accepting advancement.
+        verify_remaining(storage, &db, &r, &cancelled)?;
+        let mut next = r.progress.clone();
+        next.next += 1;
+        next.pending = None;
+        r.save(storage, &db, next, lease, check)?;
+        event("audioAdvanced");
+    }
+    event("beforeAudioFilesRemoved");
+    active(lease, check)?;
+    verify_remaining(storage, &db, &r, &cancelled)?;
+    let mut next = r.progress.clone();
+    next.phase = Phase::AudioFilesRemoved;
+    r.save(storage, &db, next, lease, check)?;
+    event("audioFilesRemoved");
+    verify_remaining(storage, &db, &r, &cancelled)?;
+    Ok(r)
+}
+
+#[cfg(test)]
+#[path = "audio_removal_tests.rs"]
+mod tests;
