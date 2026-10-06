@@ -3,7 +3,7 @@
 use super::super as intent;
 use super::super::super as models;
 use super::{active, Phase, Prepared, Progress, Receipt};
-use crate::storage::deletion::fs::Directory;
+use crate::storage::deletion::fs::{Directory, Identity};
 use crate::{analysis_worker::data_maintenance::DataMaintenanceLease, storage::Storage};
 use models::{Entry, Observation};
 use rusqlite::{params, Connection, TransactionBehavior};
@@ -33,12 +33,40 @@ impl Reference {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct CurrentRoot {
+    pub(super) storage_root: Identity,
+    pub(super) database: Identity,
+}
+impl CurrentRoot {
+    fn validate(&self) -> Result<(), String> {
+        self.storage_root.validate(true)?;
+        self.database.validate(false)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Plan {
     roots: Vec<String>,
     pub(super) observations: Vec<Observation>,
+    #[serde(
+        rename = "currentRoot",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(super) current_root: Option<CurrentRoot>,
 }
 impl Plan {
+    pub(super) fn identity(&self, saved: &Prepared) -> (Identity, Identity) {
+        match &self.current_root {
+            Some(root) => (root.storage_root.clone(), root.database.clone()),
+            None => (
+                saved.snapshot.storage_root.clone(),
+                saved.snapshot.database.clone(),
+            ),
+        }
+    }
     pub(super) fn original(saved: &Prepared) -> Self {
         let package = &saved.header.package_id;
         let observations = saved
@@ -58,9 +86,18 @@ impl Plan {
         Self {
             roots: vec![package.clone()],
             observations,
+            current_root: None,
         }
     }
     fn validate(&self, saved: &Prepared, roots: &[String]) -> Result<(), String> {
+        if let Some(root) = &self.current_root {
+            root.validate()?;
+            if (&root.storage_root, &root.database)
+                == (&saved.snapshot.storage_root, &saved.snapshot.database)
+            {
+                return Err("移動後のモデル再同意には現在の別実体を記録します".into());
+            }
+        }
         if self.roots != roots
             || roots.is_empty()
             || roots.len() > MAX_ROOTS
@@ -231,7 +268,7 @@ impl Record {
 }
 pub(in crate::storage::deletion::models) fn audit_source(json: &str) -> Result<String, String> {
     let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if record.version != 1
+    if !matches!(record.version, 1 | 2)
         || record.subtype != "modelDeletionReconfirmation"
         || record.encode()? != json
         || !uuid::Uuid::parse_str(&record.source_operation)
@@ -301,7 +338,7 @@ fn read_record(
         return Err("モデル再同意の固定記録を検証できません".into());
     }
     let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    if record.version != 1
+    if !matches!(record.version, 1 | 2)
         || record.subtype != "modelDeletionReconfirmation"
         || record.source_operation != saved.header.operation_id
         || record.source_hash != source_hash(saved)?
@@ -363,6 +400,7 @@ fn read_record(
     }
     let plan: Plan = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if serde_json::to_vec(&plan).map_err(|e| e.to_string())? != bytes
+        || (record.version == 2) != plan.current_root.is_some()
         || plan.observations.iter().any(|o| !o.entry.present)
         || (!record.include_unregistered && plan.observations.iter().any(|o| !o.entry.registered))
     {
@@ -402,6 +440,14 @@ pub(super) fn active_plan(
             return Err("モデル再同意の進捗・同意履歴の接続が不正です".into());
         }
         record.previous_progress.validate(saved, &plan)?;
+        if (next.current_root != plan.current_root
+            && (next.current_root.is_none() || record.previous_progress.phase != Phase::Completed))
+            || (record.version == 1 && next.current_root.is_some())
+        {
+            return Err(
+                "モデル再同意の保存先変更は完了済み範囲からの新しい同意に限定します".into(),
+            );
+        }
         let roots = review_roots(&plan, &record.previous_progress, &saved.header.operation_id)?;
         next.validate(saved, &roots)?;
         completed |= record.previous_progress.phase == Phase::Completed;
@@ -453,14 +499,18 @@ impl Review {
             .map(|o| o.entry.clone())
             .collect()
     }
-    fn verify(
+    pub(in crate::storage::deletion) fn verify(
         &self,
         storage: &Storage,
         db: &Connection,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         self.receipt.verify_saved(db)?;
-        self.receipt.metadata(storage, db)?;
+        self.receipt.metadata_review(storage, db)?;
+        let current = storage.managed_anchor.identity()?;
+        if self.plan.identity(&self.receipt.saved) != current {
+            return Err("モデル再同意の現在の保存先・DB実体が変わりました".into());
+        }
         let models = Directory::root(Path::new(&self.receipt.saved.header.models_root))?;
         models.verify_identity(&self.receipt.saved.snapshot.models_root)?;
         if inventory(&models, &self.receipt.saved, &self.plan.roots, check)?
@@ -484,13 +534,26 @@ pub(crate) fn review(
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
     let receipt = Receipt::load(&db, operation)?;
-    receipt.metadata(storage, &db)?;
+    receipt.metadata_review(storage, &db)?;
     let roots = review_roots(&receipt.plan, &receipt.progress, operation)?;
     let models = Directory::root(Path::new(&receipt.saved.header.models_root))?;
     models.verify_identity(&receipt.saved.snapshot.models_root)?;
+    let current = storage.managed_anchor.identity()?;
     let plan = Plan {
         observations: inventory(&models, &receipt.saved, &roots, &cancelled)?,
         roots,
+        current_root: if current
+            == (
+                receipt.saved.snapshot.storage_root.clone(),
+                receipt.saved.snapshot.database.clone(),
+            ) {
+            None
+        } else {
+            Some(CurrentRoot {
+                storage_root: current.0,
+                database: current.1,
+            })
+        },
     };
     plan.validate(&receipt.saved, &plan.roots)?;
     let evidence = serde_json::to_vec(&(source_hash(&receipt.saved)?, &receipt.progress, &plan))
@@ -552,7 +615,11 @@ fn accept_inner(
         return Err("モデル再同意の対象証拠が容量上限を超えています".into());
     }
     let record = Record {
-        version: 1,
+        version: if review.plan.current_root.is_some() {
+            2
+        } else {
+            1
+        },
         subtype: "modelDeletionReconfirmation".into(),
         source_operation: old.saved.header.operation_id.clone(),
         source_hash: source_hash(&old.saved)?,
@@ -623,7 +690,9 @@ fn accept_inner(
     // Completed sources retain their SQL completed state. The v3 residual
     // cursor is conservatively fenced; no original fixed evidence is changed.
     storage.deletion_fence.arm(&db)?;
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, old, lease)?;
+    let _writer = crate::storage::deletion::fence::write_model_reconfirmation(
+        storage, &db, review, old, lease, &cancelled,
+    )?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let updated: i64 = tx
@@ -667,7 +736,7 @@ fn accept_inner(
     Ok(saved)
 }
 #[cfg(test)]
-pub(in crate::storage::deletion::models) fn accept_observed(
+pub(crate) fn accept_observed(
     storage: &Storage,
     review: &Review,
     include_unregistered: bool,

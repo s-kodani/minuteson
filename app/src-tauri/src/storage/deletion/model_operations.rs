@@ -212,14 +212,22 @@ fn load(storage: &Storage, root: &Path, operation: &str) -> Result<Target, Strin
         Target::Files(r) => r.confirmed(),
         _ => unreachable!(),
     };
-    if saved.models_root() != root
-        || storage.managed_anchor.identity()?
-            != (
-                saved.snapshot().storage_root.clone(),
-                saved.snapshot().database.clone(),
-            )
-    {
+    if saved.models_root() != root {
         return Err("モデル削除の会議DB・ネイティブモデル領域と保存記録が一致しません".into());
+    }
+    match &target {
+        Target::Files(r) => r.verify_review_anchor(storage, &db)?,
+        Target::Unstarted(p) | Target::Kept(p) => {
+            if storage.managed_anchor.identity()?
+                != (
+                    p.snapshot().storage_root.clone(),
+                    p.snapshot().database.clone(),
+                )
+            {
+                return Err("未開始モデル削除の保存先・DB実体が一致しません".into());
+            }
+        }
+        _ => unreachable!(),
     }
     Ok(target)
 }

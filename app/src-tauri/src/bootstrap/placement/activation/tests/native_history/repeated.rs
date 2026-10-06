@@ -14,7 +14,7 @@ fn target(f: &NativeFixture) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
-fn select_current(b: &Bootstrap, storage: &Storage, target: &Path) -> serde_json::Value {
+pub(super) fn select_current(b: &Bootstrap, storage: &Storage, target: &Path) -> serde_json::Value {
     let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
     let operation = Uuid::new_v4().to_string();
     b.begin_move(

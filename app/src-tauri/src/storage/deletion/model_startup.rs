@@ -84,15 +84,7 @@ pub(in crate::storage) fn inspect(
                 return Ok(None);
             }
             let receipt = removal::Receipt::load(db, &operation)?;
-            let snapshot = receipt.confirmed().snapshot();
-            if !anchor.matches_history_root(
-                db,
-                &operation,
-                &snapshot.storage_root,
-                &snapshot.database,
-            )? {
-                return Err("モデル削除記録の保存領域・DB実体が一致しません".into());
-            }
+            receipt.verify_history_anchor(db, anchor)?;
             // SQL completed is immutable even while a newly accepted v3 plan
             // is removing. The persistent unfinished fence already covers it.
             if !receipt.completed() {

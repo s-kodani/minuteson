@@ -9,7 +9,7 @@ use crate::{
 };
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::atomic::Ordering};
 
 #[path = "model_renewal.rs"]
 pub(crate) mod renewal;
@@ -195,7 +195,47 @@ impl Receipt {
         &self,
         storage: &Storage,
     ) -> Result<(), String> {
-        self.saved.verify_anchor(storage)
+        if storage.retired.load(Ordering::Acquire)
+            || storage.maintenance.load(Ordering::Acquire)
+            || storage.managed_anchor.identity()? != self.plan.identity(&self.saved)
+        {
+            return Err("モデル削除の現在の同意・保存先・DB実体が一致しません".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage::deletion) fn verify_review_anchor(
+        &self,
+        storage: &Storage,
+        db: &Connection,
+    ) -> Result<(), String> {
+        if self.verify_anchor(storage).is_ok() {
+            return Ok(());
+        }
+        let identity = self.plan.identity(&self.saved);
+        if storage.retired.load(Ordering::Acquire)
+            || storage.maintenance.load(Ordering::Acquire)
+            || !self.completed()
+            || !storage.managed_anchor.matches_model_reconfirmation_root(
+                db,
+                self.operation(),
+                &identity.0,
+                &identity.1,
+            )?
+        {
+            return Err("モデル削除の再確認用の所有対応が一致しません".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage::deletion) fn verify_history_anchor(
+        &self,
+        db: &Connection,
+        anchor: &crate::storage::deletion::fs::RootAnchor,
+    ) -> Result<(), String> {
+        let identity = self.plan.identity(&self.saved);
+        if !anchor.matches_history_root(db, self.operation(), &identity.0, &identity.1)? {
+            return Err("モデル削除の有効な同意と保存領域が一致しません".into());
+        }
+        Ok(())
     }
     pub(crate) fn completed(&self) -> bool {
         self.progress.phase == Phase::Completed
@@ -209,6 +249,13 @@ impl Receipt {
     }
     fn metadata(&self, storage: &Storage, db: &Connection) -> Result<(), String> {
         self.verify_anchor(storage)?;
+        self.metadata_common(storage, db)
+    }
+    fn metadata_review(&self, storage: &Storage, db: &Connection) -> Result<(), String> {
+        self.verify_review_anchor(storage, db)?;
+        self.metadata_common(storage, db)
+    }
+    fn metadata_common(&self, storage: &Storage, db: &Connection) -> Result<(), String> {
         // Cold startup deliberately leaves unrelated stale SQL work unchanged.
         // Only previously completed sources may use this lane; all public
         // callers still require the actual active shared maintenance lease.

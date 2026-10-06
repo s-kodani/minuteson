@@ -131,6 +131,27 @@ impl Aliases {
         }
         self.matches_root(db, operation, root, database, current)
     }
+    pub(in crate::storage::deletion) fn matches_model_reconfirmation_root(
+        &self,
+        db: &Connection,
+        operation: &str,
+        root: &fs::Identity,
+        database: &fs::Identity,
+        current: &(fs::Identity, fs::Identity),
+    ) -> Result<bool, String> {
+        let Some(record) = self.records.get(operation) else {
+            return Ok(false);
+        };
+        if !self.cold
+            || record.immutable_hash.is_none()
+            || record.kind != "delete_assets"
+            || record.state != "completed"
+            || record.validation != "completedModel"
+        {
+            return Ok(false);
+        }
+        self.matches_root(db, operation, root, database, current)
+    }
     pub(in crate::storage::deletion) fn directory(
         &self,
         db: &Connection,
@@ -496,6 +517,25 @@ pub(crate) fn synthetic_meeting_reconfirmation_records(
         .collect::<Result<_, _>>()
         .unwrap();
     rows
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_model_reconfirmation_records(
+    storage: &crate::storage::Storage,
+) -> Vec<(String, String, String, i64)> {
+    let db = storage.connection.lock().unwrap();
+    let rows: Vec<(String, String, i64)> = db.prepare("SELECT id,target_manifest_json,consent_at FROM maintenance_operations WHERE kind='delete_assets' AND progress_json='{\"modelReconfirmationRecorded\":true}' ORDER BY created_at,id").unwrap().query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    rows.into_iter().map(|(id, record, consent)| {
+        let chunks: Vec<String> = db.prepare("SELECT identity_json FROM maintenance_paths WHERE operation_id=?1 ORDER BY relative_path").unwrap().query_map([&id], |r| r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+        let mut bytes = Vec::new();
+        for chunk in chunks {
+            let value: serde_json::Value = serde_json::from_str(&chunk).unwrap();
+            for part in value["data"].as_str().unwrap().as_bytes().chunks_exact(2) {
+                bytes.push(u8::from_str_radix(std::str::from_utf8(part).unwrap(), 16).unwrap());
+            }
+        }
+        (id, record, String::from_utf8(bytes).unwrap(), consent)
+    }).collect()
 }
 
 #[cfg(test)]

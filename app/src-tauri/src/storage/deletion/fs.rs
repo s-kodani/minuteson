@@ -558,6 +558,27 @@ impl RootAnchor {
         let _ = (db, operation);
         Ok(false)
     }
+    // Only a typed completed model source can capture a NEW review. This is
+    // never consulted by the removal writer or an unlink verification.
+    pub(super) fn matches_model_reconfirmation_root(
+        &self,
+        db: &rusqlite::Connection,
+        operation: &str,
+        root: &Identity,
+        database: &Identity,
+    ) -> Result<bool, String> {
+        let current = self.identity()?;
+        if current == (root.clone(), database.clone()) {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(history) = &self.inspection_history {
+            return history
+                .matches_model_reconfirmation_root(db, operation, root, database, &current);
+        }
+        let _ = (db, operation);
+        Ok(false)
+    }
     // Source-side inheritance is derived from this live admitted anchor and
     // the held native snapshot's rows; saved JSON cannot construct it.
     #[cfg(target_os = "macos")]

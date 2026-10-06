@@ -258,6 +258,28 @@ pub(super) fn write_model_prepared<'a>(
 }
 
 #[cfg(unix)]
+pub(super) fn write_model_reconfirmation<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    review: &super::models::intent::removal::renewal::Review,
+    confirmed: &super::models::intent::removal::Receipt,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+    check: &impl Fn() -> bool,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    confirmed.verify_saved(db)?;
+    review.verify(storage, db, check)?;
+    let discovered = super::startup::contains(db, confirmed.operation())?;
+    let cold_pending =
+        storage.deletion_fence.resume_restart_required() && storage.deletion_fence.pending();
+    Writer::begin(
+        storage,
+        db,
+        !confirmed.completed() || discovered || cold_pending,
+    )
+}
+
+#[cfg(unix)]
 pub(super) fn write_model_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,

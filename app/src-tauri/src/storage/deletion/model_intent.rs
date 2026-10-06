@@ -328,7 +328,7 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
         )
         .map_err(|e| e.to_string())?;
     if matches!(state.as_str(), "installing" | "completed") {
-        removal::Receipt::load(&db, operation)?.verify_anchor(storage)?;
+        removal::Receipt::load(&db, operation)?.verify_review_anchor(storage, &db)?;
     } else {
         read(&db, operation)?.verify_anchor(storage)?;
     }
