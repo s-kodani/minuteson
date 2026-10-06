@@ -3,9 +3,9 @@
 //! Cold-start admission is qualified by the selected bootstrap's live owner.
 //! Fresh-consent resolution and repeated moves remain required before cutover.
 use super::{
-    check, database, fs, intent, operation_row, paths, row_hash, startup, BoundDirectory,
-    Destination, HistoricalDirectory, HistoricalRoot, Record, Source, MAX_BYTES, MAX_OPERATIONS,
-    MAX_PATHS, MAX_ROOTS_PER_RECORD,
+    check, database, fs, operation_row, paths, row_hash, startup, BoundDirectory, Destination,
+    HistoricalDirectory, HistoricalRoot, Record, Source, MAX_BYTES, MAX_OPERATIONS, MAX_PATHS,
+    MAX_ROOTS_PER_RECORD,
 };
 use crate::{
     bootstrap::placement::Placement, storage::backup::relocation::control::ControlHandoff,
@@ -422,17 +422,12 @@ pub(crate) fn inspect(
         check(cancelled)?;
         if record.state == "recovered" {
             match record.validation.as_str() {
-                "keptMeeting" => {
-                    let saved = intent::read_kept_database(&db, &record.operation_id, cancelled)?;
-                    if !anchor.matches_history_root(
-                        &db,
-                        &record.operation_id,
-                        &saved.manifest().root,
-                        &saved.manifest().database,
-                    )? {
-                        return Err("保持した会議削除履歴の実体が一致しません".into());
-                    }
-                }
+                "keptMeeting" => super::super::audio_supersession::inspect_kept_meeting(
+                    &db,
+                    &anchor,
+                    &record.operation_id,
+                    cancelled,
+                )?,
                 "keptAudio" => super::super::audio_supersession::inspect_kept(
                     &db,
                     &anchor,
@@ -619,10 +614,22 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
 
 #[cfg(test)]
 pub(crate) fn synthetic_keep_meeting(storage: &crate::storage::Storage, meeting: &str) -> String {
+    let lease = crate::analysis_worker::AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
     let census = super::super::files::Census::capture(storage, meeting, &|| false).unwrap();
     let operation = uuid::Uuid::new_v4().to_string();
-    let prepared = intent::prepare(storage, &operation, &census, &|| false).unwrap();
-    intent::keep_unstarted(storage, &prepared, &|| false).unwrap();
+    super::super::intent::prepare(storage, &operation, &census, &|| false).unwrap();
+    let mut pending =
+        super::super::operations::Prepared::pending(storage, &operation, &|| false).unwrap();
+    assert!(
+        pending
+            .keep(storage, &lease, &pending.preview().confirmation_id, &|| {
+                false
+            })
+            .unwrap()
+            .retained
+    );
     operation
 }
 

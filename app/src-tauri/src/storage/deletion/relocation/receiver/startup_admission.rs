@@ -336,17 +336,12 @@ pub(in crate::storage) fn admitted_history(
     db.verify()?;
     for record in &source.records {
         match record.validation.as_str() {
-            "keptMeeting" => {
-                let saved = intent::read_kept_database(&db, &record.operation_id, &|| false)?;
-                if !anchor.matches_history_root(
-                    &db,
-                    &record.operation_id,
-                    &saved.manifest().root,
-                    &saved.manifest().database,
-                )? {
-                    return Err("保持した会議削除の元実体が一致しません".into());
-                }
-            }
+            "keptMeeting" => super::super::super::audio_supersession::inspect_kept_meeting(
+                &db,
+                &anchor,
+                &record.operation_id,
+                &|| false,
+            )?,
             "keptAudio" => super::super::super::audio_supersession::inspect_kept(
                 &db,
                 &anchor,

@@ -505,7 +505,6 @@ pub(super) fn read_database(
 ) -> Result<Prepared, String> {
     read_state(db, operation, ReadMode::Database, check)
 }
-#[cfg(target_os = "macos")]
 pub(super) fn read_kept_database(
     db: &Connection,
     operation: &str,
@@ -526,13 +525,27 @@ fn read_state(
     mode: ReadMode,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
+    read_frame(db, operation, mode, None, check)
+}
+// Shared metadata reader. A detached kept record is admitted only by an exact
+// full-deletion proof, never by the ordinary Prepared/Database modes.
+fn read_frame(
+    db: &Connection,
+    operation: &str,
+    mode: ReadMode,
+    supersession: Option<&super::audio_supersession::Proof>,
+    check: &dyn Fn() -> bool,
+) -> Result<Prepared, String> {
+    let check = &|| check();
     cancel(check)?;
     if !uuid(operation) {
         return Err("削除操作の識別子が不正です".into());
     }
-    let (meeting, json, expected_hash, consent, state, progress, created, updated): (Option<String>,String,String,Option<i64>,String,String,i64,i64) = db.query_row(
-        "SELECT meeting_id,target_manifest_json,target_hash,consent_at,state,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'",
+    let (meeting, json, expected_hash, consent, state, progress, created, updated): (Option<String>,Option<String>,String,Option<i64>,String,Option<String>,i64,i64) = db.query_row(
+        "SELECT meeting_id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,target_hash,consent_at,state,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'",
         params![operation], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e| e.to_string())?;
+    let json = json.ok_or("削除確認記録の容量上限を超えています")?;
+    let progress = progress.ok_or("削除進捗の容量上限を超えています")?;
     if json.len() > MAX_INTENT
         || hash(json.as_bytes()) != expected_hash
         || consent.is_none_or(|s| s < 0)
@@ -549,6 +562,10 @@ fn read_state(
         || created < 0
         || updated < created
         || consent != Some(created)
+        || (supersession.is_some()
+            && (!matches!(mode, ReadMode::Kept)
+                || state != "recovered"
+                || progress != KEPT_PROGRESS))
     {
         return Err("未開始の削除確認記録を検証できません".into());
     }
@@ -557,8 +574,16 @@ fn read_state(
     if intent.file_header.version != 1
         || !intent.file_header.reservation_roots.is_empty()
         || encode(&intent, MAX_INTENT)? != json
-        || (meeting.as_deref() != Some(intent.scope.meeting_id.as_str())
-            && !(matches!(mode, ReadMode::Database) && meeting.is_none()))
+        || !match supersession {
+            Some(proof) => {
+                meeting.is_none()
+                    && proof.authorizes_kept_meeting(operation, &intent.scope.meeting_id)
+            }
+            None => {
+                meeting.as_deref() == Some(intent.scope.meeting_id.as_str())
+                    || (matches!(mode, ReadMode::Database) && meeting.is_none())
+            }
+        }
     {
         return Err("削除の対象会議・固定確認記録が一致しません".into());
     }
@@ -571,6 +596,34 @@ fn read_state(
         manifest,
         consent_at: consent.unwrap(),
     })
+}
+pub(super) fn validate_kept_superseded(
+    db: &Connection,
+    operation: &str,
+    proof: &super::audio_supersession::Proof,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let saved = read_frame(db, operation, ReadMode::Kept, Some(proof), check)?;
+    let (batch, error): (Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT restore_batch_id,error_code FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if batch.is_some()
+        || error.is_some()
+        || !proof.matches_root(
+            db,
+            operation,
+            &saved.scope().meeting_id,
+            &saved.manifest().root,
+            &saved.manifest().database,
+        )?
+    {
+        return Err("引き継ぐ保持会議の状態・保存領域が一致しません".into());
+    }
+    cancel(check)
 }
 fn read_paths(
     db: &Connection,

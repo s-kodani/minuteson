@@ -205,7 +205,7 @@ pub(super) fn completed_attention(
     let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     let mut attention = Vec::new();
     if present {
-        let mut q = db.prepare("SELECT id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json ELSE '{}' END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '{}' END FROM maintenance_operations WHERE kind='delete_meeting' AND state='completed' ORDER BY created_at,id LIMIT 10001").map_err(|e| e.to_string())?;
+        let mut q = db.prepare("SELECT id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json ELSE '{}' END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '{}' END,state FROM maintenance_operations WHERE kind='delete_meeting' AND state IN ('completed','recovered') ORDER BY created_at,id LIMIT 10001").map_err(|e| e.to_string())?;
         let mut rows = q.query([]).map_err(|e| e.to_string())?;
         let mut count = 0;
         // Cache only within this locked, synchronous startup scan. A later
@@ -215,7 +215,8 @@ pub(super) fn completed_attention(
             count += 1;
             if count > MAX_COMPLETED {
                 return Err(
-                    "完了済み削除履歴が起動時検査の上限を超えています。対象を保持します".into(),
+                    "完了・保持した会議削除履歴が起動時検査の上限を超えています。対象を保持します"
+                        .into(),
                 );
             }
             let (operation, json, progress): (String, String, String) = (
@@ -229,6 +230,16 @@ pub(super) fn completed_attention(
             let result = (|| -> Result<Option<&str>, String> {
                 if json.len() > 65536 || progress.len() > 4096 {
                     return Err("削除履歴が容量上限を超えています".into());
+                }
+                let state: String = row.get(3).map_err(|e| e.to_string())?;
+                if state == "recovered" {
+                    super::audio_supersession::inspect_kept_meeting(
+                        db,
+                        anchor,
+                        &operation,
+                        &|| false,
+                    )?;
+                    return Ok(None);
                 }
                 if progress == "{\"confirmationRecorded\":true}" {
                     let parent = renewal::audit_source(&json)?;

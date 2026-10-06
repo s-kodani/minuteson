@@ -2,7 +2,9 @@
 //! evidence, not a deletion permit or a destination-root admission. In
 //! particular, it is deliberately not Deserialize: saved JSON cannot recreate
 //! the typed source validation performed while the native write fence is held.
-use super::{database, fs, intent, startup};
+#[cfg(test)]
+use super::intent;
+use super::{database, fs, startup};
 use crate::storage::Storage;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -202,15 +204,12 @@ fn validate_kept(
 ) -> Result<&'static str, String> {
     let operation = &row.1;
     if row.3 == "delete_meeting" {
-        let saved = intent::read_kept_database(db, operation, cancelled)?;
-        if !storage.managed_anchor.matches_history_root(
+        super::audio_supersession::inspect_kept_meeting(
             db,
+            &storage.managed_anchor,
             operation,
-            &saved.manifest().root,
-            &saved.manifest().database,
-        )? {
-            return Err("保持した会議削除履歴の保存先・DB実体が一致しません".into());
-        }
+            cancelled,
+        )?;
         return Ok("keptMeeting");
     }
     let routing: serde_json::Value = serde_json::from_str(&row.6).map_err(|e| e.to_string())?;

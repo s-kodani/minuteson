@@ -210,6 +210,7 @@ impl NativeFixture {
 mod audio_reconfirmation;
 mod audio_remaining_relocation;
 mod kept_audio_supersession;
+mod kept_meeting_supersession;
 mod model_reconfirmation;
 mod reconfirmation;
 mod repeated;

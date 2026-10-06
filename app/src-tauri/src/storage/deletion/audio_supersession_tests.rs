@@ -13,6 +13,9 @@ use std::{cell::Cell, path::PathBuf};
 #[path = "kept_audio_supersession_tests.rs"]
 mod kept_history;
 
+#[path = "kept_meeting_supersession_tests.rs"]
+mod kept_meeting;
+
 struct Fixture {
     base: tempfile::TempDir,
     storage: Storage,
