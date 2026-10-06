@@ -19,7 +19,7 @@ pub(crate) mod models;
 #[cfg(unix)]
 pub(crate) mod operations;
 #[cfg(target_os = "macos")]
-pub(in crate::storage) mod relocation;
+pub(crate) mod relocation;
 #[cfg(unix)]
 mod removal;
 #[cfg(unix)]

@@ -378,6 +378,26 @@ impl Placement<'_> {
 }
 
 // Read actual owned installed evidence, never a deserialized success receipt.
+impl Placement<'_> {
+    pub(crate) fn inspect_deletion_handoff(
+        &self,
+        handoff: &ControlHandoff<'_, '_>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<crate::storage::deletion::relocation::receiver::Report, String> {
+        handoff.verify(cancelled)?;
+        self.verify(handoff.snapshot(), cancelled)?;
+        let (control, hash, _) = installed_control(self)?;
+        let report = crate::storage::deletion::relocation::receiver::inspect(
+            handoff, self, &control, &hash, cancelled,
+        )?;
+        let (after, after_hash, _) = installed_control(self)?;
+        if control != after || hash != after_hash {
+            return Err("削除履歴の検査中に配置済み制御記録が変更されています".into());
+        }
+        Ok(report)
+    }
+}
+
 pub(super) fn installed_control(p: &Placement<'_>) -> Result<(String, String, Identity), String> {
     let local = Local::open(p, false)?.ok_or("移行先の履歴台帳が欠落しています")?;
     let saved = local.saved()?;

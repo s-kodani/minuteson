@@ -84,9 +84,13 @@ pub(in crate::storage) fn inspect(
                 return Ok(None);
             }
             let receipt = removal::Receipt::load(db, &operation)?;
-            let (storage_root, database) = anchor.identity()?;
             let snapshot = receipt.confirmed().snapshot();
-            if snapshot.storage_root != storage_root || snapshot.database != database {
+            if !anchor.matches_history_root(
+                db,
+                &operation,
+                &snapshot.storage_root,
+                &snapshot.database,
+            )? {
                 return Err("モデル削除記録の保存領域・DB実体が一致しません".into());
             }
             // SQL completed is immutable even while a newly accepted v3 plan

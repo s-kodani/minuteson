@@ -64,16 +64,17 @@ pub(super) fn verify_available_state(
 // Presence/identity only, not a body scan or an execution permission. Text
 // artifacts and later minutes jobs may change normally after completion.
 pub(super) fn absent(
+    db: &Connection,
     anchor: &RootAnchor,
     r: &Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<bool, String> {
-    if anchor.identity()?
-        != (
-            r.saved.snapshot.manifest.root.clone(),
-            r.saved.snapshot.manifest.database.clone(),
-        )
-    {
+    if !anchor.matches_history_root(
+        db,
+        r.saved.operation(),
+        &r.saved.snapshot.manifest.root,
+        &r.saved.snapshot.manifest.database,
+    )? {
         return Err("音声削除記録の保存領域・DB実体が一致しません".into());
     }
     let Some(meetings) = anchor.directory_ref()?.child("meetings")? else {
@@ -94,7 +95,7 @@ pub(super) fn absent(
             .find(|e| e.path == prefix)
             .and_then(|e| e.proof.as_ref())
             .ok_or("会議ルートの確認実体がありません")?;
-        dir.verify_identity(&root.identity)?;
+        anchor.verify_history_directory(db, r.saved.operation(), &prefix, &dir, &root.identity)?;
         let rest = target
             .path
             .strip_prefix(&format!("{prefix}/"))
@@ -116,7 +117,13 @@ pub(super) fn absent(
                 .find(|e| e.path == prefix)
                 .and_then(|e| e.proof.as_ref())
                 .ok_or("音声の親を別の実体として採用しません")?;
-            child.verify_identity(&expected.identity)?;
+            anchor.verify_history_directory(
+                db,
+                r.saved.operation(),
+                &prefix,
+                &child,
+                &expected.identity,
+            )?;
             dir = child;
         }
         if !missing
@@ -138,15 +145,15 @@ pub(in crate::storage::deletion) fn inspect_one(
     let checked = (|| {
         let r = Receipt::load(db, operation, &|| false)?;
         verify_available_state(db, &r, &|| false)?;
-        if anchor.identity()?
-            != (
-                r.saved.snapshot.manifest.root.clone(),
-                r.saved.snapshot.manifest.database.clone(),
-            )
-        {
+        if !anchor.matches_history_root(
+            db,
+            operation,
+            &r.saved.snapshot.manifest.root,
+            &r.saved.snapshot.manifest.database,
+        )? {
             return Err("音声削除記録の保存領域が一致しません".to_string());
         }
-        match absent(anchor, &r, &|| false) {
+        match absent(db, anchor, &r, &|| false) {
             Ok(true) => Ok(None),
             Ok(false) => Ok(Some("audio_completed_scope_reappeared")),
             Err(_) => Ok(Some("audio_completed_scope_uninspectable")),
@@ -233,7 +240,7 @@ pub(in crate::storage) fn backup_deleted(
         }
         let receipt = Receipt::load(db, &id, check)?;
         verify_available_state(db, &receipt, check)?;
-        if !absent(&storage.managed_anchor, &receipt, check)? {
+        if !absent(db, &storage.managed_anchor, &receipt, check)? {
             return Err(
                 "削除済み音声が再出現しています。バックアップから黙って除外しません".into(),
             );
@@ -268,7 +275,7 @@ fn finish_inner(
     if r.completed() {
         r.verify_anchor(storage)?;
         verify_available_state(&db, &r, &cancelled)?;
-        if !absent(&storage.managed_anchor, &r, &cancelled)? {
+        if !absent(&db, &storage.managed_anchor, &r, &cancelled)? {
             return Err("削除済み音声が再出現しています。確認を維持します".into());
         }
         if crate::storage::deletion::startup::contains(&db, operation)? {

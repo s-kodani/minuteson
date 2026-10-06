@@ -9,6 +9,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{fs::Metadata, path::PathBuf};
 
+pub(crate) mod receiver;
+
 const MAX_OPERATIONS: usize = 10_000;
 const MAX_PATHS: usize = 200_000;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -86,6 +88,29 @@ type PathRow = (
     Option<String>,
     Option<String>,
 );
+fn operation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
+    ))
+}
+fn row_hash(row: &OperationRow) -> Result<String, String> {
+    let mut h = Sha256::new();
+    h.update(b"mon/relocation-deletion-row/v1\0");
+    frame(&mut h, row)?;
+    Ok(format!("{:x}", h.finalize()))
+}
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
         Err("削除履歴の移動準備を取り消しました。元の同意・対象は保持します".into())
@@ -151,12 +176,15 @@ fn validate_kept(
     match routing["subtype"].as_str() {
         Some("audioOnlyDeletion") => {
             super::audio::intent::read(db, operation, cancelled)?
-                .verify_kept_history_anchor(&storage.managed_anchor)?;
+                .verify_kept_history_anchor(db, &storage.managed_anchor)?;
             Ok("keptAudio")
         }
         Some("modelDeletion") => {
-            super::models::intent::read(db, operation)?
-                .verify_kept_history_anchor(&storage.managed_anchor, &storage.native_models_root)?;
+            super::models::intent::read(db, operation)?.verify_kept_history_anchor(
+                db,
+                &storage.managed_anchor,
+                &storage.native_models_root,
+            )?;
             Ok("keptModel")
         }
         _ => Err("保持した削除履歴に未対応の種類があります。元の領域を維持します".into()),
@@ -265,21 +293,7 @@ impl Source {
             if records.len() >= MAX_OPERATIONS {
                 return Err("移動する削除履歴の件数が上限を超えています".into());
             }
-            let value: OperationRow = (
-                row.get(0).map_err(|e| e.to_string())?,
-                row.get(1).map_err(|e| e.to_string())?,
-                row.get(2).map_err(|e| e.to_string())?,
-                row.get(3).map_err(|e| e.to_string())?,
-                row.get(4).map_err(|e| e.to_string())?,
-                row.get(5).map_err(|e| e.to_string())?,
-                row.get(6).map_err(|e| e.to_string())?,
-                row.get(7).map_err(|e| e.to_string())?,
-                row.get(8).map_err(|e| e.to_string())?,
-                row.get(9).map_err(|e| e.to_string())?,
-                row.get(10).map_err(|e| e.to_string())?,
-                row.get(11).map_err(|e| e.to_string())?,
-                row.get(12).map_err(|e| e.to_string())?,
-            );
+            let value = operation_row(row).map_err(|e| e.to_string())?;
             let validation = match value.4.as_str() {
                 "recovered" => validate_kept(storage, db, &value, cancelled)?,
                 "completed" => completed_kind(storage, db, &value, cancelled)?,
@@ -289,9 +303,7 @@ impl Source {
                 validation,
                 "keptModel" | "completedModel" | "modelReconfirmation"
             );
-            let mut h = Sha256::new();
-            h.update(b"mon/relocation-deletion-row/v1\0");
-            frame(&mut h, &value)?;
+            let row_hash = row_hash(&value)?;
             let (path_count, paths_hash) = paths(db, &value.1, cancelled)?;
             records.push(Record {
                 operation_id: value.1,
@@ -299,7 +311,7 @@ impl Source {
                 state: value.4,
                 validation: validation.into(),
                 target_hash: value.7,
-                row_hash: format!("{:x}", h.finalize()),
+                row_hash,
                 path_count,
                 paths_hash,
             });

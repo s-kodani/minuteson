@@ -520,6 +520,9 @@ impl NativeSnapshot<'_> {
     pub(crate) fn source_root(&self) -> &Path {
         &self.maintenance.storage.root
     }
+    pub(in crate::storage) fn native_models_root(&self) -> &Path {
+        &self.maintenance.storage.native_models_root
+    }
     pub(crate) fn source_metadata(&self, path: &str) -> Result<Option<Metadata>, String> {
         let Ok(index) = self
             .source

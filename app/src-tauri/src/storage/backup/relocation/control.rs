@@ -106,6 +106,11 @@ impl ControlHandoff<'_, '_> {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    pub(in crate::storage) fn native_deletion_history(
+        &self,
+    ) -> Option<&crate::storage::deletion::relocation::Source> {
+        self.deletion_history.as_ref()
+    }
     pub(crate) fn require_supported_cutover(&self) -> Result<(), String> {
         // The typed destination reader must be connected to bootstrap admission
         // before allowing these roots to replace the current selection. Merely

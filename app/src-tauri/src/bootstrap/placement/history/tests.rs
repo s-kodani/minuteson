@@ -64,6 +64,19 @@ fn deletion_relocation_history_install_binds_only_owned_destination_without_rewr
         let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
         let first = p.install_history(&h, &|| false).unwrap();
         assert_eq!(p.install_history(&h, &|| false).unwrap(), first);
+        let registry_before = std::fs::read(f.target.join(REGISTRY)).unwrap();
+        let report = p.inspect_deletion_handoff(&h, &|| false).unwrap();
+        assert_eq!(report.checked_records, if full { 3 } else { 1 });
+        assert_eq!(report.completed_records, report.checked_records);
+        assert_eq!(report.kept_records, 0);
+        report.require_clean().unwrap();
+        let report_json = serde_json::to_value(&report).unwrap();
+        assert_eq!(report_json["readOnly"], true);
+        assert_eq!(report_json["executeAllowed"], false);
+        assert_eq!(
+            std::fs::read(f.target.join(REGISTRY)).unwrap(),
+            registry_before
+        );
         assert_eq!(
             std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
             before
@@ -105,6 +118,250 @@ fn deletion_relocation_history_install_binds_only_owned_destination_without_rewr
         assert!(local.get("origins").is_none());
         assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
         p.verify(&s, &|| false).unwrap();
+    }
+}
+
+#[test]
+fn deletion_relocation_receiver_kept_audio_is_read_only_history() {
+    use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
+    let f = Fixture::new();
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let operation = Uuid::new_v4().to_string();
+    audio::intent::prepare(
+        &f.storage,
+        &operation,
+        &audio::Census::capture(&f.storage, &f.meeting, &|| false).unwrap(),
+        audio::intent::Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    audio::intent::keep_unstarted(&f.storage, &operation, &lease, &|| false).unwrap();
+    drop(lease);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&h, &|| false).unwrap();
+    let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
+    let report = p.inspect_deletion_handoff(&h, &|| false).unwrap();
+    assert_eq!(report.kept_records, 1);
+    assert_eq!(report.completed_records, 0);
+    report.require_clean().unwrap();
+    assert_eq!(
+        std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::read(f.target.join(&f.relative)).unwrap(),
+        b"original audio"
+    );
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+    drop(p);
+    drop(h);
+    drop(s);
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(audio::intent::removal::start(&f.storage, &operation, &lease, &|| false).is_err());
+}
+
+#[test]
+fn deletion_relocation_receiver_does_not_admit_old_consent_to_normal_storage_startup() {
+    let f = Fixture::new();
+    delete_audio(&f);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&h, &|| false).unwrap();
+    p.inspect_deletion_handoff(&h, &|| false)
+        .unwrap()
+        .require_clean()
+        .unwrap();
+    let operation: String = Connection::open_with_flags(
+        f.target.join("meetings.sqlite3"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row(
+        "SELECT id FROM maintenance_operations WHERE kind='delete_assets'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap();
+    drop(p);
+    drop(h);
+    drop(s);
+    // The private inspection anchor is gone. Opening the real Storage does
+    // not adopt historical identities or confer the previous consent.
+    let copied = Storage::open(f.target.clone()).unwrap();
+    assert!(copied.data_write_blocked());
+    assert!(copied.create_meeting("NO AUTOMATIC ADMISSION").is_err());
+    let lease = crate::analysis_worker::AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(crate::storage::deletion::audio::intent::removal::start(
+        &copied,
+        &operation,
+        &lease,
+        &|| false
+    )
+    .is_err());
+    assert!(!f.storage.data_write_blocked());
+    assert!(f.storage.create_meeting("SOURCE REMAINS WRITABLE").is_ok());
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+}
+
+#[test]
+fn deletion_relocation_receiver_requires_installed_history_and_preserves_cancelled_copy() {
+    let f = Fixture::new();
+    delete_audio(&f);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+    assert!(!f.target.join(REGISTRY).exists());
+    p.install_history(&h, &|| false).unwrap();
+    let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
+    assert!(p.inspect_deletion_handoff(&h, &|| true).is_err());
+    let n = Cell::new(0);
+    // Cancel after source verification has made progress, not just at entry.
+    assert!(p
+        .inspect_deletion_handoff(&h, &|| {
+            let next = n.get() + 1;
+            n.set(next);
+            next > 24
+        })
+        .is_err());
+    assert!(n.get() > 24);
+    p.inspect_deletion_handoff(&h, &|| false)
+        .unwrap()
+        .require_clean()
+        .unwrap();
+    assert_eq!(
+        std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
+        before
+    );
+    for name in [
+        "meetings.sqlite3-wal",
+        "meetings.sqlite3-shm",
+        "meetings.sqlite3-journal",
+        ".mon-scratch.sqlite3-wal",
+        ".mon-scratch.sqlite3-shm",
+        ".mon-scratch.sqlite3-journal",
+    ] {
+        assert!(!f.target.join(name).exists());
+    }
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+}
+
+#[test]
+fn deletion_relocation_receiver_rejects_native_row_or_proof_change_without_repair() {
+    use rusqlite::config::DbConfig;
+    for kind in ["row", "path", "extra"] {
+        let f = Fixture::new();
+        delete_audio(&f);
+        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        f.intent(&s);
+        let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+        p.copy(&s, &|| false).unwrap();
+        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.install_history(&h, &|| false).unwrap();
+        let db = Connection::open(f.target.join("meetings.sqlite3")).unwrap();
+        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+            .unwrap();
+        match kind {
+            "row" => {
+                db.execute("UPDATE maintenance_operations SET consent_at=consent_at+1 WHERE kind='delete_assets'",[]).unwrap();
+            }
+            "path" => {
+                db.execute("UPDATE maintenance_paths SET identity_hash=?1 WHERE relative_path=(SELECT relative_path FROM maintenance_paths LIMIT 1)",["a".repeat(64)]).unwrap();
+            }
+            _ => {
+                db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,'delete_assets','recovered','{}',?2,'{}',0,0)",params![Uuid::new_v4().to_string(),"a".repeat(64)]).unwrap();
+            }
+        }
+        drop(db);
+        let altered = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
+        assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+        assert_eq!(
+            std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
+            altered
+        );
+        assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+        assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
+    }
+}
+
+#[test]
+fn deletion_relocation_receiver_rejects_forged_origin_even_with_recomputed_json_hash() {
+    use rusqlite::config::DbConfig;
+    let f = Fixture::new();
+    delete_audio(&f);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&h, &|| false).unwrap();
+    let db = Connection::open(f.target.join(REGISTRY)).unwrap();
+    db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        .unwrap();
+    let local: String = db
+        .query_row(
+            "SELECT local_json FROM relocation_history WHERE operation_id=?1",
+            [&f.operation],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut local: serde_json::Value = serde_json::from_str(&local).unwrap();
+    local["deletion_binding"]["root"] = local["deletion_history"]["root"].clone();
+    let local = serde_json::to_string(&local).unwrap();
+    db.execute(
+        "UPDATE relocation_history SET local_json=?1,local_hash=?2 WHERE operation_id=?3",
+        params![local, hash(local.as_bytes()), f.operation],
+    )
+    .unwrap();
+    drop(db);
+    let altered = std::fs::read(f.target.join(REGISTRY)).unwrap();
+    assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+    assert_eq!(std::fs::read(f.target.join(REGISTRY)).unwrap(), altered);
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+}
+
+#[test]
+fn deletion_relocation_receiver_rejects_replaced_owned_parent_after_installation() {
+    for link in [false, true] {
+        let f = Fixture::new();
+        delete_audio(&f);
+        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        f.intent(&s);
+        let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+        p.copy(&s, &|| false).unwrap();
+        let h = s.prepare_control_handoff(&|| false).unwrap();
+        p.install_history(&h, &|| false).unwrap();
+        let directory = f.target.join("meetings").join(&f.meeting).join("audio");
+        let original = directory.with_extension("retained");
+        std::fs::rename(&directory, &original).unwrap();
+        if link {
+            symlink(&original, &directory).unwrap();
+        } else {
+            std::fs::create_dir(&directory).unwrap();
+        }
+        assert!(p.inspect_deletion_handoff(&h, &|| false).is_err());
+        assert!(original.exists());
+        assert!(directory.exists());
+        assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
     }
 }
 

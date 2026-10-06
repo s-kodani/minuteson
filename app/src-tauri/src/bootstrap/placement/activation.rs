@@ -244,6 +244,8 @@ impl Placement<'_> {
         self.verify(handoff.snapshot(), cancelled)?;
         let (control_json, control_hash, _) = history::installed_control(self)?;
         handoff.check_compatible(control_json.as_bytes())?;
+        self.inspect_deletion_handoff(handoff, cancelled)?
+            .require_clean()?;
         handoff.require_supported_cutover()?;
         self.verify_target(cancelled)?;
         let target = Root::inspect(&self.pending.target)?;

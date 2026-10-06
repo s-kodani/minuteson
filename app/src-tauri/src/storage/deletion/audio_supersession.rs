@@ -130,7 +130,7 @@ impl Proof {
         }
         h.root.validate(true)?;
         h.database.validate(false)?;
-        if anchor.identity()? != (h.root.clone(), h.database.clone()) {
+        if !anchor.matches_history_root(db, operation, &h.root, &h.database)? {
             return Err("音声履歴引継ぎの保存領域が一致しません".into());
         }
         let paths: bool = db

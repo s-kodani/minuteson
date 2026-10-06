@@ -294,7 +294,7 @@ fn verify_remaining(
     r.verify_saved(db, check)?;
     if r.completed() {
         completion::verify_available_state(db, r, check)?;
-        if !completion::absent(&storage.managed_anchor, r, check)? {
+        if !completion::absent(db, &storage.managed_anchor, r, check)? {
             return Err("削除済み音声が再出現しました。再確認してください".into());
         }
         return r.verify_anchor(storage);

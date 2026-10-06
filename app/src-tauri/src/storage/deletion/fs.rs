@@ -393,6 +393,8 @@ pub(in crate::storage) struct RootAnchor {
     database_identity: Identity,
     database_name: &'static str,
     controls: Vec<(String, Option<(File, Identity)>)>,
+    #[cfg(target_os = "macos")]
+    inspection_history: Option<std::sync::Arc<super::relocation::receiver::Aliases>>,
 }
 impl RootAnchor {
     pub(in crate::storage) fn directory(path: &Path) -> Result<Directory, String> {
@@ -421,6 +423,8 @@ impl RootAnchor {
             database_identity,
             database_name,
             controls: vec![],
+            #[cfg(target_os = "macos")]
+            inspection_history: None,
         })
     }
     pub(in crate::storage) fn seal_controls(&mut self) -> Result<(), String> {
@@ -481,6 +485,59 @@ impl RootAnchor {
     pub(super) fn identity(&self) -> Result<(Identity, Identity), String> {
         self.verify()?;
         Ok((self.root.identity.clone(), self.database_identity.clone()))
+    }
+    // Read-only history checks only. identity(), file proofs, current census,
+    // writer admission and unlink verification deliberately remain unchanged.
+    pub(super) fn matches_history_root(
+        &self,
+        db: &rusqlite::Connection,
+        operation: &str,
+        root: &Identity,
+        database: &Identity,
+    ) -> Result<bool, String> {
+        let current = self.identity()?;
+        if current == (root.clone(), database.clone()) {
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(history) = &self.inspection_history {
+            return history.matches_root(db, operation, root, database, &current);
+        }
+        let _ = (db, operation);
+        Ok(false)
+    }
+    pub(super) fn verify_history_directory(
+        &self,
+        db: &rusqlite::Connection,
+        operation: &str,
+        relative_path: &str,
+        directory: &Directory,
+        expected: &Identity,
+    ) -> Result<(), String> {
+        self.verify()?;
+        if directory.verify_identity(expected).is_ok() {
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(history) = &self.inspection_history {
+            if let Some(copied) = history.directory(db, operation, relative_path, expected)? {
+                return directory.verify_identity(copied);
+            }
+        }
+        let _ = (db, operation, relative_path);
+        Err("履歴の親フォルダーを別の実体として採用しません".into())
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn with_inspection_history(
+        mut self,
+        history: std::sync::Arc<super::relocation::receiver::Aliases>,
+    ) -> Result<Self, String> {
+        history.verify_anchor(&self.root.path, &self.identity()?)?;
+        if self.inspection_history.is_some() {
+            return Err("起動検査の履歴対応を再採用できません".into());
+        }
+        self.inspection_history = Some(history);
+        Ok(self)
     }
     pub(super) fn directory_ref(&self) -> Result<&Directory, String> {
         self.verify()?;

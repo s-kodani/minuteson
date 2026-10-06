@@ -165,6 +165,9 @@ fn deletion_relocation_kept_audio_and_meeting_are_preserved_and_not_resumable_co
     assert_eq!(source.records.len(), 2);
     assert!(source.records.iter().any(|r| r.validation == "keptAudio"));
     assert!(source.records.iter().any(|r| r.validation == "keptMeeting"));
+    let report = super::receiver::inspect_synthetic_copy(&f.storage);
+    assert_eq!(report.kept_records, 2);
+    assert_eq!(report.completed_records, 0);
     assert_eq!(f.original(), before);
     assert_eq!(std::fs::read(&f.audio).unwrap(), b"SYNTHETIC AUDIO BODY");
     let lease = AnalysisController::default()
@@ -463,6 +466,10 @@ fn deletion_relocation_approved_model_root_is_required_for_kept_and_completed_hi
         );
         assert_eq!(source.models_root, f.root);
         assert!(source.models_identity.is_some());
+        let report = super::receiver::inspect_synthetic_copy(&f.storage);
+        assert_eq!(report.checked_records, 1);
+        assert_eq!(report.kept_records, usize::from(!completed));
+        assert_eq!(report.completed_records, usize::from(completed));
         let unapproved = tempfile::tempdir().unwrap();
         f.storage.native_models_root = unapproved.path().to_owned();
         let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();

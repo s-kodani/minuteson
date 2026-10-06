@@ -196,9 +196,14 @@ impl Receipt {
         cancel(check)?;
         Ok(header)
     }
-    fn absent(&self, anchor: &RootAnchor, check: &impl Fn() -> bool) -> Result<bool, String> {
+    fn absent(
+        &self,
+        db: &Connection,
+        anchor: &RootAnchor,
+        check: &impl Fn() -> bool,
+    ) -> Result<bool, String> {
         let h = &self.header;
-        if anchor.identity()? != (h.root.clone(), h.database.clone()) {
+        if !anchor.matches_history_root(db, &h.operation, &h.root, &h.database)? {
             return Err("復元音声履歴の保存領域・DB実体が一致しません".into());
         }
         let mut dir = anchor.directory_ref()?.child("meetings")?;
@@ -211,7 +216,12 @@ impl Receipt {
                 anchor.verify()?;
                 return Ok(true);
             };
-            current.verify_identity(&h.parents[i])?;
+            let path = match i {
+                0 => "meetings".to_string(),
+                1 => format!("meetings/{}", h.meeting),
+                _ => format!("meetings/{}/restored", h.meeting),
+            };
+            anchor.verify_history_directory(db, &h.operation, &path, &current, &h.parents[i])?;
             if i == 2 {
                 for id in &self.history.assets {
                     cancel(check)?;
@@ -273,7 +283,7 @@ pub(in crate::storage) fn backup_meeting(
     check: &impl Fn() -> bool,
 ) -> Result<String, String> {
     let receipt = Receipt::load(db, operation, check)?;
-    if !receipt.absent(anchor, check)? {
+    if !receipt.absent(db, anchor, check)? {
         return Err("復元済みの欠落音声が再出現しています。黙って除外しません".into());
     }
     Ok(receipt.header.meeting)
@@ -285,7 +295,7 @@ pub(in crate::storage) fn inspect_one(
 ) -> Result<Option<&'static str>, String> {
     Ok(match Receipt::load(db, operation, &|| false) {
         Err(_) => Some("restored_audio_receipt_invalid"),
-        Ok(receipt) => match receipt.absent(anchor, &|| false) {
+        Ok(receipt) => match receipt.absent(db, anchor, &|| false) {
             Ok(true) => None,
             Ok(false) => Some("restored_audio_scope_reappeared"),
             Err(_) => Some("restored_audio_scope_uninspectable"),
@@ -348,7 +358,7 @@ pub(in crate::storage) fn retain(
             ],
         };
         let receipt = Receipt { header, history };
-        if !receipt.absent(anchor, check)? {
+        if !receipt.absent(tx, anchor, check)? {
             return Err("利用不可記録の確定前に音声が再出現しました".into());
         }
         let json = serde_json::to_string(&receipt.header).map_err(|e| e.to_string())?;
@@ -367,7 +377,7 @@ pub(in crate::storage) fn retain(
         cancel(check)?;
         tx.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','completed',?3,?4,?5,?6,?6)",params![operation,meeting,json,hash,PROGRESS,published]).map_err(|e|e.to_string())?;
         let receipt = Receipt::load(tx, &operation, check)?;
-        if !receipt.absent(anchor, check)? {
+        if !receipt.absent(tx, anchor, check)? {
             return Err("利用不可記録の保存後に音声が再出現しました".into());
         }
     }
@@ -393,7 +403,7 @@ pub(in crate::storage) fn verify_retained(
             || h.meeting != m.target
             || receipt.history.tables != m.history.tables
             || receipt.history.assets != m.history.assets
-            || !receipt.absent(anchor, check)?
+            || !receipt.absent(tx, anchor, check)?
         {
             return Err("確定直前の音声利用不可記録が封印した履歴と一致しません".into());
         }

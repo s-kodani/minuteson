@@ -100,15 +100,17 @@ impl Prepared {
     #[cfg(target_os = "macos")]
     pub(in crate::storage::deletion) fn verify_kept_history_anchor(
         &self,
+        db: &Connection,
         anchor: &crate::storage::deletion::fs::RootAnchor,
         models_root: &Path,
     ) -> Result<(), String> {
         if !self.kept
-            || anchor.identity()?
-                != (
-                    self.snapshot.storage_root.clone(),
-                    self.snapshot.database.clone(),
-                )
+            || !anchor.matches_history_root(
+                db,
+                &self.header.operation_id,
+                &self.snapshot.storage_root,
+                &self.snapshot.database,
+            )?
             || models_root != self.models_root()
         {
             return Err("保持したモデル削除履歴の保存先・DB実体が一致しません".into());

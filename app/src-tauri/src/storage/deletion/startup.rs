@@ -245,6 +245,14 @@ pub(super) fn completed_attention(
                     return Ok(None);
                 }
                 let (original, files) = source(db, &operation)?;
+                if !anchor.matches_history_root(
+                    db,
+                    &operation,
+                    &original.manifest().root,
+                    &original.manifest().database,
+                )? {
+                    return Err("完了した会議削除の保存領域・DB実体が一致しません".into());
+                }
                 // Canonical v3 file-only completion still awaits the DB
                 // wrapper/acknowledgement. The existing unfinished fence
                 // already covers it; do not label it a corrupt final receipt.

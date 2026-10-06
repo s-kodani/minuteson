@@ -117,6 +117,13 @@ fn deletion_relocation_real_restored_audio_history_and_supersession_keep_no_cons
             None
         );
         assert!(target.recorded_audio_plan(&restored_meeting).is_err());
+        drop(handoff);
+        drop(snapshot);
+        let report =
+            crate::storage::deletion::relocation::receiver::inspect_synthetic_copy(&target);
+        assert_eq!(report.checked_records, if full { 3 } else { 1 });
+        assert_eq!(report.kept_records, 0);
+        assert_eq!(record(&target.connection.lock().unwrap()), before);
     }
     assert!(source.get_meeting(&meeting).unwrap().is_some());
 }

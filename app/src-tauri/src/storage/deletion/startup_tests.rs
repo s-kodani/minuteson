@@ -520,15 +520,25 @@ fn deletion_startup_final_ack_reappearance_keeps_attention_until_a_new_review() 
 }
 
 #[test]
-fn deletion_startup_clean_copied_history_is_not_new_authority_and_changed_copy_stays_fenced() {
+fn deletion_startup_unowned_copied_history_stays_fenced_without_adopting_original_identity() {
     let mut f = Fixture::new();
+    let before = evidence(f.storage());
     let root = f.storage().root().to_owned();
     drop(f.storage.take());
     let copy = f.base.path().join("copy");
     std::fs::create_dir(&copy).unwrap();
     std::fs::copy(root.join("meetings.sqlite3"), copy.join("meetings.sqlite3")).unwrap();
     let storage = Storage::open(copy.clone()).unwrap();
-    assert!(!storage.data_write_blocked());
+    assert!(storage.data_write_blocked());
+    assert_eq!(evidence(&storage), before);
+    assert_eq!(
+        operations::listing(&storage).unwrap().items[0]
+            .error_code
+            .as_deref(),
+        Some(INVALID)
+    );
+    assert!(operations::authorize_review(&storage, Some(&f.operation)).is_err());
+    assert!(storage.create_meeting("NO UNOWNED COPY ADMISSION").is_err());
     drop(storage);
     let path = copy.join(format!("meetings/{}/late", f.meeting));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -538,8 +548,10 @@ fn deletion_startup_clean_copied_history_is_not_new_authority_and_changed_copy_s
         operations::listing(&storage).unwrap().items[0]
             .error_code
             .as_deref(),
-        Some(REAPPEARED)
+        Some(INVALID)
     );
+    assert!(storage.data_write_blocked());
+    assert_eq!(evidence(&storage), before);
     assert!(operations::authorize_review(&storage, Some(&f.operation)).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"COPIED NEW DATA");
 }
