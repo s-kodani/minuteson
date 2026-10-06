@@ -129,15 +129,33 @@ impl Descriptor {
 
 // Private validated view for later historical reconstruction. No filesystem
 // paths or writable native operation can be obtained from this capability.
-pub(super) struct Verified {
-    meetings: BTreeSet<String>,
+pub(in crate::storage) struct Verified {
+    // Keep the validated proofs independently of the mutable manifest. A
+    // previously checked meeting ID alone cannot authorize historical reads
+    // after the logical database has changed.
+    proofs: BTreeMap<String, Vec<TableProof>>,
 }
 impl Verified {
     pub(super) fn contains(&self, meeting: &str) -> bool {
-        self.meetings.contains(meeting)
+        self.proofs.contains_key(meeting)
     }
     pub(super) fn is_empty(&self) -> bool {
-        self.meetings.is_empty()
+        self.proofs.is_empty()
+    }
+    pub(in crate::storage) fn verify_meeting(
+        &self,
+        db: &Connection,
+        meeting: &str,
+    ) -> Result<(), String> {
+        let expected = self
+            .proofs
+            .get(meeting)
+            .ok_or("検査済みの音声削除履歴がありません")?;
+        unavailable(db, meeting)?;
+        if &fingerprints(db, meeting, &|| false)? != expected {
+            return Err("固定入力の音声削除履歴と現在のDBが一致しません".into());
+        }
+        Ok(())
     }
 }
 
@@ -191,7 +209,12 @@ pub(super) fn verify(
         return Err("削除済み音声の全資産と除外理由が一致しません".into());
     }
     check_cancelled(check)?;
-    Ok(Verified { meetings })
+    Ok(Verified {
+        proofs: descriptors
+            .iter()
+            .map(|d| (d.meeting_id.clone(), d.tables.clone()))
+            .collect(),
+    })
 }
 
 fn unavailable(db: &Connection, meeting: &str) -> Result<(), String> {

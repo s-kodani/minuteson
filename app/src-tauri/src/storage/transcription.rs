@@ -60,15 +60,44 @@ pub(super) fn read_audio_plan(
 ) -> Result<RecordedAudioPlan, String> {
     #[cfg(unix)]
     super::deletion::audio::require_source(transaction, meeting_id)?;
+    read_audio_metadata(transaction, meeting_id, AudioMetadataState::Available)
+}
+
+/// Restore-only metadata, not playable input or permission to enqueue work.
+/// The capability has no public constructor and rechecks all audio row proofs
+/// before reading. Missing flags or an untrusted manifest alone do not suffice.
+pub(super) fn read_historical_audio_plan(
+    transaction: &Connection,
+    meeting_id: &str,
+    history: &super::backup::DeletedAudioHistory,
+) -> Result<RecordedAudioPlan, String> {
+    history.verify_meeting(transaction, meeting_id)?;
+    read_audio_metadata(transaction, meeting_id, AudioMetadataState::Deleted)
+}
+
+enum AudioMetadataState {
+    Available,
+    Deleted,
+}
+
+fn read_audio_metadata(
+    transaction: &Connection,
+    meeting_id: &str,
+    state: AudioMetadataState,
+) -> Result<RecordedAudioPlan, String> {
+    let (track_state, chunk_state) = match state {
+        AudioMetadataState::Available => ("ready", "ready"),
+        AudioMetadataState::Deleted => ("failed", "missing"),
+    };
     // Keep the serialized plan shape for old jobs; both source types use
     // verified managed manifests, never an external original path.
     let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
             "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND r.state = 'saved' AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",
             params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?)),
         ).optional().map_err(|e| e.to_string())?.ok_or("解析可能な保存済み音声manifestがありません")?;
-    let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = 'ready' AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
+    let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = ?3 AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
     let rows = query
-        .query_map(params![meeting_id, source_kind], |row| {
+        .query_map(params![meeting_id, source_kind, track_state], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -82,9 +111,9 @@ pub(super) fn read_audio_plan(
         .map_err(|e| e.to_string())?;
     let mut plans = Vec::new();
     for (id, kind, sample_rate, channels) in tracks {
-        let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence").map_err(|e| e.to_string())?;
+        let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = ?3 AND f.state = ?3 ORDER BY c.start_us, c.sequence").map_err(|e| e.to_string())?;
         let rows = query
-            .query_map(params![id, meeting_id], |row| {
+            .query_map(params![id, meeting_id, chunk_state], |row| {
                 Ok(ChunkPlan {
                     asset_id: row.get(0)?,
                     hash: row.get(1)?,

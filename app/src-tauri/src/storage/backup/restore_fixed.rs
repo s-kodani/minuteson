@@ -466,8 +466,16 @@ impl<'p, 's> FixedData<'p, 's> {
     pub(super) fn audio_plan(&self, meeting: &str, value: &Value) -> Result<Value, String> {
         let mut plan: RecordedAudioPlan =
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-        let expected =
-            super::super::transcription::read_audio_plan(&self.ids.source().database, meeting)?;
+        let source = self.ids.source();
+        let expected = if source.deleted_audio.contains(meeting) {
+            super::super::transcription::read_historical_audio_plan(
+                &source.database,
+                meeting,
+                &source.deleted_audio,
+            )?
+        } else {
+            super::super::transcription::read_audio_plan(&source.database, meeting)?
+        };
         if plan != expected {
             return Err("固定音声のトラック・区間・時刻・由来が元版と一致しません".into());
         }

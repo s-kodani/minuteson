@@ -62,6 +62,175 @@ fn audio_path(storage: &Storage, meeting: &str) -> PathBuf {
     storage.root.join(path)
 }
 
+fn historical_plan(
+    a: &VerifiedArchive,
+    meeting: &str,
+) -> Result<crate::storage::transcription::RecordedAudioPlan, String> {
+    crate::storage::transcription::read_historical_audio_plan(
+        &a.database,
+        meeting,
+        &a.deleted_audio,
+    )
+}
+
+fn change_logical(a: &VerifiedArchive, sql: &str, meeting: &str) {
+    // Keep the production connection query-only. This second writer attacks
+    // only the owned validation image, never a live/native database.
+    let writer = Connection::open(a.stage.path().join("validation.sqlite3")).unwrap();
+    writer.execute(sql, [meeting]).unwrap();
+}
+
+#[test]
+fn deleted_audio_historical_import_plan_keeps_samples_times_and_identity_without_body() {
+    let (_root, storage, meeting) = fixture();
+    let neighbor = tests::meeting(&storage, "available-history-neighbor");
+    let before = storage.recorded_audio_plan(&meeting).unwrap();
+    deleted(&storage, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    let (mut archive, _) = write(&storage, output.path());
+    // Raw manifest removal cannot erase or mint the private checked capability.
+    archive.manifest.deleted_audio.clear();
+    let plan = historical_plan(&archive, &meeting).unwrap();
+    assert_eq!(plan.tracks, before.tracks);
+    assert_eq!(plan.manifest_asset_id, before.manifest_asset_id);
+    let manifest_hash: String = archive
+        .database
+        .query_row(
+            "SELECT content_hash FROM file_assets WHERE id=?1 AND meeting_id=?2 AND state='ready'",
+            params![plan.manifest_asset_id, meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(plan.manifest_hash, manifest_hash);
+    assert!(plan
+        .tracks
+        .iter()
+        .flat_map(|t| &t.chunks)
+        .all(|c| !archive.assets.contains_key(&c.asset_id)));
+    assert!(historical_plan(&archive, &neighbor).is_err());
+    assert!(historical_plan(&archive, &Uuid::new_v4().to_string()).is_err());
+    assert!(crate::storage::transcription::read_audio_plan(&archive.database, &meeting).is_err());
+    assert!(storage.recorded_audio_plan(&meeting).is_err());
+    assert!(storage.recorded_audio_plan(&neighbor).is_ok());
+}
+
+#[test]
+fn deleted_audio_historical_recording_plan_keeps_caf_metadata_without_reopening_audio() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().join("root")).unwrap();
+    let meeting = storage.create_meeting("synthetic CAF history").unwrap().id;
+    let session = Uuid::new_v4().to_string();
+    let track = Uuid::new_v4().to_string();
+    let relative = PathBuf::from(format!("meetings/{meeting}/audio/{session}"));
+    let directory = storage.root.join(&relative);
+    std::fs::create_dir_all(&directory).unwrap();
+    let pcm: Vec<u8> = (0..32_000).flat_map(|_| 0.25_f32.to_le_bytes()).collect();
+    std::fs::write(
+        directory.join("mic.caf"),
+        crate::audio::tests::caf_fixture(16_000, 1, 3, 32, 4, &pcm),
+    )
+    .unwrap();
+    std::fs::write(directory.join("manifest.json"), b"{\"state\":\"saved\"}").unwrap();
+    let audio = storage
+        .register_ready_meeting_asset(&meeting, &relative.join("mic.caf"), "audio/x-caf")
+        .unwrap();
+    let manifest = storage
+        .register_ready_meeting_asset(
+            &meeting,
+            &relative.join("manifest.json"),
+            "application/json",
+        )
+        .unwrap();
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE meetings SET source_type='recording',lifecycle='recorded' WHERE id=?1",
+            [&meeting],
+        )
+        .unwrap();
+        db.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,audio_manifest_hash,created_at,updated_at) VALUES(?1,?2,'saved','system','{}',?1,?3,0,0)",params![session,meeting,manifest.content_hash]).unwrap();
+        db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES(?1,?2,?3,'mic','caf',16000,1,'ready',0,0)",params![track,meeting,session]).unwrap();
+        db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,2000000,32000,16000,1,'ready',0)",params![Uuid::new_v4().to_string(),meeting,track,audio.id]).unwrap();
+    }
+    let before = storage.recorded_audio_plan(&meeting).unwrap();
+    deleted(&storage, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    let (archive, _) = write(&storage, output.path());
+    let plan = historical_plan(&archive, &meeting).unwrap();
+    assert_eq!(plan.tracks, before.tracks);
+    assert_eq!(plan.manifest_asset_id, before.manifest_asset_id);
+    assert_eq!(plan.tracks[0].chunks[0].frames, 32_000);
+    assert!(archive
+        .assets
+        .get(&plan.tracks[0].chunks[0].asset_id)
+        .is_none());
+    assert!(storage.recorded_audio_plan(&meeting).is_err());
+}
+
+#[test]
+fn deleted_audio_historical_read_rechecks_all_three_row_proofs_after_archive_validation() {
+    let (_root, storage, meeting) = fixture();
+    deleted(&storage, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    for sql in [
+        "UPDATE audio_chunks SET frame_count=frame_count+1 WHERE meeting_id=?1",
+        "UPDATE audio_chunks SET state='ready' WHERE meeting_id=?1",
+        "UPDATE audio_tracks SET sample_rate=sample_rate+1 WHERE meeting_id=?1",
+        "UPDATE audio_tracks SET state='ready' WHERE meeting_id=?1",
+        "UPDATE file_assets SET content_hash=lower(hex(zeroblob(32))) WHERE meeting_id=?1 AND media_type LIKE 'audio/%'",
+        "UPDATE file_assets SET state='ready' WHERE meeting_id=?1 AND media_type LIKE 'audio/%'",
+        "UPDATE file_assets SET relative_path='meetings/substituted-' || id || '.wav' WHERE meeting_id=?1 AND media_type LIKE 'audio/%'",
+    ] {
+        let (archive, _) = write(&storage, output.path());
+        assert!(historical_plan(&archive, &meeting).is_ok());
+        change_logical(&archive, sql, &meeting);
+        assert!(historical_plan(&archive, &meeting).is_err(), "{sql}");
+    }
+}
+
+#[test]
+fn deleted_audio_historical_read_needs_checked_history_not_only_missing_flags() {
+    let (_root, storage, meeting) = fixture();
+    let output = tempfile::tempdir().unwrap();
+    let (archive, _) = write(&storage, output.path());
+    change_logical(
+        &archive,
+        "UPDATE file_assets SET state='missing' WHERE meeting_id=?1 AND media_type LIKE 'audio/%'",
+        &meeting,
+    );
+    change_logical(
+        &archive,
+        "UPDATE audio_chunks SET state='missing' WHERE meeting_id=?1",
+        &meeting,
+    );
+    change_logical(
+        &archive,
+        "UPDATE audio_tracks SET state='failed' WHERE meeting_id=?1",
+        &meeting,
+    );
+    assert!(historical_plan(&archive, &meeting).is_err());
+    assert!(storage.recorded_audio_plan(&meeting).is_ok());
+}
+
+#[test]
+fn deleted_audio_historical_read_still_requires_ready_manifest_and_saved_source_owner() {
+    let (_root, storage, meeting) = fixture();
+    deleted(&storage, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    for sql in [
+        "UPDATE file_assets SET state='missing' WHERE id IN (SELECT manifest_asset_id FROM audio_import_commits WHERE meeting_id=?1)",
+        "UPDATE audio_import_commits SET manifest_hash=lower(hex(zeroblob(32))) WHERE meeting_id=?1",
+        "UPDATE meetings SET lifecycle='archived' WHERE id=?1",
+    ] {
+        let (archive, _) = write(&storage, output.path());
+        change_logical(&archive, sql, &meeting);
+        // Audio proofs alone remain valid; shared manifest/source checks must
+        // independently refuse invalid non-audio ownership and references.
+        archive.deleted_audio.verify_meeting(&archive.database, &meeting).unwrap();
+        assert!(historical_plan(&archive, &meeting).is_err(), "{sql}");
+    }
+}
+
 #[test]
 fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_without_source_bodies()
 {

@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
 mod deleted_audio;
+pub(in crate::storage) use deleted_audio::Verified as DeletedAudioHistory;
 mod exclusions;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
