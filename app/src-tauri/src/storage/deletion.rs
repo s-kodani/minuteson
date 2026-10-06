@@ -1,6 +1,8 @@
 //! Meeting deletion is staged: consent, fixed file removal, then row removal.
 //! User-facing deletion requires shared admission and explicit scope review.
 #[cfg(unix)]
+pub(crate) mod audio;
+#[cfg(unix)]
 mod completion;
 mod database;
 pub(in crate::storage) mod fence;
