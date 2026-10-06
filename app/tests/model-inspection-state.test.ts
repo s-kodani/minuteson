@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "../src/model-inspection-state.ts";
+import { InspectionAttempt, inspectionLabel, placementLabel, modelBodyAvailable, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "../src/model-inspection-state.ts";
+import { canReviewApplication } from "../src/model-profile-state.ts";
 
 const report: ModelInspectionReport = { manifest: { modelName: "fixture", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", target: "macos_aarch64", licenseRef: "test only", quantization: null }, manifestHash: "a".repeat(64), reviewHash: "r", files: [], totalBytes: 0, engineCompatibility: "not_verified", publisherAuthenticity: "not_verified", installed: false, ready: false };
 test("a preflight never labels file hashes as AI readiness or publisher authentication", () => {
@@ -30,6 +31,23 @@ test("placement is not readiness and its response must bind operation and review
 });
 const entry: ModelPlacementEntry = { packageId: "11111111-1111-4111-8111-111111111111", modelName: "fixture", modelVersion: "1", engine: "llama.cpp", engineVersion: "declared only", totalBytes: 100, placementRecorded: true, ready: false, reviewHash: "a".repeat(64) };
 const summary: ModelCompatibilitySummary = { operationId: "22222222-2222-4222-8222-222222222222", packageId: entry.packageId, reviewHash: entry.reviewHash, adapterRevision: 1, state: "succeeded", errorMessage: null };
+test("deleted model bodies preserve history labels but cannot be applied or rebound", () => {
+  const removed = { ...entry, bodyRemoved: true, compatibility: summary };
+  assert.match(placementLabel(removed), /削除済み.*履歴/);
+  assert.equal(modelBodyAvailable(removed), false);
+  assert.equal(canReviewApplication(removed), false);
+  assert.equal(canReviewApplication({ ...removed, bodyRemoved: false }), true);
+  assert.match(placementLabel({ ...entry, bodyRemoved: true, compatibility: null }), /削除済み/);
+  assert.throws(() => placementLabel({ ...removed, compatibility: { ...summary, packageId: "different" } }));
+});
+test("model body availability accepts old catalogs but rejects nonboolean deletion flags", () => {
+  assert.equal(modelBodyAvailable({}), true);
+  assert.equal(modelBodyAvailable({ bodyRemoved: false }), true);
+  for (const flag of [null, "false", 0, 1, {}]) {
+    assert.throws(() => placementLabel({ ...entry, bodyRemoved: flag } as never));
+    assert.throws(() => canReviewApplication({ ...entry, bodyRemoved: flag, compatibility: summary } as never));
+  }
+});
 test("a fixed CPU smoke result remains unapplied and all interrupted states require explicit action", () => {
   assert.match(placementLabel({ ...entry, compatibility: summary }), /CPU互換性確認済み（適用状態は構成記録を参照）/);
   for (const state of ["preparing", "failed", "cancelled", "interrupted"] as const) {

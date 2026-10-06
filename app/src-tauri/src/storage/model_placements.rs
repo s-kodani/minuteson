@@ -44,6 +44,20 @@ pub(super) fn unused_identity(db: &Connection, id: &str) -> Result<bool, String>
     Ok(true)
 }
 pub(super) fn load(db: &Connection, id: &str) -> Result<Option<(PlacementRecord, bool)>, String> {
+    let result = load_history(db, id)?;
+    #[cfg(unix)]
+    if let Some((record, placed)) = result {
+        let removed = deletion::models::intent::removal::deleted(db, id)?;
+        return Ok(Some((record, placed && !removed)));
+    }
+    Ok(result)
+}
+// Placement and CPU history remain valid even when the local body was removed.
+// Deletion compares this original evidence, not its availability projection.
+pub(super) fn load_history(
+    db: &Connection,
+    id: &str,
+) -> Result<Option<(PlacementRecord, bool)>, String> {
     let row: Option<(String,String,String,String,String,Option<String>,Option<String>,String,String)> = db.query_row("SELECT manifest_json,manifest_hash,engine,model_name,model_version,quantization,license_ref,source_type,state FROM model_packages WHERE id=?1",params![id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional().map_err(|e|e.to_string())?;
     let Some((json, hash, engine, name, version, quantization, license, source_type, state)) = row
     else {
@@ -182,7 +196,7 @@ impl Storage {
             .map_err(|_| "DBロックを取得できません")?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
         let (saved, already) =
-            load(&tx, &record.package_id)?.ok_or("モデル配置の意図記録がありません")?;
+            load_history(&tx, &record.package_id)?.ok_or("モデル配置の意図記録がありません")?;
         if saved != *record {
             return Err("モデル配置の確認内容が変わっています".into());
         }
@@ -208,7 +222,12 @@ impl Storage {
         let ids = db.prepare("SELECT id FROM model_packages WHERE source_type='manual_import' ORDER BY rowid DESC").map_err(|e|e.to_string())?.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         ids.into_iter()
             .map(|id| {
-                let (record, placed) = load(&db, &id)?.ok_or("モデル配置記録がありません")?;
+                let (record, placed) =
+                    load_history(&db, &id)?.ok_or("モデル配置記録がありません")?;
+                #[cfg(unix)]
+                let body_removed = deletion::models::intent::removal::deleted(&db, &id)?;
+                #[cfg(not(unix))]
+                let body_removed = false;
                 let receipt = receipt(&record, placed)?;
                 let engine =
                     serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
@@ -222,6 +241,7 @@ impl Storage {
                     engine_version: record.manifest.engine_version,
                     total_bytes: receipt.total_bytes,
                     placement_recorded: placed,
+                    body_removed,
                     ready: false,
                     review_hash: record.review_hash,
                     compatibility,

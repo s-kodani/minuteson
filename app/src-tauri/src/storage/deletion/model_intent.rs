@@ -42,6 +42,8 @@ pub(crate) struct Prepared {
     consent: i64,
     kept: bool,
 }
+#[path = "model_removal.rs"]
+pub(crate) mod removal;
 fn uuid_valid(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|v| v.to_string() == id)
 }
@@ -89,7 +91,7 @@ fn decode_chunk(json: &str) -> Result<Vec<u8>, String> {
 fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(), String> {
     lease.validate_active()?;
     if check() {
-        Err("モデル削除の確認保存を取り消しました。対象を保持します".into())
+        Err("モデル削除の操作を取り消しました。未処理の対象を保持し、既に削除したファイルは復元しません".into())
     } else {
         Ok(())
     }
@@ -183,6 +185,15 @@ impl Prepared {
 // Strict typed readback. Nothing in this function removes files or obtains a
 // privileged DB writer. Unknown/corrupt delete_assets records stay fenced.
 pub(crate) fn read(db: &Connection, operation: &str) -> Result<Prepared, String> {
+    read_with_progress(db, operation, None)
+}
+// Only the typed removal reader supplies an exact canonical state/progress.
+// This does not make installing/completed receipts usable as unstarted consent.
+fn read_with_progress(
+    db: &Connection,
+    operation: &str,
+    removing: Option<(&str, &str)>,
+) -> Result<Prepared, String> {
     if !uuid_valid(operation) {
         return Err("モデル削除の操作IDが不正です".into());
     }
@@ -207,8 +218,10 @@ pub(crate) fn read(db: &Connection, operation: &str) -> Result<Prepared, String>
     if meeting.is_some()
         || batch.is_some()
         || kind != "delete_assets"
-        || !(state == "prepared" || kept)
-        || progress != if kept { KEPT } else { INITIAL }
+        || !removing.map_or(state == "prepared" || kept, |(expected, _)| {
+            state == expected
+        })
+        || progress != removing.map_or(if kept { KEPT } else { INITIAL }, |(_, progress)| progress)
         || error.is_some()
         || created != consent
         || updated < created
@@ -278,8 +291,18 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
-    let saved = read(&db, operation)?;
-    saved.verify_anchor(storage)?;
+    let state: String = db
+        .query_row(
+            "SELECT state FROM maintenance_operations WHERE id=?1",
+            params![operation],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if matches!(state.as_str(), "installing" | "completed") {
+        removal::Receipt::load(&db, operation)?.verify_anchor(storage)?;
+    } else {
+        read(&db, operation)?.verify_anchor(storage)?;
+    }
     if super::super::fence::other_pending(&db, Some(operation))? {
         return Err("別の未完了保守操作を先に確認してください".into());
     }

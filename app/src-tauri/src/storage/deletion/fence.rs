@@ -231,6 +231,19 @@ pub(super) fn write_model_prepared<'a>(
 }
 
 #[cfg(unix)]
+pub(super) fn write_model_removal<'a>(
+    storage: &'a Storage,
+    db: &'a Connection,
+    confirmed: &super::models::intent::removal::Receipt,
+    lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
+) -> Result<Writer<'a>, String> {
+    lease.validate_active()?;
+    confirmed.verify_saved(db)?;
+    confirmed.verify_anchor(storage)?;
+    Writer::begin(storage, db, true)
+}
+
+#[cfg(unix)]
 pub(super) fn write_removal<'a>(
     storage: &'a Storage,
     db: &'a Connection,

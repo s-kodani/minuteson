@@ -3,6 +3,9 @@ use super::*;
 use crate::analysis_worker::{data_maintenance::DataMaintenanceLease, AnalysisController};
 use rusqlite::{config::DbConfig, Connection};
 
+#[path = "model_removal_tests.rs"]
+mod removing;
+
 fn lease() -> DataMaintenanceLease {
     AnalysisController::default()
         .begin_data_maintenance(false, false, &|| false)

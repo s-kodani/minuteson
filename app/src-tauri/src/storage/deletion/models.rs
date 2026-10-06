@@ -145,7 +145,7 @@ pub(crate) struct Preview {
 
 fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
     if check() {
-        Err("モデル削除の対象検査を取り消しました。データは変更していません".into())
+        Err("モデル削除の対象検査を取り消しました。未処理の対象を保持し、既に削除したファイルは復元しません".into())
     } else {
         Ok(())
     }
@@ -285,7 +285,9 @@ fn walk(
     }
     Ok(())
 }
-fn inventory(
+// Removal compares only actual objects; its own staged registered file must
+// not consume a second slot as a synthesized missing original at the 256 limit.
+fn present_inventory(
     models: &Directory,
     record: &PlacementRecord,
     check: &impl Fn() -> bool,
@@ -295,6 +297,19 @@ fn inventory(
     if let Some(package) = models.child(&record.package_id)? {
         walk(&package, "", &registered, &mut result, check)?;
     }
+    models.verify()?;
+    Ok(result.into_values().collect())
+}
+fn inventory(
+    models: &Directory,
+    record: &PlacementRecord,
+    check: &impl Fn() -> bool,
+) -> Result<Vec<Observation>, String> {
+    let mut result: BTreeMap<_, _> = present_inventory(models, record, check)?
+        .into_iter()
+        .map(|o| (o.entry.relative_path.clone(), o))
+        .collect();
+    let registered = expected(record);
     for (path, kind) in registered {
         if !result.contains_key(&path) {
             if result.len() >= MAX_ENTRIES {
@@ -380,8 +395,8 @@ fn capture_locked(
     }
     let models = Directory::root(root)?;
     let models_root = models.proof()?.identity;
-    let (record, placed) =
-        storage::model_placements::load(db, package)?.ok_or("管理モデルの配置記録がありません")?;
+    let (record, placed) = storage::model_placements::load_history(db, package)?
+        .ok_or("管理モデルの配置記録がありません")?;
     if record.review_hash != review {
         return Err("モデル削除の確認対象が配置記録と一致しません".into());
     }
@@ -391,7 +406,7 @@ fn capture_locked(
     if inventory(&models, &record, check)? != observations
         || models.proof()?.identity != models_root
         || storage.managed_anchor.identity()? != (storage_root.clone(), database.clone())
-        || storage::model_placements::load(db, package)? != Some((record.clone(), placed))
+        || storage::model_placements::load_history(db, package)? != Some((record.clone(), placed))
         || usages(db, package)? != (profile_references, job_references, active_jobs)
     {
         return Err("モデル削除の対象・記録が検査中に変更されました".into());

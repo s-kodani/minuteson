@@ -34,6 +34,7 @@ export interface ModelPlacementEntry {
   engineVersion: string;
   totalBytes: number;
   placementRecorded: boolean;
+  bodyRemoved?: boolean;
   ready: false;
   reviewHash: string;
   compatibility?: ModelCompatibilitySummary | null;
@@ -59,11 +60,17 @@ export function assertCompatibilitySummary(summary: ModelCompatibilitySummary, t
     throw Error("互換性の応答と確認した素材・操作が一致しません。配置記録を再読込してください。");
   }
 }
-export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready"> & Partial<Pick<ModelPlacementEntry, "compatibility" | "packageId" | "reviewHash">>): string {
+export function modelBodyAvailable(entry: Pick<ModelPlacementEntry, "bodyRemoved">): boolean {
+  if (entry.bodyRemoved !== undefined && typeof entry.bodyRemoved !== "boolean") throw Error("モデル本体の削除状態が不正です。配置記録を再読込してください。");
+  return entry.bodyRemoved !== true;
+}
+export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready"> & Partial<Pick<ModelPlacementEntry, "compatibility" | "packageId" | "reviewHash" | "bodyRemoved">>): string {
   if (entry.ready !== false) throw Error("配置記録だけでAI準備完了とは扱えません。");
+  const available = modelBodyAvailable(entry);
   if (entry.compatibility) {
     validateCompatibility(entry.compatibility);
     if (!entry.placementRecorded || entry.compatibility.packageId !== entry.packageId || entry.compatibility.reviewHash !== entry.reviewHash) throw Error("配置と互換性の記録が一致しません。");
+    if (!available) return "モデル本体は削除済み・配置とCPU確認の履歴は保持";
     switch (entry.compatibility.state) {
       case "preparing": return "互換性確認中";
       case "succeeded": return "CPU互換性確認済み（適用状態は構成記録を参照）";
@@ -72,6 +79,7 @@ export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecord
       case "interrupted": return "前回の互換性確認が中断・明示的な再確認が必要";
     }
   }
+  if (!available) return "モデル本体は削除済み・履歴記録は保持";
   return entry.placementRecorded ? "配置記録あり・互換性検証待ち" : "未完了の配置・途中ファイルは保全";
 }
 export function assertPlacementReceipt(receipt: ModelPlacementReceipt, token: string, reviewHash: string) {

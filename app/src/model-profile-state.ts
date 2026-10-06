@@ -1,7 +1,7 @@
 import type { EnginePreferences } from "./analysis-state.ts";
 import type { DiarizationEngine } from "./diarization-state.ts";
 import type { MinutesEngine } from "./minutes-state.ts";
-import { placementLabel, type ModelPlacementEntry } from "./model-inspection-state.ts";
+import { modelBodyAvailable, placementLabel, type ModelPlacementEntry } from "./model-inspection-state.ts";
 
 export type ModelProfileName = "standard" | "high_accuracy";
 export type ModelSettings = { engine: "whisper.cpp"; settings: EnginePreferences }
@@ -36,7 +36,7 @@ function fail(): never { throw Error("モデル構成と確認内容が一致し
 export function profileName(name: ModelProfileName) { return name === "standard" ? "標準" : "高精度"; }
 export function canReviewApplication(entry: ModelPlacementEntry): boolean {
   placementLabel(entry);
-  return entry.placementRecorded && entry.compatibility?.state === "succeeded";
+  return entry.placementRecorded && modelBodyAvailable(entry) && entry.compatibility?.state === "succeeded";
 }
 export function assertProfileView(view: ModelProfileView) {
   if (!view || !names.includes(view.name) || !version(view.profileVersion) || !Array.isArray(view.components)

@@ -179,7 +179,7 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
     }
   };
   const check = async (entry: ModelPlacementEntry) => {
-    if (!entry.placementRecorded || busy || locked || recordingActive || !isTauri()) return;
+    if (!entry.placementRecorded || entry.bodyRemoved || busy || locked || recordingActive || !isTauri()) return;
     if (!window.confirm(`「${entry.modelName}」のCPU互換性を確認しますか？\n取り込んだ実行ファイル（${entry.engine} / 申告版 ${entry.engineVersion}）を利用者の権限で起動します。配布元・ライセンス・実行ファイルを信頼できることを確認してください。ネットワークや利用者のファイルへのアクセスを隔離する仕組みはありません。\nCPU・1スレッドで合成入力だけを使用します。会議音声は使いません。アプリは既存ジョブ・設定・プロファイルを変更しません。推論の待ち時間は最大120秒（ファイル照合は別）で、途中ログを保全します。\n成功しても精度・速度・話者数の正式評価や、解析への適用済みにはなりません。`)) return;
     const token = crypto.randomUUID();
     attempt.current.begin(token); setBusy(true); setPlacing(false); setChecking(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage("");
@@ -237,7 +237,7 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
         <p>{placementLabel(entry)} · {entry.totalBytes.toLocaleString()} bytes<br />配置ID: <code>{entry.packageId}</code></p>
         {entry.compatibility && <p>確認操作ID: <code>{entry.compatibility.operationId}</code>{entry.compatibility.errorMessage && <><br />{entry.compatibility.errorMessage}</>}</p>}
         <div className="analysis-actions">
-          <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>
+          <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>
           {(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}
           <button type="button" className="small-secondary" disabled={busy || locked || recordingActive || catalogLoading || !!catalogError || !isTauri()} onClick={event => void reviewDeletion(entry, event.currentTarget)}>削除対象を確認（まだ削除しません）</button>
         </div>
