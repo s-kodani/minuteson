@@ -260,6 +260,9 @@ fn completed_kind(
     if row.9 == "{\"modelReconfirmationRecorded\":true}" {
         return Ok("modelReconfirmation");
     }
+    if row.9 == super::audio::intent::removal::renewal::AUDIT_PROGRESS {
+        return Ok("audioRemainingReconfirmation");
+    }
     let routing: serde_json::Value = serde_json::from_str(&row.6).map_err(|e| e.to_string())?;
     match routing["subtype"].as_str() {
         Some("audioOnlyDeletion") => Ok("completedAudio"),

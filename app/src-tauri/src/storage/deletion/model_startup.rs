@@ -83,6 +83,17 @@ pub(in crate::storage) fn inspect(
                 }
                 return Ok(None);
             }
+            if progress == crate::storage::deletion::audio::intent::removal::renewal::AUDIT_PROGRESS
+            {
+                let valid =
+                    crate::storage::deletion::audio::intent::removal::renewal::audit_source(&json)
+                        .and_then(|parent| {
+                            crate::storage::deletion::audio::intent::removal::inspect_audit_member(
+                                db, anchor, &parent, &operation,
+                            )
+                        });
+                return Ok(valid.err().map(|_| "audio_completed_receipt_invalid"));
+            }
             let receipt = removal::Receipt::load(db, &operation)?;
             receipt.verify_history_anchor(db, anchor)?;
             // SQL completed is immutable even while a newly accepted v3 plan

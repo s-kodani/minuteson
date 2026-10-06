@@ -86,7 +86,7 @@ impl Source {
                 return Err("音声再同意の元記録・会議・同意順序が一致しません".into());
             }
             bytes = bytes
-                .checked_add(saved.header.snapshot_bytes)
+                .checked_add(receipt.source_bytes())
                 .ok_or("音声再同意の証拠容量が範囲外です")?;
             if bytes > MAX_BYTES {
                 return Err("音声再同意の証拠合計が容量上限を超えています".into());

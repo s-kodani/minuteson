@@ -91,15 +91,14 @@ pub(super) fn absent(
     let Some(meetings) = anchor.directory_ref()?.child("meetings")? else {
         return Ok(true);
     };
-    for (index, target) in r.targets.iter().enumerate() {
+    for path in &r.historical_paths {
         super::super::super::cancel(check)?;
         let Some(mut dir) = meetings.child(r.saved.meeting())? else {
             continue;
         };
         let mut prefix = format!("meetings/{}", r.saved.meeting());
         let root = r
-            .saved
-            .snapshot
+            .plan
             .manifest
             .entries
             .iter()
@@ -107,8 +106,7 @@ pub(super) fn absent(
             .and_then(|e| e.proof.as_ref())
             .ok_or("会議ルートの確認実体がありません")?;
         anchor.verify_history_directory(db, r.saved.operation(), &prefix, &dir, &root.identity)?;
-        let rest = target
-            .path
+        let rest = path
             .strip_prefix(&format!("{prefix}/"))
             .ok_or("音声対象が会議外です")?;
         let (parents, leaf) = rest.rsplit_once('/').unwrap_or(("", rest));
@@ -120,8 +118,7 @@ pub(super) fn absent(
                 break;
             };
             let expected = r
-                .saved
-                .snapshot
+                .plan
                 .manifest
                 .entries
                 .iter()
@@ -137,10 +134,7 @@ pub(super) fn absent(
             )?;
             dir = child;
         }
-        if !missing
-            && (dir.optional_kind(leaf)?.is_some()
-                || dir.optional_kind(&r.reserved(index))?.is_some())
-        {
+        if !missing && dir.optional_kind(leaf)?.is_some() {
             return Ok(false);
         }
     }

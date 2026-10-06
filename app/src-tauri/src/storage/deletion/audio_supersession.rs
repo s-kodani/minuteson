@@ -225,6 +225,21 @@ fn marker_for(db: &Connection, audio: &str) -> Result<Option<String>, String> {
     }
     Ok(ids.into_iter().next())
 }
+pub(super) fn remaining_audit_member(
+    db: &Connection,
+    anchor: &RootAnchor,
+    parent: &str,
+    audit: &str,
+) -> Result<bool, String> {
+    let Some(marker) = marker_for(db, parent)? else {
+        return Ok(false);
+    };
+    let proof = Proof::load_metadata(db, anchor, &marker, &|| false)?;
+    if !super::audio::intent::removal::superseded_audit_member(db, parent, audit, &proof)? {
+        return Err("完全削除の元音声履歴に接続しない確認記録です".into());
+    }
+    Ok(true)
+}
 pub(super) fn startup_parent(
     db: &Connection,
     anchor: &RootAnchor,

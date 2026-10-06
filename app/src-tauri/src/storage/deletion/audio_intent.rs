@@ -345,11 +345,47 @@ fn read_frame(
     {
         return Err("音声削除の保存確認の種類・形式・状態が不正です".into());
     }
+    let snapshot = read_snapshot(
+        db,
+        operation,
+        header.snapshot_bytes,
+        &header.snapshot_hash,
+        header.chunk_count,
+        check,
+    )?;
+    let saved = Prepared {
+        header,
+        snapshot,
+        consent,
+        kept,
+    };
+    saved.validate(db)?;
+    super::cancel(check)?;
+    Ok(saved)
+}
+
+fn read_snapshot(
+    db: &Connection,
+    operation: &str,
+    snapshot_bytes: usize,
+    snapshot_hash: &str,
+    chunk_count: usize,
+    check: &impl Fn() -> bool,
+) -> Result<Snapshot, String> {
+    if snapshot_bytes == 0
+        || snapshot_bytes > MAX_BYTES
+        || !hash_valid(snapshot_hash)
+        || chunk_count == 0
+        || chunk_count > MAX_CHUNKS
+        || chunk_count != snapshot_bytes.div_ceil(CHUNK)
+    {
+        return Err("音声の対象証拠の容量・形式が不正です".into());
+    }
     let mut q=db.prepare("SELECT relative_path,kind,size_bytes,content_hash,identity_json,identity_hash,length(CAST(identity_json AS BLOB)),length(CAST(relative_path AS BLOB)) FROM maintenance_paths WHERE operation_id=?1 ORDER BY relative_path LIMIT ?2").map_err(|e|e.to_string())?;
     let mut rows = q
         .query(params![operation, MAX_CHUNKS as i64 + 1])
         .map_err(|e| e.to_string())?;
-    let mut bytes = Vec::with_capacity(header.snapshot_bytes);
+    let mut bytes = Vec::with_capacity(snapshot_bytes);
     let mut count = 0;
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         super::cancel(check)?;
@@ -365,39 +401,30 @@ fn read_frame(
         let json: String = row.get(4).map_err(|e| e.to_string())?;
         let json_hash: String = row.get(5).map_err(|e| e.to_string())?;
         let part = decode_chunk(&json)?;
-        if count >= header.chunk_count
+        if count >= chunk_count
             || name != slot(count)
             || kind != "file"
             || size != part.len() as i64
             || digest != hash(&part)
             || json_hash != hash(json.as_bytes())
-            || (count + 1 < header.chunk_count && part.len() != CHUNK)
-            || bytes.len() + part.len() > header.snapshot_bytes
+            || (count + 1 < chunk_count && part.len() != CHUNK)
+            || bytes.len() + part.len() > snapshot_bytes
         {
             return Err("音声削除の分割証拠・順序・容量が一致しません".into());
         }
         bytes.extend(part);
         count += 1;
     }
-    if count != header.chunk_count
-        || bytes.len() != header.snapshot_bytes
-        || hash(&bytes) != header.snapshot_hash
-    {
+    if count != chunk_count || bytes.len() != snapshot_bytes || hash(&bytes) != snapshot_hash {
         return Err("音声削除の保存対象証拠が欠落・変更されています".into());
     }
     let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if snapshot.encode()? != bytes {
         return Err("音声削除の保存対象が正規形式ではありません".into());
     }
-    let saved = Prepared {
-        header,
-        snapshot,
-        consent,
-        kept,
-    };
-    saved.validate(db)?;
+    snapshot.validate(db)?;
     super::cancel(check)?;
-    Ok(saved)
+    Ok(snapshot)
 }
 
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {

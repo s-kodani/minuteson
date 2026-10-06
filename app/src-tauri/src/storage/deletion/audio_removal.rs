@@ -20,6 +20,8 @@ use std::{
 
 #[path = "audio_completion.rs"]
 pub(crate) mod completion;
+#[path = "audio_renewal.rs"]
+pub(crate) mod renewal;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +46,8 @@ struct Progress {
     pending: Option<Pending>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     final_audio: Option<Vec<crate::storage::deletion::database::Table>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirmation: Option<renewal::Reference>,
 }
 impl Progress {
     fn state(&self) -> &'static str {
@@ -63,7 +67,10 @@ impl Progress {
         Ok(json)
     }
     fn validate(&self, saved: &Prepared, targets: &[Entry]) -> Result<(), String> {
-        if self.version != 2
+        if !matches!(
+            (self.version, self.confirmation.is_some()),
+            (2, false) | (3, true)
+        ) || self.confirmation.as_ref().is_some_and(|r| !r.valid())
             || self.census_hash != saved.header.census_hash
             || self.next > targets.len()
             || (self.phase != Phase::RemovingAudio
@@ -102,15 +109,19 @@ pub(crate) struct Receipt {
     saved: Prepared,
     progress: Progress,
     targets: Vec<Entry>,
+    plan: super::super::Snapshot,
+    policy: super::Policy,
+    historical_paths: BTreeSet<String>,
+    audits: Vec<String>,
+    proof_bytes: usize,
 }
-fn targets(saved: &Prepared) -> Result<Vec<Entry>, String> {
-    saved
-        .snapshot
+fn targets(snapshot: &super::super::Snapshot) -> Result<Vec<Entry>, String> {
+    snapshot
         .manifest
         .entries
         .iter()
         .filter(|e| !e.directory)
-        .filter_map(|e| match saved.snapshot.disposition(e) {
+        .filter_map(|e| match snapshot.disposition(e) {
             Ok(d) if audio(&d) => Some(Ok(e.clone())),
             Ok(_) => None,
             Err(e) => Some(Err(e)),
@@ -146,12 +157,18 @@ impl Receipt {
                 super::read_frame(db, operation, Some((&state, &json)), Some(proof), check)?
             }
         };
-        let targets = targets(&saved)?;
+        let plan = renewal::load(db, &saved, &progress, check)?;
+        let targets = targets(&plan.snapshot)?;
         progress.validate(&saved, &targets)?;
         Ok(Self {
             saved,
             progress,
             targets,
+            plan: plan.snapshot,
+            policy: plan.policy,
+            historical_paths: plan.paths,
+            audits: plan.audits,
+            proof_bytes: plan.bytes,
         })
     }
     pub(in crate::storage::deletion) fn verify_saved(
@@ -180,11 +197,10 @@ impl Receipt {
         &self.saved
     }
     pub(super) fn source_paths(&self) -> BTreeSet<String> {
-        self.targets
-            .iter()
-            .enumerate()
-            .flat_map(|(index, entry)| [entry.path.clone(), self.reserved_path(index)])
-            .collect()
+        self.historical_paths.clone()
+    }
+    pub(super) fn source_bytes(&self) -> usize {
+        self.proof_bytes
     }
     pub(super) fn source_seal(&self, db: &Connection) -> Result<String, String> {
         let row: (i64, i64) = db
@@ -194,8 +210,9 @@ impl Receipt {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        Ok(super::hash(
-            &serde_json::to_vec(&(
+        let bytes = if self.progress.confirmation.is_none() {
+            // Keep persisted v1/v2 origin seals byte-for-byte compatible.
+            serde_json::to_vec(&(
                 "completed_audio_source",
                 row,
                 &self.saved.header,
@@ -203,14 +220,33 @@ impl Receipt {
                 self.saved.consent,
                 &self.progress,
             ))
-            .map_err(|e| e.to_string())?,
-        ))
+        } else {
+            serde_json::to_vec(&(
+                "renewed_completed_audio_source",
+                row,
+                &self.saved.header,
+                &self.saved.snapshot,
+                self.saved.consent,
+                &self.progress,
+                &self.plan,
+                &self.policy,
+                &self.historical_paths,
+            ))
+        }
+        .map_err(|e| e.to_string())?;
+        Ok(super::hash(&bytes))
     }
     pub(crate) fn processed_files(&self) -> usize {
         self.progress.next
     }
     pub(in crate::storage::deletion::audio) fn confirmed(&self) -> &Prepared {
         &self.saved
+    }
+    pub(in crate::storage::deletion::audio) fn snapshot(&self) -> &super::super::Snapshot {
+        &self.plan
+    }
+    pub(in crate::storage::deletion::audio) fn policy(&self) -> &super::Policy {
+        &self.policy
     }
     pub(in crate::storage::deletion::audio) fn verify_live(
         &self,
@@ -227,7 +263,14 @@ impl Receipt {
         active(lease, check)
     }
     fn reserved(&self, index: usize) -> String {
-        format!(".mon-delete-audio-{}-{index}", self.saved.operation())
+        renewal::reserved(
+            self.saved.operation(),
+            self.progress
+                .confirmation
+                .as_ref()
+                .map_or(0, |r| r.generation),
+            index,
+        )
     }
     fn reserved_path(&self, index: usize) -> String {
         format!(
@@ -297,6 +340,7 @@ impl Receipt {
             || next.version != self.progress.version
             || next.census_hash != self.progress.census_hash
             || next.final_audio != self.progress.final_audio
+            || next.confirmation != self.progress.confirmation
         {
             return Err("音声削除の進捗遷移が不正です".into());
         }
@@ -326,6 +370,44 @@ pub(in crate::storage::deletion) fn validate_superseded(
         return Err("引き継ぐ音声削除の完了状態・管理領域が一致しません".into());
     }
     super::super::cancel(check)
+}
+
+pub(in crate::storage::deletion) fn superseded_audit_member(
+    db: &Connection,
+    operation: &str,
+    audit: &str,
+    proof: &crate::storage::deletion::audio_supersession::Proof,
+) -> Result<bool, String> {
+    let receipt = Receipt::load_frame(db, operation, Some(proof), &|| false)?;
+    if !receipt.completed() {
+        return Err("再同意元の音声履歴が完了していません".into());
+    }
+    Ok(receipt.audits.iter().any(|id| id == audit))
+}
+
+pub(in crate::storage::deletion) fn inspect_audit_member(
+    db: &Connection,
+    anchor: &crate::storage::deletion::fs::RootAnchor,
+    operation: &str,
+    audit: &str,
+) -> Result<(), String> {
+    if crate::storage::deletion::audio_supersession::remaining_audit_member(
+        db, anchor, operation, audit,
+    )? {
+        return Ok(());
+    }
+    let receipt = Receipt::load(db, operation, &|| false)?;
+    if !receipt.audits.iter().any(|id| id == audit)
+        || !anchor.matches_history_root(
+            db,
+            operation,
+            &receipt.saved.snapshot.manifest.root,
+            &receipt.saved.snapshot.manifest.database,
+        )?
+    {
+        return Err("元の音声削除に接続していない確認記録です".into());
+    }
+    Ok(())
 }
 
 // Compare the complete fixed tree, not only the next audio path. Only exact
@@ -397,8 +479,7 @@ fn verify_tree(
         .map(|e| (e.path.clone(), e.clone()))
         .collect();
     let mut expected: BTreeMap<_, _> = r
-        .saved
-        .snapshot
+        .plan
         .manifest
         .entries
         .iter()
@@ -493,8 +574,7 @@ fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, Strin
         .ok_or("対象会議領域がありません")?;
     let mut relative = format!("meetings/{}", r.saved.meeting());
     let root_entry = r
-        .saved
-        .snapshot
+        .plan
         .manifest
         .entries
         .iter()
@@ -514,8 +594,7 @@ fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, Strin
         for component in parents.split('/') {
             relative = format!("{relative}/{component}");
             let e = r
-                .saved
-                .snapshot
+                .plan
                 .manifest
                 .entries
                 .iter()
@@ -577,7 +656,7 @@ pub(crate) fn start(
         .map_err(|_| "DBロックを取得できません")?;
     let saved = super::read(&db, operation, &|| check() || lease.cancelled())?;
     saved.verify_locked(storage, &db, lease, check)?;
-    let targets = targets(&saved)?;
+    let targets = targets(&saved.snapshot)?;
     // Renaming a registered file adds a missing original and a staged entry.
     if saved.snapshot.manifest.entries.len() >= MAX_ENTRIES
         && targets
@@ -593,11 +672,18 @@ pub(crate) fn start(
         next: 0,
         pending: None,
         final_audio: None,
+        confirmation: None,
     };
+    let plan = renewal::load(&db, &saved, &progress, check)?;
     let r = Receipt {
         saved,
         progress,
         targets,
+        plan: plan.snapshot,
+        policy: plan.policy,
+        historical_paths: plan.paths,
+        audits: plan.audits,
+        proof_bytes: plan.bytes,
     };
     r.progress.validate(&r.saved, &r.targets)?;
     let observed_paths: BTreeSet<_> = r

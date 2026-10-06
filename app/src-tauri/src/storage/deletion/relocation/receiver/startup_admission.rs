@@ -88,7 +88,8 @@ fn record_valid(record: &Record, version: u32) -> bool {
                 | "restoredAudioUnavailable"
                 | "audioHistorySupersession"
                 | "completedModel"
-                | "modelReconfirmation",
+                | "modelReconfirmation"
+                | "audioRemainingReconfirmation",
             ) => true,
             _ => false,
         }

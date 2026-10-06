@@ -87,7 +87,7 @@ impl Target {
         match self {
             Self::Fresh(c) => c.snapshot(),
             Self::Unstarted(p) | Self::Kept(p) => p.snapshot().clone(),
-            Self::Files(r) => r.confirmed().snapshot().clone(),
+            Self::Files(r) => r.snapshot().clone(),
             Self::Reconfirmation(r) | Self::Restored(r) => r.snapshot().clone(),
         }
     }
@@ -270,7 +270,7 @@ impl Prepared {
                 } else {
                     "files"
                 },
-                Some(r.confirmed().policy()),
+                Some(r.policy()),
                 r.confirmed().origin_operation(),
                 r.processed_files(),
                 r.completed(),
