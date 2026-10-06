@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { acceptDataSnapshot, type DataAvailability, type DataSnapshot } from "./data-operation-state";
 import { assertDeletionListing, type DeletionListing } from "./deletion-state";
+import { assertModelBodyDeletionListing, type ModelBodyDeletionListing } from "./model-deletion-operation-state";
 
 export function useDataOperation() {
   const current = useRef<DataSnapshot | null>(null);
@@ -12,6 +13,8 @@ export function useDataOperation() {
   const [error, setError] = useState("");
   const [deletionListing, setDeletionListing] = useState<DeletionListing | null>(null);
   const [deletionSupported, setDeletionSupported] = useState(false);
+  const [modelDeletionListing, setModelDeletionListing] = useState<ModelBodyDeletionListing | null>(null);
+  const [modelDeletionSupported, setModelDeletionSupported] = useState(false);
   const readEpoch = useRef(0);
   const accept = (next: DataSnapshot) => {
     const value = acceptDataSnapshot(current.current, next);
@@ -27,7 +30,10 @@ export function useDataOperation() {
       const supported = Object.hasOwn(next, "deletionPreview");
       const listing = supported ? await invoke<DeletionListing>("get_deletion_items") : null;
       if (listing) assertDeletionListing(listing);
-      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setConnected(true); setError(""); }
+      const modelSupported = Object.hasOwn(next, "modelDeletionPreview");
+      const modelListing = modelSupported ? await invoke<ModelBodyDeletionListing>("get_model_deletion_items") : null;
+      if (modelListing) assertModelBodyDeletionListing(modelListing);
+      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setConnected(true); setError(""); }
     } catch (cause) {
       if (epoch === readEpoch.current) { setAvailability(null); setConnected(false); setError(String(cause)); }
       throw cause;
@@ -54,6 +60,6 @@ export function useDataOperation() {
     window.addEventListener("focus", poll);
     return () => { disposed = true; unlisten?.(); window.clearInterval(timer); window.removeEventListener("focus", poll); };
   }, []);
-  return { snapshot, connected, availability, deletionListing, deletionSupported, error, accept, refresh, getSnapshot: () => current.current };
+  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, error, accept, refresh, getSnapshot: () => current.current };
 }
 export type DataOperation = ReturnType<typeof useDataOperation>;

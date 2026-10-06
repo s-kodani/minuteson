@@ -14,6 +14,7 @@ import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
 import { RecoveryPanel } from "./recovery-panel";
 import { MeetingDeletionPanel, useMeetingDeletion } from "./meeting-deletion";
+import { ModelBodyDeletionPanel, useModelBodyDeletion } from "./model-body-deletion";
 import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
@@ -89,6 +90,8 @@ function MainWindow() {
   const dataOperation = useDataOperation();
   const [dataPending, setDataPending] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState(false);
+  const [modelDeletionPending, setModelDeletionPending] = useState(false);
+  const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0);
   const [restoredIds, setRestoredIds] = useState<string[]>([]);
   const [restoredFilter, setRestoredFilter] = useState<string[] | null>(null);
   const [originError, setOriginError] = useState("");
@@ -127,13 +130,15 @@ function MainWindow() {
       setNavigationBusy(false);
     }
   };
-  const deletion = useMeetingDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending, withSavedEdits,
+  const deletion = useMeetingDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || modelDeletionPending, withSavedEdits,
     onDeleted: async receipt => {
       setSelectedMeeting(current => current?.id === receipt.meetingId ? null : current);
       setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins();
     } });
-  const navigationLocked = navigationBusy || dataPending || recoveryPending || deletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
-  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending;
+  const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || deletion.protectedNow, withSavedEdits,
+    onProtectionChange: setModelDeletionPending, onDeleted: async () => { setModelCatalogEpoch(epoch => epoch + 1); } });
+  const navigationLocked = navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending;
   const writeLocked = navigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   useEffect(() => {
     if (!isTauri()) return;
@@ -164,8 +169,8 @@ function MainWindow() {
         }
         const data = await invoke<DataSnapshot>("get_data_operation");
         assertDataSnapshot(data);
-        if (data.busy || data.retryAllowed || data.deletionPreview?.pending) {
-          if (!window.confirm(data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
+        if (data.busy || data.retryAllowed || data.deletionPreview?.pending || data.modelDeletionPreview?.pending) {
+          if (!window.confirm(data.kind === "model_deletion" ? "モデル本体削除の停止を待って終了しますか？ 未完了記録・残りの対象と履歴を保持します。既に消した本体は復元しません。" : data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
           if (data.token) await invoke("cancel_data_operation", { token: data.token });
         }
         await invoke("finish_main_close", { quit: event.payload.quit });
@@ -306,10 +311,11 @@ function MainWindow() {
             setSelectedMeeting(meeting);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending || deletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
-          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending || deletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
-          {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
+          <ModelBodyDeletionPanel operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
+          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
+          {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} deletionControl={modelDeletion} refreshEpoch={modelCatalogEpoch} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />{meetingError && <p className="action-error" role="alert">{meetingError}</p>}</> : <>
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>

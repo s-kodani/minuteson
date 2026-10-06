@@ -3,8 +3,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "./model-inspection-state";
 import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, profileName, type ModelApplicationPreview, type ModelProfileName, type ModelProfileView } from "./model-profile-state";
 import { assertModelDeletionPreview, modelDeletionEntryLabel, type ModelDeletionPreview } from "./model-deletion-state";
+import type { ModelBodyDeletionControl } from "./model-body-deletion";
 
-export function ModelInspectionPanel({ locked, recordingActive }: { locked: boolean; recordingActive: boolean }) {
+export function ModelInspectionPanel({ locked, recordingActive, deletionControl, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; deletionControl?: ModelBodyDeletionControl; refreshEpoch?: number }) {
   const [directory, setDirectory] = useState("");
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -54,6 +55,7 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
       if (token && isTauri()) void invoke("cancel_model_inspection", { token }).catch(() => {});
     };
   }, []);
+  useEffect(() => { if (refreshEpoch > 0) void loadPlacements(); }, [refreshEpoch]);
   useEffect(() => {
     if (!application || !dialog.current) return;
     const element = dialog.current;
@@ -240,6 +242,7 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
           <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>
           {(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}
           <button type="button" className="small-secondary" disabled={busy || locked || recordingActive || catalogLoading || !!catalogError || !isTauri()} onClick={event => void reviewDeletion(entry, event.currentTarget)}>削除対象を確認（まだ削除しません）</button>
+          {deletionControl && <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || !deletionControl.canReviewNew || busy || locked || recordingActive || catalogLoading || !!catalogError} onClick={() => void deletionControl.reviewNew(entry.packageId, entry.reviewHash)}>本体削除の実行確認へ</button>}
         </div>
       </li>)}</ul>}
     </section>
@@ -250,7 +253,7 @@ export function ModelInspectionPanel({ locked, recordingActive }: { locked: bool
     {deletionReview && <dialog ref={deletionDialog} className="model-application-dialog model-deletion-dialog" aria-labelledby="model-deletion-title" onCancel={event => { event.preventDefault(); setDeletionReview(null); }}>
       <h2 id="model-deletion-title" tabIndex={-1}>モデル削除の対象確認（読み取り専用）</h2>
       <p>{deletionReview.modelName} / {deletionReview.modelVersion}</p>
-      <p>削除の実行・確認内容の永続化・中断後の続行は実装中です。この画面で削除や設定変更はできません。検査結果のSHAは削除許可ではありません。</p>
+      <p>この画面は読み取り専用です。削除や設定変更はできません。削除の実行には別の本体削除確認画面での同意が必要です。検査結果のSHAは削除許可ではありません。</p>
       <p>対象フォルダー: <code>{deletionReview.modelsRoot}/{deletionReview.packageId}</code></p>
       <p>フォルダーを含む {deletionReview.entries.length} 件・現在存在するファイル {deletionReview.bytes.toLocaleString()} bytes。欠落 {deletionReview.missingFiles} 件・登録内容から変更 {deletionReview.changedFiles} 件・未登録ファイル {deletionReview.unregisteredFiles} 件。</p>
       <p>構成履歴の参照 {deletionReview.profileReferences} 件・ジョブ履歴の参照 {deletionReview.jobReferences} 件。履歴参照数は現在の利用中プロセス数や削除可否を示しません。DB上の実行／停止待ちジョブはアプリ全体で {deletionReview.activeJobs} 件（このモデルに限定した数ではありません）。</p>
