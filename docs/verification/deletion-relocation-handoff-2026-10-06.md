@@ -98,11 +98,13 @@ WAL関連ファイルがすべてないDBは、その不在を実体照合の前
 
 再移動9件の接続時の`make check`はRust通常1,099件が成功したが、既存の強制終了テスト4件が子プロセスの`spawn`・`status`・`output`で`ESRCH`（`No such process`）となり、終了コード2で失敗した。Python 65件、フロントエンド152件、Swift 9件は成功した。ログは`/private/tmp/mon-deletion-repeat-final-check1.log`に保存した。失敗は保留中の正式評価やWindows CIではない。
 
-最終コードの強制終了テスト22件は、サンドボックス内の同時実行4件で16成功・6失敗、制限外の同時実行4件で15成功・7失敗、サンドボックス内の直列実行で16成功・6失敗となった。いずれも子プロセス起動の同じエラーで、失敗するケースは変化した。並列数やサンドボックスだけが原因とは判断せず、テストを除外・成功扱いにしない。ログは`/private/tmp/mon-deletion-repeat-sigkill-recheck1.log`、`/private/tmp/mon-deletion-repeat-sigkill-unsandboxed-recheck1.log`、`/private/tmp/mon-deletion-repeat-sigkill-serial-recheck1.log`に保存した。最終コードの全体検査は未通過であり、子プロセス起動の切り分けと再検査が残る。Windows CIは停止したままとする。
+シンボル削減前の強制終了テスト22件は、サンドボックス内の同時実行4件で16成功・6失敗、制限外の同時実行4件で15成功・7失敗、サンドボックス内の直列実行で16成功・6失敗となった。いずれも子プロセス起動の同じエラーで、失敗するケースは変化した。並列数やサンドボックスだけが原因とは判断せず、テストを除外・成功扱いにしない。ログは`/private/tmp/mon-deletion-repeat-sigkill-recheck1.log`、`/private/tmp/mon-deletion-repeat-sigkill-unsandboxed-recheck1.log`、`/private/tmp/mon-deletion-repeat-sigkill-serial-recheck1.log`に保存した。この段階の全体検査は未通過だった。後続の起動対策と再検査は[macOS Rustテストの起動安定性](rust-test-startup-2026-10-06.md)を参照。Windows CIは停止したままとする。
 
-最終コードの固定・配置・配置後検査の関連Rust23件は、`/private/tmp/mon-deletion-repeat-relocation-recheck2.log`で成功した。履歴なしの従来形式、元同意・対象・実体の保持、改変・リンク・再出現の拒否も維持する。直前の検査ではテスト本体が起動する前にも同じESRCHが発生した。テスト実行ファイルは約1.9GBで、`codesign --verify --verbose=4`はディスク上の署名と要件を有効と判定した。起動失敗の原因は未確定である。
+最終コードの固定・配置・配置後検査の関連Rust23件は、`/private/tmp/mon-deletion-repeat-relocation-recheck2.log`で成功した。履歴なしの従来形式、元同意・対象・実体の保持、改変・リンク・再出現の拒否も維持する。直前の検査ではテスト本体が起動する前にも同じESRCHが発生した。シンボル削減前のテスト実行ファイルは2,069,573,424バイトで、`codesign --verify --verbose=4`はディスク上の署名と要件を有効と判定した。macOS内部の起動失敗機構は特定していない。
 
 最終コードの`make check-caf-playback`も終了コード0で成功し、AVFoundation製CAF読出し1件と4800/4800フレームの保持を確認した。ログは`/private/tmp/mon-deletion-repeat-caf-recheck1.log`に保存した。Rustのフォーマット検査と差分の空白検査も成功した。
+
+テスト専用のシンボル削減設定を追加した後の最終コードの`make check`は、`/private/tmp/mon-rust-test-startup-final-check1.log`で終了コード0となった。Python 65件、フロントエンド152件、Swift 9件、再移動10件と強制終了22件を含むRust通常1,104件、別実行のAVFoundation製CAF読出し1件が成功した。環境依存11件と子プロセス専用16件は従来どおりignoredで、assert・オーバーフロー検査を維持する。機能の実機統合や公開切替の完成とは区別し、継続する実装は下記のままとする。
 
 ## 継続する実装
 

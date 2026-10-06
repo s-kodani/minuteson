@@ -26,6 +26,13 @@ md-5 = "0.10"
 crc = "=3.4.0"
 libc = "0.2"
 
+# Keep test-only symbol tables from inflating the native test launcher.
+# Normal dev/release builds and runtime checks are unchanged.
+[profile.test]
+strip = "symbols"
+debug-assertions = true
+overflow-checks = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSOpenPanel", "NSSavePanel", "NSPanel", "NSWindow", "NSResponder"] }
