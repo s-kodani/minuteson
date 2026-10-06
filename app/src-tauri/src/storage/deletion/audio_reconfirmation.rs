@@ -21,6 +21,7 @@ pub(super) struct Origin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::storage::deletion) struct Source {
     receipts: Vec<Receipt>,
+    restored: Option<super::super::restored::Source>,
     paths: BTreeSet<String>,
     origin: Origin,
 }
@@ -35,10 +36,36 @@ impl Source {
         let mut expected: Option<Origin> = None;
         let mut seen = BTreeSet::new();
         let mut bytes = 0usize;
+        let mut restored = None;
         loop {
             super::super::cancel(check)?;
             if receipts.len() >= MAX_GENERATIONS || !seen.insert(next.clone()) {
                 return Err("音声再同意の世代上限・循環を検出しました。履歴を保持します".into());
+            }
+            // A route hint chooses the strict loader only. This terminal
+            // baseline has no consent and cannot become a removal receipt.
+            if super::super::restored::hinted(db, &next)? {
+                let baseline = super::super::restored::Source::load(db, &next, check)?;
+                if expected
+                    .as_ref()
+                    .is_some_and(|e| e.operation_id != next || e.receipt_hash != baseline.seal())
+                    || receipts
+                        .first()
+                        .is_some_and(|r| r.source_saved().meeting() != baseline.meeting())
+                    || receipts
+                        .last()
+                        .is_some_and(|r| r.source_saved().consent < baseline.published())
+                {
+                    return Err("音声再同意の復元元・会議・公開順序が一致しません".into());
+                }
+                bytes = bytes
+                    .checked_add(baseline.bytes())
+                    .ok_or("音声再同意の証拠容量が範囲外です")?;
+                if bytes > MAX_BYTES {
+                    return Err("音声再同意の証拠合計が容量上限を超えています".into());
+                }
+                restored = Some(baseline);
+                break;
             }
             let receipt = Receipt::load(db, &next, check)?;
             // Do not recurse through JSON-derived parents. Check the bounded
@@ -71,7 +98,7 @@ impl Source {
             };
             next = parent.operation_id.clone();
         }
-        let mut paths = BTreeSet::new();
+        let mut paths = restored.as_ref().map_or_else(BTreeSet::new, |r| r.paths());
         for receipt in receipts.iter().rev() {
             let saved = receipt.source_saved();
             validate_historical(&saved.snapshot, &paths)?;
@@ -82,10 +109,18 @@ impl Source {
         }
         let origin = Origin {
             operation_id: operation.to_owned(),
-            receipt_hash: receipts[0].source_seal(db)?,
+            receipt_hash: match receipts.first() {
+                Some(r) => r.source_seal(db)?,
+                None => restored
+                    .as_ref()
+                    .ok_or("音声再同意の元記録がありません")?
+                    .seal()
+                    .to_owned(),
+            },
         };
         Ok(Self {
             receipts,
+            restored,
             paths,
             origin,
         })
@@ -103,8 +138,8 @@ impl Source {
         let source = Self::load(db, &origin.operation_id, check)?;
         if source.origin != *origin
             || source.meeting() != saved.meeting()
-            || source.receipts[0].source_saved().consent > saved.consent
-            || source.receipts.len() >= MAX_GENERATIONS
+            || source.recorded_at() > saved.consent
+            || source.generations() >= MAX_GENERATIONS
         {
             return Err("音声再同意の元記録・世代が一致しません".into());
         }
@@ -112,7 +147,27 @@ impl Source {
         Ok(source)
     }
     pub(in crate::storage::deletion) fn meeting(&self) -> &str {
-        self.receipts[0].source_saved().meeting()
+        match self.receipts.first() {
+            Some(r) => r.source_saved().meeting(),
+            None => self
+                .restored
+                .as_ref()
+                .expect("validated source has a baseline")
+                .meeting(),
+        }
+    }
+    fn generations(&self) -> usize {
+        self.receipts.len() + usize::from(self.restored.is_some())
+    }
+    fn recorded_at(&self) -> i64 {
+        match self.receipts.first() {
+            Some(r) => r.source_saved().consent,
+            None => self
+                .restored
+                .as_ref()
+                .expect("validated source has a baseline")
+                .published(),
+        }
     }
     pub(in crate::storage::deletion) fn verify_saved(
         &self,
@@ -131,17 +186,22 @@ impl Source {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         self.verify_saved(db, check)?;
-        let saved = self.receipts[0].source_saved();
-        if storage.retired.load(Ordering::Acquire)
-            || storage.maintenance.load(Ordering::Acquire)
-            || !storage.managed_anchor.matches_history_root(
+        if storage.retired.load(Ordering::Acquire) || storage.maintenance.load(Ordering::Acquire) {
+            return Err("音声再同意の元履歴と現在の所有領域が一致しません".into());
+        }
+        if let Some(receipt) = self.receipts.first() {
+            let saved = receipt.source_saved();
+            if !storage.managed_anchor.matches_history_root(
                 db,
                 saved.operation(),
                 &saved.snapshot.manifest.root,
                 &saved.snapshot.manifest.database,
-            )?
-        {
-            return Err("音声再同意の元履歴と現在の所有領域が一致しません".into());
+            )? {
+                return Err("音声再同意の元履歴と現在の所有領域が一致しません".into());
+            }
+        }
+        if let Some(baseline) = &self.restored {
+            baseline.verify_anchor(db, &storage.managed_anchor)?;
         }
         Ok(())
     }
@@ -238,7 +298,7 @@ impl Review {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         let source = Source::load(&db, operation, check)?;
-        if source.receipts.len() >= MAX_GENERATIONS {
+        if source.generations() >= MAX_GENERATIONS {
             return Err("音声再同意の世代が上限に達しています".into());
         }
         if !storage.deletion_fence.resume_restart_required() {
@@ -403,6 +463,20 @@ pub(super) fn clear_resolved_attention(
         let operation = receipt.source_saved().operation();
         if crate::storage::deletion::startup::contains(db, operation)?
             && completion::inspect_one(db, &storage.managed_anchor, operation)?.is_none()
+        {
+            db.execute(
+                "DELETE FROM temp.mon_deletion_startup_attention WHERE operation_id=?1",
+                params![operation],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(baseline) = &source.restored {
+        super::super::cancel(check)?;
+        let operation = baseline.operation();
+        if crate::storage::deletion::startup::contains(db, operation)?
+            && super::super::restored::inspect_one(db, &storage.managed_anchor, operation)?
+                .is_none()
         {
             db.execute(
                 "DELETE FROM temp.mon_deletion_startup_attention WHERE operation_id=?1",

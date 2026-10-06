@@ -36,6 +36,7 @@ fn digest(json: &str) -> String {
     format!("{:x}", h.finalize())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::storage) struct History {
     tables: Vec<Table>,
     assets: BTreeSet<String>,
@@ -80,7 +81,7 @@ impl History {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Header {
     version: u32,
@@ -97,6 +98,7 @@ struct Header {
     parents: Vec<Identity>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Receipt {
     header: Header,
     history: History,
@@ -243,6 +245,83 @@ impl Receipt {
             dir = current.child(next)?;
         }
         unreachable!()
+    }
+}
+// A restored receipt is an immutable source of unavailability and exact asset
+// paths, NEVER a deletion consent/removal receipt. No serde grant or writer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::storage::deletion) struct Source {
+    receipt: Receipt,
+    row: (i64, i64),
+    seal: String,
+    bytes: usize,
+}
+impl Source {
+    pub(in crate::storage::deletion) fn load(
+        db: &Connection,
+        operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        let receipt = Receipt::load(db, operation, check)?;
+        let row = db
+            .query_row(
+                "SELECT rowid,created_at FROM maintenance_operations WHERE id=?1",
+                [operation],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_vec(&("restored_audio_unavailable_source", row, &receipt.header))
+            .map_err(|e| e.to_string())?;
+        // Include bounded exact paths in the chain's aggregate byte budget.
+        let path_bytes = receipt.history.assets.iter().try_fold(0usize, |n, id| {
+            n.checked_add(format!("meetings/{}/restored/{id}", receipt.header.meeting).len())
+                .ok_or("復元音声の履歴容量が範囲外です")
+        })?;
+        let bytes = json
+            .len()
+            .checked_add(path_bytes)
+            .ok_or("復元音声の履歴容量が範囲外です")?;
+        cancel(check)?;
+        Ok(Self {
+            receipt,
+            row,
+            seal: format!("{:x}", Sha256::digest(&json)),
+            bytes,
+        })
+    }
+    pub(in crate::storage::deletion) fn operation(&self) -> &str {
+        &self.receipt.header.operation
+    }
+    pub(in crate::storage::deletion) fn meeting(&self) -> &str {
+        &self.receipt.header.meeting
+    }
+    pub(in crate::storage::deletion) fn published(&self) -> i64 {
+        self.row.1
+    }
+    pub(in crate::storage::deletion) fn seal(&self) -> &str {
+        &self.seal
+    }
+    pub(in crate::storage::deletion) fn bytes(&self) -> usize {
+        self.bytes
+    }
+    pub(in crate::storage::deletion) fn paths(&self) -> BTreeSet<String> {
+        self.receipt
+            .history
+            .assets
+            .iter()
+            .map(|id| format!("meetings/{}/restored/{id}", self.meeting()))
+            .collect()
+    }
+    pub(in crate::storage::deletion) fn verify_anchor(
+        &self,
+        db: &Connection,
+        anchor: &RootAnchor,
+    ) -> Result<(), String> {
+        let h = &self.receipt.header;
+        if !anchor.matches_history_root(db, &h.operation, &h.root, &h.database)? {
+            return Err("復元音声の元履歴と現在の所有領域が一致しません".into());
+        }
+        Ok(())
     }
 }
 pub(in crate::storage::deletion) fn validate_superseded(

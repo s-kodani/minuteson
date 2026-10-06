@@ -412,7 +412,13 @@ pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(),
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if matches!(state.as_str(), "installing" | "cleanup" | "completed") {
+    if state == "completed" && super::restored::hinted(&db, operation)? {
+        reconfirmation::Source::load(&db, operation, &|| false)?.verify_review_anchor(
+            storage,
+            &db,
+            &|| false,
+        )?;
+    } else if matches!(state.as_str(), "installing" | "cleanup" | "completed") {
         let receipt = removal::Receipt::load(&db, operation, &|| false)?;
         if receipt.completed() {
             reconfirmation::Source::load(&db, operation, &|| false)?.verify_review_anchor(

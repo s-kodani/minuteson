@@ -11,6 +11,9 @@ use crate::storage::backup::{
 use crate::storage::deletion::audio::restored;
 use rusqlite::{config::DbConfig, TransactionBehavior};
 
+#[path = "restored_audio_reconfirmation_tests.rs"]
+mod reconfirmation;
+
 fn append_receipt(
     source: &Storage,
     target: &Storage,
