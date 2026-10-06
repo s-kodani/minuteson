@@ -167,6 +167,7 @@ impl Storage {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(in crate::storage::backup) fn write_image(
     db: &Connection,
     target: &Path,
@@ -174,6 +175,8 @@ pub(in crate::storage::backup) fn write_image(
     native_hash: &str,
     control_hash: &str,
     history: &transfer::Bundle,
+    deletion_history: Option<&crate::storage::deletion::relocation::Source>,
+    deletion_binding: Option<&crate::storage::deletion::relocation::Destination>,
     bindings: &[binding::Record],
 ) -> Result<(), String> {
     let proof = serde_json::to_string(&Identity::read(&private_directory(target)?)?)
@@ -217,7 +220,32 @@ pub(in crate::storage::backup) fn write_image(
     for o in &history.origins {
         insert(db, o)?;
     }
-    let local_json = history.local_json()?;
+    if deletion_history.is_some() != deletion_binding.is_some() {
+        return Err("削除履歴とコピー先の所有対応が揃っていません".into());
+    }
+    let local_json = match deletion_history {
+        None => history.local_json()?,
+        Some(deletion) => {
+            let mut local: serde_json::Value =
+                serde_json::from_str(&history.local_json()?).map_err(|e| e.to_string())?;
+            local
+                .as_object_mut()
+                .ok_or("元の移動履歴が不正です")?
+                .insert(
+                    "deletion_history".into(),
+                    serde_json::to_value(deletion).map_err(|e| e.to_string())?,
+                );
+            local
+                .as_object_mut()
+                .ok_or("元の移動履歴が不正です")?
+                .insert(
+                    "deletion_binding".into(),
+                    serde_json::to_value(deletion_binding.ok_or("削除履歴のコピー先がありません")?)
+                        .map_err(|e| e.to_string())?,
+                );
+            serde_json::to_string(&local).map_err(|e| e.to_string())?
+        }
+    };
     let prior_json = serde_json::to_string(
         &history
             .origins

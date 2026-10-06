@@ -142,6 +142,22 @@ impl Prepared {
     pub(crate) fn kept(&self) -> bool {
         self.kept
     }
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage::deletion) fn verify_kept_history_anchor(
+        &self,
+        anchor: &crate::storage::deletion::fs::RootAnchor,
+    ) -> Result<(), String> {
+        if !self.kept
+            || anchor.identity()?
+                != (
+                    self.snapshot.manifest.root.clone(),
+                    self.snapshot.manifest.database.clone(),
+                )
+        {
+            return Err("保持した音声削除履歴の保存先・DB実体が一致しません".into());
+        }
+        Ok(())
+    }
     pub(in crate::storage::deletion) fn verify_saved(
         &self,
         db: &Connection,

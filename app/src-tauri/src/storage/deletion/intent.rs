@@ -460,6 +460,14 @@ pub(super) fn read_database(
 ) -> Result<Prepared, String> {
     read_state(db, operation, ReadMode::Database, check)
 }
+#[cfg(target_os = "macos")]
+pub(super) fn read_kept_database(
+    db: &Connection,
+    operation: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Prepared, String> {
+    read_state(db, operation, ReadMode::Kept, check)
+}
 pub(super) fn read_removing(
     db: &Connection,
     operation: &str,

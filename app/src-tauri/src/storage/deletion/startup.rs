@@ -158,6 +158,32 @@ pub(in crate::storage) fn inspect(
     if exists(db)? {
         return Err("起動時の削除確認情報を再採用できません".into());
     }
+    let attention = completed_attention(db, anchor, models_root)?;
+    if attention.is_empty() {
+        return Ok(());
+    }
+    // In-memory TEMP metadata cannot change canonical main-schema receipts.
+    db.execute_batch("PRAGMA temp_store=MEMORY;")
+        .map_err(|e| e.to_string())?;
+    db.execute_batch(CREATE_ATTENTION)
+        .map_err(|e| e.to_string())?;
+    for (operation, reason) in attention {
+        db.execute(
+            "INSERT INTO temp.mon_deletion_startup_attention VALUES(?1,?2)",
+            params![operation, reason],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// Reuse the typed startup readers against a query-only relocation image.
+// Discovery itself never creates TEMP hints or grants root/cleanup authority.
+pub(super) fn completed_attention(
+    db: &Connection,
+    anchor: &RootAnchor,
+    models_root: &std::path::Path,
+) -> Result<Vec<(String, &'static str)>, String> {
     let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     let mut attention = Vec::new();
     if present {
@@ -247,22 +273,7 @@ pub(in crate::storage) fn inspect(
         attention.extend(super::models::startup::inspect(db, anchor, models_root)?);
     }
     anchor.verify()?;
-    if attention.is_empty() {
-        return Ok(());
-    }
-    // In-memory TEMP metadata cannot change canonical main-schema receipts.
-    db.execute_batch("PRAGMA temp_store=MEMORY;")
-        .map_err(|e| e.to_string())?;
-    db.execute_batch(CREATE_ATTENTION)
-        .map_err(|e| e.to_string())?;
-    for (operation, reason) in attention {
-        db.execute(
-            "INSERT INTO temp.mon_deletion_startup_attention VALUES(?1,?2)",
-            params![operation, reason],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    Ok(attention)
 }
 
 pub(super) fn resolve(

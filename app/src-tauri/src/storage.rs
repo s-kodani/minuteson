@@ -134,6 +134,8 @@ pub struct Storage {
     deletion_fence: deletion::fence::Fence,
     #[cfg(unix)]
     managed_anchor: deletion::fs::RootAnchor,
+    #[cfg(unix)]
+    native_models_root: PathBuf,
 }
 
 impl Storage {
@@ -226,11 +228,9 @@ impl Storage {
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
         #[cfg(unix)]
-        deletion::startup::inspect(
-            &connection,
-            &managed_anchor,
-            &models_root.unwrap_or_else(|| root.join("models")),
-        )?;
+        let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
+        #[cfg(unix)]
+        deletion::startup::inspect(&connection, &managed_anchor, &native_models_root)?;
         let pending_deletion = deletion::fence::has_pending(&connection)?;
         if pending_deletion {
             if verify_migration_history(&connection)? != MIGRATIONS.len() {
@@ -282,6 +282,8 @@ impl Storage {
             deletion_fence,
             #[cfg(unix)]
             managed_anchor,
+            #[cfg(unix)]
+            native_models_root,
         })
     }
 

@@ -23,6 +23,8 @@ fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabula
         )
         .unwrap(),
         scratch: None,
+        #[cfg(unix)]
+        native_models_root: root.join("models"),
         root: root.clone(),
         connection: Mutex::new(database),
         maintenance: std::sync::atomic::AtomicBool::new(false),

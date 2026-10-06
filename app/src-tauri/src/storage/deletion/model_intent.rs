@@ -97,6 +97,24 @@ fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(),
     }
 }
 impl Prepared {
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage::deletion) fn verify_kept_history_anchor(
+        &self,
+        anchor: &crate::storage::deletion::fs::RootAnchor,
+        models_root: &Path,
+    ) -> Result<(), String> {
+        if !self.kept
+            || anchor.identity()?
+                != (
+                    self.snapshot.storage_root.clone(),
+                    self.snapshot.database.clone(),
+                )
+            || models_root != self.models_root()
+        {
+            return Err("保持したモデル削除履歴の保存先・DB実体が一致しません".into());
+        }
+        super::Directory::root(models_root)?.verify_identity(&self.snapshot.models_root)
+    }
     pub(in crate::storage::deletion::models) fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }

@@ -4,6 +4,161 @@ use crate::storage::backup::recovery::{Outcome, Source};
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, DirBuilderExt};
 
+fn delete_audio(f: &Fixture) {
+    use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let operation = Uuid::new_v4().to_string();
+    audio::intent::prepare(
+        &f.storage,
+        &operation,
+        &audio::Census::capture(&f.storage, &f.meeting, &|| false).unwrap(),
+        audio::intent::Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    audio::intent::removal::start(&f.storage, &operation, &lease, &|| false).unwrap();
+    audio::intent::removal::run(&f.storage, &operation, &lease, &|| false).unwrap();
+    audio::intent::removal::completion::finish(&f.storage, &operation, &lease, &|| false).unwrap();
+}
+
+#[test]
+fn deletion_relocation_history_install_binds_only_owned_destination_without_rewriting_native_rows()
+{
+    for full in [false, true] {
+        let f = Fixture::new();
+        delete_audio(&f);
+        if full {
+            use crate::{analysis_worker::AnalysisController, storage::deletion::operations};
+            let mut prepared =
+                operations::Prepared::fresh(&f.storage, &f.meeting, &|| false).unwrap();
+            let preview = prepared.preview();
+            let lease = AnalysisController::default()
+                .begin_data_maintenance(false, false, &|| false)
+                .unwrap();
+            assert!(
+                prepared
+                    .execute(
+                        &f.storage,
+                        &lease,
+                        &preview.confirmation_id,
+                        true,
+                        &|| false,
+                        &|_| {}
+                    )
+                    .unwrap()
+                    .deleted
+            );
+        }
+        let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+        f.intent(&s);
+        let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+        p.copy(&s, &|| false).unwrap();
+        let h = s.prepare_control_handoff(&|| false).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(h.bytes()).unwrap();
+        let before = std::fs::read(f.target.join("meetings.sqlite3")).unwrap();
+        let first = p.install_history(&h, &|| false).unwrap();
+        assert_eq!(p.install_history(&h, &|| false).unwrap(), first);
+        assert_eq!(
+            std::fs::read(f.target.join("meetings.sqlite3")).unwrap(),
+            before
+        );
+        let db = Connection::open(f.target.join(REGISTRY)).unwrap();
+        let local: String = db
+            .query_row(
+                "SELECT local_json FROM relocation_history WHERE operation_id=?1",
+                [&f.operation],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let local: serde_json::Value = serde_json::from_str(&local).unwrap();
+        assert_eq!(local["deletion_history"], envelope["deletion_history"]);
+        let bound = &local["deletion_binding"];
+        assert_eq!(bound["operation"], f.operation);
+        assert_eq!(bound["targetRoot"], f.target.to_str().unwrap());
+        assert_eq!(bound["nativeHash"], s.manifest_hash());
+        assert_ne!(bound["root"], local["deletion_history"]["root"]);
+        assert_ne!(bound["database"], local["deletion_history"]["database"]);
+        let directories = bound["directories"].as_array().unwrap();
+        assert_eq!(
+            directories.len(),
+            envelope["deletion_history"]["directories"]
+                .as_array()
+                .unwrap()
+                .len()
+        );
+        assert!(directories.iter().any(|d| d["relativePath"] == "meetings"));
+        for (copied, original) in directories.iter().zip(
+            envelope["deletion_history"]["directories"]
+                .as_array()
+                .unwrap(),
+        ) {
+            assert_eq!(copied["relativePath"], original["relativePath"]);
+            assert_eq!(copied["original"], original["identity"]);
+            assert_ne!(copied["original"], copied["copied"]);
+        }
+        assert!(local.get("origins").is_none());
+        assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+        p.verify(&s, &|| false).unwrap();
+    }
+}
+
+#[test]
+fn deletion_relocation_history_install_rejects_replaced_destination_parent_and_keeps_both_roots() {
+    let f = Fixture::new();
+    delete_audio(&f);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    let directory = f.target.join("meetings");
+    let original = f.target.join("retained-meetings");
+    std::fs::rename(&directory, &original).unwrap();
+    symlink(&original, &directory).unwrap();
+    assert!(p.install_history(&h, &|| false).is_err());
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
+    assert!(original.exists());
+    assert!(!f.storage.root().join(&f.relative).exists());
+}
+
+#[test]
+fn deletion_relocation_cutover_waits_for_typed_receiver_before_retirement_or_selection() {
+    let f = Fixture::new();
+    delete_audio(&f);
+    let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&s);
+    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    p.copy(&s, &|| false).unwrap();
+    let h = s.prepare_control_handoff(&|| false).unwrap();
+    p.install_history(&h, &|| false).unwrap();
+    let before = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
+    let confirmation = p.pending.confirmation_id.clone();
+    let error = p
+        .activate_for_restart(&h, &confirmation, 1, &|| false)
+        .unwrap_err();
+    assert!(error.contains("削除履歴を含む保存先の切替"));
+    assert_eq!(
+        std::fs::read(f.bootstrap.config.join(NAME)).unwrap(),
+        before
+    );
+    assert_eq!(f.bootstrap.view().unwrap().meeting_root, f.storage.root());
+    assert!(!f.bootstrap.view().unwrap().restart_required);
+    assert!(!f.storage.restart_required());
+    p.verify(&s, &|| false).unwrap();
+    drop(p);
+    drop(h);
+    drop(s);
+    f.storage.create_meeting("旧保存先で作業を継続").unwrap();
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
+}
+
 #[test]
 fn restore_rebinding_v3_upgrade_preserves_installed_history_and_meeting_data() {
     let f = Fixture::new();

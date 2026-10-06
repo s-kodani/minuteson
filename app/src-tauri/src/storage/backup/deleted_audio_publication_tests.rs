@@ -55,6 +55,72 @@ fn fully_delete(storage: &Storage, meeting: &str) -> String {
     done.operation_id
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn deletion_relocation_real_restored_audio_history_and_supersession_keep_no_consent_and_origin_ledger(
+) {
+    let (root, source, meeting) = fixture();
+    deleted(&source, &meeting);
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("deletion-relocation-input.monbackup");
+    source.create_backup_archive(&path, &|| false).unwrap();
+    for full in [false, true] {
+        let target = Storage::open(
+            root.path()
+                .join(format!("deletion-relocation-restored-{full}")),
+        )
+        .unwrap();
+        let selected = target
+            .prepare_additive_restore(&path, &|| false, &|_| {})
+            .unwrap();
+        let preview = selected.preview();
+        let restored_meeting = selected
+            .publish(&target, &preview.confirmation_id, &|| false, &|_| {})
+            .unwrap()
+            .meeting_ids[0]
+            .clone();
+        let operation = native_record(&target, &restored_meeting);
+        drop(selected);
+        if full {
+            fully_delete(&target, &restored_meeting);
+        }
+        let record = |db: &Connection| {
+            db.query_row("SELECT json_array(target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) FROM maintenance_operations WHERE id=?1", [&operation], |r|r.get::<_, String>(0)).unwrap()
+        };
+        let before = record(&target.connection.lock().unwrap());
+        let snapshot = target.prepare_relocation_snapshot(&|| false).unwrap();
+        let handoff = snapshot.prepare_control_handoff(&|| false).unwrap();
+        handoff.verify(&|| false).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(handoff.bytes()).unwrap();
+        let records = envelope["deletion_history"]["records"].as_array().unwrap();
+        assert!(records.iter().any(
+            |r| r["operationId"] == operation && r["validation"] == "restoredAudioUnavailable"
+        ));
+        assert_eq!(records.len(), if full { 3 } else { 1 });
+        if full {
+            assert!(records
+                .iter()
+                .any(|r| r["validation"] == "audioHistorySupersession"));
+        }
+        assert_eq!(record(&target.connection.lock().unwrap()), before);
+        assert_eq!(
+            target
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT consent_at FROM maintenance_operations WHERE id=?1",
+                    [&operation],
+                    |r| r.get::<_, Option<i64>>(0)
+                )
+                .unwrap(),
+            None
+        );
+        assert!(target.recorded_audio_plan(&restored_meeting).is_err());
+    }
+    assert!(source.get_meeting(&meeting).unwrap().is_some());
+}
+
 #[test]
 fn audio_supersession_full_deletion_of_native_history_excludes_it_from_real_backup_and_keeps_neighbors(
 ) {

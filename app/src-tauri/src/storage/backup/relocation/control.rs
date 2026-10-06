@@ -8,6 +8,8 @@ struct Envelope {
     version: u32,
     native_manifest_hash: String,
     history: scratch::transfer::Bundle,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deletion_history: Option<crate::storage::deletion::relocation::Source>,
     excluded_area: String,
 }
 
@@ -20,10 +22,21 @@ pub(crate) struct ControlHandoff<'a, 'storage> {
     bytes: Vec<u8>,
     hash: String,
     history: scratch::transfer::Bundle,
+    deletion_history: Option<crate::storage::deletion::relocation::Source>,
 }
 
 #[allow(dead_code)]
 impl<'storage> NativeSnapshot<'storage> {
+    fn deletion_history(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<crate::storage::deletion::relocation::Source>, String> {
+        crate::storage::deletion::relocation::Source::capture(
+            self.maintenance.storage,
+            self,
+            cancelled,
+        )
+    }
     pub(crate) fn prepare_control_handoff<'a>(
         &'a self,
         cancelled: &impl Fn() -> bool,
@@ -42,10 +55,12 @@ impl<'storage> NativeSnapshot<'storage> {
             &read_only(&self.image.join("meetings.sqlite3"))?,
             cancelled,
         )?;
+        let deletion_history = self.deletion_history(cancelled)?;
         let bytes = serde_json::to_vec(&Envelope {
-            version: 3,
+            version: if deletion_history.is_some() { 4 } else { 3 },
             native_manifest_hash: self.manifest_hash.clone(),
             history: history.clone(),
+            deletion_history: deletion_history.clone(),
             excluded_area: self
                 .stage
                 .path()
@@ -74,6 +89,7 @@ impl<'storage> NativeSnapshot<'storage> {
             hash: digest(&bytes),
             bytes,
             history,
+            deletion_history,
         };
         result.verify(cancelled)?;
         Ok(result)
@@ -90,6 +106,16 @@ impl ControlHandoff<'_, '_> {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    pub(crate) fn require_supported_cutover(&self) -> Result<(), String> {
+        // The typed destination reader must be connected to bootstrap admission
+        // before allowing these roots to replace the current selection. Merely
+        // retaining source JSON / copied-inode evidence is NOT that admission.
+        if self.deletion_history.is_some() {
+            Err("削除履歴を含む保存先の切替はまだ対応していません。確認記録とコピーを保持し、旧保存先を維持します".into())
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) fn check_compatible(&self, saved: &[u8]) -> Result<(), String> {
         if saved == self.bytes {
             return Ok(());
@@ -98,7 +124,20 @@ impl ControlHandoff<'_, '_> {
             return Err("元の移行確認が安全容量を超えています".into());
         }
         let old: serde_json::Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
-        if old["version"] != 3 || old["native_manifest_hash"] != self.snapshot.manifest_hash() {
+        let version = if self.deletion_history.is_some() {
+            4
+        } else {
+            3
+        };
+        let expected_deletion =
+            serde_json::to_value(&self.deletion_history).map_err(|e| e.to_string())?;
+        if old["version"] != version
+            || old["native_manifest_hash"] != self.snapshot.manifest_hash()
+            || match &self.deletion_history {
+                Some(_) => old.get("deletion_history") != Some(&expected_deletion),
+                None => old.get("deletion_history").is_some(),
+            }
+        {
             return Err("元の移行確認と会議コピーが一致しません".into());
         }
         let current = serde_json::to_value(&self.history).map_err(|e| e.to_string())?;
@@ -158,6 +197,11 @@ impl ControlHandoff<'_, '_> {
             operation,
             cancelled,
         )?;
+        let deletion_binding = self
+            .deletion_history
+            .as_ref()
+            .map(|source| source.bind_destination(self.snapshot, placement, operation, cancelled))
+            .transpose()?;
         let path = self
             .snapshot
             .stage
@@ -176,6 +220,8 @@ impl ControlHandoff<'_, '_> {
             self.snapshot.manifest_hash(),
             &self.hash,
             &self.history,
+            self.deletion_history.as_ref(),
+            deletion_binding.as_ref(),
             &bindings,
         )?;
         drop(db);
@@ -207,10 +253,12 @@ impl ControlHandoff<'_, '_> {
             &read_only(&self.snapshot.image.join("meetings.sqlite3"))?,
             cancelled,
         )?;
+        let deletion_history = self.snapshot.deletion_history(cancelled)?;
         let actual = serde_json::to_vec(&Envelope {
-            version: 3,
+            version: if deletion_history.is_some() { 4 } else { 3 },
             native_manifest_hash: self.snapshot.manifest_hash.clone(),
             history,
+            deletion_history,
             excluded_area: self
                 .snapshot
                 .stage
