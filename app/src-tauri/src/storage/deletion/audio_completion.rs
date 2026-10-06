@@ -181,6 +181,36 @@ pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool
     }
     Ok(!ids.is_empty())
 }
+
+// Read-only backup admission. The image carries the original journal but has
+// a different inode, so absence is checked against the live, fenced anchor.
+// Returned meeting IDs are historical facts, never a portable removal permit.
+pub(in crate::storage) fn backup_deleted(
+    storage: &Storage,
+    db: &Connection,
+    check: &impl Fn() -> bool,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    super::super::super::cancel(check)?;
+    let ids = db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND meeting_id IS NOT NULL ORDER BY id LIMIT 10001")
+        .map_err(|e| e.to_string())?.query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    if ids.len() > 10_000 {
+        return Err("音声削除履歴がバックアップの検査上限を超えています".into());
+    }
+    let mut meetings = std::collections::BTreeSet::new();
+    for id in ids {
+        let receipt = Receipt::load(db, &id, check)?;
+        verify_available_state(db, &receipt, check)?;
+        if !absent(&storage.managed_anchor, &receipt, check)? {
+            return Err(
+                "削除済み音声が再出現しています。バックアップから黙って除外しません".into(),
+            );
+        }
+        meetings.insert(receipt.saved.meeting().to_owned());
+    }
+    super::super::super::cancel(check)?;
+    Ok(meetings)
+}
 pub(crate) fn finish(
     storage: &Storage,
     operation: &str,

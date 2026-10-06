@@ -35,6 +35,18 @@ async (page) => {
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
   results.push("new backup: one admission, busy locks, terminal-only success");
 
+  await boot(); await set({ deletedAudioMeetingCount: 1, deletedAudioAssetCount: 4 }); await choose("backup"); await done();
+  const deletedWarning = region().getByRole("alert").filter({ hasText: "音声削除済みの会議" });
+  await deletedWarning.waitFor();
+  const deletedText = await deletedWarning.innerText();
+  check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("本文・根拠の履歴") && deletedText.includes("音声本体は含みません") && deletedText.includes("追加復元は現在実装中"), "deleted-source counts or restore limitation missing");
+  for (const width of [1200, 900]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await deletedWarning.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `output/playwright/deleted-audio-backup-${width}.png` });
+  }
+  results.push("deleted source: explicit history-only counts and not-yet-connected restore warning");
+
   await boot(); await set({ replacesExisting: true }); await choose("backup");
   await page.getByRole("dialog").waitFor();
   check((await calls("start_data_operation")).length === 0 && (await page.getByRole("dialog").innerText()).includes("/safe/会議.monbackup"), "overwrite ran without target confirmation");

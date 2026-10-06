@@ -9,7 +9,7 @@ const f = window.dataFixture = {
   failRead: false, failSave: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
-  restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false,
+  restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0,
   recoveryItems: [], recoveryMode: "success", recoveryReadFail: false, recoverySelectLost: false, recoveryUnsupported: false,
   changed: async patch => { f.snapshot = { ...f.snapshot, ...patch, revision: f.snapshot.revision + 1 }; if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
 };
@@ -120,7 +120,7 @@ export const dataSaveIPC = async (command, args) => {
     const finish = async () => {
       if (f.snapshot.phase === "cancelling" && f.mode !== "cancelRace") return f.changed({ phase: "cancelled", busy: false, retryAllowed: true });
       f.published++;
-      if (f.snapshot.kind === "backup") await f.changed({ phase: "completed", busy: false, backupReceipt: { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, size: 1024, sha256: "a".repeat(64) } });
+      if (f.snapshot.kind === "backup") await f.changed({ phase: "completed", busy: false, backupReceipt: { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, size: 1024, sha256: "a".repeat(64) } });
       else {
         const ids = p.meetingTitles.map(title => { const id = crypto.randomUUID(); f.meetings.push({ id, title, lifecycle: "imported", sourceType: "audio_import", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 1 }); return id; });
         f.restored.push(...ids);

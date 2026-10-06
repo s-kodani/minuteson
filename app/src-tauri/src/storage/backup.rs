@@ -10,6 +10,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
+mod deleted_audio;
 mod exclusions;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
@@ -177,6 +178,7 @@ pub(crate) struct Snapshot<'a> {
     pub(super) database_size: u64,
     pub(super) assets: Vec<StagedAsset>,
     pub(super) meetings: Vec<Meeting>,
+    deleted_audio: deleted_audio::Native,
     _maintenance: Maintenance<'a>,
 }
 
@@ -295,7 +297,8 @@ impl Storage {
         let mut db = read_only(&database)?;
         validate_database(&mut db, cancelled)?;
         let meetings = read_meetings(&db)?;
-        let assets = read_assets(&db)?;
+        let deleted_audio = deleted_audio::Native::capture(self, &db, cancelled)?;
+        let assets = read_assets_with_deleted(&db, &deleted_audio)?;
         let required = assets.iter().try_fold(0_u64, |sum, a| {
             if a.state == "missing" {
                 return Ok(sum);
@@ -326,6 +329,7 @@ impl Storage {
             database_size,
             assets: staged,
             meetings,
+            deleted_audio,
             _maintenance: maintenance,
         };
         snapshot.verify(cancelled)?;
@@ -401,6 +405,11 @@ impl Snapshot<'_> {
         {
             return Err("一時DBスナップショットが変更されています".into());
         }
+        self.deleted_audio.verify(
+            self._maintenance.storage,
+            &read_only(&self.database)?,
+            cancelled,
+        )?;
         for staged in &self.assets {
             if staged.asset.state == "missing" {
                 // Only validated exclusion metadata is staged; no dummy body.
@@ -620,6 +629,13 @@ fn read_meetings(db: &Connection) -> Result<Vec<Meeting>, String> {
 }
 
 fn read_assets(db: &Connection) -> Result<Vec<FileAsset>, String> {
+    read_assets_with_deleted(db, &deleted_audio::Native::empty())
+}
+
+fn read_assets_with_deleted(
+    db: &Connection,
+    deleted: &deleted_audio::Native,
+) -> Result<Vec<FileAsset>, String> {
     let mut statement = db.prepare("SELECT id,meeting_id,relative_path,media_type,size_bytes,content_hash,state FROM file_assets ORDER BY id").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |r| {
@@ -638,7 +654,9 @@ fn read_assets(db: &Connection) -> Result<Vec<FileAsset>, String> {
     for asset in &assets {
         if asset.state != "ready"
             && !(asset.state == "missing"
-                && (portable::temporary_pcm(db, asset)? || portable::native_log(db, asset)?))
+                && (deleted.contains_asset(asset)
+                    || portable::temporary_pcm(db, asset)?
+                    || portable::native_log(db, asset)?))
         {
             return Err(
                 "未準備・破損・削除待ちの管理ファイルがあります。修復後にバックアップしてください"

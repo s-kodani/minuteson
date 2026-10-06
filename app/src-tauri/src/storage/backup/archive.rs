@@ -31,6 +31,7 @@ enum Transform {
 pub(super) enum OmittedReason {
     RecreatablePcm,
     NativeLog,
+    SourceAudioDeleted,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -73,6 +74,8 @@ pub(crate) struct Manifest {
     pub(super) file_references: Vec<FileReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) model_catalog: Option<crate::storage::model_profiles::portable::history::Bundle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) deleted_audio: Vec<deleted_audio::Descriptor>,
 }
 
 pub(crate) struct VerifiedArchive {
@@ -81,6 +84,7 @@ pub(crate) struct VerifiedArchive {
     pub(super) database: Connection,
     pub manifest: Manifest,
     pub(super) assets: BTreeMap<String, PathBuf>,
+    pub(super) deleted_audio: deleted_audio::Verified,
     database_proof: (u64, String),
     database_identity: Metadata,
     stage: scratch::Stage,
@@ -134,6 +138,8 @@ pub(crate) struct BackupReceipt {
     pub asset_count: usize,
     pub omitted_pcm_count: usize,
     pub omitted_log_count: usize,
+    pub deleted_audio_meeting_count: usize,
+    pub deleted_audio_asset_count: usize,
     pub size: u64,
     pub sha256: String,
 }
@@ -163,7 +169,9 @@ impl Snapshot<'_> {
         for item in &self.assets {
             check_cancelled(cancelled)?;
             let asset = &item.asset;
-            let reason = if portable::temporary_pcm(&db, asset)? {
+            let reason = if self.deleted_audio.contains_asset(asset) {
+                Some(OmittedReason::SourceAudioDeleted)
+            } else if portable::temporary_pcm(&db, asset)? {
                 Some(OmittedReason::RecreatablePcm)
             } else if portable::native_log(&db, asset)? {
                 Some(OmittedReason::NativeLog)
@@ -235,6 +243,20 @@ impl Snapshot<'_> {
         }
         let data = stage.path().join("database.jsonl");
         let tables = portable::dump(self, &data, &lookup, &mut references, cancelled)?;
+        let deleted_audio = if self.deleted_audio.is_empty() {
+            Vec::new()
+        } else {
+            let logical = portable::load(
+                &data,
+                &stage.path().join("availability.sqlite3"),
+                &tables,
+                MIGRATIONS.len(),
+                cancelled,
+            )?;
+            let descriptors = self.deleted_audio.bind(&logical, cancelled)?;
+            deleted_audio::verify(&logical, &descriptors, &omitted, cancelled)?;
+            descriptors
+        };
         if digest_file(&self.database, cancelled)?
             != (self.database_size, self.database_hash.clone())
         {
@@ -256,7 +278,7 @@ impl Snapshot<'_> {
         );
         sources.insert(0, data);
         let manifest = Manifest {
-            format_version: 2,
+            format_version: if deleted_audio.is_empty() { 2 } else { 3 },
             schema_version: MIGRATIONS.len(),
             archive_id: Uuid::new_v4().to_string(),
             created_at: now_ms()?,
@@ -268,6 +290,7 @@ impl Snapshot<'_> {
             omitted_assets: omitted,
             file_references: references.into_iter().collect(),
             model_catalog: Some(model_catalog),
+            deleted_audio,
         };
         validate_manifest(&manifest)?;
         let bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
@@ -283,6 +306,9 @@ impl Snapshot<'_> {
                         .ok_or("バックアップ容量が範囲外です")
                 })?;
         check_capacity(parent, required)?;
+        // Do not publish a snapshot whose deliberately absent source has
+        // reappeared while the portable data was being reconstructed.
+        self.verify(cancelled)?;
         output
             .write_all(MAGIC)
             .and_then(|_| output.write_all(&(bytes.len() as u32).to_le_bytes()))
@@ -304,6 +330,7 @@ impl Snapshot<'_> {
         let size = output.metadata().map_err(|e| e.to_string())?.len();
         output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let (_, sha256) = stream(output, None, size, cancelled)?;
+        self.verify(cancelled)?;
         Ok(BackupReceipt {
             archive_id: verified.manifest.archive_id.clone(),
             meeting_count: verified.manifest.meetings.len(),
@@ -319,6 +346,13 @@ impl Snapshot<'_> {
                 .omitted_assets
                 .iter()
                 .filter(|a| a.reason == OmittedReason::NativeLog)
+                .count(),
+            deleted_audio_meeting_count: verified.manifest.deleted_audio.len(),
+            deleted_audio_asset_count: verified
+                .manifest
+                .omitted_assets
+                .iter()
+                .filter(|a| a.reason == OmittedReason::SourceAudioDeleted)
                 .count(),
             size,
             sha256,
@@ -391,19 +425,20 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if !matches!(m.format_version, 1 | 2)
+    if !matches!(m.format_version, 1 | 2 | 3)
         || m.schema_version < 20
         || m.schema_version > MIGRATIONS.len()
         || !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
         || m.created_at < 0
         || m.entries.is_empty()
         || m.entries.len() + m.omitted_assets.len() > MAX_ENTRIES
+        || m.deleted_audio.len() > deleted_audio::MAX_MEETINGS
     {
         return Err("バックアップの形式版・件数が不正です".into());
     }
     match (m.format_version, &m.model_catalog) {
         (1, None) if m.schema_version <= 26 => {}
-        (2, Some(catalog)) if m.schema_version >= 27 => {
+        (2 | 3, Some(catalog)) if m.schema_version >= 27 => {
             catalog.validate()?;
             let references: BTreeSet<_> = m.file_references.iter().cloned().collect();
             if !catalog.file_references()?.is_subset(&references) {
@@ -420,6 +455,16 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             || meeting.title.chars().count() > 200
         {
             return Err("バックアップの会議一覧が不正です".into());
+        }
+    }
+    if (m.format_version == 3) == m.deleted_audio.is_empty() {
+        return Err("バックアップの形式版と音声削除履歴が一致しません".into());
+    }
+    let mut deleted_meetings = BTreeSet::new();
+    for item in &m.deleted_audio {
+        item.validate_shape()?;
+        if !meetings.contains(&item.meeting_id) || !deleted_meetings.insert(&item.meeting_id) {
+            return Err("バックアップの音声削除会議が不正です".into());
         }
     }
     let mut paths = BTreeSet::new();
@@ -462,6 +507,10 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
             || !key(&e.path, "omitted/")
             || !paths.insert(&e.path)
             || !portable::valid_hash(&e.source_sha256)
+            || (e.reason == OmittedReason::SourceAudioDeleted
+                && !deleted_meetings.contains(&e.meeting_id))
+            || (e.reason == OmittedReason::RecreatablePcm
+                && deleted_meetings.contains(&e.meeting_id))
         {
             return Err("除外ファイルの由来が不正です".into());
         }
@@ -577,7 +626,13 @@ pub(crate) fn read(
         manifest.schema_version,
         cancelled,
     )?;
-    validate_inventory(&database, &manifest)?;
+    let deleted_audio = deleted_audio::verify(
+        &database,
+        &manifest.deleted_audio,
+        &manifest.omitted_assets,
+        cancelled,
+    )?;
+    validate_inventory(&database, &manifest, &deleted_audio)?;
     validate_portability(&database, &manifest, &assets, cancelled)?;
     database
         .execute_batch("PRAGMA query_only=ON")
@@ -589,13 +644,18 @@ pub(crate) fn read(
         database,
         manifest,
         assets,
+        deleted_audio,
         database_proof,
         database_identity,
         stage,
     })
 }
 
-fn validate_inventory(db: &Connection, m: &Manifest) -> Result<(), String> {
+fn validate_inventory(
+    db: &Connection,
+    m: &Manifest,
+    deleted: &deleted_audio::Verified,
+) -> Result<(), String> {
     if read_meetings(db)? != m.meetings {
         return Err("バックアップの会議一覧とDBが一致しません".into());
     }
@@ -642,10 +702,13 @@ fn validate_inventory(db: &Connection, m: &Manifest) -> Result<(), String> {
                 || e.source_size != size as u64
                 || e.source_sha256 != hash
                 || state != "missing"
-                || referenced
+                || (referenced && e.reason != OmittedReason::SourceAudioDeleted)
                 || match e.reason {
                     OmittedReason::RecreatablePcm => media != "audio/wav",
                     OmittedReason::NativeLog => media != "text/plain",
+                    OmittedReason::SourceAudioDeleted => {
+                        !deleted.contains(&meeting) || !deleted_audio::audio_media(&media)
+                    }
                 }
             {
                 return Err("除外ファイルの参照が不正です".into());
@@ -760,3 +823,7 @@ fn validate_portability(
 #[cfg(test)]
 #[path = "archive_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "deleted_audio_tests.rs"]
+mod deleted_audio_tests;

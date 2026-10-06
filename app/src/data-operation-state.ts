@@ -12,7 +12,7 @@ export interface RestorePreview {
 }
 export interface BackupReceipt {
   archiveId: string; meetingCount: number; assetCount: number; omittedPcmCount: number;
-  omittedLogCount: number; size: number; sha256: string;
+  omittedLogCount: number; deletedAudioMeetingCount: number; deletedAudioAssetCount: number; size: number; sha256: string;
 }
 export interface RestoreReceipt {
   batchId: string; archiveId: string; meetingIds: string[]; alreadyPublished: boolean;
@@ -54,7 +54,8 @@ export function assertDataSnapshot(s: DataSnapshot): void {
   }
   if (s.backupReceipt !== null) {
     const r = s.backupReceipt;
-    if (!r || s.kind !== "backup" || !uuid.test(r.archiveId) || !/^[0-9a-f]{64}$/u.test(r.sha256) || ![r.meetingCount, r.assetCount, r.omittedPcmCount, r.omittedLogCount, r.size].every(integer)) fail();
+    if (!r || s.kind !== "backup" || !uuid.test(r.archiveId) || !/^[0-9a-f]{64}$/u.test(r.sha256) || ![r.meetingCount, r.assetCount, r.omittedPcmCount, r.omittedLogCount, r.deletedAudioMeetingCount, r.deletedAudioAssetCount, r.size].every(integer)
+      || r.deletedAudioMeetingCount > r.meetingCount || (r.deletedAudioMeetingCount === 0 && r.deletedAudioAssetCount !== 0)) fail();
   }
   if (s.restoreReceipt !== null) {
     const r = s.restoreReceipt;

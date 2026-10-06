@@ -30,6 +30,9 @@ pub(super) fn retain(
         let reason = match item.reason {
             archive::OmittedReason::RecreatablePcm => "recreatable_pcm",
             archive::OmittedReason::NativeLog => "native_log",
+            archive::OmittedReason::SourceAudioDeleted => {
+                return Err("削除済み元音声を再生成可能な除外キャッシュとして登録しません".into())
+            }
         };
         db.execute(
             "INSERT INTO restore_omitted_assets VALUES(?1,?2,?3,?4,?5)",

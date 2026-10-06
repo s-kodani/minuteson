@@ -100,6 +100,14 @@ pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Resu
     Ok(())
 }
 
+pub(in crate::storage) fn backup_deleted(
+    storage: &Storage,
+    db: &Connection,
+    check: &impl Fn() -> bool,
+) -> Result<BTreeSet<String>, String> {
+    intent::removal::completion::backup_deleted(storage, db, check)
+}
+
 // This saved observation is not a file-removal capability. No external path,
 // transcript body, document payload or whole-meeting Prepared is serialized.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

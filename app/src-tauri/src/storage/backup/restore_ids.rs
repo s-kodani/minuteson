@@ -162,6 +162,12 @@ impl<'a> RestoreIds<'a> {
             return Err("復元バッチIDが不正です".into());
         }
         check_cancelled(cancelled)?;
+        // Portable format 3 is validated and can retain text/history today;
+        // native unavailable-history publication is the next construction pass.
+        // Never fall through to ready-source reconstruction for such an archive.
+        if !archive.deleted_audio.is_empty() {
+            return Err("削除済み音声を含むバックアップの追加復元はまだ未接続です。本文・根拠・音声削除履歴はアーカイブに保存されています".into());
+        }
         let logical_bytes = archive
             .manifest
             .entries
