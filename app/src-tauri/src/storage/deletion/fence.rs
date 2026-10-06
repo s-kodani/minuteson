@@ -17,7 +17,7 @@ pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installi
 pub(in crate::storage) fn predicate(db: &Connection) -> Result<String, String> {
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema WHERE type='table' AND name='mon_deletion_startup_attention')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     Ok(if exists {
-        format!("({UNFINISHED} OR (kind='delete_meeting' AND state='completed' AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
+        format!("({UNFINISHED} OR (kind IN ('delete_meeting','delete_assets') AND state='completed' AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
     } else {
         UNFINISHED.into()
     })
@@ -240,7 +240,14 @@ pub(super) fn write_model_removal<'a>(
     lease.validate_active()?;
     confirmed.verify_saved(db)?;
     confirmed.verify_anchor(storage)?;
-    Writer::begin(storage, db, true)
+    let discovered = super::startup::contains(db, confirmed.operation())?;
+    let cold_pending =
+        storage.deletion_fence.resume_restart_required() && storage.deletion_fence.pending();
+    Writer::begin(
+        storage,
+        db,
+        !confirmed.completed() || discovered || cold_pending,
+    )
 }
 
 #[cfg(unix)]

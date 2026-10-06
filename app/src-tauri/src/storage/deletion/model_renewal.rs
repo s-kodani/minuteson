@@ -229,6 +229,39 @@ impl Record {
         serde_json::to_string(self).map_err(|e| e.to_string())
     }
 }
+pub(in crate::storage::deletion::models) fn audit_source(json: &str) -> Result<String, String> {
+    let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if record.version != 1
+        || record.subtype != "modelDeletionReconfirmation"
+        || record.encode()? != json
+        || !uuid::Uuid::parse_str(&record.source_operation)
+            .is_ok_and(|id| id.to_string() == record.source_operation)
+    {
+        return Err("モデル再同意の接続先が不正です".into());
+    }
+    Ok(record.source_operation)
+}
+
+pub(super) fn audit_ids(
+    db: &Connection,
+    saved: &Prepared,
+    progress: &Progress,
+) -> Result<Vec<String>, String> {
+    active_plan(db, saved, progress)?;
+    let mut current = progress.confirmation.clone();
+    let mut ids = Vec::new();
+    while let Some(reference) = current {
+        if ids.len() >= MAX_GENERATIONS as usize || ids.contains(&reference.operation_id) {
+            return Err("モデル再同意の世代・識別子が不正です".into());
+        }
+        current = read_record(db, &reference, saved)?
+            .0
+            .previous_progress
+            .confirmation;
+        ids.push(reference.operation_id);
+    }
+    Ok(ids)
+}
 fn source_hash(saved: &Prepared) -> Result<String, String> {
     Ok(intent::digest(
         serde_json::to_string(&saved.header)

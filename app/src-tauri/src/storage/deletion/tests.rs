@@ -66,7 +66,10 @@ impl Fixture {
                 .unwrap();
             }
             db.execute("INSERT INTO restore_provenance VALUES('restored',?1,'meeting',?1,'archive','','original','batch',1)",params![meeting]).unwrap();
-            db.execute("INSERT INTO maintenance_operations VALUES('older',?1,'delete_assets','completed',NULL,'{}',?2,1,'{}',NULL,1,1)", params![meeting,"a".repeat(64)]).unwrap();
+            // Generic older meeting-associated history for SET NULL checks,
+            // not a malformed model-deletion receipt. Completed delete_assets
+            // now requires its own canonical proof and startup validation.
+            db.execute("INSERT INTO maintenance_operations VALUES('older',?1,'prune_revisions','completed',NULL,'{}',?2,1,'{}',NULL,1,1)", params![meeting,"a".repeat(64)]).unwrap();
             db.execute("INSERT INTO model_packages VALUES('retained-model','fixture','keep','1',NULL,'manual_import','{}',?1,NULL,'ready')", params!["b".repeat(64)]).unwrap();
         }
         Self {

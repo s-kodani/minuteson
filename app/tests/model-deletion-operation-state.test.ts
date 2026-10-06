@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
-import { assertModelBodyDeletionListing, assertModelBodyDeletionPage, assertModelBodyDeletionPreview, type ModelBodyDeletionPreview } from "../src/model-deletion-operation-state.ts";
+import { assertModelBodyDeletionListing, assertModelBodyDeletionPage, assertModelBodyDeletionPreview, modelDeletionStartupLabel, type ModelBodyDeletionPreview, type ModelDeletionStartupReason } from "../src/model-deletion-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const preview = (): ModelBodyDeletionPreview => ({ confirmationId: id(2), operationId: id(3), packageId: id(4), reviewHash: "a".repeat(64), modelName: "合成モデル", modelVersion: "1", modelsRoot: "/synthetic/models", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: 4, profileReferences: 1, jobReferences: 2, activeJobs: 0, previousProcessedPaths: null, previousPathCount: null, priorDeletionCompleted: false, reservationRoots: [] });
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "model_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, modelDeletionPreview: preview(), modelDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
@@ -67,4 +67,23 @@ test("pending model listing preserves unreadable operations instead of granting 
 test("stale model snapshots cannot replace a newer server confirmation", () => {
   const s = ready(), newer = { ...ready(), revision: 3, modelDeletionPreview: { ...preview(), confirmationId: id(5) } };
   assert.equal(acceptDataSnapshot(newer, s), newer); assert.throws(() => acceptDataSnapshot(s, { ...s, modelDeletionPreview: { ...preview(), confirmationId: id(5) } }));
+});
+test("completed model startup reasons require a completed record and write protection", () => {
+  for (const startupReason of ["model_completed_scope_reappeared", "model_completed_receipt_invalid", "model_completed_scope_uninspectable"] as ModelDeletionStartupReason[]) {
+    const item = { operationId: id(3), state: "completed", packageId: id(4), modelName: "合成モデル", reviewAllowed: true, errorMessage: null, startupReason };
+    const listing = { items: [item], writeBlocked: true, restartRequired: false, reason: "attention" };
+    assert.doesNotThrow(() => assertModelBodyDeletionListing(listing));
+    assert.throws(() => assertModelBodyDeletionListing({ ...listing, writeBlocked: false, reason: null }));
+    assert.throws(() => assertModelBodyDeletionListing({ ...listing, items: [{ ...item, state: "prepared" }] }));
+    assert.match(modelDeletionStartupLabel(startupReason), /完了済みモデル削除/u);
+  }
+});
+test("unknown startup reason never grants listing authority", () => {
+  const listing = { items: [{ operationId: id(3), state: "completed", packageId: id(4), modelName: "合成モデル", reviewAllowed: true, errorMessage: null, startupReason: "automatic_cleanup" }], writeBlocked: true, restartRequired: false, reason: "attention" };
+  assert.throws(() => assertModelBodyDeletionListing(listing as never));
+});
+test("unreadable completed startup evidence remains visible without review authority", () => {
+  const item = { operationId: id(3), state: "completed", packageId: null, modelName: null, reviewAllowed: false, errorMessage: "evidence invalid", startupReason: "model_completed_receipt_invalid" as const };
+  assert.doesNotThrow(() => assertModelBodyDeletionListing({ items: [item], writeBlocked: true, restartRequired: false, reason: "held" }));
+  assert.match(modelDeletionStartupLabel(item.startupReason), /対象を保持/u);
 });

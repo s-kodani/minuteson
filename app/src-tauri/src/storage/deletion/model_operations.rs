@@ -71,6 +71,7 @@ pub(crate) struct Item {
     pub model_name: Option<String>,
     pub review_allowed: bool,
     pub error_message: Option<String>,
+    pub startup_reason: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,8 +243,15 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
     }
     let items = rows
         .into_iter()
-        .map(
-            |(operation_id, state)| match load(storage, root, &operation_id) {
+        .map(|(operation_id, state)| -> Result<Item, String> {
+            let startup_reason = {
+                let db = storage
+                    .connection
+                    .lock()
+                    .map_err(|_| "DBロックを取得できません")?;
+                super::super::startup::reason(&db, &operation_id)?
+            };
+            Ok(match load(storage, root, &operation_id) {
                 Ok(target) => Item {
                     operation_id,
                     state,
@@ -251,6 +259,7 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
                     model_name: Some(target.snapshot().record.manifest.model_name.clone()),
                     review_allowed: true,
                     error_message: None,
+                    startup_reason,
                 },
                 Err(reason) => Item {
                     operation_id,
@@ -259,10 +268,11 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
                     model_name: None,
                     review_allowed: false,
                     error_message: Some(reason),
+                    startup_reason,
                 },
-            },
-        )
-        .collect();
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Listing {
         items,
         write_blocked: storage.data_write_blocked(),

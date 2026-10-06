@@ -57,7 +57,7 @@ fn reopen(f: &mut Fixture, mutate: impl FnOnce(&Connection)) {
     let db = Connection::open(root.join("meetings.sqlite3")).unwrap();
     mutate(&db);
     drop(db);
-    f.storage = Storage::open(root).unwrap();
+    f.storage = Storage::open_with_models(root, f.root.clone()).unwrap();
 }
 
 #[test]

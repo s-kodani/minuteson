@@ -13,6 +13,9 @@ const MAX_PATH: usize = 4096;
 #[path = "model_operations.rs"]
 pub(crate) mod operations;
 
+#[path = "model_startup.rs"]
+pub(in crate::storage) mod startup;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {

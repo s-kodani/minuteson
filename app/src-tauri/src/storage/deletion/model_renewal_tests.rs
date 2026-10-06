@@ -524,14 +524,14 @@ fn model_deletion_renewal_sigkill_at_audit_boundaries_is_atomic_and_preserves_or
             drop(original);
             let output=std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact","storage::deletion::models::tests::durable::removing::renewing::model_deletion_renewal_crash_child","--ignored","--nocapture"])
-                .env("MON_MODEL_RENEWAL_TEST_ROOT",&root).env("MON_MODEL_RENEWAL_TEST_OPERATION",&op).env("MON_MODEL_RENEWAL_TEST_BOUNDARY",boundary).output().unwrap();
+                .env("MON_MODEL_RENEWAL_TEST_ROOT",&root).env("MON_MODEL_RENEWAL_TEST_MODELS",&f.root).env("MON_MODEL_RENEWAL_TEST_OPERATION",&op).env("MON_MODEL_RENEWAL_TEST_BOUNDARY",boundary).output().unwrap();
             assert_eq!(
                 output.status.signal(),
                 Some(libc::SIGKILL),
                 "{completed}/{boundary}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            f.storage = Storage::open(root).unwrap();
+            f.storage = Storage::open_with_models(root, f.root.clone()).unwrap();
             assert_eq!(receipt(&f, &op), fixed);
             assert_eq!(history(&f), before);
             assert_eq!(audits(&f).len(), usize::from(boundary == "committed"));
@@ -569,7 +569,9 @@ fn model_deletion_renewal_crash_child() {
         std::env::var("MON_MODEL_RENEWAL_TEST_OPERATION").expect("synthetic operation handoff");
     let boundary =
         std::env::var("MON_MODEL_RENEWAL_TEST_BOUNDARY").expect("synthetic boundary handoff");
-    let storage = Storage::open(std::path::PathBuf::from(root)).unwrap();
+    let models =
+        std::env::var_os("MON_MODEL_RENEWAL_TEST_MODELS").expect("synthetic native models root");
+    let storage = Storage::open_with_models(std::path::PathBuf::from(root), models.into()).unwrap();
     let controller = AnalysisController::default();
     let owner = controller
         .begin_model_deletion_maintenance(&storage, &op, false, false, &|| false)
@@ -618,14 +620,14 @@ fn model_deletion_renewal_sigkill_resumes_reserved_files_from_saved_new_scope() 
         drop(original);
         let output=std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact","storage::deletion::models::tests::durable::removing::model_deletion_body_crash_child","--ignored","--nocapture"])
-            .env("MON_MODEL_REMOVAL_TEST_ROOT",&root).env("MON_MODEL_REMOVAL_TEST_OPERATION",&op).env("MON_MODEL_REMOVAL_TEST_BOUNDARY",boundary).output().unwrap();
+            .env("MON_MODEL_REMOVAL_TEST_ROOT",&root).env("MON_MODEL_REMOVAL_TEST_MODELS",&f.root).env("MON_MODEL_REMOVAL_TEST_OPERATION",&op).env("MON_MODEL_REMOVAL_TEST_BOUNDARY",boundary).output().unwrap();
         assert_eq!(
             output.status.signal(),
             Some(libc::SIGKILL),
             "{boundary}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        f.storage = Storage::open(root).unwrap();
+        f.storage = Storage::open_with_models(root, f.root.clone()).unwrap();
         let controller = AnalysisController::default();
         let owner = controller
             .begin_model_deletion_maintenance(&f.storage, &op, false, false, &|| false)

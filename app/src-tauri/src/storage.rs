@@ -187,7 +187,31 @@ impl Storage {
         result
     }
 
+    // macOS production always supplies its separate native model location.
+    #[cfg(any(test, not(target_os = "macos")))]
     pub fn open(root: PathBuf) -> Result<Self, Box<dyn Error>> {
+        #[cfg(unix)]
+        {
+            Self::open_inner(root, None)
+        }
+        #[cfg(not(unix))]
+        {
+            Self::open_inner(root)
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn open_with_models(
+        root: PathBuf,
+        models_root: PathBuf,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::open_inner(root, Some(models_root))
+    }
+
+    fn open_inner(
+        root: PathBuf,
+        #[cfg(unix)] models_root: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
         // Resolve system aliases (e.g. macOS /var -> /private/var) once.
         // Managed children still must match this canonical root exactly.
@@ -202,7 +226,11 @@ impl Storage {
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
         #[cfg(unix)]
-        deletion::startup::inspect(&connection, &managed_anchor)?;
+        deletion::startup::inspect(
+            &connection,
+            &managed_anchor,
+            &models_root.unwrap_or_else(|| root.join("models")),
+        )?;
         let pending_deletion = deletion::fence::has_pending(&connection)?;
         if pending_deletion {
             if verify_migration_history(&connection)? != MIGRATIONS.len() {

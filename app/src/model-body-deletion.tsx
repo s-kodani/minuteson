@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
-import { assertModelBodyDeletionPage, type ModelBodyDeletionPage, type ModelBodyDeletionReceipt } from "./model-deletion-operation-state";
+import { assertModelBodyDeletionPage, modelDeletionStartupLabel, type ModelBodyDeletionPage, type ModelBodyDeletionReceipt } from "./model-deletion-operation-state";
 import { modelDeletionNewScope, modelDeletionPathProcessed, modelDeletionPhaseLabel, modelDeletionPublishRequest } from "./model-deletion-ui-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
@@ -148,8 +148,8 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible }: { ope
       {!operation.modelDeletionSupported && operation.connected && <p>この環境のモデル本体削除は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>モデル削除と書込停止の状態を再読込</button>
-      {needed && <p role="alert">未完了のモデル削除対象を保護するため、編集・録音・AI処理などの通常書込みを停止しています。既に消した本体は復元していません。{c.listing?.reason}</p>}
-      {!!c.listing?.items.length && <ul>{c.listing.items.map(i => <li key={i.operationId}><p>{i.modelName ?? "確認できないモデル"} · 操作 {i.operationId} · 記録状態 {i.state}</p>{i.errorMessage && <p role="alert">{i.errorMessage}</p>}<button type="button" className="small-secondary" disabled={!i.reviewAllowed || !c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了モデル削除の対象を確認</button></li>)}</ul>}
+      {needed && <p role="alert">確認待ちのモデル削除対象を保護するため、編集・録音・AI処理などの通常書込みを停止しています。既に消した本体は復元していません。{c.listing?.reason}</p>}
+      {!!c.listing?.items.length && <ul>{c.listing.items.map(i => <li key={i.operationId}><p>{i.modelName ?? "確認できないモデル"} · 操作 {i.operationId} · 記録状態 {i.startupReason ? "完了記録あり・対象確認が必要" : i.state}</p>{i.startupReason && <p role="alert">{modelDeletionStartupLabel(i.startupReason)}</p>}{i.errorMessage && <p role="alert">{i.errorMessage}</p>}<button type="button" className="small-secondary" disabled={!i.reviewAllowed || !c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了モデル削除の対象を確認</button></li>)}</ul>}
       {active && <p role="status">{s.busy ? "モデル本体の検査・処理中です。停止要求後も実際の終了を待ちます。" : p ? modelDeletionPhaseLabel(p.phase) : "モデル削除の確認待ちです。"}</p>}
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>モデル削除の安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>モデル削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>モデル本体の残りを再検査</button></div>}

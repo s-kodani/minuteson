@@ -128,7 +128,7 @@ impl Fixture {
             storage,
         } = self;
         drop(storage);
-        let storage = Storage::open(_meetings.path().into()).unwrap();
+        let storage = Storage::open_with_models(_meetings.path().into(), root.clone()).unwrap();
         Self {
             _source,
             _meetings,

@@ -417,6 +417,50 @@ fn model_controller_completed_reappearance_keeps_original_receipt_and_requires_n
     );
 }
 #[test]
+fn model_controller_cold_completed_attention_requires_new_scope_then_restart() {
+    let mut f = Fixture::new();
+    let done = f.run(&f.ready(), Action::Publish);
+    let operation = done.model_deletion_receipt.unwrap().operation_id;
+    std::fs::create_dir(f.model.path("")).unwrap();
+    std::fs::write(f.model.path("new"), b"COLD NEW CONSENT").unwrap();
+    f.model = f.model.cold();
+    f.controller = DataController::default();
+    f.analysis = AnalysisController::default();
+    let listing = model_deletion::listing(&f.model.storage, &f.model.root).unwrap();
+    assert_eq!(listing.items.len(), 1);
+    assert_eq!(listing.items[0].state, "completed");
+    assert_eq!(
+        listing.items[0].startup_reason.as_deref(),
+        Some("model_completed_scope_reappeared")
+    );
+    let s = f.pending(&operation);
+    assert!(
+        s.model_deletion_preview
+            .as_ref()
+            .unwrap()
+            .prior_deletion_completed
+    );
+    assert!(f
+        .controller
+        .begin_request(f.request(&s, Action::Publish))
+        .is_err());
+    let reviewed = f.run(&s, Action::ReviewRemaining);
+    let accepted = f.request(&reviewed, Action::DeleteIncludingUnregistered);
+    let done = f.run(&reviewed, Action::DeleteIncludingUnregistered);
+    assert_eq!(done.phase, "completed");
+    assert!(done.restart_required && done.model_deletion_receipt.unwrap().body_deleted);
+    assert!(f.controller.begin_request(accepted).unwrap().is_none());
+    assert_eq!(f.model.operation_state(&operation), "completed");
+    assert!(!f.model.path("").exists());
+    assert!(f.model.storage.data_write_blocked());
+    assert!(model_deletion::listing(&f.model.storage, &f.model.root)
+        .unwrap()
+        .items
+        .is_empty());
+    f.model = f.model.cold();
+    assert!(!f.model.storage.data_write_blocked());
+}
+#[test]
 fn model_controller_missing_lease_and_cancelled_lease_cannot_create_or_execute_scope() {
     let f = Fixture::new();
     let (s, _, previous) = f.controller.begin(Kind::ModelDeletion).unwrap();

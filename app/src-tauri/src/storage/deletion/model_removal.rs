@@ -108,6 +108,15 @@ pub(crate) struct Receipt {
     plan: Plan,
 }
 impl Receipt {
+    pub(in crate::storage::deletion) fn operation(&self) -> &str {
+        &self.saved.header.operation_id
+    }
+    pub(in crate::storage::deletion::models) fn startup_audits(
+        &self,
+        db: &Connection,
+    ) -> Result<Vec<String>, String> {
+        renewal::audit_ids(db, &self.saved, &self.progress)
+    }
     pub(in crate::storage::deletion::models) fn recorded_policy(
         &self,
         storage: &Storage,
@@ -200,7 +209,15 @@ impl Receipt {
     }
     fn metadata(&self, storage: &Storage, db: &Connection) -> Result<(), String> {
         self.verify_anchor(storage)?;
-        crate::storage::deletion::database::stopped_for_model_consent(db)?;
+        // Cold startup deliberately leaves unrelated stale SQL work unchanged.
+        // Only previously completed sources may use this lane; all public
+        // callers still require the actual active shared maintenance lease.
+        let cold_completed =
+            storage.deletion_resume_restart_required() && self.previously_completed();
+        if !cold_completed {
+            crate::storage::deletion::database::stopped_for_model_consent(db)?;
+        }
+        let (profiles, jobs, active_jobs) = usages(db, &self.saved.header.package_id)?;
         if crate::storage::deletion::fence::other_pending(
             db,
             Some(&self.saved.header.operation_id),
@@ -209,12 +226,9 @@ impl Receipt {
                 self.saved.snapshot.record.clone(),
                 self.saved.snapshot.placed,
             ))
-            || usages(db, &self.saved.header.package_id)?
-                != (
-                    self.saved.snapshot.profile_references,
-                    self.saved.snapshot.job_references,
-                    self.saved.snapshot.active_jobs,
-                )
+            || profiles != self.saved.snapshot.profile_references
+            || jobs != self.saved.snapshot.job_references
+            || (!cold_completed && active_jobs != self.saved.snapshot.active_jobs)
         {
             return Err("モデル削除の配置・履歴・実行状態が変更されています".into());
         }
@@ -523,11 +537,12 @@ fn run_inner(
         .map_err(|_| "DBロックを取得できません")?;
     let mut r = Receipt::load(&db, operation)?;
     let cancelled = || check() || lease.cancelled();
+    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, &r, lease)?;
     if r.completed() {
         verify_remaining(storage, &db, &r, &cancelled)?;
+        super::super::startup::resolve(storage, &db, &r, &cancelled)?;
         return Ok(r);
     }
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, &r, lease)?;
     while let Some(target) = r.target().cloned() {
         active(lease, check)?;
         let models = verify_remaining(storage, &db, &r, &cancelled)?;
@@ -615,6 +630,8 @@ fn run_inner(
     next.phase = Phase::Completed;
     r.save(storage, &db, next, lease, check)?;
     event("completed");
+    verify_remaining(storage, &db, &r, &cancelled)?;
+    super::super::startup::resolve(storage, &db, &r, &cancelled)?;
     Ok(r)
 }
 

@@ -133,7 +133,11 @@ fn absent(anchor: &RootAnchor, meeting: &str, roots: &[String]) -> Result<bool, 
     Ok(true)
 }
 
-pub(in crate::storage) fn inspect(db: &Connection, anchor: &RootAnchor) -> Result<(), String> {
+pub(in crate::storage) fn inspect(
+    db: &Connection,
+    anchor: &RootAnchor,
+    models_root: &std::path::Path,
+) -> Result<(), String> {
     if exists(db)? {
         return Err("起動時の削除確認情報を再採用できません".into());
     }
@@ -220,6 +224,10 @@ pub(in crate::storage) fn inspect(db: &Connection, anchor: &RootAnchor) -> Resul
                 Err(_) => attention.push((operation, INVALID)),
             }
         }
+    }
+    anchor.verify()?;
+    if present {
+        attention.extend(super::models::startup::inspect(db, anchor, models_root)?);
     }
     anchor.verify()?;
     if attention.is_empty() {
