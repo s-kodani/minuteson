@@ -55,7 +55,7 @@ async (page) => {
   await page.getByRole("button", { name: "照合・受付処理の取消を要求" }).click();
   await page.keyboard.press("Escape"); check(await page.getByRole("dialog").isVisible(), "cancel closed before native completion");
   await page.evaluate(() => window.rebindingFixture.complete());
-  await page.getByRole("alert").filter({ hasText: "取消済み・処理終了" }).waitFor();
+  await closed(); await page.getByRole("status").filter({ hasText: "受付取消と処理終了を確認" }).waitFor();
   check(await page.evaluate(() => window.rebindingFixture.jobs.length) === 3, "cancel committed work");
   results.push("cancelled admission: await completion, cancelled inactive receipt permits fresh review");
 
@@ -63,6 +63,10 @@ async (page) => {
   await page.getByRole("button", { name: "照合・受付処理の取消を要求" }).click();
   await page.evaluate(() => window.rebindingFixture.complete()); await closed();
   check(await page.evaluate(() => window.rebindingFixture.jobs.length) === 4, "winning commit receipt suppressed");
+  const host = page.getByRole("complementary", { name: "通知", exact: true });
+  await host.getByRole("alert").filter({ hasText: "取消要求より先に" }).waitFor();
+  await host.getByRole("button", { name: "注意通知を閉じる", exact: true }).click();
+  check(await page.getByLabel("取消後のモデル再試行受付の要対応状態", { exact: true }).isVisible(), "dismissal erased winning commit attention");
   results.push("commit/cancel race: winning commit remains visible");
 
   await boot(); await fixture({ previewMode: "delay" });
@@ -105,7 +109,8 @@ async (page) => {
 
   await boot(); await prepare(); await fixture({ mode: "conflict" }); await apply();
   await page.getByRole("button", { name: "未確定の受付を取り消して確認" }).click();
-  await page.getByRole("alert").filter({ hasText: "取消済み・処理終了" }).waitFor();
+  await closed(); await page.getByRole("status").filter({ hasText: "受付取消と処理終了を確認" }).waitFor();
+  await page.getByRole("list", { name: "解析ジョブ", exact: true }).getByRole("button", { name: "再配置モデルで同条件の再試行を確認" }).click();
   check(await page.getByRole("combobox", { name: "再配置先モデル" }).inputValue() === "", "cancel retained target as implicit selection");
   check(await count("apply_job_model_rebinding") === 1 && await page.evaluate(() => window.rebindingFixture.jobs.length) === 3, "unknown cancellation admitted work");
   results.push("unknown absent admission: explicit cancellation and fresh target review");

@@ -1,5 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, IssueStatus } from "./toast";
+import { useVersionPublication } from "./version-publication";
 import { useActionConfirmation } from "./confirmation-service";
 import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
@@ -73,7 +75,13 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
   const retryOperations = useRef(new Map<string, string>());
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const mounted = useRef(true);
+  const busyRef = useRef(false);
   const vocabularyStamp = useRef<(() => VocabularyStamp) | null>(null);
+  const publication = useVersionPublication(meetingId, "analysis", busy || locked, async () => {
+    setPreview(null); setError("");
+    try { await onHeadChanged(); await refreshRef.current(); }
+    catch (cause) { if (mounted.current) setError(`採用・復元は確認済みですが、画面の再読込に失敗しました。変更命令を再送せず状態を再読込してください: ${String(cause)}`); }
+  });
 
   useEffect(() => {
     mounted.current = true;
@@ -128,17 +136,19 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
 
 
   const run = async (action: () => Promise<void>) => {
-    if (busy || locked) return;
-    setBusy(true); setError("");
+    if (busyRef.current || locked) return;
+    busyRef.current = true; setBusy(true); setError("");
     try { await action(); }
     catch (cause) { if (mounted.current) setError(String(cause)); }
-    finally { if (mounted.current) setBusy(false); }
+    finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   };
   const updateEngine = (patch: Partial<EnginePreferences>) => queue.edit((value) => ({ ...value, [profile]: { ...value[profile], ...patch } }));
-  const saved = (action: () => Promise<void>) => withSavedEdits(async () => {
-    try { await action(); }
-    catch (cause) { if (mounted.current) setError(String(cause)); throw cause; }
-  });
+  const saved = async (action: () => Promise<void>) => {
+    let ran = false, failed = false, failure: unknown;
+    await withSavedEdits(async () => { ran = true; try { await action(); } catch (cause) { failed = true; failure = cause; if (mounted.current) setError(String(cause)); } });
+    if (!ran) throw Error("編集の保存を完了できませんでした。入力を保持し、操作は開始していません。");
+    if (failed) throw failure;
+  };
   const start = () => run(() => saved(async () => {
     const engine = queue.snapshot().payload?.[profile];
     if (!engine || !engineConfigured(engine)) throw new Error("実行ファイルとモデルを設定してください。");
@@ -179,7 +189,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
     }));
   };
   const applyPreview = (confirmationOpener: HTMLElement) => run(async () => {
-    if (!preview) return;
+    if (!preview || publication.inFlight) return;
     const state = await invoke<VersionState>("get_analysis_versions", { meetingId });
     assertReviewedVersion(state, preview.analysis, preview.restoring);
     const currentNo = state.versions.find((item) => item.id === state.currentId)?.revisionNo;
@@ -189,9 +199,9 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
       : `候補 #${preview.summary.revisionNo} を採用しますか？ ${state.currentId ? `現在版 #${currentNo} とその編集は新しい直前版へ移します。` : "初めての現在版になります。"}${state.previousId ? `今の直前版 #${previousNo} はこの画面から復元できなくなります。参照中のデータと保存済み編集は削除しません。` : ""}`;
     await confirm({ opener: confirmationOpener, title: preview.restoring ? "文字起こしの直前版復元を確認" : "文字起こし候補の採用を確認", target: `会議「${meetingTitle}」 · 文字起こし #${preview.summary.revisionNo}`, confirmLabel: preview.restoring ? "直前版へ戻す" : "候補を採用する", message, onError: cause => { if (mounted.current) setError(String(cause)); }, action: () => saved(async () => {
     if (preview.restoring) {
-      await invoke("restore_analysis_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.analysis.id, expectedContentHash: preview.analysis.contentHash, expectedDraft: state.draft });
+      await publication.apply({ meetingId, kind: "analysis", id: preview.analysis.id, contentHash: preview.analysis.contentHash, revisionNo: preview.summary.revisionNo, meetingLockVersion: state.meetingLockVersion, currentId: state.currentId, restoring: true }, "restore_analysis_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.analysis.id, expectedContentHash: preview.analysis.contentHash, expectedDraft: state.draft });
     } else {
-      await invoke("adopt_analysis_candidate", { request: { meetingId, revisionId: preview.analysis.id, expectedContentHash: preview.analysis.contentHash, expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft, confirmReplacingPrevious: !!state.previousId } });
+      await publication.apply({ meetingId, kind: "analysis", id: preview.analysis.id, contentHash: preview.analysis.contentHash, revisionNo: preview.summary.revisionNo, meetingLockVersion: state.meetingLockVersion, currentId: state.currentId, restoring: false }, "adopt_analysis_candidate", { request: { meetingId, revisionId: preview.analysis.id, expectedContentHash: preview.analysis.contentHash, expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft, confirmReplacingPrevious: !!state.previousId } });
     }
     setPreview(null);
     await onHeadChanged(); await refreshRef.current();
@@ -216,7 +226,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
         <label className="inline-label"><input type="checkbox" checked={engine.useGpu} onChange={(event) => updateEngine({ useGpu: event.target.checked })} />GPUを使用（対応ビルドが必要）</label>
       </fieldset> : <p>設定を読込中です。</p>}
       <div className="analysis-actions"><span role="status">{settings.error ? "設定の保存に失敗" : settings.saving ? "設定を保存中" : settings.dirty ? "設定は未保存" : "設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "設定保存を再試行" : "設定を保存"}</button></div>
-      {settings.error && <p className="action-error" role="alert">{settings.error} 入力は保持しています。修正後に保存を再試行してください。</p>}
+      <IssueNotice scope={meetingId} type="analysis-settings" label="文字起こし設定の保存" message={settings.error} toastMessage="文字起こし設定を保存できません。入力は保持しています" action={{ kind: "retry", label: "文字起こし設定保存を再試行", disabled: disabled || settings.saving, run: () => run(() => queue.retry()) }} />
     </details>
     <VocabularyEditor meetingId={meetingId} meetingTitle={meetingTitle} locked={disabled} stampRef={vocabularyStamp} />
     <label className="prompt-label">今回の用語ヒント（認識効果は未検証）<textarea value={prompt} maxLength={8000} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="例：点検日。自動置換ではなくエンジンへのヒントです。" /></label>
@@ -231,14 +241,16 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
     </div></li>)}</ul>}
     <DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
-    {error && <p className="action-error" role="alert">{error}</p>}
+    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし操作" message={error} toastMessage="文字起こし操作を完了できません。状態を確認してください" />
+    {!preview && publication.status}
     <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => returnFocus.current} className="analysis-dialog" aria-labelledby="analysis-preview-title">{preview && <>
       <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>閉じる</button></div>
       <p>比較する発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
       <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
-      {error && <p className="action-error" role="alert">{error}</p>}
-      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={event => void applyPreview(event.currentTarget)}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+      <IssueStatus label="文字起こし操作" message={error} />
+      {publication.status}
+      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void applyPreview(event.currentTarget)}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
     </>}</CommonModal>
   </section>;
 }

@@ -71,16 +71,19 @@ mockIPC(async (command, args) => {
     case "get_model_placements": return [];
     case "get_model_profiles": return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
     case "get_analysis_flow": return null;
-    case "get_diarization_tracks": return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
+    case "get_diarization_tracks": if (fixture.failTracks) throw Error("模擬トラック読込失敗"); return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
     case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
     case "save_diarization_preferences":
       await new Promise(resolve => setTimeout(resolve, fixture.persistenceDelayMs));
+      if (fixture.failDiarizationPreferences) throw Error("模擬話者分離設定の保存失敗");
       if (args.expectedLockVersion !== fixture.diarizationPreferences.lockVersion) throw Error("模擬話者分離設定競合");
       fixture.diarizationPreferences = { ...fixture.diarizationPreferences, payload: structuredClone(args.payload), lockVersion: fixture.diarizationPreferences.lockVersion + 1 };
       return structuredClone(fixture.diarizationPreferences);
     case "get_speaker_reviews": return { analysisId: args.request.analysisId, contentHash: args.request.expectedContentHash, reviews: args.request.utteranceIds.map(utteranceId => ({ utteranceId, trackId: "microphone", estimatedState: "unknown", manualAssignment: false, segmentCount: 0, overlapCount: 0, page: args.request.page, pageCount: 1, segments: [], overlaps: [] })) };
     case "list_meetings": return meetings;
-    case "get_meeting": return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
+    case "get_meeting":
+      if (fixture.failMeetingRead) throw Error("模擬会議読込失敗");
+      return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
     case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
     case "get_transcript_draft": return args.meetingId === meetings[0].id ? fixture.draft : null;
     case "begin_transcript_draft":
@@ -122,10 +125,16 @@ mockIPC(async (command, args) => {
     case "get_analysis_preview": return structuredClone(args.analysisId === analysis.id ? analysis : fixture.candidate);
     case "get_analysis_version_draft": return structuredClone(fixture.draft?.baseAnalysisId === args.analysisId ? fixture.draft : fixture.archivedDrafts[args.analysisId] ?? null);
     case "start_transcription": {
+      if (fixture.failStart) throw Error("模擬文字起こし開始失敗");
       const book = fixture.vocabulary[args.request.meetingId] ?? { lockVersion: 0 };
       if (args.request.expectedVocabulary.globalVersion !== fixture.vocabulary.global.lockVersion || args.request.expectedVocabulary.meetingVersion !== book.lockVersion) throw new Error("確認した用語リストが変更されました。用語を再確認して開始してください");
       fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "c".repeat(64), retryOfJobId: null, attempt: 1 });
       return structuredClone(fixture.jobs[0]);
+    }
+    case "start_diarization": {
+      if (fixture.failStart) throw Error("模擬話者分離開始失敗");
+      const job = { ...fixture.jobs[0], id: crypto.randomUUID(), kind: "diarization", state: "queued", operationId: args.request.input.operationId, completedUnits: 0, retryOfJobId: null, attempt: 1 };
+      fixture.jobs.unshift(job); return structuredClone(job);
     }
     case "retry_transcription":
     case "retry_diarization": {
@@ -157,7 +166,8 @@ mockIPC(async (command, args) => {
       fixture.candidateVisible = false;
       switchDraft(fixture.currentId);
       meetings[0].lockVersion++;
-      return {};
+      if (fixture.lostPublicationResponse) { fixture.lostPublicationResponse = false; throw Error("模擬採用応答喪失"); }
+      return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: fixture.candidate.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
     case "restore_analysis_version": {
       const target = args.expectedPreviousId === analysis.id ? analysis : fixture.candidate;
@@ -166,7 +176,8 @@ mockIPC(async (command, args) => {
       const prior = fixture.currentId;
       fixture.currentId = fixture.previousId; fixture.previousId = prior;
       switchDraft(fixture.currentId); meetings[0].lockVersion++;
-      return {};
+      if (fixture.lostPublicationResponse) { fixture.lostPublicationResponse = false; throw Error("模擬復元応答喪失"); }
+      return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
     case "prepare_utterance_playback":
       if (fixture.failPlayback) throw new Error("音声ファイルのハッシュが保存時と一致しません");

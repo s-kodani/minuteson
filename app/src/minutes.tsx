@@ -1,7 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { InfoPopover } from "./info-popover";
-import { IssueNotice, ToastNotice } from "./toast";
+import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
+import { useVersionPublication } from "./version-publication";
+import { SourceUpdateTracker } from "./version-publication-state";
 import { useActionConfirmation } from "./confirmation-service";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useId, useRef, useState } from "react";
@@ -51,6 +53,13 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const opener = useRef<HTMLElement | null>(null);
   const operations = useRef(new Map<string, string>());
   const retryOperations = useRef(new Map<string, string>());
+  const publication = useVersionPublication(meetingId, "minutes", busy || locked, async () => {
+    setPreview(null); setError(""); loadedCurrent.current = "";
+    try { await onHeadChanged(); await refreshRef.current(); }
+    catch (cause) { if (mounted.current) setError(`採用・復元は確認済みですが、画面の再読込に失敗しました。変更命令を再送せず状態を再読込してください: ${String(cause)}`); }
+  });
+  const [sourceTracker] = useState(() => new SourceUpdateTracker());
+  const [sourceUpdateEvent, setSourceUpdateEvent] = useState<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -97,6 +106,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
               setCurrent(view); setCurrentDraft(draft); loadedCurrent.current = key;
             }
             setVersions(state); setSource(analysis); setJobs(allJobs);
+            const present = state.versions.find(v => v.id === state.currentId);
+            if (present) { const event = sourceTracker.observe(present.id, present.contentHash, present.inputUpdated); if (event) setSourceUpdateEvent(event); }
             setExports(exportHistory);
             // A known job resolves a lost start response. Subsequent explicit
             // generations may then receive a fresh operation ID.
@@ -122,9 +133,12 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     try { await action(); } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   };
-  const saved = (action: () => Promise<void>) => withSavedEdits(async () => {
-    try { await action(); } catch (cause) { if (mounted.current) setError(String(cause)); throw cause; }
-  });
+  const saved = async (action: () => Promise<void>) => {
+    let ran = false, failed = false, failure: unknown;
+    await withSavedEdits(async () => { ran = true; try { await action(); } catch (cause) { failed = true; failure = cause; if (mounted.current) setError(String(cause)); } });
+    if (!ran) throw Error("編集の保存を完了できませんでした。入力を保持し、操作は開始していません。");
+    if (failed) throw failure;
+  };
   const update = (patch: Partial<MinutesEngine>) => queue.edit((value) => ({ ...value, [profile]: { ...value[profile], ...patch } }));
   const start = () => run(() => saved(async () => {
     const engine = queue.snapshot().payload?.[profile];
@@ -192,7 +206,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     }));
   };
   const apply = (confirmationOpener: HTMLElement) => run(async () => {
-    if (!preview) return;
+    if (!preview || publication.inFlight) return;
     const state = await invoke<MinutesVersions>("get_minutes_versions", { meetingId });
     assertMinutesReview(state, preview.original, preview.summary, preview.restoring);
     const present = state.versions.find((v) => v.id === state.currentId);
@@ -200,8 +214,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     const message = preview.restoring ? `直前版 #${preview.summary.revisionNo} に戻しますか？ 現在版 #${present?.revisionNo} は新しい直前版になり、両方の保存済み編集を保持します。`
       : `候補 #${preview.summary.revisionNo} を採用しますか？ ${present ? `現在版 #${present.revisionNo} とその編集は新しい直前版へ移します。` : "初めての現在版になります。"}${previous ? `今の直前版 #${previous.revisionNo} はこの画面から復元できなくなります。保存済み編集と参照中のデータは削除しません。` : ""}`;
     await confirm({ opener: confirmationOpener, title: preview.restoring ? "議事録の直前版復元を確認" : "議事録候補の採用を確認", target: `会議「${meetingTitle}」 · 議事録 #${preview.summary.revisionNo}`, confirmLabel: preview.restoring ? "直前版へ戻す" : "候補を採用する", message, onError: cause => { if (mounted.current) setError(String(cause)); }, action: () => saved(async () => {
-    if (preview.restoring) await invoke("restore_minutes_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedDraft: state.draft });
-    else await invoke("adopt_minutes_candidate", { request: { meetingId, revisionId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft, confirmReplacingPrevious: !!state.previousId } });
+    const review = { meetingId, kind: "minutes" as const, id: preview.view.id, contentHash: preview.view.contentHash, revisionNo: preview.summary.revisionNo, meetingLockVersion: state.meetingLockVersion, currentId: state.currentId, restoring: preview.restoring };
+    if (preview.restoring) await publication.apply(review, "restore_minutes_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedDraft: state.draft });
+    else await publication.apply(review, "adopt_minutes_candidate", { request: { meetingId, revisionId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft, confirmReplacingPrevious: !!state.previousId } });
     setPreview(null); loadedCurrent.current = "";
     await onHeadChanged(); await refreshRef.current();
     }) });
@@ -223,7 +238,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
         <p>入力上限はコンテキスト − 出力上限 − 512 以下にしてください。bytesは正確なトークン数ではありません。GPU 0ならCPUで処理します。</p>
       </fieldset> : <p>議事録設定を読込中です。</p>}
       <div className="analysis-actions"><span role="status">{settings.error ? "議事録設定の保存に失敗" : settings.saving ? "議事録設定を保存中" : settings.dirty ? "議事録設定は未保存" : "議事録設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "議事録設定保存を再試行" : "議事録設定を保存"}</button></div>
-      {settings.error && <p className="action-error" role="alert">{settings.error} 入力は保持しています。</p>}
+      <IssueNotice scope={meetingId} type="minutes-settings" label="議事録設定の保存" message={settings.error} toastMessage="議事録設定を保存できません。入力は保持しています" action={{ kind: "retry", label: "議事録設定保存を再試行", disabled: disabled || settings.saving, run: () => run(() => queue.retry()) }} />
     </details>
     <div className="analysis-actions"><button type="button" disabled={disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine)} onClick={() => void start()}>{current ? "議事録を再生成" : "議事録を生成"}</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先" : "端末内で処理"}</span></div>
     {!source?.currentId && <p>先に文字起こし候補を確認・採用してください。</p>}
@@ -235,17 +250,20 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       <JobModelRebinding meetingId={meetingId} job={j} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
-    {current && <><div className="transcript-actions"><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p><button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button></div>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
+    {current && <><div className="transcript-actions"><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p><button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button></div>{currentSummary?.inputUpdated && <div className="heading-with-info data-updated"><span role="status">元データ更新あり</span><InfoPopover label="議事録の元データ更新">文字起こし・話者情報が生成後に変更されています。この議事録と根拠は生成時の版を保持し、自動では置き換えません。内容を確認して、必要なら「議事録を再生成」してください。</InfoPopover></div>}<MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
+    <ToastNotice scope={meetingId} type="minutes-source-updated" level="warning" eventId={sourceUpdateEvent ?? undefined} message={sourceUpdateEvent ? "議事録作成後に元データが変更されています。既存の議事録と根拠は保持しています" : ""} />
     {exportNoticeLevel(exportState) === "error" ? <IssueNotice scope={meetingId} type="minutes-export" label="議事録の書き出しを要確認" message={exportNotice} /> : <ToastNotice scope={meetingId} type="minutes-export" eventId={exportEvent} level={exportNoticeLevel(exportState)} message={exportNotice} onClose={() => setExportNotice("")} />}
     <details className="minutes-export-history"><summary>Markdown出力履歴（最新50件）</summary><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</details>
-    {error && <p className="action-error" role="alert">{error}</p>}
+    <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。状態を確認してください" />
+    {!preview && publication.status}
     <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => opener.current} className="analysis-dialog" aria-labelledby="minutes-preview-title">{preview && <>
       <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>
       <p>全項目の内容・根拠・担当者・期限を確認してください。SHA-256: <code>{preview.view.contentHash}</code></p>{preview.summary.inputUpdated && <p className="data-updated">元データ更新あり。この版の根拠は生成時の入力を保持しています。</p>}
       <details><summary>固定された議事録処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, inputAnalysisId: preview.view.inputAnalysisId, inputContentHash: preview.view.inputContentHash }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <MinutesDocument key={`current-${preview.current.id}`} view={preview.current} locked={disabled} content={preview.currentDraft?.payload ?? preview.current.content} title="比較する現在の議事録" /> : <section><h3>現在の議事録</h3><p>まだありません。</p></section>}<MinutesDocument key={preview.view.id} view={preview.view} locked={disabled} content={preview.draft?.payload ?? preview.view.content} title={preview.restoring ? "復元する議事録（保存済み編集を含む）" : "採用する議事録候補"} /></div>
-      {error && <p className="action-error" role="alert">{error}</p>}
-      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={event => void apply(event.currentTarget)}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+      <IssueStatus label="議事録操作" message={error} />
+      {publication.status}
+      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void apply(event.currentTarget)}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
     </>}</CommonModal>
   </section>;
 }

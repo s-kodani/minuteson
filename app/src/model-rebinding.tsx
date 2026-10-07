@@ -1,4 +1,5 @@
 import { CommonModal } from "./common-modal";
+import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
 import type { AnalysisJob } from "./analysis-state";
@@ -21,6 +22,8 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeEvent, setNoticeEvent] = useState("");
+  const [noticeLevel, setNoticeLevel] = useState<"info" | "warning">("info");
   const dialog = useRef<HTMLDialogElement>(null), opener = useRef<HTMLElement | null>(null);
   const mounted = useRef(true), active = useRef<{ kind: string; token: string } | null>(null);
   const savingEdits = useRef(false);
@@ -110,7 +113,7 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
   const accept = (result: RebindingJob, attempt: ReviewedModelRetry) => {
     assertJobModelResult(result, attempt.operationId, attempt.preview);
     if (unresolved.get(key) === attempt) unresolved.delete(key);
-    if (mounted.current) { setReview(null); setOpen(false); setError(""); setNotice(`同条件の再試行を受付済みです（試行 ${result.attempt}、ジョブ ${result.id.slice(0, 8)}）。現在版・編集・今後の解析設定は変更していません。`); }
+    if (mounted.current) { setReview(null); setOpen(false); setError(""); setNoticeEvent(attempt.operationId); setNoticeLevel(attempt.cancelled ? "warning" : "info"); setNotice(`${attempt.cancelled ? "取消要求より先に、" : ""}同条件の再試行を受付済みです（試行 ${result.attempt}、ジョブ ${result.id.slice(0, 8)}）。解析の完了ではありません。現在版・編集・今後の解析設定は変更していません。`); }
   };
   const receipt = async (attempt: ReviewedModelRetry) => {
     const value = await invoke<Receipt>("get_job_model_rebinding_result", attempt.receipt());
@@ -118,7 +121,7 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
     if (value.job) accept(value.job, attempt);
     else if (value.cancelled && !value.active) {
       if (unresolved.get(key) === attempt) unresolved.delete(key);
-      if (mounted.current) { setReview(null); setSelected(""); setError("取消済み・処理終了を確認しました。この操作では再試行を受け付けていません。配置記録を再読込して条件を再確認できます。"); }
+      if (mounted.current) { setReview(null); setSelected(""); setOpen(false); setError(""); setNoticeEvent(attempt.operationId); setNoticeLevel("info"); setNotice("再試行の受付取消と処理終了を確認しました。この操作では新しいジョブを受け付けていません。現在版・編集は保持しています。"); }
     } else if (mounted.current) setError(value.active ? "受付処理はまだ終了していません。終了後に同じ操作IDで結果を確認してください。" : "この操作の受付記録はまだ確認できません。結果確認は新しいジョブを作りません。同じ操作で受付を再試行できます。確認内容は変更できません。");
   };
   const checkResult = async () => {
@@ -165,7 +168,9 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
   if (!open && !pending && !eligible && !notice) return null;
   return <>
     {(eligible || pending) && <button type="button" className="small-secondary" disabled={!!busy || (!pending && (locked || recordingActive))} onClick={e => show(e.currentTarget)}>{pending ? "モデル再試行の受付結果を確認" : "再配置モデルで同条件の再試行を確認"}</button>}
-    {notice && <p role="status">{notice}</p>}
+    <ToastNotice scope={key} type="model-rebinding-result" message={notice} eventId={noticeEvent} level={noticeLevel} important={noticeLevel === "warning"} onClose={noticeLevel === "info" ? () => setNotice("") : undefined} />
+    {noticeLevel === "warning" && <IssueStatus label="取消後のモデル再試行受付" message={notice} />}
+    <IssueNotice scope={key} type="model-rebinding-operation" label="同条件モデル再試行" message={error} toastMessage="同条件モデル再試行を確定できません。確認情報を保持しています" />
     {open && <CommonModal ref={dialog} open blocked={!!busy} onDismiss={() => { if (!active.current) setOpen(false); }} restoreTarget={() => opener.current} className="analysis-dialog model-rebinding-dialog" aria-labelledby={titleId}>
       <div className="card-head"><h2 id={titleId} tabIndex={-1}>再配置モデルによる同条件の再試行</h2><button type="button" className="small-secondary" disabled={!!busy} data-dialog-cancel onClick={() => setOpen(false)}>閉じる</button></div>
       <p>元のジョブの音声・入力版・用語・人数・数値条件と保存済み途中結果を固定し、同じ構成・同じバイトのモデルだけを再照合します。モデル変更や設定変更による新規解析とは別の操作です。</p>

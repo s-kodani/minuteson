@@ -43,10 +43,12 @@ const suites = [
   ["model-preparation-toast", "model-preparation-browser-fixture.js", "model-preparation-toast-browser-check.js"],
   ["model-profile-toast", "model-profile-browser-fixture.js", "model-profile-toast-browser-check.js"],
   ["job-notifications", "browser-fixture.js", "job-notifications-browser-check.js"],
+  ["publication-toast", "browser-fixture.js", "publication-toast-browser-check.js"],
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
   ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],
   ["minutes-toast", "minutes-init", "minutes-toast-browser-check.js"],
+  ["minutes-publication-toast", "minutes-init", "minutes-publication-toast-browser-check.js"],
   ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
 ].filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");

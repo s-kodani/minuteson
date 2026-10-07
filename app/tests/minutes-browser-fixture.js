@@ -87,9 +87,11 @@ async (page) => {
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : copy(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return copy(data.td); }
         if (cmd === "get_analysis_preferences") return {id:"whisper_profiles",lockVersion:0,payload:{standard:copy(analysisEngine),highAccuracy:copy(analysisEngine)}};
+        if (cmd === "get_diarization_tracks") return {tracks:[]};
+        if (cmd === "get_diarization_preferences") {const engine={executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:800,windowShiftMilli:500,minDurationOnMs:0,minDurationOffMs:0};return {id:"sherpa_profiles",lockVersion:0,payload:{standard:copy(engine),highAccuracy:copy(engine)}};}
         if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
         if (cmd === "get_minutes_preferences") return copy(data.pref);
-        if (cmd === "save_minutes_preferences") { if (data.pref.lockVersion!==args.expectedLockVersion) throw Error("stale preferences"); data.pref.payload=copy(args.payload); data.pref.lockVersion++; return copy(data.pref); }
+        if (cmd === "save_minutes_preferences") { if(data.failPreferences)throw Error("模擬議事録設定保存失敗");if (data.pref.lockVersion!==args.expectedLockVersion) throw Error("stale preferences"); data.pref.payload=copy(args.payload); data.pref.lockVersion++; return copy(data.pref); }
         if (cmd === "get_analysis_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",previousId:null,draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion},versions:args.meetingId === "m2" ? [] : [{id:"analysis",revisionNo:1,contentHash:"source-hash",publicationState:"committed",utteranceCount:1,createdAt:0,profile:{},config:{}}]};
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if (cmd === "get_minutes_versions") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : data.current,previousId:args.meetingId === "m2" ? null : data.previous,draft:args.meetingId === "m2" ? null : stamp(),versions:args.meetingId === "m2" ? [] : copy(data.versions.filter(v=>v.publicationState==="candidate"||[data.current,data.previous].includes(v.id)))};
@@ -178,6 +180,7 @@ async (page) => {
           const prior=data.history[data.current]?.pop();if(!prior) throw Error("no minutes undo");d.payload=prior;d.lockVersion++;return copy(d);
         }
         if (cmd === "start_minutes_generation") {
+          if(data.failStart)throw Error("模擬議事録生成開始失敗");
           if(args.request.input.expectedDraft.lockVersion!==data.td.lockVersion||args.request.input.expectedMeetingLockVersion!==data.lock) throw Error("stale input");
           const j={id:"job",meetingId:"m1",operationId:args.request.input.operationId,kind:"minutes_generation",state:"queued",completedUnits:0,totalUnits:3,errorCode:null,pauseReason:null,specHash:"spec",outputAnalysisId:null,outputMinutesId:null,retryOfJobId:null,attempt:1};data.jobs.push(j);emit("analysis-job-changed",j);return copy(j);
         }
@@ -199,7 +202,10 @@ async (page) => {
           if(r.expectedMeetingLockVersion!==data.lock||JSON.stringify(r.expectedDraft)!==JSON.stringify(stamp())) throw Error("stale adoption");
           const id=cmd==="adopt_minutes_candidate"?r.revisionId:r.expectedPreviousId;
           if(r.expectedContentHash!==data.views[id].contentHash) throw Error("stale preview");
-          data.previous=data.current;data.current=id;data.lock++;data.versions.find(v=>v.id===id).publicationState="committed";emit("minutes-version-changed","m1");return {id,contentHash:data.views[id].contentHash,meetingLockVersion:data.lock,previousId:data.previous};
+          if(data.failPublication)throw Error("模擬議事録採用・復元競合");
+          data.previous=data.current;data.current=id;data.lock++;data.versions.find(v=>v.id===id).publicationState="committed";emit("minutes-version-changed","m1");
+          if(data.lostPublicationResponse){data.lostPublicationResponse=false;throw Error("模擬議事録採用・復元応答喪失");}
+          return data.foreignPublicationReceipt?{id:"foreign",contentHash:"wrong",meetingLockVersion:0,previousId:null}:{id,contentHash:data.views[id].contentHash,meetingLockVersion:data.lock,previousId:data.previous};
         }
         if(cmd==="finish_main_close") return;
         throw Error(`unmocked command ${cmd}`);
