@@ -13,6 +13,7 @@ import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./spe
 import {preciseTime} from "./diarization-state";
 import { appShortcut, nativeTextTarget, overlayOpen } from "./keyboard";
 import { cancelTextEdit, retainedTextRows, stageTextEdit, textBuffersDirty, textEditBaseline, type TextEditSession } from "./transcript-edit-session";
+import { cancelName, nameBaseline, namesDirty, stageName, type SpeakerNameSession } from "./speaker-name-edit";
 
 import { activeSpeakers, addSpeaker, assignSpeakers, canonicalPayload, filterUtterances, mergeSpeaker, projectTranscript, splitPosition, splitUtterance, textPieces, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
 export type { Analysis, DraftPayload } from "./transcript-state";
@@ -90,6 +91,15 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const textInputs = useRef(new Map<string, HTMLTextAreaElement>());
   const transcriptRoot = useRef<HTMLElement>(null);
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const [nameSessions,setNameSessions] = useState<Record<string,SpeakerNameSession>>({});
+  const nameBuffers = useRef<Record<string,SpeakerNameSession>>({});
+  const nameInputs = useRef(new Map<string,HTMLInputElement>());
+  const focusNameAfterRemoval = useRef<{ id: string; input: HTMLInputElement } | null>(null);
+  const nameOperations = useRef(new Map<string,{ kind: "commit" | "cancel" }>());
+  const [namePending,setNamePending] = useState<Record<string,"commit" | "cancel">>({});
+  const updateNames = (update: (current: Record<string,SpeakerNameSession>) => Record<string,SpeakerNameSession>) => {
+    nameBuffers.current = update(nameBuffers.current); setNameSessions(nameBuffers.current);
+  };
   const focusAfterRemoval = useRef<{ id: string; row: HTMLElement | null } | null>(null);
   const undoPending = useRef(false);
   const removingBuffers = useRef(new Map<string,{ session: TextEditSession; kind: "commit" | "cancel" | "barrier" }>());
@@ -116,20 +126,26 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     if(discardPendingRef.current) throw Error("回復入力の破棄結果を確認してから移動してください");
     if(!recoveryReadyRef.current) { if(saveQueue.snapshot().draft) throw Error("未確定入力の回復記録を先に読み込んでください"); return; }
     if(!saveQueue.snapshot().draft) return;
-    if(recovery.snapshot().review && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length) return;
+    if(recovery.snapshot().review && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !Object.keys(nameBuffers.current).length) return;
     for (;;) {
       if(removingBuffers.current.size) { await recovery.flushRecovery(); settleRemovedBuffers(); }
       const expected = textBuffers.current;
+      const expectedNames = nameBuffers.current;
+      saveQueue.edit(current => Object.values(expectedNames).reduce(stageName,current));
       stageTextBuffers(); await saveQueue.flush();
       // A barrier can save while this editor remains mounted (e.g. a candidate
       // review). Keep its field/baseline so Esc can still record a restoration.
       for(const session of Object.values(expected)) if(textBuffers.current[session.utteranceId] === session) removingBuffers.current.set(session.utteranceId,{ session,kind: "barrier" });
       syncRecoveryBuffers(); await recovery.flushRecovery(); settleRemovedBuffers();
-      if(!durableBuffers().length && !saveQueue.snapshot().dirty) return;
+      if(!durableBuffers().length && !saveQueue.snapshot().dirty && expectedNames === nameBuffers.current) return;
     }
   };
   const recoveryReadyRef = useRef(recoveryReady); recoveryReadyRef.current = recoveryReady;
-  const retryTextBuffers = async () => { stageTextBuffers(); await saveQueue.retry(); await flushTextBuffers(); setBodyManual(false); };
+  const retryTextBuffers = async () => {
+    // Resolve only already-confirmed payload. New names and text typed after
+    // a failure must not be published just because another operation is retried.
+    await saveQueue.retry(); await recovery.flushRecovery(); settleRemovedBuffers(); setBodyManual(false);
+  };
 
   useEffect(() => {
     const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
@@ -159,6 +175,12 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     if(pending.row?.isConnected) pending.row.focus();
     else transcriptRoot.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
   },[textSessions]);
+  useLayoutEffect(() => {
+    const pending = focusNameAfterRemoval.current;
+    if(!pending || nameSessions[pending.id]) return;
+    focusNameAfterRemoval.current = null;
+    if(pending.input.isConnected && (document.activeElement === document.body || pending.input.closest(".speaker-name-editor")?.contains(document.activeElement))) pending.input.focus();
+  },[nameSessions]);
 
   const reload = async (propagateFailure = false) => {
     audio.clear();
@@ -176,6 +198,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       setAnalysis(current);
       saveQueue.load(working);
       textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null);
+      updateNames(() => ({}));
       recoveryReadyRef.current = true; setRecoveryReady(true);
       setPage(0);
       setSelection([]); setMergeSource(""); setMergeTarget(""); setNotice(""); setNoticeVersion(null);
@@ -234,7 +257,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   };
 
   const undo = async (flushCurrent = false) => {
-    if (!draft || !matchingBase || (!flushCurrent && (draft.lockVersion === 0 || dirty || saving || textDirty)) || busy || locked || confirm.pending || undoPending.current) return;
+    if (!draft || !matchingBase || (!flushCurrent && (draft.lockVersion === 0 || dirty || saving || textDirty || nameDirty)) || busy || locked || confirm.pending || undoPending.current) return;
     undoPending.current = true;
     setBusy(true);
     audio.clear();
@@ -248,6 +271,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       recovery.advance(previous);
       saveQueue.load(previous);
       updateTextSessions(() => ({}));
+      updateNames(() => ({}));
       setNotice("直前の編集を取り消しました。"); setNoticeVersion(null); setMergeSource(""); setMergeTarget("");
     } catch (cause) {
       setError(String(cause));
@@ -268,11 +292,10 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     finally { setBusy(false); }
   };
 
-  const changeName = (speakerId: string, value: string) => {
-    saveQueue.edit((current) => {
-      const other = current.speaker_names.filter((item) => item.speaker_id !== speakerId);
-      return { ...current, speaker_names: [...other, { speaker_id: speakerId, display_name: value || null }] };
-    });
+  const changeName = (speaker: typeof speakers[number], value: string) => {
+    const current = saveQueue.snapshot().payload;
+    if(!editable || !current) return;
+    updateNames(sessions => ({ ...sessions,[speaker.id]: { ...(sessions[speaker.id] ?? nameBaseline(current,speaker)),value } }));
   };
 
   const changeUtterance = (utterance: Utterance, update: Partial<DraftPayload["utterances"][number]>) => {
@@ -298,9 +321,39 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const retained = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, [...Object.keys(textSessions), ...(focusedRow ? [focusedRow] : [])]);
   const shown = retained.rows;
   const textDirty = textBuffersDirty(textSessions, view?.utterances ?? []);
+  const nameDirty = namesDirty(nameSessions,view?.speakers ?? []);
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
   const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation);
+  const finishName = async (id: string,kind: "commit" | "cancel") => {
+    const session = nameBuffers.current[id];
+    if(!editable || !session || nameOperations.current.has(id)) return;
+    const startedFocused = !!nameInputs.current.get(id)?.closest(".speaker-name-editor")?.contains(document.activeElement);
+    const operation = { kind }; nameOperations.current.set(id,operation);
+    setNamePending(current => ({ ...current,[id]: kind })); setError("");
+    try {
+      const failed = saveQueue.snapshot();
+      if(failed.error && kind === "cancel") {
+        const saved = recovery.snapshot().bodyPending ? (await recovery.recheckBody(false)).draft : await invoke<Draft | null>("get_transcript_draft",{ meetingId });
+        if(!saved || !failed.draft || saved.id !== failed.draft.id || saved.baseAnalysisId !== failed.draft.baseAnalysisId
+          || saved.lockVersion !== failed.draft.lockVersion || saved.contentHash !== failed.draft.contentHash
+          || JSON.stringify(canonicalPayload(saved.payload)) !== JSON.stringify(canonicalPayload(failed.draft.payload))) throw Error("先行する保存結果を確認できません。話者名の入力は保持しています。");
+        saveQueue.load(saved); if(failed.payload) saveQueue.edit(() => failed.payload!);
+      }
+      if(nameBuffers.current[id] !== session) return;
+      saveQueue.edit(current => kind === "commit" ? stageName(current,session) : cancelName(current,session));
+      await saveQueue.flush(); await recovery.flushRecovery();
+      setBodyManual(false);
+      if(nameBuffers.current[id] === session) {
+        const input = nameInputs.current.get(id);
+        if(input && (input.closest(".speaker-name-editor")?.contains(document.activeElement) || startedFocused && document.activeElement === document.body)) focusNameAfterRemoval.current = { id,input };
+        updateNames(current => { const next = { ...current }; delete next[id]; return next; });
+      }
+    } catch(cause) { setError(String(cause)); }
+    finally {
+      if(nameOperations.current.get(id) === operation) { nameOperations.current.delete(id); setNamePending(current => { const next = { ...current }; delete next[id]; return next; }); }
+    }
+  };
   const beginTextEdit = (utterance: Utterance) => {
     const current = saveQueue.snapshot().payload;
     if (!editable || !current || textOperations.current.has(utterance.id)) return;
@@ -356,8 +409,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   };
   const confirmReload = () => {
     if(discardPendingRef.current || recovery.snapshot().pendingRequest || recovery.snapshot().bodyPending || recovery.snapshot().saving) { setError("未確認の保存結果を確認してから再読込してください。入力を保持しています。"); return; }
-    if (!saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length) { void reload(); return; }
-    const stamp = () => JSON.stringify([saveQueue.snapshot().payload, textBuffers.current]);
+    if (!saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !Object.keys(nameBuffers.current).length) { void reload(); return; }
+    const stamp = () => JSON.stringify([saveQueue.snapshot().payload, textBuffers.current,nameBuffers.current]);
     const expected = stamp();
     void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集とその回復入力を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => stamp() === expected, action: async () => {
       // Complete fallible reads before consenting input is cleared. The empty
@@ -372,6 +425,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       recovery.load(working,recovery.snapshot().saved); saveQueue.load(working); setAnalysis(current);
       setRecoveryManual(false); setBodyManual(false);
       textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null); setError("");
+      updateNames(() => ({}));
       setNotice("未保存の編集と回復入力を破棄し、保存済み本文を再読込しました。"); setNoticeVersion(null);
     } });
   };
@@ -409,7 +463,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
 
   return (
     <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onKeyDown={event => {
-      if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving && !textDirty) || undoPending.current) return;
+      if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving && !textDirty && !nameDirty) || undoPending.current) return;
       event.preventDefault(); void undo(true);
     }}>
       <div className="card-head">
@@ -421,14 +475,14 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       {analysis && <>
         <div className="transcript-actions">
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
-          {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty ? "未保存" : "保存済み"}</span>}
+          {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty || nameDirty ? "未保存" : "保存済み"}</span>}
           {(saveError || bodyManual && dirty) && <button type="button" className="small-secondary" onClick={() => void runRecoveryAction(retryTextBuffers)} disabled={saving || busy || locked || discardPending || !!activeConfirmation}>保存を再試行</button>}
-          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
+          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || nameDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
           <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
         </div>
         <TranscriptRecoveryPanel meetingId={meetingId} review={recoverySnapshot.review} currentDraftId={draft?.id}
           blocked={locked || loading || busy || saving}
-          canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
+          canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !Object.keys(nameSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
           onPending={pending => { discardPendingRef.current = pending; setDiscardPending(pending); }}
           onResume={async () => {
             await recovery.resume();
@@ -438,7 +492,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
           onDiscarded={record => {
             const current = saveQueue.snapshot().draft;
             if(current?.id === record.draftId && record.currentContext && record.matchesDraft && record.currentDraftLockVersion === current.lockVersion && record.currentDraftContentHash === current.contentHash
-              && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !recovery.snapshot().pendingRequest && !recovery.snapshot().bodyPending) {
+              && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !Object.keys(nameBuffers.current).length && !recovery.snapshot().pendingRequest && !recovery.snapshot().bodyPending) {
               recovery.load(current,record); setError("");
             }
           }} />
@@ -451,14 +505,23 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         {(recoverySnapshot.error || recoveryManual && recoverySnapshot.dirty) && <div className="action-error" role="alert">未確定入力を保持しています：{recoverySnapshot.error || "保存結果の確認後も、新しい入力の自動再送は停止しています。"}
           <button type="button" disabled={busy || recoverySnapshot.saving || recoverySnapshot.bodyPending || locked || !!activeConfirmation} onClick={() => void runRecoveryAction(async () => { await recovery.retryRecovery(); setRecoveryManual(false); })}>未確定入力の保存を再試行</button>
         </div>}
-        <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? [])) await undo(); } } : undefined} />
+        <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || nameDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? []) && !namesDirty(nameBuffers.current,view?.speakers ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {!splitting&&audio.controls}
         <div className="speaker-grid">
           {speakers.map((speaker) => {
-            return <label key={speaker.id}>{speaker.label}<input value={speaker.displayName ?? ""} onChange={(event) => changeName(speaker.id, event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名" /></label>;
+            const session = nameSessions[speaker.id], pending = namePending[speaker.id];
+            return <div key={speaker.id} className="speaker-name-editor" role="group" aria-label={`${speaker.label}の名前編集`}>
+              <label>{speaker.label}<input ref={node => { if(node) nameInputs.current.set(speaker.id,node); else nameInputs.current.delete(speaker.id); }} value={session?.value ?? speaker.displayName ?? ""} onChange={event => changeName(speaker,event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名"
+                onKeyDown={event => {
+                  if(!session || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat || event.altKey || event.shiftKey || overlayOpen()) return;
+                  if(event.key === "Enter" || event.key === "Escape") { event.preventDefault(); void finishName(speaker.id,event.key === "Enter" ? "commit" : "cancel"); }
+                }} /></label>
+              {session && <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"commit")}>確定</button><button type="button" className="small-secondary" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"cancel")}>キャンセル</button><span>{pending ? "保存を確認中" : "Enterで確定 · Escでキャンセル"}</span></div>}
+            </div>;
           })}
         </div>
+        {!!Object.keys(nameSessions).length && <p className="hint">話者名の入力は画面内で保持しています。確定・通常の画面移動で保存します。未確定の名前の異常終了時回復は未対応です。</p>}
         <div className="transcript-actions" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
         <div className="transcript-actions" aria-label="話者統合">
           <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>

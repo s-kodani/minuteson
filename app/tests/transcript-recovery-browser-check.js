@@ -102,7 +102,9 @@ async page => {
   await boot(); await input("00:00:00").fill("取消済み本文を再保存しない"); await savedInput("取消済み本文を再保存しない");
   await page.evaluate(() => { window.monBrowserFixture.recovery.lostClear = true; }); await row("00:00:00").getByRole("button",{ name: "キャンセル",exact: true }).click();
   await editor.getByRole("button",{ name: "回復保存の結果を確認",exact: true }).waitFor();
-  await editor.getByRole("textbox",{ name: "話者A",exact: true }).fill("名前だけ変更"); await editor.getByRole("button",{ name: "保存を再試行",exact: true }).waitFor();
+  await editor.getByRole("textbox",{ name: "話者A",exact: true }).fill("名前だけ変更");
+  await editor.getByRole("group",{ name: "話者Aの名前編集",exact: true }).getByRole("button",{ name: "確定",exact: true }).click();
+  await editor.getByRole("button",{ name: "保存を再試行",exact: true }).waitFor();
   await editor.getByRole("button",{ name: "回復保存の結果を確認",exact: true }).click(); await input("00:00:00").waitFor({ state: "hidden" });
   await editor.getByRole("button",{ name: "保存を再試行",exact: true }).click();
   await page.waitForFunction(() => window.monBrowserFixture.draft.payload.speaker_names[0]?.display_name === "名前だけ変更");
