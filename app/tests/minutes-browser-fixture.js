@@ -65,7 +65,7 @@ async (page) => {
       }
     };
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
-    const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
+    const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", sourceType:"recording", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
     const stamp = () => data.drafts[data.current] ? { id: data.drafts[data.current].id, lockVersion: data.drafts[data.current].lockVersion } : null;
     window.__mon = data;
     data.ui = { id:"ui_preferences", payload:{ schemaVersion:1, theme:"system" }, lockVersion:0 };
@@ -163,10 +163,17 @@ async (page) => {
           if(data.corruptEvidence||data.corruptEvidenceId===e.id)result.analysisId="wrong-current-analysis";
           return result;
         }
+        if(cmd==="prepare_meeting_playback"){
+          const {meetingId,mode}=args.request;
+          if(!["m1","m2"].includes(meetingId)||!["mic","system","both"].includes(mode))throw Error("invalid meeting playback");
+          const token=`meeting-audio-${++sequence}`,sampleRate=48000,totalFrames=sampleRate*3600;
+          data.playbacks[token]={totalFrames,sampleRate};
+          return {token,sampleRate,channels:1,totalFrames,startUs:0,endUs:3600000000,trackKind:mode,alignment:"unverified"};
+        }
         if(cmd==="read_playback_chunk"){
           if(!data.playbacks[args.token])throw Error("closed playback");
           const frames=Math.min(65536,(data.playbacks[args.token].totalFrames??16000)-args.offsetFrames), buffer=new ArrayBuffer(12+frames*4), values=new DataView(buffer);
-          values.setUint32(0,8000,true);values.setUint32(4,1,true);values.setUint32(8,frames,true);
+          values.setUint32(0,data.playbacks[args.token].sampleRate??8000,true);values.setUint32(4,1,true);values.setUint32(8,frames,true);
           return Array.from(new Uint8Array(buffer));
         }
         if(cmd==="close_playback"){delete data.playbacks[args.token];return;}

@@ -7,6 +7,7 @@ import type { DraftUtteranceAudioRequest } from "./transcript-state";
 import { registerPlaybackStop } from "./playback-barrier";
 import { appShortcut, overlayOpen } from "./keyboard";
 import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface";
+import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode, type MeetingPlaybackRequest, type MeetingPlaybackRestore } from "./meeting-playback-state";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -35,7 +36,7 @@ function durationLabel(seconds: number) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-export function useTranscriptAudio(meetingId: string, locked: boolean, options: { inline?: boolean; label?: string } = {}) {
+export function useTranscriptAudio(meetingId: string, locked: boolean, options: { inline?: boolean; label?: string; scope?: "meeting" } = {}) {
   const surface=usePlaybackSurface();
   const [, refresh] = useState(0);
   const [clock] = useState(() => new BrowserAudioClock());
@@ -45,6 +46,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   const [error, setError] = useState("");
   const request = useRef(0);
   const token = useRef<string | null>(null);
+  const meetingCheckpoint = useRef<MeetingPlaybackRestore | null>(null);
   const [owner] = useState(() => crypto.randomUUID());
   const preparations = useRef(new Set<Promise<void>>());
   const closing = useRef(new Map<string, { job: Promise<void>; active: boolean }>());
@@ -63,6 +65,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     player.clear();
     if (token.current) void closeToken(token.current).catch(() => {});
     token.current = null;
+    meetingCheckpoint.current = null;
     setSelected(null);
     setPreparing(false);
     setError("");
@@ -98,9 +101,11 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     };
   }, [clock, player, owner]);
 
-  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest, absoluteStartUs?: number) => {
+  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest | MeetingPlaybackRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore) => {
     if (locked) return;
     clear();
+    const meeting = reference && "mode" in reference ? reference : null;
+    if (meeting) meetingCheckpoint.current = restore ?? null;
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
     if (!options.inline) surface?.claim({ id:owner,meetingId,label:options.label ?? "文字起こしの発言音声" });
     const generation = request.current;
@@ -112,7 +117,9 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       if (generation !== request.current) return;
       const transcript = reference && "reference" in reference ? reference : null;
       const split=reference && "expectedDraft" in reference ? reference : null;
-      const info = split
+      const info = meeting
+        ? await invoke<PlaybackInfo>("prepare_meeting_playback", { request: meeting })
+        : split
         ? await invoke<PlaybackInfo>("prepare_draft_utterance_playback",{request:split})
         : transcript
         ? await invoke<PlaybackInfo>("prepare_minutes_transcript_playback", { request: transcript })
@@ -126,20 +133,23 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       token.current = info.token;
       const startUs = split?.expectedStartUs ?? transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
       const endUs = split?.expectedEndUs ?? transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
-      if (reference && (info.startUs !== startUs || info.endUs !== endUs)) {
+      if (reference && !meeting && (info.startUs !== startUs || info.endUs !== endUs)) {
         await closeToken(info.token);
         token.current = null;
         throw new Error("確認した発言と再生する音声区間が一致しません");
       }
+      if (meeting && restore) validateMeetingPlayback(info, meeting.mode, restore);
       const startFrame=absoluteStartUs===undefined?null:playbackStartFrame(info,absoluteStartUs);
       player.load(info);
+      if (meeting && restore) { player.setRate(restore.rate); player.seek(restore.frame); }
       if(startFrame!==null)player.seek(startFrame);
-      await player.play();
+      if (!meeting || restore?.playing !== false) await player.play();
     } catch (cause) {
       if (generation === request.current) {
         player.clear();
         if(token.current)void closeToken(token.current).catch(()=>{});
         token.current=null;
+        meetingCheckpoint.current=null;
         setError(String(cause));
       }
     } finally {
@@ -154,17 +164,28 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     return job;
   };
 
+  const startMeeting = (mode: MeetingPlaybackMode, preserve = false) => {
+    const current = player.snapshot();
+    const restore = preserve && current.info ? { frame:current.frame, rate:current.rate, playing:current.playing, endUs:current.info.endUs }
+      : preserve && meetingCheckpoint.current ? meetingCheckpoint.current
+      : { frame:0, rate:current.rate, playing:true };
+    return start("", `meeting:${mode}`, { meetingId, mode }, undefined, restore);
+  };
+
   const snapshot = player.snapshot();
   const info = snapshot.info;
   const toggle = () => {
     if (locked || preparing || !player.snapshot().info) return;
     if (player.snapshot().playing) player.pause(); else void player.play();
   };
-  const controls = selected && <div className="audio-player" role="group" aria-label="発言の音声再生" tabIndex={0} aria-keyshortcuts="Space" onKeyDown={event => {
+  const meetingScope = options.scope === "meeting";
+  const controls = selected && <div className="audio-player" role="group" aria-label={meetingScope ? "会議全体の音声再生" : "発言の音声再生"} tabIndex={0} aria-keyshortcuts="Space" onKeyDown={event => {
     if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen(event.currentTarget) || preparing || locked || !info) return;
     event.preventDefault(); toggle();
   }}>
     {preparing && <p role="status">保存音声を検証して再生を準備しています。</p>}
+    {preparing && meetingScope && <button type="button" className="small-secondary" disabled={locked} onClick={clear}>再生準備を取り消す</button>}
+    {preparing && meetingScope && <p>取り消した結果は再生しません。進行中の音声検証が終わるまではバックエンド処理が続きます。</p>}
     {info && <>
       <div className="audio-controls">
         <button type="button" className="small-secondary" onClick={toggle} disabled={preparing || locked}>{snapshot.playing ? "一時停止" : "再生"}</button>
@@ -173,13 +194,13 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         <span>{durationLabel(snapshot.frame / info.sampleRate)} / {durationLabel(info.totalFrames / info.sampleRate)}</span>
         <button type="button" className="small-secondary" onClick={clear} disabled={locked}>再生を閉じる</button>
       </div>
-      <input type="range" aria-label="発言内の再生位置" min={0} max={info.totalFrames} step={Math.max(1, Math.floor(info.sampleRate / 10))} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={preparing || locked} />
-      <div className="heading-with-info"><span>{info.trackKind === "mic" ? "マイク音声" : info.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label="発言の音声再生">発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。</InfoPopover></div>
+      <input type="range" aria-label={meetingScope ? "会議全体の再生位置" : "発言内の再生位置"} min={0} max={info.totalFrames} step={Math.max(1, Math.floor(info.sampleRate / 10))} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={preparing || locked} />
+      <div className="heading-with-info"><span>{meetingScope ? meetingPlaybackLabel(info.trackKind as MeetingPlaybackMode) : info.trackKind === "mic" ? "マイク音声" : info.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={meetingScope ? "会議全体の音声再生" : "発言の音声再生"}>{meetingScope ? "選択した種類の保存音声を会議全体の時間軸で再生します。両方では各音声を半分の音量で混ぜます。実録音の同期やエコー除去の正確さは未検証です。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}</InfoPopover></div>
       {info.alignment === "unverified" && <p>会議時間軸との同期精度は未検証です。</p>}
       {snapshot.buffering && <p role="status">音声を読み込んでいます。</p>}
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}
   </div>;
-  return { start, clear, controls: controls && surface?.target && !options.inline ? <PlaybackSurfaceControls target={surface.target}>{controls}</PlaybackSurfaceControls> : controls,
+  return { start, startMeeting, clear, controls: controls && surface?.target && !options.inline ? <PlaybackSurfaceControls target={surface.target}>{controls}</PlaybackSurfaceControls> : controls,
     sharedSurface:!!surface, selected, preparing, toggle, available: !!info,playing: snapshot.playing };
 }

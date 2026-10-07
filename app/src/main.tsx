@@ -32,6 +32,7 @@ import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
 import { appShortcut, overlayOpen } from "./keyboard";
 import { MeetingPlaybackSurface } from "./playback-surface";
+import { MeetingAudioControls } from "./meeting-audio";
 import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -553,6 +554,7 @@ function MainWindow() {
         <div ref={setPlaybackHost} className="meeting-playback-dock" role="region" aria-label="会議の共通音声プレーヤー" hidden={!selectedMeeting || screen === "settings"} />
       </div>
     </div>
+    {selectedMeeting && screen !== "settings" && ["recorded", "imported", "archived"].includes(selectedMeeting.lifecycle) && selectedMeeting.sourceType && <MeetingAudioControls key={selectedMeeting.id} meetingId={selectedMeeting.id} sourceType={selectedMeeting.sourceType} locked={writeLocked} host={playbackHost} />}
     </MeetingPlaybackSurface>
   );
 }

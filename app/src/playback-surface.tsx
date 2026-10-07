@@ -14,9 +14,9 @@ export function MeetingPlaybackSurface({ host, meetingId, title, children }: { h
   const surface = useMemo<Surface>(() => ({ target, claim:setOwner, release:id=>setOwner(current=>current?.id===id ? null : current) }), [target]);
   const current = owner?.meetingId===meetingId ? owner : null;
   return <Context.Provider value={surface}>{children}{host && createPortal(<div className="meeting-playback-content" data-meeting-id={meetingId ?? ""}>
-    <span className="playback-owner">{title || "選択会議"} · {current?.label || "発言区間の音声"}</span>
+    <span className="playback-owner"><span className="playback-meeting-title" title={title || "選択会議"}>{title || "選択会議"}</span><span> · {current?.label || "発言区間の音声"}</span></span>
     <div ref={setTarget} className="shared-playback-slot" />
-    {!current && <p className="playback-empty">発言の時刻か「音声を再生」を選ぶと、保存音声を検証して再生します。</p>}
+    {!current && <p className="playback-empty">発言の時刻から保存音声を再生できます。</p>}
   </div>,host)}</Context.Provider>;
 }
 
