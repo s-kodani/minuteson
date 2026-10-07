@@ -104,9 +104,10 @@ async (page, capturePath, detailUI) => {
   await host().getByRole("alert").filter({ hasText: "話者分離トラックを読み込めません" }).waitFor();
   await host().getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
   check(await failedTracks.getByLabel("話者分離トラックの読込の要対応状態", { exact: true }).isVisible() && await failedTracks.getByRole("button", { name: "話者分離を開始・やり直す", exact: true }).isDisabled(), "missing tracks allowed start or disappeared on dismissal");
+  const trackReadsBeforeRetry=await count("get_diarization_tracks");
   await page.evaluate(() => window.monBrowserFixture.failTracks = false); await failedTracks.getByRole("button", { name: "トラックを再読込", exact: true }).click();
   await failedTracks.getByLabel("話者分離トラックの読込の要対応状態", { exact: true }).waitFor({ state: "hidden" });
-  check(await count("get_diarization_tracks") === 2 && await count("start_diarization") === 0, "track read retried execution");
+  check(await count("get_diarization_tracks") === trackReadsBeforeRetry+1 && await count("start_diarization") === 0, "track read retried execution or performed duplicate reads");
   results.push("track read failure retains cause and disables start; read-only retry resolves after an authoritative read");
   await page.screenshot({ path: "analysis-publication.png" });
   return { passed: results.length, results };

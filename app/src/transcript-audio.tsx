@@ -195,7 +195,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     if(options.inline||!info||!selected||token.current!==info.token){playbackTimeline.release(owner);return;}
     if(!Number.isSafeInteger(info.startUs)||!Number.isSafeInteger(info.endUs)||!Number.isSafeInteger(snapshot.frame))return;
     const timeUs=Math.min(info.endUs,Number(BigInt(info.startUs)+BigInt(snapshot.frame)*1000000n/BigInt(info.sampleRate)));
-    playbackTimeline.publish({owner,session:`${owner}:${followSession.current}`,meetingId,analysisId:originAnalysis.current,utteranceId:options.scope==="meeting"?null:selected,scope:options.scope??"utterance",timeUs,playing:snapshot.playing});
+    playbackTimeline.publish({owner,session:`${owner}:${followSession.current}`,meetingId,analysisId:originAnalysis.current,utteranceId:options.scope==="meeting"?null:selected,scope:options.scope??"utterance",timeUs,playing:snapshot.playing,trackKind:info.trackKind});
   },[info,snapshot.frame,snapshot.playing,selected,owner,meetingId,options.inline,options.scope]);
   const toggle = () => {
     if (locked || preparing || !player.snapshot().info) return;

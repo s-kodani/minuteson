@@ -4,6 +4,8 @@ import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { usePlaybackFollowing } from "./playback-following";
+import { useTranscriptTrackKinds } from "./transcript-track-kinds-hook";
+import { SpeakerLabel } from "./speaker-label";
 import { WorkspacePanel } from "./workspace-panel";
 import { createPortal } from "react-dom";
 import { confirmations } from "./confirmation-service";
@@ -351,6 +353,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const matchingBase = Boolean(draft && draft.baseAnalysisId === analysis?.id);
   const view = useMemo(()=>analysis ? projectTranscript(analysis,matchingBase?payload:null) : null,[analysis,matchingBase,payload]);
   const speakers = view ? activeSpeakers(view,matchingBase?payload:null) : [];
+  const tracks = useTranscriptTrackKinds(meetingId,analysis?.id??null);
   const speakerCounts = useMemo(() => {
     const counts = new Map<string,number>();
     for (const utterance of view?.utterances ?? []) for (const id of new Set(utterance.speakerIds)) counts.set(id,(counts.get(id) ?? 0) + 1);
@@ -366,7 +369,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation && !conflictPreview);
   const following=usePlaybackFollowing({meetingId,analysisId:analysis?.id??null,rows:filtered,page,pageSize:PAGE_SIZE,setPage,
     editing:!!Object.keys(textSessions).length||!!Object.keys(nameSessions).length||saving||dirty||!!conflictPreview||!!activeConfirmation||busy||loading,
-    active:visible&&!locked,port:followPort});
+    active:visible&&!locked,port:followPort,trackKinds:tracks.kinds,highlightRows:shown});
   const finishName = async (id: string,kind: "commit" | "cancel") => {
     const session = nameBuffers.current[id];
     if(!editable || !session || nameOperations.current.has(id)) return;
@@ -621,7 +624,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
             const session = nameSessions[speaker.id], pending = namePending[speaker.id];
             return <div key={speaker.id} className="speaker-name-editor" role="group" aria-label={`${speaker.label}の名前編集`}>
               <button type="button" className="speaker-filter" aria-label={`${speaker.displayName || speaker.label}の発言で絞り込み`} aria-pressed={speakerFilter === speaker.id} disabled={loading} onClick={() => setSpeakerFilter(speaker.id)}>
-                <strong>{speaker.displayName || speaker.label}</strong><span>{speakerCounts.get(speaker.id) ?? 0}発言</span>
+                <strong><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} name={speaker.displayName || speaker.label}/></strong><span>{speakerCounts.get(speaker.id) ?? 0}発言</span>
               </button>
               {!speaker.displayName && <small className="speaker-unset">名前未設定</small>}
               <label>{speaker.label}<input ref={node => { if(node) nameInputs.current.set(speaker.id,node); else nameInputs.current.delete(speaker.id); }} value={session?.value ?? speaker.displayName ?? ""} onChange={event => changeName(speaker,event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名"
@@ -657,6 +660,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
         {following.enabled&&<div className="playback-follow-status" role="status">{following.suspended?<>手動操作のため再生追従を一時停止しています。<button type="button" className="small-secondary" onClick={following.resume}>再生位置への追従を再開</button></>:"再生位置に追従します。編集中・確認画面・文字選択中はスクロールしません。"}</div>}
         <div ref={followPort} {...following.handlers} className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>
+          {following.meetingPlaying&&!tracks.kinds&&<p className="hint">{tracks.error?<>再生トラックと発言の対応を確認できないため、強調・追従を行いません。<button type="button" className="small-secondary" disabled={loading||locked} onClick={tracks.retry}>発言のトラック対応を再読込</button></>:"再生トラックと発言の対応を確認中です。"}</p>}
           {retained.extra > 0 && <p className="hint" role="status">検索・ページ条件外の編集中またはフォーカス中の発言 {retained.extra} 件を保持しています。</p>}
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {
@@ -664,7 +668,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
             const source=analysis.utterances.find(u=>u.id===(utterance.sourceUtteranceId??utterance.id))!;
             const session = textSessions[utterance.id], pending = textPending[utterance.id];
             const splitText = session?.value ?? utterance.effectiveText;
-            const playing = audio.selected === utterance.id && audio.playing;
+            const playing = following.playingIds.has(utterance.id);
             return <article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${playing ? " utterance-playing" : ""}`} aria-current={playing ? "true" : undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z"
               onFocus={() => setFocusedRow(utterance.id)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedRow(current => current === utterance.id ? null : current); }} onKeyDown={event => {
               if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen() || locked || loading || busy || audio.preparing) return;
@@ -673,6 +677,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
             }}>
               <div className="utterance-meta"><time title={`${utterance.startUs}–${utterance.endUs} µs`}>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}–{utterance.recognitionIsSource?preciseTime(utterance.endUs):timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span>{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}<button type="button" className="small-secondary" onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
               {playing && <span className="utterance-playing-label">再生中</span>}
+              <div className="assigned-speakers" aria-label="発言の話者">{speakerIds.length?speakerIds.map(id=>{const speaker=view!.speakers.find(value=>value.id===id);return speaker?<SpeakerLabel key={id} meetingId={meetingId} speakerId={id} name={speaker.displayName||speaker.label} unconfirmed={!speaker.displayName}/>:<span key={id}>話者不明</span>;}):<span>話者不明</span>}</div>
               <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
               {session ? <div className="utterance-text-edit">
               <textarea ref={node => { if (node) textInputs.current.set(utterance.id, node); else textInputs.current.delete(utterance.id); }} aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={session.value}
@@ -685,7 +690,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
                 <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={event => void finishTextEdit(utterance.id, "commit", event.currentTarget)}>確定</button><button type="button" className="small-secondary" disabled={!editable || pending === "cancel"} onClick={event => void finishTextEdit(utterance.id, "cancel", event.currentTarget)}>キャンセル</button><span>{pending === "cancel" ? "元の本文の保存を確認中" : pending ? "確定した本文を保存中" : "Ctrl／Cmd＋Enterで確定 · Escでキャンセル"}</span></div>
               </div> : <><p className="utterance-text" aria-label={`${timeLabel(utterance.startUs)}の発言本文`}>{utterance.effectiveText}</p><button type="button" className="small-secondary" aria-label={`${timeLabel(utterance.startUs)}の発言を編集`} disabled={!editable} onClick={() => beginTextEdit(utterance)}>発言を編集</button></>}
               {(utterance.recognitionIsSource||utterance.effectiveText !== utterance.recognizedText) && <small>{utterance.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {utterance.recognizedText}</small>}
-              {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{speaker.displayName || speaker.label}</label>)}</div>}
+              {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} /><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} name={speaker.displayName || speaker.label}/></label>)}</div>}
               <button type="button" className="small-secondary" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({utteranceId:utterance.id});}}>新しい話者を作成してこの発言に割り当て</button>
               <button type="button" className="small-secondary" disabled={!editable||!!pending||textPieces(splitText).length<2||utterance.endUs-utterance.startUs<2} onClick={()=>{setPendingSplit(false);setError("");setSplitting({...utterance,effectiveText:splitText});setSplitSeconds(((utterance.endUs-utterance.startUs)/2_000_000).toFixed(6));setSplitOffset(Math.floor(textPieces(splitText).length/2));setFirstSpeaker("keep");setSecondSpeaker("keep");}}>発言を手動分割</button>
               {utterance.sourceUtteranceId&&<small>推定区間と区間再生は分割元全体を参照します。この部分だけを聞くには「音声を再生」を使用してください。</small>}

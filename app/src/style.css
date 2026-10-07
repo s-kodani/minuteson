@@ -262,7 +262,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .speaker-filters button,.speaker-filter { padding:6px 8px; font-size:12px; }
 .speaker-filter { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px; width:100%; background:var(--raised); color:var(--text); text-align:left; }
 .speaker-filter strong { overflow-wrap:anywhere; }
-.speaker-filter span,.speaker-unset { font-size:11px; color:var(--muted); }
+.speaker-filter>span,.speaker-unset { font-size:11px; color:var(--muted); }
 .speaker-filters [aria-pressed=true],.speaker-filter[aria-pressed=true] { box-shadow:inset 0 0 0 2px var(--primary); }
 .speaker-panel-body .hint { font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
 .speaker-panel-body .transcript-actions { flex-wrap:wrap; gap:6px; margin-block:6px; }
@@ -370,6 +370,12 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 }
 .utterance-playing { background:var(--selection); border-left:3px solid var(--accent); }
 .utterance-playing-label { display:inline-block; padding:3px 8px; border:1px solid var(--primary-border); border-radius:6px; color:var(--primary-strong); font-size:12px; font-weight:700; }
+.assigned-speakers { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; font-size:12px; }
+.speaker-label { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px; max-width:100%; padding:3px 6px; border:1px solid currentColor; border-radius:6px; color:var(--speaker-light-fg); background:var(--speaker-light-bg); overflow-wrap:anywhere; font-size:12px; }
+.speaker-label .speaker-unset { display:inline; margin:0; color:inherit; font-size:10px; font-weight:400; }
+:root[data-theme="dark"] .speaker-label { color:var(--speaker-dark-fg); background:var(--speaker-dark-bg); }
+@media(prefers-color-scheme:dark) { :root:not([data-theme]) .speaker-label { color:var(--speaker-dark-fg); background:var(--speaker-dark-bg); } }
+@media(forced-colors:active) { .speaker-label,:root[data-theme="dark"] .speaker-label { color:CanvasText; background:Canvas; } }
 .meeting-playback-dock .audio-player { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px; margin:4px 0 0; padding:0; border:0; border-radius:0; }
 .meeting-playback-dock .audio-controls { min-width:0; gap:8px; }
 .meeting-playback-dock .audio-controls button { padding:6px 10px; }

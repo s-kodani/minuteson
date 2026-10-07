@@ -111,9 +111,12 @@ async (page, capturePath, detailUI) => {
   await play();await expectPage("1 / 3");check(await resume.count()===0,"new explicit playback did not clear temporary suspension");await pause();
   results.push("manual pagination suspends following; a new explicit full playback resets temporary suspension and returns to its actual start");
   await port.focus();await port.press("PageDown");await resume.waitFor();
+  check(await mode.inputValue()==="mic","keyboard suspension fixture lost its explicit microphone selection");
   await syntheticPosition(75000000);check((await pages.innerText()).includes("1 / 3"),"manual keyboard scroll did not suspend synthetic current-time following");
-  await resume.click();await expectPage("2 / 3");
-  results.push("focused transcript PageDown suspends following; explicit resume consumes the preserved production timeline");
+  await resume.click();
+  check((await pages.innerText()).includes("1 / 3"),"microphone following picked the simultaneous PC-only row");
+  await syntheticPosition(76000000);await expectPage("2 / 3");
+  results.push("focused transcript PageDown suspends following; explicit resume preserves the selected track, ignores PC-only speech and follows the next microphone position");
 
   // Paused audio stops the playback publisher. Inject current-time notifications
   // solely to isolate consumer guards; these are not native/audio output tests.

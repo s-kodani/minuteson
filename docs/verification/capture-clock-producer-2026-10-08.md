@@ -32,7 +32,7 @@ Tauriの `--until-stopped` は形式版2を出力し、両トラックの全保�
 
 合成のマイク4800フレームとPC音声2400＋2400フレームをAVAssetWriterで保存し、200msの欠損がファイル内の無音にならないことを、全フレーム・全チャンネルの値で検査した。実際のSwiftの統計・補正生成・manifestエンコードを使って二つのCAFとmanifestを生成する。
 
-`make check-capture-clock` は、このSwift生成物をRustの実際の録音確定処理へ渡す独立の統合検査である。UTC原点、物理フレーム数、欠損登録、既知区間の補正付き再生、欠損を横断する入力の拒否、原本の保持を検査する。先行実行はSwift生成1件・Rust統合1件が終了コード0で成功した。最終Swift変更とヘルパーバンドル再構築後の同じ統合検査を再確認中である。ログは `/private/tmp/mon-swift-capture-clock-integration-final.log` にある。環境依存のRust検査を通常テストではignoredとし、通常の `make check` の専用工程から明示実行する。
+`make check-capture-clock` は、このSwift生成物をRustの実際の録音確定処理へ渡す独立の統合検査である。UTC原点、物理フレーム数、欠損登録、既知区間の補正付き再生、欠損を横断する入力の拒否、原本の保持を検査する。最終Swift変更とヘルパーバンドル再構築後の再確認も、Swift生成1件・Rust統合1件が終了コード0で成功した。ログは `/private/tmp/mon-swift-capture-clock-integration-final.log` にある。環境依存のRust検査を通常テストではignoredとし、通常の `make check` の専用工程から明示実行する。
 
 最終製品ソースの通常の `make check` はPython65件、Swift33件、フロントエンド406件と型検査・ビルドを通過し、Rust全体を継続中である。ログは `/private/tmp/mon-capture-clock-producer-full-check.log` にある。今回追加した実生成物の統合検査を専用工程で明示実行するため、通常Rustのignored区分は既存36件と追加1件となる。
 
