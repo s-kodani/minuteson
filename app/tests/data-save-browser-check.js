@@ -194,7 +194,7 @@ async (page) => {
   await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日"); await choose("backup");
   await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
   check((await calls("select_data_operation")).length === 0 && await page.getByRole("textbox", { name: "用語（必須）", exact: true }).inputValue() === "点検日", "save failure lost edits or selected backup");
-  await set({ failSave: false }); await page.getByRole("button", { name: "用語保存を再試行", exact: true }).click();
+  await set({ failSave: false }); await page.getByRole("region", { name: "共通用語", exact: true }).getByRole("button", { name: "用語保存を再試行", exact: true }).click();
   await choose("backup"); await done();
   results.push("draft save failure blocks data operation and preserves input");
 

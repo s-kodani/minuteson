@@ -23,7 +23,7 @@ import type { DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
-import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice } from "./theme";
+import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
@@ -95,7 +95,7 @@ function RecorderPanel() {
       </div>
       {action.error && <p className="mini-error" role="alert">{action.error}</p>}
       {decision.error && <p className="mini-error" role="alert">{decision.error}</p>}
-      <ThemeReadNotice />
+      <ThemeReadNotice compact />
     </main>
   );
 }
@@ -376,6 +376,7 @@ function MainWindow() {
       </aside>
       <div className="main-column">
         <ToastHost />
+        <ThemeNotifications locked={writeLocked} />
         <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage : state.kind === "error" ? state.message : ""} />
         <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><ThemeSelection compact locked={writeLocked} /><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}</div></header>
         <main className="content" aria-label="会議ワークスペース" tabIndex={-1}>

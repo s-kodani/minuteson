@@ -81,3 +81,43 @@ test("theme save blocks overlapping requests and reads until actual completion",
   assert.equal(writes, 1); assert.equal(reads, 1); assert.equal(c.getSnapshot().busy, true);
   slow.resolve(snapshot("dark", 1)); await save; assert.equal(c.getSnapshot().busy, false); assert.equal(c.getSnapshot().snapshot?.payload.theme, "dark");
 });
+
+test("routine theme reads emit no result; explicit saves have distinct acknowledgement identities", async () => {
+  let stored = snapshot(); let writes = 0;
+  const c = new ThemeController({ read: async () => stored, save: async (version, theme) => { writes++; return stored = snapshot(theme, version + (theme === stored.payload.theme ? 0 : 1)); } });
+  await c.refresh(); await c.refresh(); assert.equal(c.getSnapshot().notice, null);
+  await c.change("dark"); const first = c.getSnapshot().notice!;
+  assert.equal(first.level, "success"); assert.match(first.message, /保存しました/);
+  await c.refresh(); assert.equal(c.getSnapshot().notice, first);
+  c.clearNotice(first.id); await c.refresh(); assert.equal(c.getSnapshot().notice, null);
+  await c.change("light"); const second = c.getSnapshot().notice!;
+  assert.ok(second.id > first.id); c.clearNotice(first.id); assert.equal(c.getSnapshot().notice, second);
+  assert.equal(writes, 2); assert.equal(c.getSnapshot().error, "");
+});
+
+test("lost theme acknowledgement notifies a read-confirmed result once and never saves again", async () => {
+  let stored = snapshot(); let unavailable = false; let writes = 0;
+  const c = new ThemeController({ read: async () => { if (unavailable) throw Error("offline"); return stored; }, save: async () => { writes++; stored = snapshot("dark", 1); unavailable = true; throw Error("lost reply"); } });
+  await c.refresh(); await c.change("dark"); assert.equal(c.getSnapshot().notice, null);
+  unavailable = false; await c.refresh(); const notice = c.getSnapshot().notice!;
+  assert.equal(notice.level, "info"); assert.match(notice.message, /確認しました/);
+  await c.refresh(); assert.equal(c.getSnapshot().notice, notice);
+  c.clearNotice(notice.id); await c.refresh(); assert.equal(c.getSnapshot().notice, null); assert.equal(writes, 1);
+});
+
+test("failed theme save and failed reload never notify success or discard an error on dismissal", async () => {
+  let readFails = false;
+  const c = new ThemeController({ read: async () => { if (readFails) throw Error("offline"); return snapshot(); }, save: async () => { throw Error("disk full"); } });
+  await c.refresh(); await c.change("dark"); c.clearNotice(1);
+  assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().pendingTheme, "dark"); assert.match(c.getSnapshot().error, /disk full/);
+  readFails = true; await c.reload(); assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().uncertain, true);
+  readFails = false; await c.reload(); assert.equal(c.getSnapshot().notice?.level, "info");
+});
+
+test("an older explicit reload cannot announce a newer in-flight theme save as read-confirmed", async () => {
+  const read = deferred<unknown>(), save = deferred<unknown>(); let reads = 0;
+  const c = new ThemeController({ read: () => ++reads === 1 ? Promise.resolve(snapshot()) : read.promise, save: () => save.promise });
+  await c.refresh(); const reload = c.reload(); const writing = c.change("dark");
+  read.resolve(snapshot()); await reload; assert.equal(c.getSnapshot().notice, null); assert.equal(c.getSnapshot().busy, true);
+  save.resolve(snapshot("dark", 1)); await writing; assert.equal(c.getSnapshot().notice?.level, "success");
+});

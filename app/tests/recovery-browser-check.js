@@ -6,6 +6,7 @@ async (page) => {
   const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
   const region = () => page.getByRole("region", { name: "中断したデータ操作の確認" });
+  const host = () => page.getByRole("complementary", { name: "通知", exact: true });
   const dialog = () => page.getByRole("dialog");
   const boot = async (source = "scratch", options = {}) => {
     await page.reload();
@@ -24,7 +25,7 @@ async (page) => {
     await dialog().getByRole("heading", { name: "未確定データの解決方法を確認", exact: true }).waitFor();
   };
   const act = action => dialog().getByRole("button", { name: action === "keep" ? "保持して確認を完了" : "再検査して回収", exact: true }).click();
-  const retained = () => region().getByRole("status").filter({ hasText: "回収はしていません" }).waitFor();
+  const retained = async () => { await region().getByRole("status").filter({ hasText: "保持して確認済み（回収なし）" }).waitFor(); await host().getByRole("status").filter({ hasText: "回収はしていません" }).waitFor(); };
 
   await boot(); await review();
   check((await calls("start_data_operation")).length === 0, "readonly review mutated files");
@@ -45,19 +46,21 @@ async (page) => {
   }
 
   await boot(); await review(); await act("recover");
-  await region().getByRole("status").filter({ hasText: "記録済みの対象を回収しました" }).waitFor();
+  await region().getByRole("status").filter({ hasText: "回収済み" }).waitFor();
+  await host().getByRole("status").filter({ hasText: "記録済みの対象を回収しました" }).waitFor();
   await region().getByRole("status").filter({ hasText: "未確認 0 件" }).waitFor();
   results.push("confirmed recovery removes only mocked owned target");
 
   await boot("restore_addition", { recoveryMode: "attention" }); await review(); await act("recover");
-  await region().getByRole("alert").filter({ hasText: "要確認が残っています" }).waitFor();
+  await host().getByRole("alert").filter({ hasText: "要確認が残っています" }).waitFor();
+  check(await page.getByLabel("要確認データの確認・回収の要対応状態", { exact: true }).isVisible(), "attention receipt has no retained issue");
   check((await region().innerText()).includes("未確認 1 件") && !(await region().innerText()).includes("対象を回収しました"), "remaining attention called success");
   results.push("remaining unknown data is attention, not recovered");
 
   await boot("scratch", { recoveryMode: "stale" }); await review();
   const previous = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.recoveryPreview));
   await act("keep"); await dialog().waitFor({ state: "hidden" });
-  await region().getByRole("alert").filter({ hasText: "対象が変更" }).waitFor();
+  await host().getByRole("alert").filter({ hasText: "対象が変更" }).waitFor();
   await region().getByRole("button", { name: "回収の確認内容を開く", exact: true }).click();
   check(await dialog().getByRole("button", { name: "保持して確認を完了", exact: true }).isDisabled(), "stale preview admitted keep");
   await dialog().getByRole("button", { name: "最新の対象を再確認", exact: true }).click();
@@ -107,7 +110,7 @@ async (page) => {
   results.push("lost inspection reply: readonly polling recovers explicit review");
 
   await boot("scratch", { recoveryReadFail: true });
-  await region().getByRole("alert").filter({ hasText: "回収一覧失敗" }).waitFor();
+  await host().getByRole("alert").filter({ hasText: "回収一覧失敗" }).waitFor();
   check(await region().getByRole("button", { name: "対象と解決方法を確認", exact: true }).count() === 0, "failed listing exposes mutation");
   await set({ recoveryReadFail: false }); await region().getByRole("button", { name: "要確認一覧を再読込", exact: true }).click(); await review();
   await dialog().getByRole("button", { name: "取り消して閉じる", exact: true }).click();
@@ -128,7 +131,7 @@ async (page) => {
 
   await boot("scratch", { recoveryMode: "forged" }); await review(); await act("keep");
   await dialog().getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
-  check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled() && !(await region().innerText()).includes("回収はしていません"), "forged receipt unlocked or displayed success");
+  check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled() && !(await region().innerText()).includes("保持して確認済み（回収なし）") && await host().locator(".toast-success").count() === 0, "forged receipt unlocked or displayed success");
   results.push("wrong-operation receipt rejected, no success, protection remains");
   console.log(JSON.stringify({ passed: results.length, results }));
   return { passed: results.length, results };

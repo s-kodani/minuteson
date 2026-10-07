@@ -29,3 +29,4 @@ export function assertRecoveryReceipt(r: RecoveryReceipt): void {
 }
 export const recoverySourceLabel = (s: RecoverySource) => s === "scratch" ? "バックアップ・復元の構築用コピー" : "未公開の追加復元データ";
 export const recoveryOutcomeLabel = (r: RecoveryReceipt) => ({ recovered: "記録済みの対象を回収しました。", retained: "ファイルを保持して確認済みと記録しました。回収はしていません。", attention: "要確認が残っています。所有不明・変更済みのファイルは保持しています。", published: "公開済みの会議は保持しました。" })[r.outcome];
+export const recoveryOutcomeStatus = (r: RecoveryReceipt) => ({ recovered: "回収済み", retained: "保持して確認済み（回収なし）", attention: "要確認が残っています", published: "公開済み会議を保持" })[r.outcome];

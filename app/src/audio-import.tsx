@@ -3,6 +3,7 @@ import { CommonModal } from "./common-modal";
 import { useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect,useRef,useState } from "react";
@@ -122,8 +123,10 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
   const engineKey=profile==="standard"?"standard":"highAccuracy";
   const configured=settings&&engineConfigured(settings.w[engineKey])&&diarizationConfigured(settings.d[engineKey]);
   return <>
+    <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
+    <ToastNotice scope="audio-import" type="saved" eventId={snapshot?.saved?.id} message={snapshot?.phase === "saved" && snapshot.saved ? "音声を保存しました。解析結果は確認待ちの候補として扱います。" : ""} action={snapshot?.saved ? { kind: "open", label: "保存した会議を開く", disabled, run: async () => { const saved = snapshotRef.current?.saved; if (!disabled && saved) await openSaved(saved.meetingId); } } : undefined} />
     {visible&&<div className={`import-entry ${hover?"drag-over":""}`}><button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button><button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={()=>void select(null)}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
-    {!open&&(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
+    {!open&&<IssueNotice scope="audio-import" type="operation" label="音声の取り込み" message={error||snapshot?.errorMessage} />}
     {!open&&snapshot?.busy&&<p role="status">{importLabel(snapshot.phase)} <button type="button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button></p>}
     {!open&&openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
     <CommonModal ref={dialog} open={open} blocked={busy || !!snapshot?.busy} onDismiss={close} restoreReady={!busy && !snapshot?.busy} restoreTarget={() => opener.current} className="import-dialog" aria-labelledby="import-title">

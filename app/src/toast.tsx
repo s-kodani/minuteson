@@ -24,7 +24,12 @@ export function ToastNotice({ scope, type, message, level = "success", onClose, 
 }
 
 export function IssueNotice({ scope, type, message, label, children, action }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction }) {
-  return <><ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} />{message && <div className="issue-status" aria-label={`${label}の要対応状態`}><strong>要対応：{label}</strong><InfoPopover label={label}>{message}</InfoPopover>{children}</div>}</>;
+  return <><ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} /><IssueStatus message={message} label={label}>{children}</IssueStatus></>;
+}
+
+/** Retained state for sources whose one notification owner outlives a view. */
+export function IssueStatus({ message, label, children }: { message: string | null | undefined; label: string; children?: ReactNode }) {
+  return message ? <div className="issue-status" aria-label={`${label}の要対応状態`}><strong>要対応：{label}</strong><InfoPopover label={label}>{message}</InfoPopover>{children}</div> : null;
 }
 
 function ToastCard({ toast, restoreFocus }: { toast: Toast; restoreFocus: () => void }) {

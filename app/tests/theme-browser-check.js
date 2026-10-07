@@ -102,6 +102,7 @@ async (page, capturePath = path => path) => {
 
   await page.getByRole("button", { name: "設定", exact: true }).click();
   const settings = page.getByRole("region", { name: "表示設定", exact: true });
+  const themeError = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "表示設定の読込・保存" });
   await settings.getByRole("combobox", { name: "テーマ", exact: true }).selectOption("dark"); await waitTheme("dark");
   check(await select().inputValue() === "dark", "settings and header diverged");
   const mini = await page.context().newPage();
@@ -123,7 +124,8 @@ async (page, capturePath = path => path) => {
   results.push("settings/header sync; separate recorder window reloads saved theme without events or writes");
 
   await page.evaluate(() => { window.themeFixture.mode = "fail"; });
-  await select().selectOption("dark"); await settings.getByRole("alert").filter({ hasText: "保存できません" }).waitFor();
+  await select().selectOption("dark"); await themeError().filter({ hasText: "保存できません" }).waitFor();
+  check(await settings.getByLabel("表示設定の読込・保存の要対応状態", { exact: true }).isVisible(), "failed theme has no retained issue");
   await waitTheme("light"); check(await select().inputValue() === "dark", "failed selection lost");
   const failed = await count();
   await page.evaluate(async () => { await window.themeFixture.emitHint({ theme: "dark", lockVersion: 99999 }); });
@@ -136,17 +138,17 @@ async (page, capturePath = path => path) => {
   const beforeLost = await count(); await select().selectOption("light"); await waitTheme("light");
   check(await count() === beforeLost + 1, "lost acknowledgement duplicated save");
   await page.evaluate(() => { window.themeFixture.mode = "lostUnreadable"; });
-  await select().selectOption("dark"); await settings.getByRole("alert").filter({ hasText: "保存結果を確認できません" }).waitFor();
+  await select().selectOption("dark"); await themeError().filter({ hasText: "保存結果を確認できません" }).waitFor();
   check(await select().isDisabled(), "uncertain write can be retried");
   const uncertain = await count(); await page.evaluate(() => { window.themeFixture.readFail = false; });
   await settings.getByRole("button", { name: "保存済み表示設定を再読込", exact: true }).click(); await waitTheme("dark");
   check(await count() === uncertain, "uncertain commit was rewritten");
   results.push("lost committed save recovers by read; unknown commit blocks write until confirmed reload");
 
-  await select().selectOption("light"); await settings.getByRole("alert").filter({ hasText: "保存結果を確認できません" }).waitFor();
+  await select().selectOption("light"); await themeError().filter({ hasText: "保存結果を確認できません" }).waitFor();
   const beforePoll = await count(); await page.evaluate(() => { window.themeFixture.readFail = false; });
   await waitTheme("light");
-  check(await select().inputValue() === "light" && await settings.getByRole("alert").count() === 0 && await settings.getByRole("button", { name: "テーマの保存を再試行", exact: true }).count() === 0, "authoritative polling left false uncertainty or retry");
+  check(await select().inputValue() === "light" && await themeError().count() === 0 && await settings.getByRole("button", { name: "テーマの保存を再試行", exact: true }).count() === 0, "authoritative polling left false uncertainty or retry");
   check(await count() === beforePoll, "polling rewrote the committed theme");
   results.push("later authoritative poll resolves lost commit and clears stale uncertainty/choice without events, manual reload or resave");
 

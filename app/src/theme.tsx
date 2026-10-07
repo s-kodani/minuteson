@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isTheme, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
+import { IssueStatus, ToastNotice } from "./toast";
 
 const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -53,15 +54,27 @@ export function ThemeSettingsPanel({ locked }: { locked: boolean }) {
   return <section className="status-card theme-settings" aria-label="表示設定">
     <div className="heading-with-info"><h2>表示設定</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
     <ThemeSelection locked={locked} />
-    {state.error && <p className="action-error" role="alert">{state.error}</p>}
+    <IssueStatus label="表示設定の読込・保存" message={state.error} />
     <div className="analysis-actions">
       {state.pendingTheme && !state.busy && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
       <button type="button" className="small-secondary" disabled={state.busy || !isTauri()} onClick={() => void controller.reload()}>保存済み表示設定を再読込</button>
-      <span role="status">{state.status || (state.snapshot ? "保存済み設定を使用しています。" : isTauri() ? "表示設定を確認しています。" : "ブラウザプレビューではOS設定に追従します。")}</span>
+      <span role="status">{state.busy ? "表示設定を保存中" : state.uncertain ? "表示設定は未確認" : state.pendingTheme ? "選択は未保存" : state.snapshot ? "保存済み設定を使用しています。" : isTauri() ? "表示設定を確認しています。" : "ブラウザプレビューではOS設定に追従します。"}</span>
     </div>
   </section>;
 }
-export function ThemeReadNotice() {
+// This owner stays mounted across navigation. Periodic reads are state updates,
+// not notifications, and an expired result must not return on opening settings.
+export function ThemeNotifications({ locked }: { locked: boolean }) {
+  const { controller, state } = useTheme();
+  const notice = state.notice;
+  const retrySave = !state.uncertain && state.pendingTheme;
+  return <><ToastNotice scope="ui-preferences" type="result" message={notice?.message} level={notice?.level} eventId={notice ? String(notice.id) : undefined} onClose={() => { if (notice) controller.clearNotice(notice.id); }} />
+    <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingTheme) await controller.change(current.pendingTheme); else await controller.refresh(); } }} />
+  </>;
+}
+export function ThemeReadNotice({ compact = false }: { compact?: boolean }) {
   const { state } = useTheme();
-  return state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null;
+  // The recorder has no full-size toast host yet. Keep its local error visible
+  // until notifications can be routed to one native window safely.
+  return compact ? state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null : <IssueStatus label="表示設定の読込・保存" message={state.error} />;
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertRecoveryListing, assertRecoveryPreview, assertRecoveryReceipt, recoveryOutcomeLabel, type RecoveryPreview } from "../src/recovery-state.ts";
+import { assertRecoveryListing, assertRecoveryPreview, assertRecoveryReceipt, recoveryOutcomeLabel, recoveryOutcomeStatus, type RecoveryPreview } from "../src/recovery-state.ts";
 import { dataRequest, assertDataSnapshot, type DataSnapshot } from "../src/data-operation-state.ts";
 const id = "11111111-1111-4111-8111-111111111111";
 const preview = (): RecoveryPreview => ({ confirmationId: id, item: { source: "scratch", operationId: id, paths: [`.mon-stage-${id}`], registeredPaths: 2, reason: "所有不明", retained: false }, root: "/safe/root", observedPaths: 3, inspectionComplete: true });
@@ -30,4 +30,11 @@ test("kept and incomplete recovery are distinct from reclaimed files and publish
 test("unreadable inventories may explicitly keep but never claim complete inspection", () => {
   assert.doesNotThrow(() => assertRecoveryPreview({ ...preview(), inspectionComplete: false }));
   assert.throws(() => assertRecoveryReceipt({ source: "scratch", operationId: id, outcome: "attention", reason: null }));
+});
+test("short recovery states retain the distinction between keep, recovery, remaining attention and published data", () => {
+  const receipt = { source: "scratch" as const, operationId: id, outcome: "retained" as const, reason: null };
+  assert.equal(recoveryOutcomeStatus(receipt), "保持して確認済み（回収なし）");
+  assert.equal(recoveryOutcomeStatus({ ...receipt, outcome: "recovered" }), "回収済み");
+  assert.equal(recoveryOutcomeStatus({ ...receipt, outcome: "attention" }), "要確認が残っています");
+  assert.equal(recoveryOutcomeStatus({ ...receipt, outcome: "published" }), "公開済み会議を保持");
 });
