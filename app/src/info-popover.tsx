@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { infoPosition } from "./info-position";
+import { appShortcut } from "./keyboard";
 
 let activeClose: ((restore: boolean) => void) | null = null;
 // A confirmation takes precedence; do not move focus away from its controls.
@@ -43,7 +44,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
     position.current = place;
     place(); closeButton.current?.focus({ preventScroll: true });
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); close(true); }
+      if (appShortcut(event) === "cancel") { event.preventDefault(); event.stopImmediatePropagation(); close(true); }
     };
     const outside = (event: MouseEvent) => {
       const path = event.composedPath();

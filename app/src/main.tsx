@@ -30,6 +30,7 @@ import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
 import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
+import { appShortcut, overlayOpen } from "./keyboard";
 import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -339,11 +340,36 @@ function MainWindow() {
       assertCloseRecording(current);
       if (!recordingActive(current) || current.sessionId !== expected.sessionId || current.meetingId !== expected.meetingId || current.revision < expected.revision) throw Error("録音の対象が変更されています。最新のヘッダーから開き直してください。");
       const meeting = await invoke<Meeting | null>("get_meeting", { id: current.meetingId });
-      if (!meeting) throw Error("録音中の会議が見つかりません。録音は停止していません。");
+      if (!meeting || meeting.id !== current.meetingId) throw Error("録音中の会議が見つかりません。録音は停止していません。");
       setSelectedMeeting(meeting); setRenameTitle(meeting.title); setScreen("overview");
       requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-label="録音状態"]')?.focus({ preventScroll: false }));
     });
   };
+  const keyboardAction = useRef<(event: KeyboardEvent) => void>(() => {});
+  keyboardAction.current = event => {
+    if (overlayOpen() || navigationLocked || confirmations.getSnapshot()) return;
+    const shortcut = appShortcut(event);
+    if (shortcut === "search") {
+      const search = Array.from(document.querySelectorAll<HTMLInputElement>('.content input[type="search"]'))
+        .find(input => !input.disabled && !input.closest('[hidden], [inert]') && input.getClientRects().length > 0);
+      if (search) { event.preventDefault(); search.focus(); search.select(); }
+    } else if (shortcut === "recording" && isTauri() && state.kind === "ready") {
+      event.preventDefault();
+      if (recordingActive(state.snapshot)) { void openRecordingMeeting(); return; }
+      if (writeLocked || meetingBusy || navigating.current || starting.current || closing.current) return;
+      void withSavedEdits(async () => {
+        const current = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(current);
+        if (recordingActive(current)) throw Error("録音状態が変更されています。最新の状態から録音画面を開き直してください。");
+        setScreen("overview");
+        requestAnimationFrame(() => document.getElementById("meeting-title")?.focus());
+      });
+    }
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => keyboardAction.current(event);
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
   const renameMeeting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedMeeting) return;

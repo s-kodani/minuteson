@@ -35,6 +35,7 @@ const suites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
+  ["keyboard", "browser-fixture.js", "keyboard-browser-check.js"],
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   ["vocabulary-toast", "browser-fixture.js", "vocabulary-toast-browser-check.js"],
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],

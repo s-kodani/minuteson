@@ -7,6 +7,8 @@ import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 import {preciseTime} from "./diarization-state";
+import { appShortcut, nativeTextTarget, overlayOpen } from "./keyboard";
+import { cancelTextEdit, textEditBaseline, type TextEditBaseline } from "./transcript-edit-session";
 
 import { activeSpeakers, addSpeaker, assignSpeakers, canonicalPayload, filterUtterances, mergeSpeaker, projectTranscript, splitPosition, splitUtterance, textPieces, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
 export type { Analysis, DraftPayload } from "./transcript-state";
@@ -60,6 +62,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const [secondSpeaker,setSecondSpeaker]=useState("keep");
   const splitDialog=useRef<HTMLDialogElement>(null);
   const audio = useTranscriptAudio(meetingId, locked);
+  const textSession = useRef<TextEditBaseline | null>(null);
+  const undoPending = useRef(false);
+  const commitPending = useRef(false);
 
   useEffect(() => {
     const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
@@ -68,6 +73,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   }, [saveQueue]);
 
   const reload = async (propagateFailure = false) => {
+    textSession.current = null;
     audio.clear();
     setLoading(true);
     setError("");
@@ -117,18 +123,24 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     }
   };
 
-  const undo = async () => {
-    if (!draft || dirty || saving || busy || locked || confirm.pending) return;
+  const undo = async (flushCurrent = false) => {
+    if (!draft || !matchingBase || (!flushCurrent && (draft.lockVersion === 0 || dirty || saving)) || busy || locked || confirm.pending || undoPending.current) return;
+    undoPending.current = true;
+    textSession.current = null;
     setBusy(true);
     audio.clear();
     setError("");
     try {
-      const previous = await invoke<Draft>("undo_transcript_edit", { draftId: draft.id, expectedLockVersion: draft.lockVersion });
+      if (flushCurrent) await saveQueue.flush();
+      const current = saveQueue.snapshot().draft;
+      if (!current || current.id !== draft.id || current.baseAnalysisId !== analysis?.id || current.lockVersion === 0) return;
+      const previous = await invoke<Draft>("undo_transcript_edit", { draftId: current.id, expectedLockVersion: current.lockVersion });
       saveQueue.load(previous);
       setNotice("直前の編集を取り消しました。"); setNoticeVersion(null); setMergeSource(""); setMergeTarget("");
     } catch (cause) {
       setError(String(cause));
     } finally {
+      undoPending.current = false;
       setBusy(false);
     }
   };
@@ -197,7 +209,10 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   if(splitting)try{splitAt=splitPosition(splitting.startUs,splitting.endUs,splitSeconds);if(splitOffset<1||splitOffset>=splitPieces.length)throw Error("空の部分を作らない本文の切れ目を指定してください。");}catch(cause){splitError=String(cause);}
 
   return (
-    <section className="transcript-card" aria-label="文字起こし編集">
+    <section className="transcript-card" aria-label="文字起こし編集" onKeyDown={event => {
+      if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving) || undoPending.current) return;
+      event.preventDefault(); void undo(true);
+    }}>
       <div className="card-head">
         <h2>文字起こし</h2>
         <button type="button" className="small-secondary" onClick={confirmReload} disabled={loading || saving || busy || locked || confirm.pending}>再読込</button>
@@ -243,10 +258,33 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
           {shown.map((utterance) => {
             const speakerIds = utterance.speakerIds;
             const source=analysis.utterances.find(u=>u.id===(utterance.sourceUtteranceId??utterance.id))!;
-            return <article key={utterance.id} className="utterance-row">
+            return <article key={utterance.id} className="utterance-row" tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z" onKeyDown={event => {
+              if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen() || locked || loading || busy || audio.preparing) return;
+              event.preventDefault();
+              if (audio.selected === utterance.id && audio.available) audio.toggle(); else void play(utterance);
+            }}>
               <div className="utterance-meta"><time title={`${utterance.startUs}–${utterance.endUs} µs`}>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}–{utterance.recognitionIsSource?preciseTime(utterance.endUs):timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span>{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}<button type="button" className="small-secondary" onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
               <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
-              <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} value={utterance.effectiveText} onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
+              <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={utterance.effectiveText}
+                onFocus={() => { const current = saveQueue.snapshot().payload; if (current) textSession.current = textEditBaseline(current, utterance); }}
+                onBlur={() => { if (textSession.current?.utteranceId === utterance.id) textSession.current = null; }}
+                onKeyDown={event => {
+                  if (!editable || overlayOpen()) return;
+                  const shortcut = appShortcut(event.nativeEvent), baseline = textSession.current, input = event.currentTarget;
+                  if (shortcut === "cancel" && baseline?.utteranceId === utterance.id) {
+                    event.preventDefault(); saveQueue.edit(current => cancelTextEdit(current, baseline)); textSession.current = null;
+                    input.closest<HTMLElement>(".utterance-row")?.focus();
+                  } else if (shortcut === "commit") {
+                    event.preventDefault(); if (commitPending.current) return;
+                    commitPending.current = true;
+                    void saveQueue.flush().then(() => {
+                      // Do not steal focus if the user moved to another field
+                      // while an older save was being acknowledged.
+                      if (document.activeElement === input && textSession.current === baseline) { textSession.current = null; input.closest<HTMLElement>(".utterance-row")?.focus(); }
+                    }).catch(() => { /* SaveQueue retains input and the retryable cause. */ }).finally(() => { commitPending.current = false; });
+                  }
+                }}
+                onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
               {(utterance.recognitionIsSource||utterance.effectiveText !== utterance.recognizedText) && <small>{utterance.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {utterance.recognizedText}</small>}
               {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{speaker.displayName || speaker.label}</label>)}</div>}
               <button type="button" className="small-secondary" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({utteranceId:utterance.id});}}>新しい話者を作成してこの発言に割り当て</button>

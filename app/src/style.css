@@ -223,6 +223,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .nav-glyph { display:none; }
 .card-actions { flex-wrap:wrap; }
 .content :focus-visible { scroll-margin-block:24px; }
+.utterance-row:focus-visible, .audio-player:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 @media(max-width:1279px) {
   .app-layout { grid-template-columns:64px minmax(0,1fr); }
   .sidebar { padding-inline:8px; }

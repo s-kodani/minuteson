@@ -5,6 +5,7 @@ import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, t
 import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
 import type { DraftUtteranceAudioRequest } from "./transcript-state";
 import { registerPlaybackStop } from "./playback-barrier";
+import { appShortcut, overlayOpen } from "./keyboard";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -150,11 +151,18 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
 
   const snapshot = player.snapshot();
   const info = snapshot.info;
-  const controls = selected && <div className="audio-player" aria-label="発言の音声再生">
+  const toggle = () => {
+    if (locked || preparing || !player.snapshot().info) return;
+    if (player.snapshot().playing) player.pause(); else void player.play();
+  };
+  const controls = selected && <div className="audio-player" role="group" aria-label="発言の音声再生" tabIndex={0} aria-keyshortcuts="Space" onKeyDown={event => {
+    if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen(event.currentTarget) || preparing || locked || !info) return;
+    event.preventDefault(); toggle();
+  }}>
     {preparing && <p role="status">保存音声を検証して再生を準備しています。</p>}
     {info && <>
       <div className="audio-controls">
-        <button type="button" className="small-secondary" onClick={() => { if (snapshot.playing) player.pause(); else void player.play(); }} disabled={preparing || locked}>{snapshot.playing ? "一時停止" : "再生"}</button>
+        <button type="button" className="small-secondary" onClick={toggle} disabled={preparing || locked}>{snapshot.playing ? "一時停止" : "再生"}</button>
         <button type="button" className="small-secondary" onClick={() => { player.pause(); player.seek(0); }} disabled={locked}>先頭へ</button>
         <label>速度<select value={snapshot.rate} onChange={(event) => player.setRate(Number(event.target.value))} disabled={locked}>{[0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}</select></label>
         <span>{durationLabel(snapshot.frame / info.sampleRate)} / {durationLabel(info.totalFrames / info.sampleRate)}</span>
@@ -167,5 +175,5 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}
   </div>;
-  return { start, clear, controls, selected, preparing };
+  return { start, clear, controls, selected, preparing, toggle, available: !!info };
 }
