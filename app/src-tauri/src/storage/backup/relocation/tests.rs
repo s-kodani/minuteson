@@ -42,6 +42,52 @@ fn native_tables(db: &Connection) -> (String, Vec<Table>) {
 }
 
 #[test]
+fn history_placed_database_inspects_exact_v27_without_migrating_or_relaxing_new_snapshots() {
+    let f = Fixture::new();
+    let mut db = f.storage.connection.lock().unwrap();
+    crate::storage::edit_recovery::remove_schema_for_test(&db);
+    let before = native_tables(&db);
+    assert!(validate_database(&mut db, &|| false).is_err());
+    validate_placed_database(&mut db, &|| false).unwrap();
+    assert_eq!(native_tables(&db), before);
+    assert_eq!(verify_migration_history(&db).unwrap(), 27);
+    assert!(validate_placed_database(&mut db, &|| true).is_err());
+    assert_eq!(native_tables(&db), before);
+}
+
+#[test]
+fn history_placed_database_refuses_changed_old_structure_and_disabled_protection() {
+    for change in 0..4 {
+        let f = Fixture::new();
+        let mut db = f.storage.connection.lock().unwrap();
+        crate::storage::edit_recovery::remove_schema_for_test(&db);
+        match change {
+            0 => db
+                .execute_batch("CREATE TABLE unknown_image(body TEXT)")
+                .unwrap(),
+            1 => db.execute_batch("PRAGMA foreign_keys=OFF").unwrap(),
+            2 => {
+                db.set_db_config(
+                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+                    false,
+                )
+                .unwrap();
+            }
+            _ => {
+                db.execute(
+                    "UPDATE schema_migrations SET checksum=?1 WHERE version=27",
+                    ["a".repeat(64)],
+                )
+                .unwrap();
+            }
+        }
+        let before = native_tables(&db);
+        assert!(validate_placed_database(&mut db, &|| false).is_err());
+        assert_eq!(native_tables(&db), before);
+    }
+}
+
+#[test]
 fn native_image_preserves_wal_ids_all_tables_settings_and_unregistered_audio() {
     let f = Fixture::new();
     let unregistered = f

@@ -132,7 +132,7 @@ impl<'a> Proof<'a> {
         // closures; the original probe is still invoked at every checkpoint.
         let check = &|| check();
         cancel(check)?;
-        database::trusted_schema(db)?;
+        database::trusted_history_schema(db)?;
         let (fk,kind,state,batch,json,sha,consent,progress,error,created,updated):(Option<String>,String,String,Option<String>,Option<String>,String,Option<i64>,Option<String>,Option<String>,i64,i64)=db.query_row("SELECT meeting_id,kind,state,restore_batch_id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,target_hash,consent_at,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json END,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?))).map_err(|e|e.to_string())?;
         let json = json.ok_or("音声履歴引継ぎの容量が上限を超えています")?;
         let h: Header = serde_json::from_str(&json).map_err(|e| e.to_string())?;

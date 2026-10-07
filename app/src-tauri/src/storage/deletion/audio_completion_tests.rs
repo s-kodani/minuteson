@@ -88,6 +88,44 @@ fn phase(f: &Fixture, op: &str) -> String {
         )
         .unwrap()
 }
+
+#[test]
+fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_original_evidence() {
+    let mut f = Fixture::new();
+    f.documents();
+    let lease = owner();
+    let op = removed(&f, &lease);
+    assert!(finish(&f.storage, &op, &lease, &|| false)
+        .unwrap()
+        .completed());
+    drop(lease);
+    {
+        let db = f.storage.connection.lock().unwrap();
+        crate::storage::deletion::audio::intent::historical_completed_fixture(&db, &op);
+        crate::storage::edit_recovery::remove_schema_for_test(&db);
+    }
+    let saved = fixed(&f, &op);
+    reopen(&mut f);
+    assert_eq!(fixed(&f, &op), saved);
+    assert_eq!(hint(&f, &op), None);
+    assert!(!f.storage.data_write_blocked());
+    assert_eq!(phase(&f, &op), "completed");
+    assert!(crate::storage::deletion::audio::require_source(
+        &f.storage.connection.lock().unwrap(),
+        &f.meeting
+    )
+    .is_err());
+    assert_eq!(
+        crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
+        28
+    );
+    f.storage
+        .create_meeting("OTHER MEETING AFTER AUDIO HISTORY UPGRADE")
+        .unwrap();
+    reopen(&mut f);
+    assert_eq!(fixed(&f, &op), saved);
+    assert!(!f.storage.data_write_blocked());
+}
 #[test]
 fn completion_changes_only_availability_retains_every_history_and_releases_hot_fence() {
     let f = Fixture::new();

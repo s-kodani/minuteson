@@ -7,6 +7,14 @@ mod audio_supersession;
 #[cfg(unix)]
 mod completion;
 mod database;
+
+// Read-only native-image inspection; not a deletion or cutover capability.
+#[cfg(target_os = "macos")]
+pub(in crate::storage) fn verify_known_history_schema(
+    db: &rusqlite::Connection,
+) -> Result<(), String> {
+    database::trusted_history_schema(db).map(|_| ())
+}
 pub(in crate::storage) mod fence;
 #[cfg(unix)]
 mod files;

@@ -1,4 +1,3 @@
-use crate::storage::apply_migrations;
 #[cfg(test)]
 use crate::storage::now_ms;
 use rusqlite::{config::DbConfig, params, types::ValueRef, Connection};
@@ -111,7 +110,7 @@ pub(super) fn audio_tables(
     if !uuid(meeting) {
         return Err("音声履歴の会議IDが不正です".into());
     }
-    trusted_schema(db)?;
+    trusted_history_schema(db)?;
     [
         ("audio_chunks", "meeting_id=?1"),
         ("audio_tracks", "meeting_id=?1"),
@@ -142,17 +141,61 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String, String)>, Stri
         .map_err(|e| e.to_string())?.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .map_err(|e| e.to_string())?.collect::<Result<_,_>>().map_err(|e| e.to_string())
 }
-fn expected_schema() -> Result<&'static Vec<(String, String, String, String)>, String> {
+type Schema = Vec<(String, String, String, String)>;
+struct KnownSchema {
+    version: usize,
+    objects: Schema,
+    hash: String,
+    targets: Vec<(&'static str, &'static str)>,
+}
+#[cfg(test)]
+pub(super) fn historical_scope_fixture(current: &Scope, version: usize) -> Scope {
+    let known = known_schemas()
+        .unwrap()
+        .iter()
+        .find(|s| s.version == version)
+        .unwrap();
+    let mut scope = current.clone();
+    scope.schema_hash = known.hash.clone();
+    scope
+        .tables
+        .retain(|t| known.targets.iter().any(|(name, _)| t.name == *name));
+    scope
+}
+#[cfg(test)]
+pub(super) fn historical_schema_hash_fixture(version: usize) -> String {
+    known_schemas()
+        .unwrap()
+        .iter()
+        .find(|s| s.version == version)
+        .unwrap()
+        .hash
+        .clone()
+}
+fn known_schemas() -> Result<&'static Vec<KnownSchema>, String> {
     // Cache only the schema built from this binary's fixed migrations, never a
     // live connection's schema, migration history, trigger/FK state or rows.
     // Each actual DB still undergoes every inspection below on every call.
-    static EXPECTED: std::sync::OnceLock<Result<Vec<(String, String, String, String)>, String>> =
+    static EXPECTED: std::sync::OnceLock<Result<Vec<KnownSchema>, String>> =
         std::sync::OnceLock::new();
     EXPECTED
         .get_or_init(|| {
-            let mut expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-            apply_migrations(&mut expected).map_err(|e| e.to_string())?;
-            schema(&expected)
+            let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            expected.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e| e.to_string())?;
+            let mut versions = Vec::new();
+            for (index, (_, sql)) in crate::storage::MIGRATIONS.iter().enumerate() {
+                expected.execute_batch(sql).map_err(|e| e.to_string())?;
+                let version = index + 1;
+                if version >= 22 {
+                    let objects = schema(&expected)?;
+                    let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
+                    let targets = TARGETS.iter().copied().filter(|(name, _)| {
+                        objects.iter().any(|(kind, object, _, _)| kind == "table" && object.as_str() == *name)
+                    }).collect();
+                    versions.push(KnownSchema { version, objects, hash, targets });
+                }
+            }
+            Ok(versions)
         })
         .as_ref()
         .map_err(Clone::clone)
@@ -196,6 +239,27 @@ pub(super) fn legacy_without_journal(db: &Connection) -> Result<bool, String> {
     Ok(true)
 }
 pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
+    Ok(inspect_schema(db, false)?.hash.clone())
+}
+// Historical readers verify an exact repository-owned schema and checksum
+// chain. This is not permission to capture or execute an old deletion scope.
+pub(super) fn trusted_history_schema(db: &Connection) -> Result<String, String> {
+    Ok(inspect_schema(db, true)?.hash.clone())
+}
+pub(super) fn verify_history_schema_hash(db: &Connection, hash: &str) -> Result<(), String> {
+    history_schema(db, hash).map(|_| ())
+}
+fn history_schema(db: &Connection, hash: &str) -> Result<&'static KnownSchema, String> {
+    let actual = inspect_schema(db, true)?;
+    saved_schema(actual, hash)
+}
+fn saved_schema(actual: &KnownSchema, hash: &str) -> Result<&'static KnownSchema, String> {
+    known_schemas()?
+        .iter()
+        .find(|known| known.hash == hash && known.version <= actual.version)
+        .ok_or_else(|| "削除履歴のDB定義が既知の旧形式と一致しません".into())
+}
+fn inspect_schema(db: &Connection, history: bool) -> Result<&'static KnownSchema, String> {
     #[cfg(unix)]
     super::startup::verify_temp_schema(db)?;
     #[cfg(not(unix))]
@@ -207,13 +271,16 @@ pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
     {
         return Err("削除対象DBに未対応の一時オブジェクトがあります".into());
     }
-    if crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?
-        != crate::storage::MIGRATIONS.len()
-    {
+    let version = crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?;
+    if !history && version != crate::storage::MIGRATIONS.len() {
         return Err("削除対象のDB移行が未完了です".into());
     }
+    let expected = known_schemas()?
+        .iter()
+        .find(|known| known.version == version)
+        .ok_or("削除履歴を検査するDBの版が未対応です")?;
     let actual = schema(db)?;
-    if &actual != expected_schema()? {
+    if actual != expected.objects {
         return Err("削除対象DBの構造・保護制約が既知の形式と一致しません".into());
     }
     if !db
@@ -236,9 +303,7 @@ pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
     {
         return Err("削除前のDB参照整合性を確認できません".into());
     }
-    Ok(digest(
-        &serde_json::to_vec(&actual).map_err(|e| e.to_string())?,
-    ))
+    Ok(expected)
 }
 
 pub(super) fn stopped(db: &Connection) -> Result<(), String> {
@@ -364,7 +429,7 @@ pub(super) fn detached_maintenance_hash(
     ids: &[String],
     check: &impl Fn() -> bool,
 ) -> Result<String, String> {
-    trusted_schema(db)?;
+    trusted_history_schema(db)?;
     if !uuid(meeting) || ids.len() > 1024 {
         return Err("保持する保守履歴の範囲が不正です".into());
     }
@@ -557,22 +622,43 @@ impl Scope {
         Ok(digest(self.encode()?.as_bytes()))
     }
     pub(super) fn validate_format(&self, db: &Connection) -> Result<(), String> {
+        self.validate_schema(db).map(|_| ())
+    }
+    fn validate_schema(&self, db: &Connection) -> Result<&'static KnownSchema, String> {
         let valid_hash = |s: &str| {
             s.len() == 64
                 && s.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         };
-        if trusted_schema(db)? != self.schema_hash
-            || self.version != 1
+        let actual = inspect_schema(db, true)?;
+        let known = saved_schema(actual, &self.schema_hash)?;
+        if self.version != 1
             || !uuid(&self.meeting_id)
             || !valid_hash(&self.maintenance_hash)
-            || self.tables.len() != TARGETS.len()
-            || self.tables.iter().zip(TARGETS).any(|(t, (name, _))| {
-                t.name != *name || t.rows > MAX_ROWS || !valid_hash(&t.sha256)
-            })
+            || self.tables.len() != known.targets.len()
+            || self
+                .tables
+                .iter()
+                .zip(&known.targets)
+                .any(|(t, (name, _))| {
+                    t.name != *name || t.rows > MAX_ROWS || !valid_hash(&t.sha256)
+                })
             || self.tables.last().is_none_or(|t| t.rows != 1)
         {
             return Err("削除の確認対象が既知の形式と一致しません".into());
+        }
+        Ok(actual)
+    }
+    fn validate_current(&self, db: &Connection) -> Result<(), String> {
+        let actual = self.validate_schema(db)?;
+        if actual.version != crate::storage::MIGRATIONS.len()
+            || self.schema_hash != actual.hash
+            || self.tables.len() != TARGETS.len()
+        {
+            return Err(
+                "旧版の削除同意は現在のDB行削除に使用できません。現在の対象を再確認してください"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -641,7 +727,7 @@ pub(super) fn erase_rows(
     if tx.is_autocommit() {
         return Err("DB行削除には同じ接続の確定トランザクションが必要です".into());
     }
-    expected.validate_format(tx)?;
+    expected.validate_current(tx)?;
     let db = tx;
     cancel(check)?;
     // Keep this enabled on the connection even if cancellation rolls back.
@@ -726,8 +812,10 @@ pub(super) fn verify_rows_absent(
     expected: &Scope,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    expected.validate_format(db)?;
-    for (name, predicate) in TARGETS {
+    let actual = expected.validate_schema(db)?;
+    // Inspect every live target, including newly added tables. The old receipt
+    // can prove historical absence, never authorize removing these new rows.
+    for (name, predicate) in &actual.targets {
         cancel(check)?;
         let exists: bool = db
             .query_row(
@@ -841,3 +929,9 @@ pub(super) fn finish_database_purge(
     checkpoint(db)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod history_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod history_upgrade_tests;

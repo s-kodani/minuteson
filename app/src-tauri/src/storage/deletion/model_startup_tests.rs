@@ -80,6 +80,74 @@ fn job_state(f: &Fixture) -> String {
 }
 
 #[test]
+fn history_v27_completed_model_upgrades_without_rewriting_evidence_or_reviving_bodies() {
+    let f = Fixture::new();
+    let op = finish(&f);
+    {
+        let db = f.storage.connection.lock().unwrap();
+        intent::historical_header_fixture(&db, &op);
+        crate::storage::edit_recovery::remove_schema_for_test(&db);
+    }
+    let saved = fixed(&f, &op);
+    let f = f.cold();
+    assert_eq!(fixed(&f, &op), saved);
+    assert_eq!(reason(&f, &op), None);
+    assert!(!f.storage.data_write_blocked());
+    assert!(!f.path("").exists());
+    assert_eq!(
+        crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
+        28
+    );
+    f.storage
+        .create_meeting("MODEL HISTORY IS READABLE AFTER UPGRADE")
+        .unwrap();
+    let f = f.cold();
+    assert_eq!(fixed(&f, &op), saved);
+    assert!(!f.storage.data_write_blocked());
+}
+
+#[test]
+fn history_old_model_consent_can_be_read_but_never_starts_current_deletion() {
+    let f = Fixture::new();
+    let op = uuid::Uuid::new_v4().to_string();
+    let owner = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let view = models::preview(&f.storage, &f.root, &op, &f.package, &f.review, &|| false).unwrap();
+    intent::prepare(
+        &f.storage,
+        &f.root,
+        &op,
+        &f.package,
+        &f.review,
+        &view.census_hash,
+        false,
+        &owner,
+        &|| false,
+    )
+    .unwrap();
+    {
+        let db = f.storage.connection.lock().unwrap();
+        // Synthetic old fixed intent on the latest test DB: validating a
+        // historical header must not admit it to a new deletion start.
+        let _writer = crate::storage::deletion::fence::write_model_prepared(
+            &f.storage,
+            &db,
+            &intent::read(&db, &op).unwrap(),
+            &owner,
+        )
+        .unwrap();
+        intent::historical_header_fixture(&db, &op);
+        intent::read(&db, &op).unwrap();
+    }
+    let saved = fixed(&f, &op);
+    assert!(removal::start(&f.storage, &op, &owner, &|| false).is_err());
+    assert_eq!(fixed(&f, &op), saved);
+    assert!(f.path("").exists());
+    assert_eq!(f.operation_state(&op), "prepared");
+}
+
+#[test]
 fn model_startup_clean_completion_allows_ordinary_recovery_and_keeps_original() {
     let f = Fixture::new();
     let op = finish(&f);

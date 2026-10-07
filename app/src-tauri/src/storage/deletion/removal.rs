@@ -263,6 +263,15 @@ impl Progress {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Finished(Progress);
 impl Finished {
+    #[cfg(test)]
+    pub(super) fn historical_manifest_fixture(&self, manifest: &Manifest) -> Self {
+        assert_eq!(self.0.version, 1);
+        assert!(self.0.confirmation.is_none());
+        let mut progress = self.0.clone();
+        progress.manifest_hash = manifest_hash(manifest).unwrap();
+        progress.plan_hash = plan_hash(manifest, &progress.policy).unwrap();
+        Self(progress)
+    }
     pub(super) fn progress(&self) -> &Progress {
         &self.0
     }

@@ -845,3 +845,36 @@ pub(super) fn prepare_observed(
 ) -> Result<Prepared, String> {
     prepare_inner(storage, operation, confirmed, check, event)
 }
+
+// Construct a v27 native completed fixture with the original consent time,
+// identities and observed paths. Production never rewrites fixed old receipts.
+#[cfg(test)]
+pub(super) fn historical_completed_fixture(db: &Connection, operation: &str) {
+    let original = read_database(db, operation, &|| false).unwrap();
+    let scope = super::database::historical_scope_fixture(original.scope(), 27);
+    let mut manifest = original.manifest().clone();
+    manifest.database_scope_hash = scope.hash().unwrap();
+    let rows = read_paths(db, operation, &|| false).unwrap();
+    let intent = Intent::from_parts(&scope, &manifest, &rows).unwrap();
+    let json = encode(&intent, MAX_INTENT).unwrap();
+    let progress: String = db
+        .query_row(
+            "SELECT progress_json FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let progress = super::completion::historical_progress_fixture(&progress, &manifest);
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        false,
+    )
+    .unwrap();
+    db.execute("UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3,progress_json=?4 WHERE id=?1",params![operation,json,hash(json.as_bytes()),progress]).unwrap();
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        true,
+    )
+    .unwrap();
+    super::completion::Receipt::load(db, operation, &|| false).unwrap();
+}

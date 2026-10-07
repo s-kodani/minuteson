@@ -399,3 +399,11 @@ pub(super) fn run_observed(
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(super) fn historical_progress_fixture(json: &str, manifest: &super::files::Manifest) -> String {
+    let mut progress: Progress = serde_json::from_str(json).unwrap();
+    assert_eq!(progress.database_phase, Phase::Finished);
+    progress.files = progress.files.historical_manifest_fixture(manifest);
+    progress.encode().unwrap()
+}

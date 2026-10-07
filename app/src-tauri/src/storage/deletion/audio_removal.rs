@@ -49,6 +49,25 @@ struct Progress {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     confirmation: Option<renewal::Reference>,
 }
+#[cfg(test)]
+pub(super) fn historical_progress_fixture(
+    db: &Connection,
+    operation: &str,
+    census: &str,
+) -> String {
+    let json: String = db
+        .query_row(
+            "SELECT progress_json FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut progress: Progress = serde_json::from_str(&json).unwrap();
+    assert_eq!(progress.phase, Phase::AudioDeletionCompleted);
+    assert!(progress.confirmation.is_none());
+    progress.census_hash = census.into();
+    progress.encode().unwrap()
+}
 impl Progress {
     fn state(&self) -> &'static str {
         if self.phase == Phase::AudioDeletionCompleted {

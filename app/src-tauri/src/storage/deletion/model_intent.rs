@@ -128,6 +128,7 @@ impl Prepared {
     fn validate(&self, db: &Connection) -> Result<(), String> {
         let h = &self.header;
         self.snapshot.validate()?;
+        super::super::database::verify_history_schema_hash(db, &h.schema_hash)?;
         let bytes = serde_json::to_vec(&self.snapshot).map_err(|e| e.to_string())?;
         if h.version != 1
             || h.subtype != "modelDeletion"
@@ -138,7 +139,6 @@ impl Prepared {
             || !hash_valid(&h.review_hash)
             || !hash_valid(&h.census_hash)
             || !hash_valid(&h.schema_hash)
-            || h.schema_hash != super::super::database::trusted_schema(db)?
             || !Path::new(&h.models_root).is_absolute()
             || Path::new(&h.models_root).file_name() != Some(std::ffi::OsStr::new("models"))
             || h.models_root.contains('\0')
@@ -163,6 +163,18 @@ impl Prepared {
     pub(in crate::storage::deletion) fn verify_saved(&self, db: &Connection) -> Result<(), String> {
         if read(db, &self.header.operation_id)? != *self {
             return Err("モデル削除の保存確認が変更されています".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage::deletion) fn verify_current_schema(
+        &self,
+        db: &Connection,
+    ) -> Result<(), String> {
+        if self.header.schema_hash != super::super::database::trusted_schema(db)? {
+            return Err(
+                "旧版のモデル削除同意は現在の削除開始に使用できません。対象を再確認してください"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -191,6 +203,7 @@ impl Prepared {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        self.verify_current_schema(&db)?;
         self.verify_saved(&db)?;
         super::super::database::stopped_for_model_consent(&db)?;
         if self.kept
@@ -312,6 +325,35 @@ fn read_with_progress(
     };
     result.validate(db)?;
     Ok(result)
+}
+
+#[cfg(test)]
+pub(in crate::storage) fn historical_header_fixture(db: &Connection, operation: &str) {
+    let json: String = db
+        .query_row(
+            "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
+            [operation],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut header: Header = serde_json::from_str(&json).unwrap();
+    header.schema_hash = super::super::database::historical_schema_hash_fixture(27);
+    let json = serde_json::to_string(&header).unwrap();
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        false,
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3 WHERE id=?1",
+        params![operation, json, digest(json.as_bytes())],
+    )
+    .unwrap();
+    db.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
+        true,
+    )
+    .unwrap();
 }
 
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {

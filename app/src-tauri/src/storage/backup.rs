@@ -460,6 +460,35 @@ fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Resu
     if verify_migration_history(db).map_err(|e| e.to_string())? != MIGRATIONS.len() {
         return Err("未対応のDBスナップショット形式です".into());
     }
+    validate_database_contents(db, cancelled)
+}
+
+// An already-written placement image must remain inspectable before its first
+// admission and normal migration. This validates content only; its manifest,
+// byte hash, path inventory and ownership are still checked by the caller.
+// New source snapshots and restore/publication writers retain latest-only
+// validate_database above. Native content formats before 27 stay unsupported.
+#[cfg(target_os = "macos")]
+fn validate_placed_database(
+    db: &mut Connection,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    check_cancelled(cancelled)?;
+    let version = verify_migration_history(db).map_err(|e| e.to_string())?;
+    if version == MIGRATIONS.len() {
+        return validate_database(db, cancelled);
+    }
+    if !(27..MIGRATIONS.len()).contains(&version) {
+        return Err("未対応の旧DBスナップショット形式です".into());
+    }
+    super::deletion::verify_known_history_schema(db)?;
+    validate_database_contents(db, cancelled)
+}
+
+fn validate_database_contents(
+    db: &mut Connection,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
     // Validate native selections and imported, unavailable catalog history.
     super::model_profiles::portable::history::Bundle::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;
