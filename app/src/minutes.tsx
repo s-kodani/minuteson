@@ -1,13 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { canRetryJob, jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { JobModelRebinding } from "./model-rebinding";
-import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, type MinutesExport, type MinutesExportRequest, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
+import { assertMinutesReview, assertMinutesVersion, minutesConfigured, minutesExportRequest, exportLabel, exportNoticeLevel, type MinutesExport, type MinutesExportRequest, type MinutesDraft, type MinutesEngine, type MinutesPreferences, type MinutesVersion, type MinutesVersions, type MinutesView } from "./minutes-state";
 import { MinutesDocument } from "./minutes-document";
 import { MinutesEditor, type EditorGuard } from "./minutes-editor";
 
@@ -38,6 +39,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [error, setError] = useState("");
   const [exports, setExports] = useState<MinutesExport[]>([]);
   const [exportNotice, setExportNotice] = useState("");
+  const [exportEvent, setExportEvent] = useState("");
+  const [exportState, setExportState] = useState<MinutesExport["state"] | null>(null);
   const pendingExport = useRef<MinutesExportRequest | null>(null);
   const mounted = useRef(true);
   const busyRef = useRef(false);
@@ -159,6 +162,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       if (status.active) throw new Error("保存ダイアログまたは書き出しが進行中です。完了・取消を待ってください。");
       pendingExport.current = null;
       if (!mounted.current) return;
+      setExportEvent(status.record?.id ?? crypto.randomUUID()); setExportState(status.record?.state ?? null);
       setExportNotice(status.record ? `${exportLabel(status.record.state)}: ${status.record.destinationPath}${status.record.errorMessage ? ` — ${status.record.errorMessage}` : ""}` : "前回の出力履歴はありません。保存先を確認し、必要なら改めて書き出してください。");
       await refreshRef.current(); return;
     }
@@ -167,6 +171,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     const record = await invoke<MinutesExport | null>("export_minutes_markdown", { request: pendingExport.current });
     pendingExport.current = null;
     if (!mounted.current) return;
+    setExportEvent(record?.id ?? crypto.randomUUID()); setExportState(record?.state ?? null);
     setExportNotice(record ? `${exportLabel(record.state)}: ${record.destinationPath}${record.errorMessage ? ` — ${record.errorMessage}` : ""}` : "書き出しを取り消しました。ローカルの編集内容は保存されています。");
     await refreshRef.current();
   }));
@@ -231,7 +236,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
     {current && <><div className="transcript-actions"><p>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</p><button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button></div>{currentSummary?.inputUpdated && <p className="data-updated" role="status">元データ更新あり。引用は生成時の版を保持しています。必要に応じて再生成してください。</p>}<MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
-    {exportNotice && <p role="status">{exportNotice}</p>}
+    {exportNoticeLevel(exportState) === "error" ? <IssueNotice scope={meetingId} type="minutes-export" label="議事録の書き出しを要確認" message={exportNotice} /> : <ToastNotice scope={meetingId} type="minutes-export" eventId={exportEvent} level={exportNoticeLevel(exportState)} message={exportNotice} onClose={() => setExportNotice("")} />}
     <details className="minutes-export-history"><summary>Markdown出力履歴（最新50件）</summary><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</details>
     {error && <p className="action-error" role="alert">{error}</p>}
     <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => opener.current} className="analysis-dialog" aria-labelledby="minutes-preview-title">{preview && <>

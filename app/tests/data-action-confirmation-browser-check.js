@@ -10,7 +10,7 @@ async page => {
   const chooseMove = async () => { await data().getByRole("button", { name: "会議保存先を変更", exact: true }).click(); await moving().waitFor(); };
   const stopTitle = "データ操作の安全な取消を確認", changeTitle = "データ操作の確認内容変更を確認";
   const changeButton = () => data().getByRole("button", { name: "バックアップから追加復元", exact: true });
-  const failedMove = async () => { await boot(); await chooseMove(); await page.evaluate(() => window.dataFixture.mode = "stale"); await moving().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click(); await moving().waitFor({ state: "hidden" }); await data().getByRole("alert").filter({ hasText: "確認後に" }).waitFor(); };
+  const failedMove = async () => { await boot(); await chooseMove(); await page.evaluate(() => window.dataFixture.mode = "stale"); await moving().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click(); await moving().waitFor({ state: "hidden" }); await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "確認後に" }).waitFor(); };
   await failedMove(); const old = await page.evaluate(() => JSON.stringify(window.dataFixture.snapshot));
   await changeButton().click(); await modal(changeTitle).waitFor();
   check(await count("select_data_operation") === 1 && (await modal(changeTitle).innerText()).includes("元バックアップは変更しません"), "reselect ran before decision or omitted scope");

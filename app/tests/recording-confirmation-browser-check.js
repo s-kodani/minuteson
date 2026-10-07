@@ -1,4 +1,4 @@
-async page=>{
+async (page, capturePath = path => path)=>{
  const context=page.context(), results=[], check=(ok,message)=>{if(!ok)throw Error(message);};
  let sequence=0;
  const id=()=>"00000000-0000-4000-8000-"+(++sequence).toString().padStart(12,"0");
@@ -88,7 +88,7 @@ async page=>{
   results.push("failed stop stays visible without replay; only a new explicit confirmation can retry the same recording");
 
   await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();await modal.setViewportSize({width:360,height:640});
-  const box=await dialog().boundingBox();check(box.x>=23.9&&box.x+box.width<=336.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"small separate confirmation clipped");await modal.screenshot({path:"recording-stop-confirmation-360.png"});await modal.setViewportSize({width:560,height:460});await modal.screenshot({path:"recording-stop-confirmation-560.png"});
+  const box=await dialog().boundingBox();check(box.x>=23.9&&box.x+box.width<=336.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"small separate confirmation clipped");await modal.screenshot({path:capturePath("recording-stop-confirmation-360.png")});await modal.setViewportSize({width:560,height:460});await modal.screenshot({path:capturePath("recording-stop-confirmation-560.png")});
   await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"visual check stopped recording");
   results.push("separate confirmation fits 560px and 360px; visual check and Escape never stop recording");
 
@@ -99,7 +99,7 @@ async page=>{
   const quitEnd=()=>modal.getByRole("button",{name:"録音を終了して閉じる",exact:true});
   await reset();await clearClose();await requestQuit();await modal.getByRole("heading",{name:"録音を終了してアプリを閉じますか？",exact:true}).waitFor();
   check((await state()).decision.quitAfterSave&&await page.getByRole("dialog").count()===0,"quit intent was missing or duplicated main confirmation");
-  const quitBox=await dialog().boundingBox();check(quitBox.y>=23.9&&quitBox.y+quitBox.height<=436.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"recording quit clipped the native-size confirmation");await modal.screenshot({path:"recording-quit-confirmation-560.png"});
+  const quitBox=await dialog().boundingBox();check(quitBox.y>=23.9&&quitBox.y+quitBox.height<=436.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"recording quit clipped the native-size confirmation");await modal.screenshot({path:capturePath("recording-quit-confirmation-560.png")});
   await modal.keyboard.press("Enter");await dialog().waitFor({state:"hidden"});check(await closed()===0&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"declining quit stopped or closed recording");
   results.push("recording quit shares the independent confirmation and declining never stops or closes the app");
 

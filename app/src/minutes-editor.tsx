@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useActionConfirmation } from "./confirmation-service";
+import { IssueNotice } from "./toast";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
@@ -178,7 +179,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
       <MinutesPages plan={plan} mode="編集" disabled={changingPageDisabled} changePage={changePage} />
     </>}
     {error && <p className="action-error" role="alert">{error}</p>}
-    {saved.error && <p className="action-error" role="alert">議事録を保存できませんでした。入力はこの画面に保持しています。修正後に再試行してください: {saved.error}</p>}
+    <IssueNotice scope={view.meetingId} type="minutes-save" label="議事録の保存に失敗" message={saved.error ? `入力はこの画面に保持しています。修正後に再試行してください: ${saved.error}` : ""} action={{ kind: "retry", label: "議事録保存を再試行", disabled: locked || busy || saved.saving || confirm.pending, run: () => run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); }) }} />
     <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"}
       verify={disabled || failure.current || compositions.current.size ? undefined : (id, verified) => { edit((d) => setEvidenceVerification(d, id, verified)); }} />
   </section>;

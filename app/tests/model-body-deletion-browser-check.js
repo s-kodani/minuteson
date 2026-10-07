@@ -12,7 +12,7 @@ async (page) => {
   const publish = () => dialog().getByRole("button", { name: /モデル本体を削除する|照合してモデル本体削除を続行|新しいモデル範囲へ再同意して削除を続行/u });
   const boot = async () => { await page.reload(); await page.getByRole("button", { name: "設定", exact: true }).click(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "本体削除の実行確認へ" && !b.disabled)); };
   const review = async () => { await trigger().click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
-  const done = () => region().getByRole("status").filter({ hasText: "モデル本体を削除しました" }).waitFor();
+  const done = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "モデル本体を削除しました" }).waitFor();
   const pending = async (phase, altered = false) => {
     await page.evaluate(([p, a]) => window.modelBodyFixture.pending(p, a), [phase, altered]);
     await region().getByRole("button", { name: "未完了モデル削除の対象を確認", exact: true }).click();
@@ -61,14 +61,14 @@ async (page) => {
 
   await boot(); await pending("not_started", true); check(await publish().isDisabled(), "changed unstarted executed");
   await dialog().getByRole("button", { name: "モデル本体を未開始のまま保持して中止" }).click();
-  await region().getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
   check(await page.evaluate(() => window.modelBodyFixture.kept === 1 && window.modelBodyFixture.deleted === 0 && window.dataFixture.meetings.length === 1), "keep deleted data"); results.push("unstarted keep preserves body and history, restart required");
 
   await boot(); await set({ mode: "delay" }); await review(); await understand(); await publish().click();
   await region().getByRole("button", { name: "モデル削除の安全な停止を要求", exact: true }).click();
   check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "stop unlocked prematurely");
   await page.evaluate(() => window.modelBodyFixture.complete());
-  await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
   await set({ mode: "success" }); await region().getByRole("button", { name: "モデル本体の残りを再検査", exact: true }).click(); await dialog().waitFor();
   check(await dialog().getByRole("button", { name: "モデル本体を未開始のまま保持して中止" }).count() === 0, "partial fake restore exposed");
   check((await dialog().innerText()).includes("処理済み") && (await dialog().innerText()).includes("現在の実在一覧ではありません"), "frozen processed paths unexplained");
@@ -88,7 +88,7 @@ async (page) => {
   check(JSON.stringify((await calls("start_data_operation"))[1].args.request) === JSON.stringify(original), "lost request substituted"); results.push("unknown response protects shared actions and explicitly replays exact request");
 
   await boot(); await set({ mode: "forged" }); await review(); await understand(); await publish().click();
-  await region().getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
   check(!(await region().getByText(/モデル本体を削除しました/u).count()), "forged receipt accepted"); results.push("forged model receipt rejected without success");
 
   await boot(); await set({ pageFail: true }); await trigger().click(); await dialog().waitFor();
@@ -131,7 +131,7 @@ async (page) => {
       registerPlaybackStop(() => fail ? Promise.reject(Error("模擬モデル前の再生解放失敗")) : new Promise(resolve => { window.modelBodyFixture.releasePlayback = resolve; }));
     }, fail);
     await trigger().click();
-    if (fail) { await region().getByRole("alert").filter({ hasText: "模擬モデル前の再生解放失敗" }).waitFor(); check(!(await calls("review_model_body_deletion")).length, "playback failure admitted review"); }
+    if (fail) { await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "模擬モデル前の再生解放失敗" }).waitFor(); check(!(await calls("review_model_body_deletion")).length, "playback failure admitted review"); }
     else { await page.waitForFunction(() => !!window.modelBodyFixture.releasePlayback); check(!(await calls("review_model_body_deletion")).length, "review skipped playback wait"); await page.evaluate(() => window.modelBodyFixture.releasePlayback()); await dialog().waitFor(); }
     results.push(fail ? "playback release failure prevents model review" : "model review waits for playback release");
   }

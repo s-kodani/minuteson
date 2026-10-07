@@ -4,11 +4,12 @@ async (page) => {
   const set = values => page.evaluate(v => Object.assign(window.deletionFixture, v), values);
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
   const region = () => page.getByRole("region", { name: "会議削除の確認と中断対応" });
+  const notifications = () => page.getByRole("complementary", { name: "通知", exact: true });
   const dialog = () => page.getByRole("dialog", { name: "会議の完全削除を確認" });
   const understand = () => dialog().getByRole("checkbox", { name: "対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。", exact: true }).check();
   const boot = async () => { await page.reload(); await page.getByRole("button", { name: "既存会議を削除", exact: true }).waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "既存会議を削除" && !b.disabled)); };
   const review = async () => { await page.getByRole("button", { name: "既存会議を削除", exact: true }).click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
-  const deleted = () => region().getByRole("status").filter({ hasText: "会議の管理データを削除しました" }).waitFor();
+  const deleted = () => notifications().getByRole("status").filter({ hasText: "会議の管理データを削除しました" }).waitFor();
   const publish = () => dialog().getByRole("button", { name: /会議を削除する|照合して残りの削除を続行/u }).click();
   const pending = async (phase, changed = false) => { await page.evaluate(([p, c]) => window.deletionFixture.pending(p, c), [phase, changed]); await region().getByRole("button", { name: "未完了削除の対象を確認", exact: true }).waitFor(); await region().getByRole("button", { name: "未完了削除の対象を確認", exact: true }).click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
 
@@ -41,7 +42,7 @@ async (page) => {
   check((await calls("start_data_operation")).length === 0, "pagination caused deletion"); results.push("bounded metadata pagination without execution");
 
   await boot(); await set({ mode: "stale" }); await review(); await understand(); await publish();
-  await region().getByRole("alert").filter({ hasText: "確認後に会議が変更" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "確認後に会議が変更" }).waitFor();
   const old = await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.confirmationId);
   await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click(); await dialog().waitFor();
   await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
@@ -53,7 +54,7 @@ async (page) => {
   await region().getByRole("button", { name: "安全な停止を要求", exact: true }).click();
   check(await page.getByRole("button", { name: "残す会議を削除" }).isDisabled(), "stop request unlocked work before terminal");
   await page.evaluate(() => window.deletionFixture.complete());
-  await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
   check(await page.getByRole("textbox", { name: "会議名", exact: true }).isDisabled(), "partial deletion unlocked editing");
   await set({ mode: "success" }); await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click(); await dialog().waitFor();
   check(await dialog().getByRole("button", { name: "未開始のまま保持して中止" }).count() === 0, "partial deletion can be kept as if restored");
@@ -62,7 +63,7 @@ async (page) => {
   await boot(); await pending("not_started", true);
   check(await dialog().getByRole("button", { name: /照合して残りの削除/u }).isDisabled(), "changed unstarted contents can execute");
   await dialog().getByRole("button", { name: "未開始のまま保持して中止" }).click();
-  await region().getByRole("status").filter({ hasText: "ファイル削除を開始せず保持して中止" }).waitFor();
+  await notifications().getByRole("status").filter({ hasText: "ファイル削除を開始せず保持して中止" }).waitFor();
   check(await page.getByRole("button", { name: "既存会議を削除" }).count() === 1 && await page.getByRole("button", { name: "既存会議を削除" }).isDisabled(), "keep deleted meeting or released cold startup fence");
   check(await region().getByRole("button", { name: "終了する（再起動は手動）" }).count() === 1, "restart guidance missing"); results.push("changed unstarted keep preserves meeting and cold restart fence");
 
@@ -163,7 +164,7 @@ async (page) => {
       registerPlaybackStop(() => fail ? Promise.reject(Error("模擬音声停止失敗")) : new Promise(resolve => { window.deletionFixture.releasePlayback = resolve; }));
     }, fail);
     await page.getByRole("button", { name: "既存会議を削除" }).click();
-    if (fail) { await region().getByRole("alert").filter({ hasText: "模擬音声停止失敗" }).waitFor(); check((await calls("review_meeting_deletion")).length === 0, "playback failure admitted review"); }
+    if (fail) { await notifications().getByRole("alert").filter({ hasText: "模擬音声停止失敗" }).waitFor(); check((await calls("review_meeting_deletion")).length === 0, "playback failure admitted review"); }
     else { check((await calls("review_meeting_deletion")).length === 0, "review did not wait for playback release"); await page.evaluate(() => window.deletionFixture.releasePlayback()); await dialog().waitFor(); }
     results.push(fail ? "playback release failure prevents review" : "review waits for playback token release");
   }
@@ -187,7 +188,7 @@ async (page) => {
   await page.evaluate(() => { window.deletionFixture.unmountPlayback(); window.deletionFixture.releasePreparation(); });
   await page.waitForFunction(() => window.deletionFixture.closes >= 2);
   await page.getByRole("button", { name: "既存会議を削除" }).click();
-  await region().getByRole("alert").filter({ hasText: "模擬ネイティブ再生解放失敗" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "模擬ネイティブ再生解放失敗" }).waitFor();
   check((await calls("review_meeting_deletion")).length === 0, "unmounted hook lost failed token release");
   await set({ closeFail: false }); await page.getByRole("button", { name: "既存会議を削除" }).click(); await dialog().waitFor();
   check(await page.evaluate(() => window.deletionFixture.liveTokens.size === 0), "detached token retry was not released");
@@ -196,7 +197,7 @@ async (page) => {
   await boot(); await pending("not_started"); await dialog().getByRole("button", { name: "未開始のまま保持して中止" }).click();
   await region().getByRole("button", { name: "終了する（再起動は手動）" }).waitFor(); await set({ quitFail: true });
   await region().getByRole("button", { name: "終了する（再起動は手動）" }).click();
-  await region().getByRole("alert").filter({ hasText: "模擬終了失敗" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "模擬終了失敗" }).waitFor();
   results.push("manual restart exit failure remains visible");
   for (const phase of ["database", "awaiting_ack", "database_files"]) {
     await boot(); await set({ mode: "unknown", unknownCount: 1 }); await pending(phase, true);
@@ -226,7 +227,7 @@ async (page) => {
     }
     await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click();
     if (phase === "awaiting_ack") {
-      await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+      await notifications().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
       check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.phase === "database_files" && window.dataFixture.snapshot.deletionPreview.rowPhaseCommitted), "partial DB files forgot committed rows");
       await set({ mode: "success" }); await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click();
       await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
@@ -266,7 +267,7 @@ async (page) => {
     await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: "output/playwright/deletion-root-reconfirmation-consent-900.png" });
     await set({ mode: "partial" }); await renewedDialog().getByRole("button", { name: "新しい範囲へ再同意して削除を続行", exact: true }).click();
-    await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+    await notifications().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
     check(await page.evaluate(() => window.dataFixture.snapshot.deletionPreview.reservationRoots.length) === 1, "partial plan forgot reserved root");
     await set({ mode: "success" }); await region().getByRole("button", { name: "残りの状態を再検査", exact: true }).click();
     await dialog().waitFor(); await dialog().getByText("1〜5 / 5 件", { exact: true }).waitFor();
@@ -296,7 +297,7 @@ async (page) => {
     }
     await region().getByRole("button", { name: "未完了削除の対象を確認", exact: true }).click();
     if (code === "completed_receipt_invalid") {
-      await region().getByRole("alert").filter({ hasText: "模擬完了記録の検証失敗" }).waitFor();
+      await notifications().getByRole("alert").filter({ hasText: "模擬完了記録の検証失敗" }).waitFor();
       check(await dialog().count() === 0 && (await calls("start_data_operation")).length === 0, "invalid receipt became an executable scope");
     } else {
       await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();

@@ -1,0 +1,104 @@
+async page => {
+  const results = [], check = (value, message) => { if (!value) throw Error(message); };
+  const host = page.getByRole("complementary", { name: "通知", exact: true }), input = page.getByRole("textbox", { name: "保持する入力", exact: true });
+  const clear = async () => { await page.evaluate(() => window.toastFixture.clear()); await host.locator(".toast-card").waitFor({ state: "hidden" }); };
+  const show = async notice => { await page.evaluate(n => window.toastFixture.show(n), notice); };
+  await input.focus(); await show({ key: "ordinary", level: "success", message: "会議を書き出しました" });
+  await host.getByRole("status").waitFor(); check(await input.evaluate(e => e === document.activeElement), "notification stole typing focus");
+  check((await host.innerText()).includes("成功："), "success lacks a non-color label");
+  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  results.push("success is labelled, polite, does not steal input focus, and expires after about four seconds");
+
+  await show({ key: "hover", level: "info", message: "読み取り中の情報" }); await host.locator(".toast-card").hover();
+  await page.waitForTimeout(4300); check(await host.getByRole("status").isVisible(), "hovered notification expired");
+  await page.mouse.move(8, 8); await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  results.push("hover pauses automatic dismissal and leaving resumes the remaining interval");
+
+  await input.focus(); await show({ key: "focus", level: "warning", message: "確認が必要です" });
+  await host.getByRole("button", { name: "注意通知を閉じる", exact: true }).focus(); await page.waitForTimeout(4300);
+  check(await host.getByRole("status").isVisible(), "keyboard-focused notification expired");
+  await page.keyboard.press("Enter"); await host.getByRole("status").waitFor({ state: "hidden" });
+  check(await input.evaluate(e => e === document.activeElement), "dismissal did not restore the user's preceding input");
+  results.push("keyboard reading pauses dismissal; Enter dismisses only the notification and restores the preceding field");
+
+  await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
+  await page.waitForTimeout(4500); check(await host.getByRole("alert").isVisible(), "important save error automatically expired");
+  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
+  check(await page.getByLabel("保存に失敗の要対応状態", { exact: true }).isVisible() && await page.getByRole("button", { name: "画面から保存を再試行", exact: true }).isEnabled(), "dismissing error cleared its issue or retry");
+  check(await input.inputValue() === "編集中の点検日" && await page.evaluate(() => window.toastFixture.retryCalls) === 0, "notification close changed input or retried saving");
+  await page.getByRole("button", { name: "保存に失敗の説明を開く", exact: true }).click();
+  const details = page.getByRole("dialog", { name: "保存に失敗", exact: true }); await details.waitFor();
+  check((await details.innerText()).includes("容量が不足"), "issue explanation lost the actual cause"); await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "画面から保存を再試行", exact: true }).click();
+  await page.getByLabel("保存に失敗の要対応状態", { exact: true }).waitFor({ state: "hidden" });
+  results.push("important errors persist; dismissing preserves issue, explanation, retry and local input without issuing commands");
+
+  await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
+  await host.getByRole("button", { name: "保存を再試行", exact: true }).click();
+  await host.getByRole("alert").waitFor({ state: "hidden" });
+  check(await page.evaluate(() => window.toastFixture.retryCalls) === 2, "explicit notification retry was not exactly once");
+  results.push("explicit safe retry resolves both notification and issue only after the originating controller resolves the problem");
+  await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
+  await page.evaluate(() => window.toastFixture.changeScope()); await host.getByRole("alert").waitFor({ state: "hidden" });
+  check(await page.getByLabel("保存に失敗の要対応状態", { exact: true }).count() === 0, "resolved old scope left a stale important notification or issue");
+  results.push("an originating controller clearing its error while changing targets resolves the previous key rather than leaving a stale problem");
+
+  await input.focus(); await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
+  const before = await host.locator(".toast-card").getAttribute("data-toast-id");
+  for (let i = 0; i < 5; i++) await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
+  check(await host.locator(".toast-card").count() === 1 && await host.locator(".toast-card").getAttribute("data-toast-id") === before, "polling duplicated or re-announced the same problem");
+  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click(); await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
+  check(await host.locator(".toast-card").count() === 0, "acknowledged polling problem reappeared");
+  await show({ key: "dedup", level: "error", message: "保存も失敗しました" }); await host.getByRole("alert").waitFor(); await clear();
+  results.push("same problem updates in place and stays acknowledged after dismissal; a changed problem is notified again");
+  await show({ key: "receipt", eventId: "operation-1", level: "success", message: "バックアップを作成しました" });
+  const firstReceipt = await host.locator(".toast-card").getAttribute("data-toast-id");
+  await show({ key: "receipt", eventId: "operation-2", level: "success", message: "バックアップを作成しました" });
+  check(await host.locator(".toast-card").count() === 1 && await host.locator(".toast-card").getAttribute("data-toast-id") !== firstReceipt, "a distinct completed operation reused the old notification");
+  await clear(); results.push("identical result text from a distinct operation replaces the previous result as a new event, without stacking duplicates");
+
+  for (let i = 0; i < 4; i++) await show({ key: `critical-${i}`, level: "error", message: `重要な問題 ${i}` });
+  await show({ key: "queued-success", level: "success", message: "待機している完了通知" });
+  check(await host.locator(".toast-card").count() === 3 && await host.getByRole("alert").count() === 3 && (await host.innerText()).includes("ほか 2 件"), "queue does not cap at three or prioritize important problems");
+  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).first().click();
+  check(await host.getByRole("alert").count() === 3 && (await host.innerText()).includes("重要な問題 0"), "queued important problem was lost");
+  await clear(); results.push("at most three notifications are displayed; important problems are promoted ahead of queued normal results");
+
+  await page.getByRole("button", { name: "変更の確認を開く", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "変更の確認", exact: true }); await modal.waitFor();
+  await show({ key: "under-modal", level: "info", message: "確認中に届いた情報" }); await page.waitForTimeout(4300);
+  check(await host.locator(".toast-card").count() === 1 && await page.evaluate(() => !!document.activeElement?.closest("dialog[open]")), "notification expired beneath confirmation or stole its focus");
+  await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" }); await page.mouse.move(8, 8);
+  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5500 });
+  results.push("confirmation stays above notifications with focus intact; dismissal time starts when the confirmation closes");
+
+  await page.evaluate(() => window.toastFixture.showAction()); await page.waitForTimeout(4300);
+  check(await host.getByRole("button", { name: "元に戻す", exact: true }).isVisible(), "action notice used the ordinary four-second timeout");
+  await host.getByRole("status").waitFor({ state: "hidden", timeout: 5000 });
+  check(await page.evaluate(() => window.toastFixture.actionCalls) === 0, "expiry executed undo");
+  results.push("action notifications last about eight seconds and never execute actions on expiry");
+  await clear(); await input.focus(); await page.evaluate(() => window.toastFixture.showAction());
+  await host.getByRole("button", { name: "元に戻す", exact: true }).click(); await input.focus(); await page.mouse.move(8, 8);
+  check(await page.evaluate(() => window.toastFixture.actionCalls) === 1, "explicit action was not exactly once");
+  await host.getByRole("status").waitFor({ state: "hidden", timeout: 9500 });
+  results.push("an explicit action runs once; its temporary disabled state cannot leave dismissal permanently paused after focus leaves");
+
+  await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("button", { name: "保存を再試行", exact: true }).waitFor();
+  await page.evaluate(() => window.toastFixture.detach()); await host.getByRole("button", { name: "保存を再試行", exact: true }).waitFor({ state: "hidden" });
+  check(await host.getByRole("alert").isVisible() && await page.evaluate(() => window.toastFixture.retryCalls) === 2, "detaching operation discarded the notice or left a stale command");
+  await clear(); results.push("unmounting an operation removes its stale action without executing it or silently dismissing its important notification");
+
+  for (const [width, height] of [[1280, 820], [960, 640], [360, 640]]) {
+    await page.setViewportSize({ width, height }); await show({ key: "geometry", level: "error", message: "保存に失敗しました。" });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(t => { document.documentElement.dataset.theme = t; document.querySelector(".content").scrollTop = 600; }, theme);
+      const geometry = await host.evaluate(e => { const r = e.getBoundingClientRect(), h = document.querySelector(".topbar").getBoundingClientRect(), p = document.querySelector(".toast-fixture-player").getBoundingClientRect(); return { x: r.x, right: r.right, y: r.y, bottom: r.bottom, headerBottom: h.bottom, playerTop: p.top, scroll: document.querySelector(".content").scrollTop, width: e.scrollWidth, clientWidth: e.clientWidth }; });
+      check(geometry.x >= 64 && geometry.right <= width && geometry.y >= geometry.headerBottom && geometry.bottom <= geometry.playerTop && geometry.width <= geometry.clientWidth + 1 && geometry.scroll > 0, `notification overlaps fixed UI or overflows: ${JSON.stringify(geometry)}`);
+      await page.screenshot({ path: `toast-${theme}-${width}.png` });
+    }
+    await clear();
+  }
+  check(await page.evaluate(() => window.toastFixture.unsafeCommands) === 0, "notification fixture executed an unsafe command");
+  results.push("light/dark and wide/narrow layouts reserve header and player space while scrolling; no unsafe command is present");
+  return { passed: results.length, results };
+}

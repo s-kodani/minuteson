@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -17,6 +18,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const [rpcBusy, setRpcBusy] = useState(false), running = useRef(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
+  const [toastEvent, setToastEvent] = useState("");
   const [page, setPage] = useState<DeletionPathPage | null>(null), [pageError, setPageError] = useState("");
   const [pageBusy, setPageBusy] = useState(false), pageEpoch = useRef(0);
   const [understood, saveUnderstood] = useState(false), [includeUnknown, saveIncludeUnknown] = useState(false);
@@ -129,7 +131,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     }
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
-      completed.current = s.token; setError("");
+      completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
       setToast(receipt.deleted ? "会議の管理データを削除しました。アプリ内では復元できません。" : "ファイル削除を開始せず保持して中止しました。部分削除の復元ではありません。");
       if (receipt.deleted) void latest.current.onDeleted(receipt).catch(cause => setError(`削除は完了しています。会議一覧を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
@@ -137,7 +139,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   }, [s, rpcBusy, locked, unknown]);
   const canDelete = canResolve && s?.phase === "ready" && preview?.executeAllowed && currentUnderstood && !!page && page.confirmationId === preview.confirmationId && !pageBusy && !pageError && (!preview.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(preview.phase) || currentIncludeUnknown);
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
-    rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, setToast, page, pageBusy, pageError, loadPage,
+    rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast, page, pageBusy, pageError, loadPage,
     understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
 
@@ -146,6 +148,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
   const active = s?.kind === "deletion";
   const needed = !!c.listing?.writeBlocked || !!p?.pending;
   return <>
+    <ToastNotice scope="deletion" type="meeting-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     {(visible || active || needed || c.error || c.unknown || c.rpcBusy || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="会議削除の確認と中断対応">
       <div className="heading-with-info"><h2 id="deletion-panel-heading" tabIndex={-1}>会議削除の確認と中断対応</h2><InfoPopover label="会議削除" details={<p>現在の保存領域にある会議の管理音声・文字起こし・議事録・下書き・版・処理履歴を削除します。外部の元音声・書き出し・バックアップ、AIモデル、共通用語、旧保存先や保持コピーは消しません。媒体の安全消去ではありません。</p>}>会議の管理音声・文書・履歴を完全削除する操作です。実行前に対象と消失範囲を確認します。外部の原本やバックアップは対象外です。</InfoPopover></div>
       {!operation.deletionSupported && operation.connected && <p>この環境の会議削除操作は保留中です。</p>}
@@ -157,8 +160,7 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button></div>}
       {c.unknown && <button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
-      {c.toast && <p className="data-toast" role="status">{c.toast}<button type="button" className="small-secondary" onClick={() => c.setToast("")}>削除通知を閉じる</button></p>}
+      <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s.errorMessage : "")} />
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">保留した起動時回復を行うため、通常利用にはアプリの再起動が必要です。未確認の完了応答がある場合は、先に残りの状態を再検査できます。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
     </section>}
     <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("deletion-panel-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">

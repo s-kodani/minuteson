@@ -122,6 +122,9 @@ export function minutesExportRequest(state: MinutesVersions, meetingId: string, 
 export function exportLabel(state: MinutesExport["state"]): string {
   return ({ writing: "結果未確定（保存先を確認）", succeeded: "書き出し完了", failed: "書き出し失敗", interrupted: "結果未確定（保存先を確認）" })[state];
 }
+export function exportNoticeLevel(state: MinutesExport["state"] | null): "success" | "info" | "error" {
+  return state === null ? "info" : state === "succeeded" ? "success" : "error";
+}
 export function minutesConfigured(engine: MinutesEngine): boolean {
   const integer = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
   return !!engine.executablePath.trim() && !!engine.modelPath.trim() && integer(engine.threads, 1, 64)

@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -19,6 +20,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
   const running = useRef(false), [rpcBusy, setRpcBusy] = useState(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
+  const [toastEvent, setToastEvent] = useState("");
   const [page, setPage] = useState<ModelBodyDeletionPage | null>(null), [pageError, setPageError] = useState(""), [pageBusy, setPageBusy] = useState(false);
   const pageEpoch = useRef(0), [understoodId, setUnderstoodId] = useState<string | null>(null), [includeUnknownId, setIncludeUnknownId] = useState<string | null>(null);
   const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
@@ -117,7 +119,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
     }
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
-      completed.current = s.token; setError("");
+      completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
       setToast(receipt.bodyDeleted ? "モデル本体を削除しました。会議データ・モデル構成と処理の履歴は保持しています。再利用には本体の準備が必要です。" : "モデル本体の削除を開始せず保持して中止しました。部分削除の復元ではありません。");
       if (receipt.bodyDeleted) void latest.current.onDeleted(receipt).catch(cause => setError(`本体削除は完了しています。配置記録を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
@@ -128,7 +130,7 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
     try { modelDeletionPublishRequest(s, preview.confirmationId, page, understoodId, includeUnknownId); canDelete = true; } catch { /* Fail closed on stale consent/page/phase. */ }
   }
   return { reviewNew: (id: string, reviewHash: string) => review(id, reviewHash), reviewPending: (id: string) => review(id, null), canReviewNew, canReviewPending, canResolve,
-    protectedNow, rpcBusy, unknown, open, setOpen, error, toast, setToast, preview, receipt, listing, page, pageBusy, pageError, loadPage,
+    protectedNow, rpcBusy, unknown, open, setOpen, error, toast, toastEvent, setToast, preview, receipt, listing, page, pageBusy, pageError, loadPage,
     understood, setUnderstood: (v: boolean) => setUnderstoodId(v ? preview?.confirmationId ?? null : null), includeUnknown, setIncludeUnknown: (v: boolean) => setIncludeUnknownId(v ? preview?.confirmationId ?? null : null),
     canDelete, submit, cancel, dismiss, retryUnknown, quit, dialog, heading, opener };
 }
@@ -137,6 +139,7 @@ export type ModelBodyDeletionControl = ReturnType<typeof useModelBodyDeletion>;
 export function ModelBodyDeletionPanel({ operation, control: c, visible }: { operation: DataOperation; control: ModelBodyDeletionControl; visible: boolean }) {
   const s = operation.snapshot, p = c.preview, active = s?.kind === "model_deletion", needed = !!c.listing?.writeBlocked || !!p?.pending;
   return <>
+    <ToastNotice scope="models" type="body-deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     {(visible || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="モデル本体削除と中断対応">
       <div className="heading-with-info"><h2 id="model-body-deletion-heading" tabIndex={-1}>モデル本体削除と中断対応</h2><InfoPopover label="モデル本体削除" details={<p>端末内の指定モデル本体だけを削除します。会議音声・本文・議事録・モデル名とSHA・構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は、再準備まで利用できません。外部の導入元、他モデル、バックアップは対象外です。</p>}>指定した管理モデル本体だけを削除します。会議と構成履歴は残りますが、対応するAI処理にはモデルの再準備が必要です。</InfoPopover></div>
       {!operation.modelDeletionSupported && operation.connected && <p>この環境のモデル本体削除は保留中です。</p>}
@@ -148,8 +151,7 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible }: { ope
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>モデル削除の安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>モデル削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>モデル本体の残りを再検査</button></div>}
       {c.unknown && <button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じモデル削除操作の結果を確認</button>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
-      {c.toast && <p className="data-toast" role="status">{c.toast}<button type="button" className="small-secondary" onClick={() => c.setToast("")}>モデル削除通知を閉じる</button></p>}
+      <IssueNotice scope="models" type="body-deletion" label="モデル削除" message={c.error || (active ? s.errorMessage : "")} />
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の応答は先に同じ操作で確認してください。</p><button type="button" disabled={c.protectedNow || !!s?.busy} onClick={() => void c.quit()}>モデル削除確認後に終了する（再起動は手動）</button></>}
     </section>}
     <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("model-body-deletion-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="model-body-deletion-title">

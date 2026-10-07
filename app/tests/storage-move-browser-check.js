@@ -53,13 +53,14 @@ async (page) => {
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked running copy");
   await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
   await region().getByRole("alert").filter({ hasText: "未完了の保存先変更があります" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "旧保存先と途中コピーを保持します" }).waitFor();
   check(await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "unresolved copy admitted new move");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "cancel selected partial target");
   check(!(await region().innerText()).includes("保存先を切り替えました。"), "partial copy claimed completed");
   results.push("cancel waits for actual completion, keeps old selection and pending copy");
 
   await boot(); await set({ mode: "stale" }); await choose(); await publish();
-  await region().getByRole("alert").filter({ hasText: "確認後に会議・編集・音声が変更" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "確認後に会議・編集・音声が変更" }).waitFor();
   await region().getByRole("button", { name: "確認内容を開く", exact: true }).click();
   check(await dialog().getByRole("button", { name: "コピーして保存先を切替", exact: true }).isDisabled(), "failed preview reusable without refresh");
   await set({ mode: "success" }); await dialog().getByRole("button", { name: "同じ保存先を再確認", exact: true }).click(); await dialog().waitFor(); await publish(); await finished();
@@ -72,7 +73,7 @@ async (page) => {
   results.push("durable selection wins over late cancellation");
 
   await boot(); await set({ mode: "forged" }); await choose(); await publish();
-  await region().getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "forged receipt unlocked writes");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "forged receipt published");
   results.push("foreign receipt rejected, unknown IPC state locks writes");
@@ -100,7 +101,7 @@ async (page) => {
   check(!await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).isDisabled(), "non-destructive keep blocked by unknown source");
   await page.screenshot({ path: "output/playwright/storage-move-pending-review.png" });
   await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
-  await region().getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
   check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "keep did not release pending move");
   check(!await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "keep incorrectly retires old root");
   await region().getByText("保持した途中コピー（1 件）", { exact: true }).click();
@@ -119,7 +120,7 @@ async (page) => {
 
   await pendingReview({ reviewLost: true, suppressEvents: true, resumeAllowed: false, mode: "lost" });
   await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
-  await region().getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
   check(await count() === 1 && await page.evaluate(() => window.dataFixture.keptMoves.length) === 1, "lost keep result duplicated durable decision");
   check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "lost keep acknowledgement remains locked after verified read");
   results.push("lost pending review and keep replies recover via read without duplicate");

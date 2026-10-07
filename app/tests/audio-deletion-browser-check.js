@@ -12,7 +12,7 @@ async (page) => {
   const publish = () => dialog().getByRole("button", { name: /音声だけを削除する|照合して音声削除を続行|新しい音声範囲へ別同意して削除/u });
   const boot = async () => { await page.reload(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "音声だけを削除" && !b.disabled)); };
   const review = async () => { await trigger().click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
-  const done = () => region().getByRole("status").filter({ hasText: "音声だけを削除しました" }).waitFor();
+  const done = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "音声だけを削除しました" }).waitFor();
   const pending = async (phase, altered = false) => {
     await page.evaluate(([p, a]) => window.audioDeletionFixture.pending(p, a), [phase, altered]);
     await page.getByRole("button", { name: "設定", exact: true }).click();
@@ -61,14 +61,14 @@ async (page) => {
 
   await boot(); await pending("not_started", true); check(await publish().isDisabled(), "changed unstarted executed");
   await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止" }).click();
-  await region().getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
   check(await page.evaluate(() => window.audioDeletionFixture.kept === 1 && window.audioDeletionFixture.deleted === 0 && window.dataFixture.meetings.length === 1), "keep deleted data"); results.push("unstarted keep preserves audio and history, restart required");
 
   await boot(); await set({ mode: "delay" }); await review(); await understand(); await publish().click();
   await region().getByRole("button", { name: "音声削除の安全な停止を要求", exact: true }).click();
   check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "stop unlocked prematurely");
   await page.evaluate(() => window.audioDeletionFixture.complete());
-  await region().getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "部分削除を保持" }).waitFor();
   await set({ mode: "success" }); await region().getByRole("button", { name: "音声の残りを再検査", exact: true }).click(); await dialog().waitFor();
   check(await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止" }).count() === 0, "partial fake restore exposed");
   check((await dialog().innerText()).includes("処理済み") && (await dialog().innerText()).includes("現在の実在一覧ではありません"), "frozen processed paths unexplained");
@@ -123,7 +123,7 @@ async (page) => {
   check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "remaining lost response released protection");
   await set({ mode: "unstarted" });
   await dialog().getByRole("button", { name: "同じ音声削除操作の結果を確認", exact: true }).click();
-  await region().getByRole("alert").filter({ hasText: "再同意保存後に停止。残り音声を保持" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "再同意保存後に停止。残り音声を保持" }).waitFor();
   await region().getByRole("button", { name: "音声削除の確認内容を開く", exact: true }).click();
   await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
   const savedRemaining = await page.evaluate(() => structuredClone(window.dataFixture.snapshot.audioDeletionPreview));
@@ -142,7 +142,7 @@ async (page) => {
   check(JSON.stringify((await calls("start_data_operation"))[1].args.request) === JSON.stringify(original), "lost request substituted"); results.push("unknown response protects shared actions and explicitly replays exact request");
 
   await boot(); await set({ mode: "forged" }); await review(); await understand(); await publish().click();
-  await region().getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "受付結果を確定できません" }).waitFor();
   check(!(await region().getByText(/音声だけを削除しました/u).count()), "forged receipt accepted"); results.push("forged audio receipt rejected without success");
 
   await boot(); await set({ pageFail: true }); await trigger().click(); await dialog().waitFor();
@@ -185,7 +185,7 @@ async (page) => {
       registerPlaybackStop(() => fail ? Promise.reject(Error("模擬音声削除前の再生解放失敗")) : new Promise(resolve => { window.audioDeletionFixture.releasePlayback = resolve; }));
     }, fail);
     await trigger().click();
-    if (fail) { await region().getByRole("alert").filter({ hasText: "模擬音声削除前の再生解放失敗" }).waitFor(); check(!(await calls("review_meeting_audio_deletion")).length, "playback failure admitted review"); }
+    if (fail) { await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "模擬音声削除前の再生解放失敗" }).waitFor(); check(!(await calls("review_meeting_audio_deletion")).length, "playback failure admitted review"); }
     else { await page.waitForFunction(() => !!window.audioDeletionFixture.releasePlayback); check(!(await calls("review_meeting_audio_deletion")).length, "review skipped playback wait"); await page.evaluate(() => window.audioDeletionFixture.releasePlayback()); await dialog().waitFor(); }
     results.push(fail ? "playback release failure prevents audio review" : "audio review waits for playback release");
   }
@@ -227,7 +227,7 @@ async (page) => {
     registerPendingEdits(() => Promise.reject(Error("書込停止中の編集を再保存しない")));
   });
   await dialog().getByRole("button", { name: "音声を未開始のまま保持して中止", exact: true }).click();
-  await region().getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "削除を開始せず保持して中止" }).waitFor();
   check(await page.evaluate(() => window.audioDeletionFixture.kept === 1), "pending recovery tried to rewrite fenced edits"); results.push("pending recovery never rewrites fenced document rows");
 
   await boot(); await set({ mode: "cancelRace" }); await review(); await understand(); await publish().click();

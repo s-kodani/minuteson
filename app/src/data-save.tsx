@@ -4,6 +4,7 @@ import { useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
 import { waitForDataStop } from "./data-stop";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataPhaseLabel, dataRequest, type DataKind, type DataRequest, type DataSnapshot, type RestoreReceipt } from "./data-operation-state";
@@ -27,6 +28,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const [unknown, setUnknown] = useState(false);
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [toastEvent, setToastEvent] = useState("");
   const [openError, setOpenError] = useState("");
   const pending = useRef<DataRequest | null>(null);
   const pendingChoice = useRef<{ kind: DataKind; revision: number } | null>(null);
@@ -142,7 +144,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       }
     }
     if (s.phase === "completed" && s.token !== completed.current) {
-      completed.current = s.token; setOpen(false); setError("");
+      completed.current = s.token; setToastEvent(s.token ?? ""); setOpen(false); setError("");
       setToast(s.relocationReceipt ? s.relocationReceipt.retained ? "途中コピーを保持して移動を中止しました。旧保存先を引き続き使用します。ファイルは削除していません。" : "保存先を切り替えました。終了して再起動してください。旧保存先は削除していません。" : s.restoreReceipt ? `会議 ${s.restoreReceipt.meetingIds.length} 件を追加復元しました。` : "バックアップを作成しました。");
       if (s.restoreReceipt) void onRestored(s.restoreReceipt).catch(cause => setOpenError(`復元は完了しています。会議一覧を再読込してください: ${String(cause)}`));
     }
@@ -164,6 +166,8 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && ((!!restore && restore.availableBytes >= restore.requiredBytes) || (!!moving?.resumeAllowed && moving.availableBytes >= moving.requiredBytes))));
   const show = async () => run(async () => { setOpenError(""); if (s?.restoreReceipt) await onShowMeetings(s.restoreReceipt.meetingIds); });
   return <>
+    <ToastNotice scope="data" type="save-result" eventId={toastEvent} message={toast} onClose={() => setToast("")} />
+    <IssueNotice scope="data" type="save-operation" label="データの保存・復元" message={error || operation.error || (s?.kind && ["backup", "restore", "relocation"].includes(s.kind) ? s.errorMessage : "")} />
     {visible && <section className="analysis-card data-save" aria-label="データと保存">
       <div className="heading-with-info"><h2>データと保存</h2><InfoPopover label="バックアップと追加復元" details={<p>会議・管理音声・文字起こし・議事録・下書き・用語を保存します。AIモデル本体・一時PCM・ログ・端末固有の設定は含みません。追加復元は現在の会議を置き換えず、同じ会議も新しい別会議として追加します。独自暗号化やクラウド同期ではありません。内容を含むファイルは安全な場所へ保管してください。</p>}>会議と管理音声・文書・用語を保存します。復元は別会議として追加し、現在の会議を置き換えません。AIモデル本体は含みません。</InfoPopover></div>
       <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={() => void choose("backup")}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={() => void choose("restore")}>バックアップから追加復元</button></div>
@@ -180,9 +184,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         {s?.busy && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <button type="button" className="stop-button" disabled={rpcBusy || ["cancelling", "discarding"].includes(s.phase)} onClick={() => void cancel()}>処理を取り消す</button>}
         {requestReady && !s?.busy && !unknown && <><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>確認内容を開く</button>{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void cancel()}>確認内容を破棄</button></>}
       </div>
-      {(error || operation.error || (s?.kind !== "deletion" && s?.errorMessage)) && <p className="action-error" role="alert">{error || operation.error || (s?.kind !== "deletion" && s?.errorMessage)}</p>}
       {s?.attentionRequired && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <p role="alert">{s.kind === "relocation" ? "保存先変更の確認が必要です。旧保存先と途中コピーを保持し、自動削除・再上書きは行いません。切替結果が未確定の場合は終了して再起動してください。" : "保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。"}</p>}
-      {toast && <p className="data-toast" role="status">{toast}<button type="button" className="small-secondary" onClick={() => setToast("")}>通知を閉じる</button></p>}
       {s?.backupReceipt && <><p>保存先: <span className="data-path">{s.backupPreview?.destination}</span><br />会議 {s.backupReceipt.meetingCount} 件 · {bytesLabel(s.backupReceipt.size)}</p>{s.backupReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.backupReceipt.deletedAudioMeetingCount} 件・音声資産 {s.backupReceipt.deletedAudioAssetCount} 件の欠落理由と本文・根拠の履歴を保存しました。音声本体は含みません。追加復元後も、削除済み音声の再生・再解析はできません。</p>}</>}
       {s?.restoreReceipt && <>{s.restoreReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.restoreReceipt.deletedAudioMeetingCount} 件・音声資産 {s.restoreReceipt.deletedAudioAssetCount} 件は、本文・根拠・下書きと欠落理由の履歴のみ復元しました。削除済み音声の再生・再解析はできません。</p>}<button type="button" disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
       {openError && <p role="alert">{openError}</p>}

@@ -35,9 +35,12 @@ const suites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
+  ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
   ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],
+  ["minutes-toast", "minutes-init", "minutes-toast-browser-check.js"],
+  ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
 ].filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");
 mkdirSync(output, { recursive: true });
@@ -52,13 +55,17 @@ const readiness = {
   "model-body-deletion-browser-fixture.js": "modelBodyFixture", "model-profile-browser-fixture.js": "modelProfileFixture",
   "model-rebinding-browser-fixture.js": "rebindingFixture", "model-preparation-browser-fixture.js": "modelPreparationFixture",
   "audio-deletion-browser-fixture.js": "audioDeletionFixture", "theme-browser-fixture.js": "themeFixture",
+  "toast-browser-fixture.tsx": "toastFixture",
 };
 for (const [name, fixture, source] of suites) {
   const check = readFileSync(resolve(tests, source), "utf8");
   const setup = fixture === "minutes-init" ? `await page.goto("http://127.0.0.1:1420/"); await (${readFileSync(resolve(tests, "minutes-browser-fixture.js"), "utf8")})(page);`
     : fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("http://127.0.0.1:1420/");` : "";
   const ready = readiness[fixture] ? `await page.waitForFunction(name=>!!window[name],${JSON.stringify(readiness[fixture])});` : "";
-  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}return await (${check})(page);}`;
+  // The browser daemon's cwd can differ from this runner's cwd. Always route
+  // generated captures to the explicit output directory, not the repo root.
+  const capturePrefix = JSON.stringify(resolve(output, name + "-"));
+  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath);}finally{page.screenshot=screenshot;}}`;
   const run = spawnSync(process.execPath, [cli, `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
   const log = (run.stdout ?? "") + (run.stderr ?? "");
   writeFileSync(resolve(output, `${name}.log`), log);

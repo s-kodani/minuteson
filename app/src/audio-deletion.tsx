@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -19,6 +20,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const running = useRef(false), [rpcBusy, setRpcBusy] = useState(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false);
   const [error, setError] = useState(""), [toast, setToast] = useState("");
+  const [toastEvent, setToastEvent] = useState("");
   const [page, setPage] = useState<AudioDeletionPage | null>(null), [pageError, setPageError] = useState(""), [pageBusy, setPageBusy] = useState(false);
   const pageEpoch = useRef(0), [understoodId, setUnderstoodId] = useState<string | null>(null), [includeUnknownId, setIncludeUnknownId] = useState<string | null>(null);
   const pending = useRef<{ request: DataRequest; revision: number } | null>(null);
@@ -117,7 +119,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
     }
     if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
-      completed.current = s.token; setError("");
+      completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
       setToast(receipt.audioDeleted ? "音声だけを削除しました。文字起こし・議事録・根拠テキストと履歴は保持しています。音声の再生・解析・再解析はできません。" : "音声削除を開始せず保持して中止しました。部分削除の復元ではありません。");
       if (receipt.audioDeleted) void latest.current.onDeleted(receipt).catch(cause => setError(`音声削除は完了しています。会議一覧を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
@@ -128,7 +130,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
     try { audioDeletionPublishRequest(s, preview.confirmationId, page, understoodId, includeUnknownId); canDelete = true; } catch { /* Fail closed on stale consent/page/phase. */ }
   }
   return { reviewNew: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewNew, canReviewPending, canResolve,
-    protectedNow, rpcBusy, unknown, open, setOpen, error, toast, setToast, preview, receipt, listing, page, pageBusy, pageError, loadPage,
+    protectedNow, rpcBusy, unknown, open, setOpen, error, toast, toastEvent, setToast, preview, receipt, listing, page, pageBusy, pageError, loadPage,
     understood, setUnderstood: (v: boolean) => setUnderstoodId(v ? preview?.confirmationId ?? null : null), includeUnknown, setIncludeUnknown: (v: boolean) => setIncludeUnknownId(v ? preview?.confirmationId ?? null : null),
     canDelete, submit, cancel, dismiss, retryUnknown, quit, dialog, heading, opener };
 }
@@ -139,6 +141,7 @@ export function AudioDeletionPanel({ operation, control: c, visible, meetingTitl
   const trackKind = (kind: string) => ({ mic: "マイク", system: "システム音声", imported: "取り込み音声", processed: "処理済み音声" } as Record<string, string>)[kind] ?? kind;
   const trackState = (state: string) => ({ ready: "保存済み", interrupted: "中断", failed: "失敗" } as Record<string, string>)[state] ?? state;
   return <>
+    <ToastNotice scope="audio" type="deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
     {(visible || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="音声だけの削除と中断対応">
       <div className="heading-with-info"><h2 id="audio-deletion-heading" tabIndex={-1}>音声だけの削除と中断対応</h2><InfoPopover label="音声だけの削除" details={<p>会議の管理音声だけを削除します。文字起こし・議事録・下書き・根拠テキスト・編集履歴・ジョブ・外部出力の記録は保持します。音声の再生・解析・再解析と、根拠からの音声再生はできなくなります。外部の原本やバックアップは対象外です。</p>}>文書・根拠テキスト・編集履歴を残して管理音声を削除します。音声の再生と再解析はできなくなります。実行前に範囲を確認します。</InfoPopover></div>
       {!operation.audioDeletionSupported && operation.connected && <p>この環境の音声削除は保留中です。</p>}
@@ -150,8 +153,7 @@ export function AudioDeletionPanel({ operation, control: c, visible, meetingTitl
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>音声削除の安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>音声削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>音声の残りを再検査</button></div>}
       {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
-      {(c.error || (active && s.errorMessage)) && <p className="action-error" role="alert">{c.error || s?.errorMessage}</p>}
-      {c.toast && <p className="data-toast" role="status">{c.toast}<button type="button" className="small-secondary" onClick={() => c.setToast("")}>音声削除通知を閉じる</button></p>}
+      <IssueNotice scope={p?.meetingId ?? "audio"} type="audio-deletion" label="音声削除" message={c.error || (active ? s.errorMessage : "")} />
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の応答は先に同じ操作で確認してください。</p><button type="button" disabled={c.protectedNow || !!s?.busy} onClick={() => void c.quit()}>音声削除確認後に終了する（再起動は手動）</button></>}
     </section>}
     <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("audio-deletion-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">

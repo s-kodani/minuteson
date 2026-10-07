@@ -1,4 +1,4 @@
-async (page) => {
+async (page, capturePath = path => path) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const select = () => page.getByRole("combobox", { name: "表示テーマ", exact: true });
   const waitTheme = theme => page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
@@ -53,7 +53,7 @@ async (page) => {
     check(await rich.evaluate(node => { const s = getSelection(); return s.rangeCount === 1 && s.getRangeAt(0).startContainer === node.firstChild && s.getRangeAt(0).startOffset === 2 && s.getRangeAt(0).endOffset === 5; }), "theme lost rich selection");
     check(await page.getByRole("button", { name: "編集を終了", exact: true }).isVisible(), "theme exited rich editing");
     check(await page.evaluate(() => window.themeFixture.savedMinutes().payload.blocks[1].content[0].text) === "保存済みの点検日メモです。", "theme discarded or forced incomplete rich save");
-    await rich.locator("..").screenshot({ path: `rich-${theme}.png` });
+    await rich.locator("..").screenshot({ path: capturePath(`rich-${theme}.png`) });
   }
   await page.waitForFunction(() => !!window.themeFixture.releaseMinutesSave);
   await page.evaluate(() => { window.themeFixture.minutesSaveDelay = false; window.themeFixture.releaseMinutesSave(); });
@@ -113,12 +113,12 @@ async (page) => {
     });
     await mini.goto("http://127.0.0.1:1420/?window=recorder"); await mini.waitForFunction(() => document.documentElement.dataset.theme === "dark");
     await mini.setViewportSize({ width: 380, height: 130 });
-    await mini.screenshot({ path: "mini-dark.png" });
+    await mini.screenshot({ path: capturePath("mini-dark.png") });
     await page.evaluate(() => { window.themeFixture.suppressEvents = true; });
     await select().selectOption("light"); await waitTheme("light");
     await mini.waitForFunction(() => document.documentElement.dataset.theme === "light");
     check(await mini.evaluate(() => window.themeFixture.calls.filter(c => c.command === "save_ui_preferences").length) === 0, "mini wrote theme");
-    await mini.screenshot({ path: "mini-light.png" });
+    await mini.screenshot({ path: capturePath("mini-light.png") });
   } finally { await mini.close(); }
   results.push("settings/header sync; separate recorder window reloads saved theme without events or writes");
 

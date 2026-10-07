@@ -12,8 +12,9 @@ async (page) => {
     await page.getByRole("region", { name: "データと保存" }).waitFor();
   };
   const region = () => page.getByRole("region", { name: "データと保存" });
+  const notifications = () => page.getByRole("complementary", { name: "通知", exact: true });
   const choose = kind => region().getByRole("button", { name: kind === "backup" ? "バックアップを作成" : "バックアップから追加復元", exact: true }).click();
-  const done = () => region().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
+  const done = () => notifications().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
   const confirm = () => page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).click();
   const ready = async () => { await page.getByRole("dialog").waitFor(); await page.getByRole("heading", { name: "バックアップから追加復元", exact: true }).waitFor(); };
   const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
@@ -30,7 +31,7 @@ async (page) => {
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled during native work");
   check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "navigation enabled during native work");
-  check(!await region().getByText("バックアップを作成しました。", { exact: true }).count(), "partial output labelled usable");
+  check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
   await page.evaluate(() => window.dataFixture.complete()); await done();
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
   results.push("new backup: one admission, busy locks, terminal-only success");
@@ -116,7 +117,7 @@ async (page) => {
   results.push("capacity refusal + same-batch refreshed confirmation");
 
   await boot(); await set({ previewMode: "invalid" }); await choose("restore");
-  await region().getByRole("alert").filter({ hasText: "不正な形式" }).waitFor();
+  await notifications().getByRole("alert").filter({ hasText: "不正な形式" }).waitFor();
   check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "invalid archive exposed confirmation");
   results.push("invalid archive: no publication capability");
 
