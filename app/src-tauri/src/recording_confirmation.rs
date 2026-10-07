@@ -53,6 +53,49 @@ impl StopDecision {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecorderCloseAction {
+    Hide,
+    Keep,
+    FocusConfirmation,
+    RequestConfirmation,
+}
+
+// Run inside the recorder lifecycle lock. An OS event can wait behind a
+// transition, but it must not hide or stop the next recording it did not name.
+pub fn recorder_close_action(
+    expected: &RecordingSnapshot,
+    current: &RecordingSnapshot,
+    decision: &StopDecision,
+) -> Result<RecorderCloseAction, String> {
+    if current.revision < expected.revision
+        || current.phase != RecordingPhase::Idle
+            && (current.session_id != expected.session_id
+                || current.meeting_id != expected.meeting_id)
+        || current.is_active() && (current.session_id.is_none() || current.meeting_id.is_none())
+    {
+        return Err("録音状態が変更されています。別の録音は閉じたり停止したりしていません".into());
+    }
+    if decision.visible() {
+        return Ok(RecorderCloseAction::FocusConfirmation);
+    }
+    match current.phase {
+        RecordingPhase::Idle | RecordingPhase::Error => Ok(RecorderCloseAction::Hide),
+        RecordingPhase::Stopping | RecordingPhase::Saving => Ok(RecorderCloseAction::Keep),
+        RecordingPhase::Preparing | RecordingPhase::Recording => {
+            if !matches!(
+                expected.phase,
+                RecordingPhase::Preparing | RecordingPhase::Recording
+            ) {
+                return Err(
+                    "録音の状態が変更されています。最新の画面から再確認してください".into(),
+                );
+            }
+            Ok(RecorderCloseAction::RequestConfirmation)
+        }
+    }
+}
+
 #[derive(Default)]
 struct DecisionState {
     decision: StopDecision,
@@ -280,6 +323,116 @@ pub fn fitted_size(area: (u32, u32), scale: f64) -> Result<(u32, u32), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recorder_os_close_respects_every_recording_phase_without_stopping() {
+        for (phase, action) in [
+            (RecordingPhase::Idle, RecorderCloseAction::Hide),
+            (RecordingPhase::Error, RecorderCloseAction::Hide),
+            (
+                RecordingPhase::Preparing,
+                RecorderCloseAction::RequestConfirmation,
+            ),
+            (
+                RecordingPhase::Recording,
+                RecorderCloseAction::RequestConfirmation,
+            ),
+            (RecordingPhase::Stopping, RecorderCloseAction::Keep),
+            (RecordingPhase::Saving, RecorderCloseAction::Keep),
+        ] {
+            let state = if phase == RecordingPhase::Idle {
+                RecordingSnapshot::default()
+            } else {
+                RecordingSnapshot {
+                    phase,
+                    ..recording()
+                }
+            };
+            assert_eq!(
+                recorder_close_action(&state, &state, &StopDecision::default()).unwrap(),
+                action
+            );
+        }
+    }
+    #[test]
+    fn recorder_os_close_reuses_pending_confirmation_and_never_changes_quit_intent() {
+        let store = StopDecisionStore::default();
+        let (value, _) = store
+            .request_for_exit(&recording(), "main", "A".into(), true)
+            .unwrap();
+        for phase in [
+            DecisionPhase::Confirming,
+            DecisionPhase::Stopping,
+            DecisionPhase::Failed,
+        ] {
+            let value = StopDecision {
+                phase,
+                ..value.clone()
+            };
+            assert_eq!(
+                recorder_close_action(&recording(), &recording(), &value).unwrap(),
+                RecorderCloseAction::FocusConfirmation
+            );
+        }
+        assert_eq!(store.snapshot(), value);
+    }
+    #[test]
+    fn queued_recorder_os_close_rejects_new_sessions_and_stale_reads() {
+        let expected = recording();
+        let next = RecordingSnapshot {
+            revision: expected.revision + 1,
+            session_id: Some("new-session".into()),
+            ..expected.clone()
+        };
+        assert!(recorder_close_action(&expected, &next, &StopDecision::default()).is_err());
+        let next = RecordingSnapshot {
+            meeting_id: Some("other-meeting".into()),
+            ..expected.clone()
+        };
+        assert!(recorder_close_action(&expected, &next, &StopDecision::default()).is_err());
+        let expected = RecordingSnapshot {
+            revision: 2,
+            ..expected
+        };
+        assert!(recorder_close_action(&expected, &recording(), &StopDecision::default()).is_err());
+        assert!(recorder_close_action(
+            &RecordingSnapshot::default(),
+            &recording(),
+            &StopDecision::default()
+        )
+        .is_err());
+    }
+    #[test]
+    fn queued_recorder_os_close_follows_same_session_preparation_and_actual_completion() {
+        let preparing = RecordingSnapshot {
+            phase: RecordingPhase::Preparing,
+            ..recording()
+        };
+        assert_eq!(
+            recorder_close_action(&preparing, &recording(), &StopDecision::default()).unwrap(),
+            RecorderCloseAction::RequestConfirmation
+        );
+        let saving = RecordingSnapshot {
+            phase: RecordingPhase::Saving,
+            ..recording()
+        };
+        assert_eq!(
+            recorder_close_action(&preparing, &saving, &StopDecision::default()).unwrap(),
+            RecorderCloseAction::Keep
+        );
+        let idle = RecordingSnapshot {
+            revision: saving.revision + 1,
+            ..RecordingSnapshot::default()
+        };
+        assert_eq!(
+            recorder_close_action(&saving, &idle, &StopDecision::default()).unwrap(),
+            RecorderCloseAction::Hide
+        );
+        let broken = RecordingSnapshot {
+            session_id: None,
+            ..recording()
+        };
+        assert!(recorder_close_action(&broken, &broken, &StopDecision::default()).is_err());
+    }
     #[test]
     fn quit_requires_explicit_consent_and_only_continues_once_after_actual_save() {
         let store = StopDecisionStore::default();

@@ -1995,12 +1995,11 @@ pub fn run() {
                     api.prevent_close();
                     recording_confirmation_window::close_requested(window.app_handle());
                 } else if window.label() == "recorder" {
-                    if window.state::<SessionStore>().snapshot().is_active() {
-                        api.prevent_close();
-                    } else {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
+                    api.prevent_close();
+                    recording_confirmation_window::recorder_close_requested(
+                        window.app_handle(),
+                        window.state::<SessionStore>().snapshot(),
+                    );
                 } else if window.label() == "main" {
                     api.prevent_close();
                     if window.state::<StopDecisionStore>().snapshot().visible() {

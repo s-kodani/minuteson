@@ -113,6 +113,16 @@ async page=>{
 
   await reset();await clearClose();await requestQuit();await quitEnd().click();await page.evaluate(()=>window.recordingFixture.finish(true));await dialog().getByRole("alert").filter({hasText:"保存失敗"}).waitFor();check(await closed()===0,"failed recording save continued application closing");await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});check(await closed()===0&&(await state()).recording.phase==="error","closing failed confirmation erased save failure or quit");
   results.push("recording quit retains saving failure and never continues closing after dismissal");
+  stage="native-close-request-error";await reset();await clearClose();
+  const beforeRequestError=JSON.stringify((await state()).recording);
+  const requestError="録音状態と保存結果を保持しています。新しい停止は送っていません: 合成確認ウィンドウの表示失敗";
+  await Promise.all([page,mini].map(p=>p.evaluate(message=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"recording-confirmation-request-error",payload:message}),requestError)));
+  await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor();
+  check(await mini.locator(".mini-error").textContent()===requestError&&JSON.stringify((await state()).recording)===beforeRequestError&&!(await state()).calls.some(c=>c.command==="synthetic-stop")&&await closed()===0,"native close request error changed recording or was lost");
+  await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();
+  await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor({state:"hidden"});check(await mini.locator(".mini-error").count()===0,"new explicit confirmation retained stale request error");
+  await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});
+  results.push("native close request failure preserves canonical recording and reaches both recording UIs; a new explicit decision clears stale request error without stopping");
   return {passed:results.length,results};
  }catch(cause){throw Error(`${stage}: ${String(cause)}; modal=${await modal.locator("body").innerText()}; decision=${JSON.stringify((await page.evaluate(()=>window.recordingFixture.read())).decision)}`);}
  finally{await mini.close();await modal.close();await page.goto("about:blank");await context.unrouteAll();}

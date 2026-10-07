@@ -23,11 +23,12 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
   const refreshRef=useRef(refresh);refreshRef.current=refresh;
   useEffect(()=>{
     mounted.current=true;if(!isTauri())return;
-    let disposed=false, reading=false, unlisten:(()=>void)|undefined;
+    let disposed=false, reading=false;const stops:(()=>void)[]=[];
     const read=async()=>{if(disposed||reading)return;reading=true;try{await refreshRef.current();}catch{}finally{reading=false;}};
-    void listen<RecordingDecision>("recording-confirmation-changed",event=>{if(!disposed)try{accept(event.payload);}catch(cause){setConnected(false);setReadError(String(cause));}}).then(stop=>{if(disposed)stop();else{unlisten=stop;void read();}}).catch(()=>void read());
+    void listen<RecordingDecision>("recording-confirmation-changed",event=>{if(!disposed)try{accept(event.payload);}catch(cause){setConnected(false);setReadError(String(cause));}}).then(stop=>{if(disposed)stop();else{stops.push(stop);void read();}}).catch(()=>void read());
+    if(origin)void listen<string>("recording-confirmation-request-error",event=>{if(!disposed&&typeof event.payload==="string")setError(event.payload);}).then(stop=>{if(disposed)stop();else stops.push(stop);}).catch(cause=>{if(!disposed)setReadError(String(cause));});
     const timer=window.setInterval(()=>void read(),500);window.addEventListener("focus",read);
-    return()=>{disposed=true;mounted.current=false;unlisten?.();window.clearInterval(timer);window.removeEventListener("focus",read);};
+    return()=>{disposed=true;mounted.current=false;stops.forEach(stop=>stop());window.clearInterval(timer);window.removeEventListener("focus",read);};
   },[]);
   useEffect(()=>{
     if(snapshot?.phase!=="cancelled"||snapshot.origin!==origin||!opener.current)return;

@@ -320,6 +320,19 @@ function MainWindow() {
       setRenameTitle(meeting.title);
     });
   };
+  const openRecordingMeeting = async () => {
+    const expected = state.kind === "ready" ? state.snapshot : null;
+    if (!expected?.meetingId || !expected.sessionId || !recordingActive(expected) || navigationLocked) return;
+    await withSavedEdits(async () => {
+      const current = await invoke<RecordingSnapshot>("get_recording_snapshot");
+      assertCloseRecording(current);
+      if (!recordingActive(current) || current.sessionId !== expected.sessionId || current.meetingId !== expected.meetingId || current.revision < expected.revision) throw Error("録音の対象が変更されています。最新のヘッダーから開き直してください。");
+      const meeting = await invoke<Meeting | null>("get_meeting", { id: current.meetingId });
+      if (!meeting) throw Error("録音中の会議が見つかりません。録音は停止していません。");
+      setSelectedMeeting(meeting); setRenameTitle(meeting.title); setScreen("overview");
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-label="録音状態"]')?.focus({ preventScroll: false }));
+    });
+  };
   const renameMeeting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedMeeting) return;
@@ -352,17 +365,17 @@ function MainWindow() {
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">m</span><span>mon</span></div>
+        <div className="brand"><span className="brand-mark" aria-hidden="true">m</span><span className="brand-name">mon</span></div>
         <nav aria-label="メインナビゲーション">
-          <button type="button" className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("overview"))}>概要</button>
-          <button type="button" className={`nav-item ${screen === "meetings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => { setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button>
-          <button type="button" className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("settings"))}>設定</button>
+          <button type="button" aria-label="概要" title="概要" aria-current={screen === "overview" ? "page" : undefined} className={`nav-item ${screen === "overview" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("overview"))}><span className="nav-glyph" aria-hidden="true">⌂</span><span className="nav-label">概要</span></button>
+          <button type="button" aria-label="会議一覧" title="会議一覧" aria-current={screen === "meetings" ? "page" : undefined} className={`nav-item ${screen === "meetings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => { setRestoredFilter(null); setScreen("meetings"); })}><span className="nav-glyph" aria-hidden="true">☷</span><span className="nav-label">会議一覧</span></button>
+          <button type="button" aria-label="設定" title="設定" aria-current={screen === "settings" ? "page" : undefined} className={`nav-item ${screen === "settings" ? "selected" : ""}`} disabled={navigationLocked} onClick={() => void withSavedEdits(() => setScreen("settings"))}><span className="nav-glyph" aria-hidden="true">⚙</span><span className="nav-label">設定</span></button>
         </nav>
         <div className="sidebar-foot">端末内で会議を記録</div>
       </aside>
       <div className="main-column">
-        <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><ThemeSelection compact locked={writeLocked} /><span className="header-status"><span className="status-dot" /> {phaseLabel(state)}</span></header>
-        <main className="content">
+        <header className="topbar"><span>{screen === "overview" ? "概要" : screen === "meetings" ? "会議一覧" : "設定"}</span><ThemeSelection compact locked={writeLocked} /><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}</div></header>
+        <main className="content" aria-label="会議ワークスペース" tabIndex={-1}>
           <AudioImportPanel visible={screen==="overview"} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={()=>{document.getElementById("meeting-title")?.focus();}} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);
@@ -381,7 +394,7 @@ function MainWindow() {
           <div className="eyebrow">DESKTOP FOUNDATION</div>
           <h1>{screen === "meetings" ? "会議一覧" : "会議の記録を、手元で。"}</h1>
           <p className="lead">保存済み音声を端末内で文字起こし・話者分離し、修正後の内容から議事録候補を生成できます。内容と根拠を確認して採用してください。macOSの実録音と推定品質は検証中です。</p>
-          <section className="status-card" aria-label="録音状態">
+          <section className="status-card" aria-label="録音状態" tabIndex={-1}>
             <div className="card-head"><div className="heading-with-info"><h2>録音セッション</h2><InfoPopover label="録音セッション" details={<p>マイクとPC音声を別々のトラックに保存します。PC音声の対象範囲はOSのキャプチャ機能と権限に依存し、会議アプリだけに限定されるとは限りません。参加者の同意を得て、不要なアプリの音声を止めてください。保存後は準備済みモデルで文字起こし・話者分離を順に進め、結果を候補として保存します。モデル未準備でも音声は保持します。録音品質・長時間と10話者の正式評価は保留中です。</p>}>マイクとPC音声を別々に保存します。PC音声には会議以外の音が含まれる場合があります。同意を確認し、不要な音を止めてください。保存後の解析結果は確認待ちの候補です。</InfoPopover></div><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>

@@ -1,6 +1,7 @@
 use crate::recorder::RecorderController;
 use crate::recording_confirmation::{
-    centered_position, fitted_size, DecisionPhase, StopDecision, StopDecisionStore,
+    centered_position, fitted_size, recorder_close_action, DecisionPhase, RecorderCloseAction,
+    StopDecision, StopDecisionStore,
 };
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::Storage;
@@ -204,4 +205,41 @@ pub fn close_requested(app: &AppHandle) {
             restore(app, &cancelled, true);
         }
     }
+}
+
+pub fn recorder_close_requested(app: &AppHandle, expected: RecordingSnapshot) {
+    let app = app.clone();
+    // Never wait for the lifecycle lock on the native event-loop thread:
+    // capture admission may itself need a window operation on that thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = RecorderController::with_transition(&app, || {
+            let current = app.state::<SessionStore>().snapshot();
+            let decision = session_changed(&app, &current);
+            match recorder_close_action(&expected, &current, &decision)? {
+                RecorderCloseAction::Keep => Ok(()),
+                RecorderCloseAction::FocusConfirmation => {
+                    focus(&app);
+                    Ok(())
+                }
+                RecorderCloseAction::Hide => app
+                    .get_webview_window("recorder")
+                    .ok_or("録音パネルがありません")?
+                    .hide()
+                    .map_err(|e| e.to_string()),
+                RecorderCloseAction::RequestConfirmation => {
+                    let window = app
+                        .get_webview_window("recorder")
+                        .ok_or("録音パネルがありません")?;
+                    request_recording_confirmation(window, Some(false)).map(|_| ())
+                }
+            }
+        });
+        if let Err(cause) = result {
+            let message =
+                format!("録音状態と保存結果を保持しています。新しい停止は送っていません: {cause}");
+            for label in ["main", "recorder"] {
+                let _ = app.emit_to(label, "recording-confirmation-request-error", &message);
+            }
+        }
+    });
 }

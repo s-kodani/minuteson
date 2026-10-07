@@ -154,7 +154,7 @@ async (page) => {
   await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
   await page.getByRole("dialog").getByRole("button", { name: "同じ操作を取り消して確認", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
-  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "概要" && !b.disabled));
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "概要" && !b.disabled));
   check((await calls("start_data_operation")).length === 1 && (await calls("cancel_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.meetings.length) === 1, "unknown cancellation published or retried work");
   results.push("unknown unaccepted request: explicit native cancellation releases review without publication");
 

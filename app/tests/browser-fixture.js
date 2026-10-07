@@ -1,6 +1,7 @@
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 
 const meetings = ["会議A", "会議B"].map((title, index) => ({ id: `meeting-${index}`, title, lifecycle: "recorded", createdAt: 1791028800000, updatedAt: 1791028800000, lockVersion: 1 }));
@@ -31,12 +32,20 @@ const switchDraft = (nextId) => {
 window.isTauri = true;
 mockWindows("main");
 mockIPC(async (command, args) => {
+  if (command === "get_ui_preferences" && fixture.uiPreferences) return structuredClone(fixture.uiPreferences);
   const baseline = dataIdleRead(command);
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
-    case "get_recording_snapshot": return { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
+    case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
     case "capture_available": return false;
+    case "save_ui_preferences": {
+      const current = fixture.uiPreferences ?? dataIdleRead("get_ui_preferences");
+      if (args.expectedLockVersion !== current.lockVersion) throw Error("模擬表示設定の競合");
+      fixture.uiPreferences = { ...current, payload: structuredClone(args.payload), lockVersion: current.lockVersion + (current.payload.theme === args.payload.theme ? 0 : 1) };
+      await emit("ui-preferences-changed", fixture.uiPreferences.lockVersion);
+      return structuredClone(fixture.uiPreferences);
+    }
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
     case "get_analysis_flow": return null;
     case "get_diarization_tracks": return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
