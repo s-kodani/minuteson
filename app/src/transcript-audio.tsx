@@ -175,5 +175,5 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}
   </div>;
-  return { start, clear, controls, selected, preparing, toggle, available: !!info };
+  return { start, clear, controls, selected, preparing, toggle, available: !!info,playing: snapshot.playing };
 }

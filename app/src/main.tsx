@@ -4,7 +4,7 @@ import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
 import { TranscriptEditor } from "./transcript";
@@ -120,6 +120,18 @@ function MainWindow() {
   const [meetingError, setMeetingError] = useState("");
   const [meetingBusy, setMeetingBusy] = useState(false);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
+  const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const column = playbackHost?.parentElement,header = column?.querySelector<HTMLElement>(".topbar");
+    if(!playbackHost || !column || !header) return;
+    const measure = () => {
+      column.style.setProperty("--playback-dock-height",`${Math.ceil(playbackHost.getBoundingClientRect().height)}px`);
+      column.style.setProperty("--workspace-header-height",`${Math.ceil(header.getBoundingClientRect().height)}px`);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(playbackHost); observer.observe(header); measure();
+    return () => { observer.disconnect(); column.style.removeProperty("--playback-dock-height"); column.style.removeProperty("--workspace-header-height"); };
+  },[playbackHost]);
   const [renameTitle, setRenameTitle] = useState("");
   const [captureAvailable, setCaptureAvailable] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
@@ -472,7 +484,7 @@ function MainWindow() {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}
-          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} />}
+          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} />}
           {selectedMeeting && <MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
@@ -484,6 +496,7 @@ function MainWindow() {
           </div>
           </>}
         </main>
+        <div ref={setPlaybackHost} className="meeting-playback-dock" role="region" aria-label="文字起こしの固定音声プレーヤー" hidden={!selectedMeeting || screen === "settings"} />
       </div>
     </div>
   );

@@ -35,6 +35,7 @@ const suites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
+  ["fixed-player", "browser-fixture.js", "fixed-player-browser-check.js"],
   ["keyboard", "browser-fixture.js", "keyboard-browser-check.js"],
   ["transcript-edit", "browser-fixture.js", "transcript-edit-browser-check.js"],
   ["transcript-recovery", "browser-fixture.js", "transcript-recovery-browser-check.js"],

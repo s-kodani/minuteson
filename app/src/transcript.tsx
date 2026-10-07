@@ -3,6 +3,7 @@ import { CommonModal } from "./common-modal";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { confirmations } from "./confirmation-service";
 import { TranscriptRecoverySaveQueue, type TranscriptRecovery } from "./transcript-recovery-save";
 import { TranscriptRecoveryEditor } from "./transcript-recovery-editor";
@@ -38,7 +39,7 @@ export function timeLabel(microseconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { meetingId: string; meetingTitle?: string; locked?: boolean }) {
+export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playbackHost = null }: { meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null }) {
   const confirm = useActionConfirmation(locked);
   const activeConfirmation = useSyncExternalStore(confirmations.subscribe,confirmations.getSnapshot);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -590,7 +591,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         </div>}
         <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || nameDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? []) && !namesDirty(nameBuffers.current,view?.speakers ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
-        {!splitting&&audio.controls}
+        {!splitting && !playbackHost && audio.controls}
         <div className="speaker-grid">
           {speakers.map((speaker) => {
             const session = nameSessions[speaker.id], pending = namePending[speaker.id];
@@ -631,13 +632,15 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
             const source=analysis.utterances.find(u=>u.id===(utterance.sourceUtteranceId??utterance.id))!;
             const session = textSessions[utterance.id], pending = textPending[utterance.id];
             const splitText = session?.value ?? utterance.effectiveText;
-            return <article key={utterance.id} data-utterance-id={utterance.id} className="utterance-row" tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z"
+            const playing = audio.selected === utterance.id && audio.playing;
+            return <article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${playing ? " utterance-playing" : ""}`} aria-current={playing ? "true" : undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z"
               onFocus={() => setFocusedRow(utterance.id)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedRow(current => current === utterance.id ? null : current); }} onKeyDown={event => {
               if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen() || locked || loading || busy || audio.preparing) return;
               event.preventDefault();
               if (audio.selected === utterance.id && audio.available) audio.toggle(); else void play(utterance);
             }}>
               <div className="utterance-meta"><time title={`${utterance.startUs}–${utterance.endUs} µs`}>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}–{utterance.recognitionIsSource?preciseTime(utterance.endUs):timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span>{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}<button type="button" className="small-secondary" onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
+              {playing && <span className="utterance-playing-label">再生中</span>}
               <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
               {session ? <div className="utterance-text-edit">
               <textarea ref={node => { if (node) textInputs.current.set(utterance.id, node); else textInputs.current.delete(utterance.id); }} aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={session.value}
@@ -687,6 +690,11 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       }}>追加話者の保存を再試行</button>}</CommonModal>
       {conflictPreview && <TranscriptConflictPanel key={conflictGeneration.current} preview={conflictPreview} blocked={busy || locked || !!activeConfirmation}
         onClose={() => { if(conflictBusy.current) return; conflictRef.current = null; setConflictPreview(null); }} onRefresh={inspectConflict} onAccept={acceptConflict}/>}
+      {playbackHost && createPortal(<div className="meeting-playback-content" data-meeting-id={meetingId}>
+        <span className="playback-owner">{meetingTitle || "選択会議"} · 発言区間の音声</span>
+        {splitting ? <p className="playback-empty">手動分割の確認画面で音声を操作できます。</p>
+          : audio.controls || <p className="playback-empty">発言の時刻か「音声を再生」を選ぶと、保存音声を検証して再生します。</p>}
+      </div>,playbackHost)}
     </section>
   );
 }

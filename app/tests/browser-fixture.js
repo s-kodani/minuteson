@@ -39,6 +39,7 @@ window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
+fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
 fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
@@ -192,6 +193,7 @@ mockIPC(async (command, args) => {
       return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
     case "prepare_utterance_playback":
+      if (fixture.holdPlayback) await new Promise(resolve => { fixture.releasePlayback = resolve; });
       if (fixture.failPlayback) throw new Error("音声ファイルのハッシュが保存時と一致しません");
       return { token: "audio-token", sampleRate: 48000, channels: 2, totalFrames: 720000, startUs: 0, endUs: 15000000, trackKind: "mic", alignment: "unverified" };
     case "read_playback_chunk": {

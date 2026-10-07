@@ -247,6 +247,22 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .transcript-conflict-dialog textarea { width:100%; min-width:0; resize:vertical; padding:10px; font:inherit; line-height:1.6; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
 .transcript-conflict-dialog pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 .transcript-conflict-dialog button { max-width:100%; white-space:normal; }
+/* Reserve actual space below the workspace, rather than overlaying its last row. */
+.meeting-playback-dock { flex:none; min-width:0; min-height:72px; max-height:40dvh; overflow:auto; overscroll-behavior:contain; padding:8px 24px; border-top:1px solid var(--input-border); background:var(--surface); }
+.meeting-playback-dock[hidden] { display:none; }
+.main-column:has(.meeting-playback-dock:not([hidden])) .toast-host { top:calc(var(--workspace-header-height,64px) + 12px); max-height:max(0px,min(420px,calc(100dvh - var(--workspace-header-height,64px) - var(--playback-dock-height,40dvh) - 24px))); }
+.meeting-playback-content { min-width:0; }
+.playback-owner { display:block; font-size:11px; color:var(--secondary-text); overflow-wrap:anywhere; }
+.playback-empty { margin:8px 0 0; font-size:13px; color:var(--muted); line-height:1.7; }
+.utterance-playing { background:var(--selection); border-left:3px solid var(--accent); }
+.utterance-playing-label { display:inline-block; padding:3px 8px; border:1px solid var(--primary-border); border-radius:6px; color:var(--primary-strong); font-size:12px; font-weight:700; }
+.meeting-playback-dock .audio-player { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px; margin:4px 0 0; padding:0; border:0; border-radius:0; }
+.meeting-playback-dock .audio-controls { min-width:0; gap:8px; }
+.meeting-playback-dock .audio-controls button { padding:6px 10px; }
+.meeting-playback-dock .audio-player>input[type=range] { grid-column:1 / -1; grid-row:2; margin:0; min-width:0; }
+.meeting-playback-dock .audio-player>.heading-with-info { grid-column:2; grid-row:1; font-size:11px; }
+.meeting-playback-dock .audio-player>p { grid-column:1 / -1; margin:0; overflow-wrap:anywhere; }
+@media (max-width:760px) { .meeting-playback-dock { padding:8px 16px; } .meeting-playback-dock .audio-player { grid-template-columns:minmax(0,1fr); } .meeting-playback-dock .audio-player>.heading-with-info { grid-column:1; grid-row:auto; } }
 .recovery-actions { display:flex; flex-wrap:wrap; gap:12px; margin:18px 0; }
 .recovery-inventory p { display:grid; gap:8px; padding-block:12px; border-bottom:1px solid var(--border); }
 .recovery-inventory p button { justify-self:start; }

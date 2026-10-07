@@ -40,7 +40,7 @@ async page => {
   results.push("text cancellation preserves a speaker assignment made in the same row");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("再生中も保持する未確定本文");
   await row("00:00:20").getByRole("button", { name: "音声を再生", exact: true }).click();
-  await editor.getByRole("group", { name: "発言の音声再生", exact: true }).getByRole("button", { name: "一時停止", exact: true }).waitFor();
+  await page.getByRole("region", { name: "文字起こしの固定音声プレーヤー", exact: true }).getByRole("group", { name: "発言の音声再生", exact: true }).getByRole("button", { name: "一時停止", exact: true }).waitFor();
   check(await text("00:00:00").inputValue() === "再生中も保持する未確定本文" && (await writes()).length === 0, "playback discarded or confirmed text");
   results.push("changing playback to another utterance retains the edit without implicit confirmation");
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await commit("00:00:00");
