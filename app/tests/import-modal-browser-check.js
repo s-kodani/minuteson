@@ -92,5 +92,13 @@ async (page) => {
   await cancelChoice.getByRole("button", { name: "取り込みを取り消す", exact: true }).click(); await cancelChoice.waitFor({ state: "hidden" });
   check(await count("cancel_audio_import") === 1 && await page.evaluate(t => window.monImportFixture.calls.find(c => c.command === "cancel_audio_import").args.token === t && window.monImportFixture.import.phase === "cancelled", originalToken), "cancel changed native token or repeated");
   results.push("native busy import supports cancelled choices and exact-opener focus, then one explicit same-token cancellation");
+  await boot(); await open(); await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
+  const selectFailure = page.getByRole("dialog", { name: "取り込み入力の破棄と選び直しを確認", exact: true });
+  await selectFailure.waitFor(); await page.evaluate(() => window.monImportFixture.failSelect = true);
+  await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await selectFailure.getByRole("alert").waitFor();
+  check(await count("select_audio_import") === 2 && await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).isDisabled(), "swallowed selection failure completed or repeated");
+  await selectFailure.getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal().getByRole("alert").waitFor();
+  check(await count("start_audio_import") === 0 && await count("cancel_audio_import") === 0, "failed selection started or cancelled import");
+  results.push("navigation helper cannot swallow accepted selection failure into success; retained error without import admission or automatic retry");
   return { passed: results.length, results };
 }

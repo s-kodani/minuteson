@@ -1,6 +1,7 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { useActionConfirmation } from "./confirmation-service";
+import { withConfirmedEdits } from "./confirmed-action";
 import { InfoPopover } from "./info-popover";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -70,12 +71,15 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
     const sourceOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const expectedInput = JSON.stringify(inputRef.current), expectedToken = snapshotRef.current?.token;
     selecting.current=true;
-    const change = async (propagateFailure = false) => withSavedEdits(async()=>{
-      if (!open) opener.current=sourceOpener;
-      setError("");setOpenFailed(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");
-      try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
-      catch(cause){setError(String(cause)); if (propagateFailure) throw cause;}finally{setBusy(false);}
-    });
+    const change = async (propagateFailure = false) => {
+      const action = async()=>{
+        if (!open) opener.current=sourceOpener;
+        setError("");setOpenFailed(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");
+        try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
+        catch(cause){setError(String(cause)); if (propagateFailure) throw cause;}finally{setBusy(false);}
+      };
+      if (propagateFailure) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
+    };
     try {
       if (open && (terms.length || title)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
       else await change();

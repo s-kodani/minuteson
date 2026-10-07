@@ -1,6 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
 import { CommonModal } from "./common-modal";
+import { useActionConfirmation } from "./confirmation-service";
+import { withConfirmedEdits } from "./confirmed-action";
+import { waitForDataStop } from "./data-stop";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
@@ -12,12 +15,15 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   onProtectionChange: (active: boolean) => void;
 }) {
   const latest = useRef(operation); latest.current = operation;
+  const confirm = useActionConfirmation(false);
+  const conditions = useRef({ locked, unknown: false });
   const s = operation.snapshot;
   const [listing, setListing] = useState<RecoveryListing | null>(null);
   const [error, setError] = useState("");
   const [rpcBusy, setRpcBusy] = useState(false);
   const rpcRunning = useRef(false);
   const [unknown, setUnknown] = useState(false);
+  conditions.current = { locked, unknown };
   const [open, setOpen] = useState(false);
   const pending = useRef<DataRequest | null>(null);
   const pendingChoice = useRef<{ item: RecoveryItem; revision: number } | null>(null);
@@ -32,13 +38,13 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
     try { const value = await invoke<RecoveryListing>("get_recovery_items"); assertRecoveryListing(value); if (epoch === listEpoch.current) setListing(value); }
     catch (cause) { if (epoch === listEpoch.current) setListing(null); throw cause; }
   };
-  const run = async (action: () => Promise<void>) => {
-    if (rpcRunning.current) return;
+  const run = async (action: () => Promise<void>, propagate = false) => {
+    if (rpcRunning.current) { if (propagate) throw Error("別の回収操作が実行中です。処理は開始していません。"); return; }
     rpcRunning.current = true; setRpcBusy(true); setError("");
-    try { await action(); } catch (cause) { setError(String(cause)); }
+    try { await action(); } catch (cause) { setError(String(cause)); if (propagate) throw cause; }
     finally { rpcRunning.current = false; setRpcBusy(false); }
   };
-  useEffect(() => { onProtectionChange(rpcBusy || unknown); }, [rpcBusy, unknown, onProtectionChange]);
+  useEffect(() => { onProtectionChange(rpcBusy || unknown || confirm.pending); }, [rpcBusy, unknown, confirm.pending, onProtectionChange]);
   useEffect(() => {
     if (visible && isTauri()) void readList().catch(cause => setError(String(cause)));
     return () => { listEpoch.current++; };
@@ -51,8 +57,8 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
       if ((choice && s.revision > choice.revision && (s.busy || s.phase === "failed" || (s.recoveryPreview?.item.operationId === choice.item.operationId && s.recoveryPreview.item.source === choice.item.source)))
         || (pending.current?.token === s.token && (s.busy || ["completed", "failed", "cancelled"].includes(s.phase)))) { pending.current = null; pendingChoice.current = null; setUnknown(false); }
     }
-    if (s.phase === "ready" && s.recoveryPreview && visible && !rpcBusy && !locked && !unknown && review.current !== s.recoveryPreview.confirmationId) { review.current = s.recoveryPreview.confirmationId; setOpen(true); }
-  }, [s, visible, rpcBusy, locked, unknown]);
+    if (s.phase === "ready" && s.recoveryPreview && visible && !rpcBusy && !locked && !unknown && !confirm.pending && review.current !== s.recoveryPreview.confirmationId) { review.current = s.recoveryPreview.confirmationId; setOpen(true); }
+  }, [s, visible, rpcBusy, locked, unknown, confirm.pending]);
   const send = async (request: DataRequest) => {
     pending.current = request;
     try { latest.current.accept(await invoke<DataSnapshot>("start_data_operation", { request })); pending.current = null; setUnknown(false); setOpen(false); }
@@ -60,14 +66,21 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   };
   const choose = async (item: RecoveryItem) => {
     if (!canAct || item.retained) return;
-    if (s?.retryAllowed && !window.confirm("現在の確認内容を破棄して、要確認対象を検査しますか？ 既存会議と元バックアップは変更しません。")) return;
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    await withSavedEdits(async () => run(async () => {
-      opener.current = active; setOpen(false);
-      pendingChoice.current = { item, revision: latest.current.snapshot?.revision ?? -1 };
-      try { latest.current.accept(await invoke<DataSnapshot>("review_recovery_item", { source: item.source, operationId: item.operationId })); pendingChoice.current = null; setUnknown(false); }
-      catch (cause) { setUnknown(true); throw Error(`検査の受付を確認できません。まだ回収・保持確認は行っていません: ${String(cause)}`); }
-    }));
+    const expected = latest.current.getSnapshot();
+    const sameTarget = () => latest.current.connected && !!latest.current.availability?.available && latest.current.getSnapshot()?.revision === expected?.revision && !latest.current.getSnapshot()?.busy;
+    const inspect = async (propagate = false) => {
+      const action = async () => run(async () => {
+        if (propagate && !sameTarget()) throw Error("確認対象が変更されました。元の画面で再確認してください。検査は開始していません。");
+        opener.current = active; setOpen(false);
+        pendingChoice.current = { item, revision: latest.current.snapshot?.revision ?? -1 };
+        try { latest.current.accept(await invoke<DataSnapshot>("review_recovery_item", { source: item.source, operationId: item.operationId })); pendingChoice.current = null; setUnknown(false); }
+        catch (cause) { setUnknown(true); throw Error(`検査の受付を確認できません。まだ回収・保持確認は行っていません: ${String(cause)}`); }
+      }, propagate);
+      if (propagate) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
+    };
+    if (expected?.retryAllowed) await confirm({ opener: active, title: "回収対象の確認内容変更を確認", target: `${recoverySourceLabel(item.source)} · ${item.operationId}`, confirmLabel: "確認内容を破棄して対象を検査する", message: "現在の確認内容を破棄して、要確認対象を検査します。既存会議と元バックアップは変更しません。検査だけでは回収・保持確認を行いません。", validate: () => !conditions.current.locked && !conditions.current.unknown && !rpcRunning.current && sameTarget(), action: () => inspect(true) });
+    else await inspect();
   };
   const submit = async (action: "recover" | "keep" | "refresh") => {
     if (!canAct) return;
@@ -86,10 +99,12 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   };
   const cancel = async () => {
     if (rpcRunning.current || !s?.token || s.kind !== "recovery") return;
-    if (s.busy && !window.confirm("回収操作の安全な停止を待ちますか？ 完了済みの回収や保持確認は取り消しません。")) return;
-    await run(async () => { latest.current.accept(await invoke<DataSnapshot>("cancel_data_operation", { token: s.token })); setOpen(false); pending.current = null; pendingChoice.current = null; setUnknown(false); });
+    const token = s.token;
+    const stop = async (propagate = false) => run(async () => { latest.current.accept(await invoke<DataSnapshot>("cancel_data_operation", { token })); if (propagate) await waitForDataStop(token, "recovery", async () => { await latest.current.refresh(); return latest.current.getSnapshot(); }); setOpen(false); pending.current = null; pendingChoice.current = null; setUnknown(false); }, propagate);
+    if (s.busy) await confirm({ title: "回収操作の安全な停止を確認", target: s.recoveryPreview ? `${recoverySourceLabel(s.recoveryPreview.item.source)} · ${s.recoveryPreview.item.operationId}` : "回収操作（対象を検査中）", confirmLabel: "安全な停止を要求して待つ", message: "回収操作の安全な停止を待ちます。完了済みの回収や保持確認は取り消しません。未登録・変更済みのファイルは保持し、停止完了まで書込保護を維持します。", validate: () => !rpcRunning.current && latest.current.getSnapshot()?.token === token && latest.current.getSnapshot()?.kind === "recovery" && !!latest.current.getSnapshot()?.busy, action: () => stop(true) });
+    else await stop();
   };
-  const canAct = isTauri() && !!listing?.supported && operation.connected && !!operation.availability?.available && !locked && !rpcBusy && !s?.busy && !unknown;
+  const canAct = isTauri() && !!listing?.supported && operation.connected && !!operation.availability?.available && !locked && !rpcBusy && !confirm.pending && !s?.busy && !unknown;
   const preview = s?.kind === "recovery" ? s.recoveryPreview : null;
   const receipt = s?.kind === "recovery" ? s.recoveryReceipt : null;
   const ready = canAct && s?.phase === "ready" && s.retryAllowed && !!preview;

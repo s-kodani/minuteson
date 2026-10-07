@@ -6,7 +6,7 @@ const idle = dataIdleRead("get_data_operation");
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const f = window.dataFixture = {
   snapshot: idle, calls: [], mode: "success", replacesExisting: false, blocker: null,
-  failRead: false, failSave: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
+  failRead: false, failSave: false, failCancel: false, cancelLost: false, failClose: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
   restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0,
@@ -134,9 +134,11 @@ export const dataSaveIPC = async (command, args) => {
     return structuredClone(f.snapshot);
   }
   if (command === "cancel_data_operation") {
+    if (f.failCancel) throw Error("模擬停止要求失敗");
     if (args.token !== f.snapshot.token) throw Error("取消対象が変更されています");
     if (f.snapshot.busy) await f.changed({ phase: "cancelling" });
     else if (!f.snapshot.backupReceipt && !f.snapshot.restoreReceipt && !f.snapshot.recoveryReceipt && !f.snapshot.relocationReceipt && !f.snapshot.attentionRequired) await f.changed({ phase: "cancelled", retryAllowed: false, backupPreview: null, restorePreview: null, recoveryPreview: null, relocationPreview: null });
+    if (f.cancelLost) throw Error("模擬停止要求の応答喪失");
     return structuredClone(f.snapshot);
   }
   if (command === "get_recording_snapshot") return recording;
@@ -154,7 +156,7 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
   if (["get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
   if (["get_audio_import"].includes(command)) return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
-  if (command === "finish_main_close") return null;
+  if (command === "finish_main_close") { if (f.failClose) throw Error("模擬終了失敗"); return null; }
   throw Error(`Unexpected data fixture command: ${command}`);
 };
 mockIPC(dataSaveIPC, { shouldMockEvents: true });

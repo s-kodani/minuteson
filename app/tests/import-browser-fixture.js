@@ -6,7 +6,7 @@ const engine = { executablePath:"",modelPath:"",vadModelPath:null,threads:4,useG
 const diar = { executablePath:"",segmentationModelPath:"",embeddingModelPath:"",runtimeLibraryPaths:[],threads:4,clusterThresholdMilli:500,windowShiftMilli:100,minDurationOnMs:0,minDurationOffMs:0 };
 const llama = {executablePath:"",modelPath:"",threads:4,contextTokens:8192,predictionTokens:2048,gpuLayers:0,seed:1,promptBudget:5400};
 const f = window.monImportFixture = {
-  calls:[],failCancel:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
+  calls:[],failCancel:false,failSelect:false,failOpen:false,loseStart:false,cancelPanel:false,insufficientSpace:false,saveDelayMs:200,
   import:{revision:0,phase:"idle",busy:false,recordingBlocked:false,token:null,fileName:null,info:null,sourceBytes:null,requiredBytes:null,availableBytes:null,completed:0,saved:null,errorMessage:null},
   global:{id:"global",payload:[{id:crypto.randomUUID(),term:"MON",reading:null,note:null,enabled:true}],lockVersion:1},
   meetings:[{id:"existing",title:"既存会議",lifecycle:"draft",sourceType:"recording",createdAt:1791115200000,updatedAt:1791115200000,lockVersion:0}],books:{},
@@ -23,6 +23,7 @@ mockIPC(async(command,args)=>{
     case "capture_available":return false;
     case "get_audio_import":return structuredClone(f.import);
     case "select_audio_import":{
+      if(f.failSelect)throw Error("模擬音声選択失敗");
       if(f.cancelPanel){await f.changed({phase:"idle",busy:false});return structuredClone(f.import);}
       await f.changed({phase:"inspecting",busy:true,token:crypto.randomUUID(),saved:null,info:null,errorMessage:null});
       setTimeout(()=>{if(f.import.phase==="inspecting")void f.changed({phase:"ready",busy:false,fileName:"会議.wav",sourceBytes:256044,requiredBytes:135497772,availableBytes:f.insufficientSpace?1:800000000,errorMessage:f.insufficientSpace?"保存先の空き容量が不足しています":null,info:{schemaVersion:1,detectedFormat:"wav",codec:"pcm",sampleRate:16000,channels:2,frames:64000,durationUs:4000000}});},200);

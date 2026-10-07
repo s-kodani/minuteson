@@ -8,9 +8,6 @@ async (page) => {
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
   const boot = async () => {
     await page.reload();
-    // CLI modal interception ends a run-code call early; only native confirm
-    // prompts are accepted here. HTML review dialogs still require clicks.
-    await page.evaluate(() => { window.confirm = () => true; });
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await page.getByRole("region", { name: "データと保存" }).waitFor();
   };
@@ -19,6 +16,8 @@ async (page) => {
   const done = () => region().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
   const confirm = () => page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).click();
   const ready = async () => { await page.getByRole("dialog").waitFor(); await page.getByRole("heading", { name: "バックアップから追加復元", exact: true }).waitFor(); };
+  const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
+  const stop = async () => { await region().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await stopChoice().getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); };
 
   await boot(); await page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true }).click();
   await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).getByRole("link", { name: "詳しい説明", exact: true }).click();
@@ -122,18 +121,18 @@ async (page) => {
   results.push("invalid archive: no publication capability");
 
   await boot(); await set({ previewMode: "delay" }); await choose("restore");
-  await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
+  await stop();
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "preview cancellation unlocked before actual completion");
-  await page.evaluate(() => window.dataFixture.complete());
+  await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
   await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor();
   check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "late preview resurrected confirmation");
   results.push("cancel preview: wait for completion, no late resurrection");
 
   for (const mode of ["delay", "cancelRace"]) {
     await boot(); await set({ mode }); await choose("restore"); await ready(); await confirm();
-    await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
+    await stop();
     check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "cancel released write protection early");
-    await page.evaluate(() => window.dataFixture.complete());
+    await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
     if (mode === "cancelRace") { await done(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 3, "winning commit suppressed"); }
     else { await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 1, "cancel published meetings"); }
     results.push(mode === "cancelRace" ? "commit/cancel race: commit remains successful" : "cancel publication: wait for cleanup, preserve existing");

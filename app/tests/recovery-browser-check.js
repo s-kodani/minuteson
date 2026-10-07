@@ -11,7 +11,6 @@ async (page) => {
     await page.reload();
     await page.waitForFunction(() => !!window.dataFixture);
     await page.evaluate(({ source, options }) => {
-      window.confirm = () => true;
       const id = crypto.randomUUID();
       window.dataFixture.recoveryItems = [{ source, operationId: id, paths: [source === "scratch" ? `.mon-stage-${id}` : `meetings/${crypto.randomUUID()}`], registeredPaths: 2, reason: "所有不明のファイルを保持しています", retained: false }];
       Object.assign(window.dataFixture, options);
@@ -71,8 +70,10 @@ async (page) => {
   for (const mode of ["delay", "cancelRace"]) {
     await boot("scratch", { recoveryMode: mode }); await review(); await act("keep");
     await region().getByRole("button", { name: "安全な停止を要求", exact: true }).click();
+    const stopChoice = page.getByRole("dialog", { name: "回収操作の安全な停止を確認", exact: true });
+    await stopChoice.getByRole("button", { name: "安全な停止を要求して待つ", exact: true }).click();
     check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled() && await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked before worker end");
-    await page.evaluate(() => window.dataFixture.complete());
+    await page.evaluate(() => window.dataFixture.complete()); await stopChoice.waitFor({ state: "hidden" });
     if (mode === "cancelRace") await retained();
     else {
       await page.waitForFunction(() => window.dataFixture.snapshot.phase === "cancelled");

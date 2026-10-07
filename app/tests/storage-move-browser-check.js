@@ -7,13 +7,15 @@ async (page) => {
   const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
   const count = () => page.evaluate(() => window.dataFixture.calls.filter(c => c.command === "start_data_operation").length);
   const boot = async () => {
-    await page.reload(); await page.evaluate(() => { window.confirm = () => true; });
+    await page.reload();
     await page.getByRole("button", { name: "設定", exact: true }).click();
     await region().getByRole("button", { name: "会議保存先を変更", exact: true }).waitFor();
   };
   const choose = async () => { await region().getByRole("button", { name: "会議保存先を変更", exact: true }).click(); await dialog().waitFor(); };
   const publish = () => dialog().getByRole("button", { name: "コピーして保存先を切替", exact: true }).click();
   const finished = () => region().getByRole("alert").filter({ hasText: "保存先切替の書込停止中です" }).waitFor();
+  const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
+  const stop = async () => { await region().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await stopChoice().getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); };
 
   await boot(); await choose();
   const body = await dialog().innerText();
@@ -47,9 +49,9 @@ async (page) => {
   results.push("lost response and suppressed events recover through snapshot without duplicate");
 
   await boot(); await set({ mode: "delay" }); await choose(); await publish();
-  await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
+  await stop();
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked running copy");
-  await page.evaluate(() => window.dataFixture.complete());
+  await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
   await region().getByRole("alert").filter({ hasText: "未完了の保存先変更があります" }).waitFor();
   check(await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "unresolved copy admitted new move");
   check(await page.evaluate(() => window.dataFixture.published) === 0, "cancel selected partial target");
@@ -64,8 +66,8 @@ async (page) => {
   results.push("changed content refuses stale confirmation, refresh admits new confirmation");
 
   await boot(); await set({ mode: "cancelRace" }); await choose(); await publish();
-  await region().getByRole("button", { name: "処理を取り消す", exact: true }).click();
-  await page.evaluate(() => window.dataFixture.complete()); await finished();
+  await stop();
+  await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" }); await finished();
   check(await page.evaluate(() => window.dataFixture.published) === 1, "late cancel erased committed cutover");
   results.push("durable selection wins over late cancellation");
 

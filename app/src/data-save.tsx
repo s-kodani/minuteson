@@ -1,5 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { useActionConfirmation } from "./confirmation-service";
+import { withConfirmedEdits } from "./confirmed-action";
+import { waitForDataStop } from "./data-stop";
 import { InfoPopover } from "./info-popover";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
@@ -16,6 +19,8 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
 }) {
   const { snapshot: s, connected, availability } = operation;
   const latest = useRef(operation); latest.current = operation;
+  const confirm = useActionConfirmation(false);
+  const conditions = useRef({ locked, unknown: false, storage: null as StorageView | null });
   const [rpcBusy, setRpcBusy] = useState(false);
   const rpcRunning = useRef(false);
   const [error, setError] = useState("");
@@ -33,6 +38,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const heading = useRef<HTMLHeadingElement>(null);
   const [storage, setStorage] = useState<StorageView | null>(null);
   const [storageError, setStorageError] = useState("");
+  conditions.current = { locked, unknown, storage };
   useEffect(() => {
     if (!visible || !isTauri()) return;
     let disposed = false;
@@ -42,12 +48,12 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     }).catch(cause => { if (!disposed) { setStorage(null); setStorageError(String(cause)); } });
     return () => { disposed = true; };
   }, [visible, s?.revision]);
-  useEffect(() => { onProtectionChange(rpcBusy || unknown); }, [rpcBusy, unknown, onProtectionChange]);
-  const run = async (action: () => Promise<void>) => {
-    if (rpcRunning.current) return;
+  useEffect(() => { onProtectionChange(rpcBusy || unknown || confirm.pending); }, [rpcBusy, unknown, confirm.pending, onProtectionChange]);
+  const run = async (action: () => Promise<void>, propagate = false) => {
+    if (rpcRunning.current) { if (propagate) throw Error("別のデータ操作が実行中です。処理は開始していません。"); return; }
     rpcRunning.current = true; setRpcBusy(true); setError("");
     try { await action(); }
-    catch (cause) { setError(String(cause)); }
+    catch (cause) { setError(String(cause)); if (propagate) throw cause; }
     finally { rpcRunning.current = false; setRpcBusy(false); }
   };
   const read = async () => { await latest.current.refresh(); };
@@ -72,20 +78,26 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   };
   const choose = async (kind: DataKind, pendingMove = false) => {
     if (rpcRunning.current || locked || unknown || s?.busy || !connected || !availability?.available) return;
-    if (s?.attentionRequired && !window.confirm(pendingMove ? "未完了移動の現在の内容を再確認しますか？ 確認だけでは切替・削除しません。" : "前の保存結果は未確定です。保存先の実ファイルを確認してから、別の操作を開始しますか？ 前の結果と途中コピーは変更しません。")) return;
-    if (s?.retryAllowed && !window.confirm("現在の確認内容を破棄して選び直しますか？ 既存会議と元バックアップは変更しません。")) return;
     const selectionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    await withSavedEdits(async () => run(async () => {
-      opener.current = selectionOpener;
-      setOpen(false); setToast(""); setOpenError("");
-      pending.current = null; pendingChoice.current = { kind, revision: latest.current.snapshot?.revision ?? -1 };
-      try {
-        latest.current.accept(pendingMove ? await invoke<DataSnapshot>("review_storage_move") : await invoke<DataSnapshot>("select_data_operation", { kind }));
-        pendingChoice.current = null; setUnknown(false);
-      } catch (cause) {
-        setUnknown(true); throw Error(`選択の受付状態を確認してください。新しい復元はまだ確定していません: ${String(cause)}`);
-      }
-    }));
+    const expected = latest.current.getSnapshot(), moveId = storage?.pendingOperationId;
+    const sameTarget = () => latest.current.connected && !!latest.current.availability?.available && latest.current.getSnapshot()?.revision === expected?.revision && !latest.current.getSnapshot()?.busy && (!pendingMove || conditions.current.storage?.pendingOperationId === moveId);
+    const select = async (propagate = false) => {
+      const action = async () => run(async () => {
+        if (propagate && !sameTarget()) throw Error("選択対象が変更されました。元の画面で再確認してください。選択処理は開始していません。");
+        opener.current = selectionOpener;
+        setOpen(false); setToast(""); setOpenError("");
+        pending.current = null; pendingChoice.current = { kind, revision: latest.current.snapshot?.revision ?? -1 };
+        try {
+          latest.current.accept(pendingMove ? await invoke<DataSnapshot>("review_storage_move") : await invoke<DataSnapshot>("select_data_operation", { kind }));
+          pendingChoice.current = null; setUnknown(false);
+        } catch (cause) {
+          setUnknown(true); throw Error(`選択の受付状態を確認してください。新しい復元はまだ確定していません: ${String(cause)}`);
+        }
+      }, propagate);
+      if (propagate) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
+    };
+    if (expected?.attentionRequired || expected?.retryAllowed) await confirm({ opener: selectionOpener, title: "データ操作の確認内容変更を確認", target: pendingMove ? storage?.pendingTarget ?? "未完了の保存先変更" : expected.backupPreview?.destination ?? expected.relocationPreview?.destination ?? "現在のデータ操作", confirmLabel: pendingMove ? "未完了移動を再確認する" : "確認内容を変更して選び直す", message: [expected.attentionRequired ? pendingMove ? "未完了移動の現在の内容を再確認します。確認だけでは切替・削除しません。" : "前の保存結果は未確定です。保存先の実ファイルを確認してから別の操作を開始します。前の結果と途中コピーは変更しません。" : "", expected.retryAllowed ? "現在の確認内容を破棄して選び直します。既存会議と元バックアップは変更しません。" : ""].filter(Boolean).join("\n"), validate: () => !conditions.current.locked && !conditions.current.unknown && !rpcRunning.current && sameTarget(), action: () => select(true) });
+    else await select();
   };
   const retryUnknown = async () => {
     if (rpcRunning.current || locked) return;
@@ -102,11 +114,16 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const cancel = async () => {
     const current = latest.current.getSnapshot();
     if (rpcRunning.current || !current?.token) return;
-    if (current.busy && !window.confirm(current.kind === "relocation" ? "保存先変更を取り消しますか？ 旧保存先と途中コピーを保持します。切替済みの場合は終了して再起動が必要です。" : "進行中の処理を取り消しますか？ 公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。")) return;
-    await run(async () => {
+    const stop = async (propagate = false) => run(async () => {
       latest.current.accept(await invoke<DataSnapshot>("cancel_data_operation", { token: current.token }));
+      if (propagate) await waitForDataStop(current.token!, current.kind!, async () => { await latest.current.refresh(); return latest.current.getSnapshot(); });
       setOpen(false); pending.current = null; pendingChoice.current = null; setUnknown(false);
-    });
+    }, propagate);
+    if (current.busy) await confirm({ title: "データ操作の安全な取消を確認", target: current.kind === "relocation" ? current.relocationPreview?.destination ?? "保存先変更" : current.kind === "backup" ? current.backupPreview?.destination ?? "バックアップ" : current.kind === "restore" ? "追加復元" : "データ操作", confirmLabel: "取消を要求して停止を待つ", message: current.kind === "relocation" ? "保存先変更を取り消します。旧保存先と途中コピーを保持します。切替済みの場合は終了して再起動が必要です。停止完了まで書込保護を維持します。" : "進行中の処理を取り消します。公開済みの結果と既存会議は保持し、未公開の追加物だけを整理します。停止完了まで書込保護を維持します。", validate: () => !rpcRunning.current && latest.current.getSnapshot()?.token === current.token && latest.current.getSnapshot()?.kind === current.kind && !!latest.current.getSnapshot()?.busy, action: () => stop(true) });
+    else await stop();
+  };
+  const restart = async () => {
+    await confirm({ title: "保存先切替後の終了を確認", target: storage?.meetingRoot ?? s?.relocationReceipt?.destination ?? "切替後の保存先", confirmLabel: "安全に終了する", message: "アプリを安全に終了します。終了後、手動で再起動してください。旧保存先は削除しません。", validate: () => !rpcRunning.current && !latest.current.getSnapshot()?.busy && (!!latest.current.getSnapshot()?.restartRequired || !!conditions.current.storage?.restartRequired), action: () => run(async () => { await invoke("finish_main_close", { quit: true }); }, true) });
   };
   const dismiss = async () => {
     if (rpcRunning.current || unknown || latest.current.snapshot?.busy) { setError("処理と結果確認が終わってから閉じてください。"); return; }
@@ -130,7 +147,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       if (s.restoreReceipt) void onRestored(s.restoreReceipt).catch(cause => setOpenError(`復元は完了しています。会議一覧を再読込してください: ${String(cause)}`));
     }
     const confirmation = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.relocationPreview?.confirmationId;
-    if (s.phase === "ready" && confirmation && !rpcBusy && !locked && !unknown) {
+    if (s.phase === "ready" && confirmation && !rpcBusy && !locked && !unknown && !confirm.pending) {
       if (s.kind === "backup" && !s.backupPreview?.replacesExisting) {
         if (autoBackup.current !== confirmation && connected && availability?.available) {
           autoBackup.current = confirmation; void submit("publish");
@@ -139,8 +156,8 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         review.current = confirmation; setOpen(true);
       }
     }
-  }, [s, rpcBusy, locked, unknown, connected, availability?.available, visible]);
-  const canAct = isTauri() && connected && !locked && !rpcBusy && !s?.busy && !s?.restartRequired && !storage?.restartRequired && !unknown && !!availability?.available;
+  }, [s, rpcBusy, locked, unknown, confirm.pending, connected, availability?.available, visible]);
+  const canAct = isTauri() && connected && !locked && !rpcBusy && !confirm.pending && !s?.busy && !s?.restartRequired && !storage?.restartRequired && !unknown && !!availability?.available;
   const requestReady = s?.kind !== "recovery" && s?.kind !== "deletion" && s?.kind !== "model_deletion" && s?.kind !== "audio_deletion" && !!s?.retryAllowed && !s.attentionRequired;
   const restore = s?.restorePreview;
   const moving = s?.relocationPreview;
@@ -153,7 +170,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       {storage && <><p>会議保存先: <span className="data-path">{storage.meetingRoot}</span></p><p>AIモデル保存先（移動しません）: <span className="data-path">{storage.modelsRoot}</span></p><button type="button" className="secondary" disabled={!canAct || !!storage.pendingOperationId} onClick={() => void choose("relocation")}>会議保存先を変更</button>{storage.pendingOperationId && <><p role="alert">未完了の保存先変更があります。旧保存先と途中コピーを保持しています。新たな保存先変更は開始しません。途中コピー: <span className="data-path">{storage.pendingTarget}</span></p><button type="button" disabled={!canAct} onClick={() => void choose("relocation", true)}>未完了移動を確認</button></>}{storage.keptMoves.length > 0 && <details><summary>保持した途中コピー（{storage.keptMoves.length} 件）</summary><p>利用中の会議ではありません。ファイルを削除・採用しません。別の保存先変更を開始しても残ります。</p><ul>{storage.keptMoves.map(m => <li key={m.operationId}><span className="data-path">{m.destination}</span> — {m.decisionPending ? "保持判断を保存済み。未完了移動を確認して中止を完了してください。" : "保持して中止済み"}</li>)}</ul></details>}</>}
       {storageError && <p role="status">保存先の確認・変更は利用できません: {storageError}</p>}
       {(s?.restartRequired || storage?.restartRequired) && <p role="alert">保存先切替の書込停止中です。新しい録音・編集・AI処理は開始できません。アプリを終了して再起動してください。現在開いている保存先: <span className="data-path">{storage?.activeMeetingRoot ?? moving?.source}</span>。旧保存先は削除しません。</p>}
-      {(s?.restartRequired || storage?.restartRequired) && <button type="button" disabled={rpcBusy || !!s?.busy} onClick={() => void run(async () => { if (window.confirm("アプリを安全に終了しますか？ 終了後、手動で再起動してください。旧保存先は削除しません。")) await invoke("finish_main_close", { quit: true }); })}>終了する（再起動は手動）</button>}
+      {(s?.restartRequired || storage?.restartRequired) && <button type="button" disabled={rpcBusy || confirm.pending || !!s?.busy} onClick={() => void restart()}>終了する（再起動は手動）</button>}
       {!connected && <p role="status">データ操作の状態を確認できるまで変更操作を停止しています。</p>}
       {availability?.reason && !s?.busy && <p role="status">{availability.reason}。停止・完了後にバックアップ／復元できます。</p>}
       {s?.token && s.kind !== "recovery" && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
