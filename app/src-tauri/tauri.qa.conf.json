@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MON QA",
+  "identifier": "jp.mon.desktop.qa",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MON QA — 会議記録",
+        "url": "index.html",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true
+      },
+      {
+        "label": "recorder",
+        "title": "MON QA 録音パネル",
+        "url": "index.html?window=recorder",
+        "width": 360,
+        "height": 116,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
+      },
+      {
+        "label": "recording-confirmation",
+        "title": "MON QA 録音終了の確認",
+        "url": "index.html?window=recording-confirmation",
+        "width": 560,
+        "height": 460,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
+      }
+    ]
+  }
+}
