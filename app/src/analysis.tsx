@@ -5,7 +5,8 @@ import { useVersionPublication } from "./version-publication";
 import { useActionConfirmation } from "./confirmation-service";
 import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
 import { timeLabel, type Analysis, type Draft } from "./transcript";
@@ -50,11 +51,16 @@ function PreviewText({ analysis, draft, title,locked }: { analysis: Analysis; dr
   </section>;
 }
 
-export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActive, locked, withSavedEdits, onHeadChanged }: {
+export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActive, locked, withSavedEdits, onHeadChanged, diarizationHost = null }: {
   meetingId: string; meetingTitle: string; recorded: boolean; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
+  diarizationHost?: HTMLElement | null;
 }) {
+  const [diarizationMount] = useState(() => document.createElement("div"));
+  const localDiarization = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { (diarizationHost ?? localDiarization.current)?.append(diarizationMount); }, [diarizationHost,diarizationMount]);
+  useLayoutEffect(() => () => diarizationMount.remove(), [diarizationMount]);
   const profileSelectId = useId();
   const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<AnalysisPreferences, Preferences>(
@@ -239,7 +245,8 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
       {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={job} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
-    <DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
+    <div ref={localDiarization} />
+    {createPortal(<DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />,diarizationMount)}
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし操作" message={error} toastMessage="文字起こし操作を完了できません。状態を確認してください" />
     {!preview && publication.status}

@@ -97,7 +97,7 @@ async (page, capturePath, detailUI) => {
 
   await boot(); await name("話者A").fill("幅とテーマを変えても保持する名");
   for(const theme of ["light","dark"]) for(const width of [960,1200]) {
-    await page.setViewportSize({ width,height: 900 }); await page.getByRole("banner").getByRole("combobox",{ name: "表示テーマ",exact: true }).selectOption(theme); await name("話者A").focus();
+    await page.setViewportSize({ width,height: 900 }); await detailUI.closeSpeakerPanel(); await page.getByRole("banner").getByRole("combobox",{ name: "表示テーマ",exact: true }).selectOption(theme); await detailUI.openSpeakerPanel(); await name("話者A").focus();
     check(await group("話者A").evaluate(e => e.scrollWidth <= e.clientWidth && e.querySelector("input").getBoundingClientRect().right <= e.getBoundingClientRect().right) && await name("話者A").inputValue() === "幅とテーマを変えても保持する名","name layout overflowed or lost input");
     await group("話者A").scrollIntoViewIfNeeded(); await page.waitForTimeout(150); await page.screenshot({ path: `speaker-name-${theme}-${width}.png` });
   }

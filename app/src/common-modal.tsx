@@ -13,12 +13,13 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
   restoreReady?: boolean;
   dismissLabel?: "キャンセル" | "閉じる";
   dismissText?: string;
+  externalContent?: boolean;
 };
 
 // Native top-layer dialogs supply an inert background. Explicit Tab wrapping
 // keeps focus inside even when a browser would cycle through its own chrome.
 // Controllers retain all command, identity, consent and unknown-result guards.
-export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, className = "", children, ...attributes }: Props) {
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
   const ref = suppliedRef ?? ownRef;
   const confirmation = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
@@ -117,6 +118,29 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     }
   }, [owned?.id, blocked, ref, open]);
   const dismiss = () => { if (!latest.current.blocked) { if (owned) confirmations.cancel(owned.id); else void latest.current.onDismiss(); } };
+  const keyDown = (event: Pick<KeyboardEvent,"key" | "shiftKey" | "target" | "preventDefault" | "stopPropagation" | "defaultPrevented" | "isComposing" | "keyCode" | "repeat">) => {
+    const element = ref.current;
+    if (!element || event.defaultPrevented || externalContent && (event.isComposing || event.keyCode === 229)) return;
+    if (externalContent && event.repeat && event.key === "Escape") { event.preventDefault(); return; }
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
+    if (event.key === "Enter" && (event.target === element || (event.target instanceof HTMLElement && event.target.matches("h2, h3")))) event.preventDefault();
+    if (event.key !== "Tab") return;
+    const fields = Array.from(element.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], summary, [tabindex], [contenteditable="true"]'))
+      .filter(field => field.tabIndex >= 0 && !field.matches(":disabled") && !field.closest("[hidden], [inert]") && field.getClientRects().length)
+      .sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Number.MAX_SAFE_INTEGER) - (b.tabIndex > 0 ? b.tabIndex : Number.MAX_SAFE_INTEGER));
+    const first = fields[0], last = fields.at(-1);
+    if (!first) { event.preventDefault(); element.querySelector<HTMLElement>("h2, h3")?.focus({ preventScroll: true }); }
+    else if (event.shiftKey && (document.activeElement === first || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && (document.activeElement === last || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
+  };
+  useLayoutEffect(() => {
+    // Portals bubble React events through their owner, not their DOM parent.
+    // A reparented workspace must trap keys at its native dialog boundary.
+    const element = ref.current;
+    if (!externalContent || !element) return;
+    element.addEventListener("keydown",keyDown);
+    return () => element.removeEventListener("keydown",keyDown);
+  }, [externalContent,ref,owned?.id,owned?.phase,effectiveBlocked]);
   return <dialog {...attributes} ref={ref} data-common-modal aria-labelledby={owned ? `${owned.id}-title` : attributes["aria-labelledby"]} className={`common-modal ${className}`} aria-modal="true"
     onCancel={event => { event.preventDefault(); dismiss(); }}
     onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}
@@ -125,21 +149,11 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       if (downOutside.current && outside) dismiss();
       downOutside.current = false;
     }}
-    onKeyDown={event => {
+    onKeyDown={externalContent ? undefined : event => {
       // Repeated native Escape requests may become non-cancelable. Handle the
       // key here so declining a nested choice cannot close its parent or bypass
       // the in-flight guard. Platform cancel events still use the same handler.
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
-      if (event.key === "Enter" && (event.target === event.currentTarget || (event.target instanceof HTMLElement && event.target.matches("h2, h3")))) event.preventDefault();
-      if (event.key !== "Tab") return;
-      const element = event.currentTarget;
-      const fields = Array.from(element.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], summary, [tabindex], [contenteditable="true"]'))
-        .filter(field => field.tabIndex >= 0 && !field.matches(":disabled") && !field.closest("[hidden], [inert]") && field.getClientRects().length)
-        .sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Number.MAX_SAFE_INTEGER) - (b.tabIndex > 0 ? b.tabIndex : Number.MAX_SAFE_INTEGER));
-      const first = fields[0], last = fields.at(-1);
-      if (!first) { event.preventDefault(); element.querySelector<HTMLElement>("h2, h3")?.focus({ preventScroll: true }); }
-      else if (event.shiftKey && (document.activeElement === first || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
+      keyDown({ key:event.key,shiftKey:event.shiftKey,target:event.target,defaultPrevented:event.defaultPrevented,repeat:event.repeat,isComposing:event.nativeEvent.isComposing,keyCode:event.nativeEvent.keyCode,preventDefault:()=>event.preventDefault(),stopPropagation:()=>event.stopPropagation() });
     }}>
     <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label={dismissText ?? `確認を${label}`} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}>{dismissText ?? label}</button></div>
     {owned && <ConfirmationBody value={owned} />}

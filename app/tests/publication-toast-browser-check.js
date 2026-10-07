@@ -14,7 +14,7 @@ async (page, capturePath, detailUI) => {
         Object.assign(f.diarizationPreferences.payload.standard, { executablePath: "/synthetic/sherpa", segmentationModelPath: "/synthetic/segmentation.onnx", embeddingModelPath: "/synthetic/embedding.onnx" });
       }
     }, patch);
-    await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools(); await panel().getByRole("button", { name: "内容を確認", exact: true }).waitFor();
+    await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools(); await panel().getByRole("button", { name: "内容を確認", exact: true }).waitFor(); await detailUI.openDiarization();
   };
   const choose = async (restoring = false) => {
     await panel().getByRole("button", { name: restoring ? "直前版を確認・復元" : "内容を確認", exact: true }).click();

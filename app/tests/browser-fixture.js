@@ -39,6 +39,7 @@ window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
+fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
 fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
 fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");

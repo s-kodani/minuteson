@@ -2,6 +2,9 @@
 async page => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
+  // The speaker side panel owns a separate engine-settings textarea. Only
+  // utterance-body textareas represent an active transcript edit buffer.
+  const body = editor.getByRole("region", { name: "発言本文", exact: true });
   const row = at => editor.getByRole("article", { name: `${at}の発言行`, exact: true });
   const text = at => row(at).getByRole("textbox", { name: `${at}の発言`, exact: true });
   const read = at => row(at).getByLabel(`${at}の発言本文`, { exact: true });
@@ -20,7 +23,7 @@ async page => {
   };
   const begin = () => editor.getByRole("button", { name: "編集を開始", exact: true }).click();
   await boot();
-  check(await editor.locator("textarea").count() === 0 && await read("00:00:00").evaluate(e => e.tagName === "P" && getComputedStyle(e).userSelect === "text" && Number.parseFloat(getComputedStyle(e).lineHeight) / Number.parseFloat(getComputedStyle(e).fontSize) >= 1.69), "read-only text is not selectable with specified line height");
+  check(await body.locator("textarea").count() === 0 && await read("00:00:00").evaluate(e => e.tagName === "P" && getComputedStyle(e).userSelect === "text" && Number.parseFloat(getComputedStyle(e).lineHeight) / Number.parseFloat(getComputedStyle(e).fontSize) >= 1.69), "read-only text is not selectable with specified line height");
   check(await row("00:00:00").getByRole("button", { name: "00:00:00の発言を編集", exact: true }).isDisabled(), "editing was offered without a versioned draft");
   results.push("normal transcript is selectable non-button text with 1.7 line height; editing requires its versioned draft");
   await begin(); await edit("00:00:00"); await text("00:00:00").fill("確定するまでは未保存です。");
@@ -96,7 +99,7 @@ async page => {
   const split = page.getByRole("dialog", { name: "発言の手動分割", exact: true }); await split.waitFor();
   check(await split.locator(".split-preview p").allTextContents().then(parts => parts.join("") === "編集済み本文を正確に二分します。"), "split preview ignored the unconfirmed edit buffer");
   await split.getByRole("button", { name: "分割して保存", exact: true }).click(); await split.waitFor({ state: "hidden" }); await saved();
-  const p = await payload(); check(p.utterance_splits[0].parts.map(part => part.effective_text).join("") === "編集済み本文を正確に二分します。" && (await writes()).length === 2 && await editor.locator("textarea").count() === 0, "split saved different text or kept a removed source buffer");
+  const p = await payload(); check(p.utterance_splits[0].parts.map(part => part.effective_text).join("") === "編集済み本文を正確に二分します。" && (await writes()).length === 2 && await body.locator("textarea").count() === 0, "split saved different text or kept a removed source buffer");
   results.push("manual split previews the staged text and acknowledges it before splitting; removed source buffers are released");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("表示幅とテーマを切り替えても編集は続きます。\n改行も維持します。");
   for (const theme of ["light", "dark"]) for (const width of [960, 1200]) {

@@ -248,6 +248,42 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-detail-content .minutes-document-status .data-updated { padding:4px 8px; font-size:12px; }
 .meeting-detail-content .job-notifications { flex:none; max-height:16dvh; overflow:auto; }
 .meeting-detail-content .transcript-card>.action-error,.meeting-detail-content .issue-status { flex:none; max-height:10dvh; overflow:auto; font-size:12px; }
+.transcript-split { display:grid; grid-template-columns:216px minmax(0,1fr); gap:24px; flex:1; min-height:0; }
+.transcript-main { display:flex; flex-direction:column; gap:6px; min-width:0; min-height:0; overflow:hidden; }
+.workspace-panel-shell { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.workspace-panel-side-host,.workspace-panel-drawer-host { display:flex; min-height:0; flex:1; }
+.workspace-panel-side-host[hidden],.workspace-drawer-trigger[hidden] { display:none; }
+.workspace-panel-body { min-width:0; flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:2px 8px 8px 2px; }
+.speaker-panel-body h3 { margin:0 0 12px; font-size:14px; }
+.speaker-panel-body .speaker-grid { display:grid; grid-template-columns:minmax(0,1fr); margin:12px 0; gap:12px; }
+.speaker-panel-body .speaker-name-editor { border:1px solid var(--border); border-radius:8px; padding:8px; min-width:0; }
+.speaker-panel-body .speaker-grid input { width:100%; min-width:0; }
+.speaker-filters { display:flex; flex-wrap:wrap; gap:6px; }
+.speaker-filters button,.speaker-filter { padding:6px 8px; font-size:12px; }
+.speaker-filter { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px; width:100%; background:var(--raised); color:var(--text); text-align:left; }
+.speaker-filter strong { overflow-wrap:anywhere; }
+.speaker-filter span,.speaker-unset { font-size:11px; color:var(--muted); }
+.speaker-filters [aria-pressed=true],.speaker-filter[aria-pressed=true] { box-shadow:inset 0 0 0 2px var(--primary); }
+.speaker-panel-body .hint { font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.speaker-panel-body .transcript-actions { flex-wrap:wrap; gap:6px; margin-block:6px; }
+.speaker-panel-body .transcript-actions label,.speaker-panel-body select { width:100%; max-width:100%; min-width:0; }
+.speaker-panel-body button { max-width:100%; white-space:normal; }
+.speaker-diarization-tools { margin-top:16px; border-top:1px solid var(--border); padding-top:12px; }
+.speaker-diarization-tools>summary { font-size:13px; font-weight:700; cursor:pointer; }
+.speaker-panel-body .diarization-panel { margin-top:12px; padding-top:0; border:0; }
+.speaker-panel-body .diarization-panel h3 { margin-top:12px; }
+.speaker-panel-body .diarization-panel p { font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.speaker-panel-body .diarization-panel .analysis-settings { padding:8px; }
+.speaker-panel-body .diarization-panel input,.speaker-panel-body .diarization-panel textarea { min-width:0; max-width:100%; }
+.speaker-panel-body .diarization-tracks { padding:0; min-width:0; }
+.speaker-panel-body .analysis-jobs li { display:grid; }
+.workspace-drawer { position:fixed; inset:112px auto 16px 64px; margin:0; width:min(360px,calc(100vw - 80px)); max-width:none; height:calc(100dvh - 128px); max-height:calc(100dvh - 128px); padding:16px; border-radius:0 12px 12px 0; overflow:hidden; }
+.workspace-drawer[open] { display:flex; flex-direction:column; }
+.workspace-drawer .common-modal-dismiss-row { flex:none; position:static; padding:0 0 12px; }
+.workspace-drawer .common-modal-body { display:flex; flex:1; min-height:0; }
+.workspace-drawer .common-modal-body[hidden] { display:none; }
+.workspace-drawer .action-confirmation { min-height:0; overflow:auto; overflow-wrap:anywhere; }
+@media(max-width:1119px) { .transcript-split { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:6px; } .workspace-panel-shell { flex:none; } .workspace-drawer-trigger { align-self:flex-start; padding:6px 10px; font-size:12px; } }
 @media (max-width:760px) { .content.meeting-detail-content { padding:8px; } .meeting-detail-tabs { padding:0 8px; } }
 @media (max-width:760px) { .meeting-detail-content .transcript-actions { gap:4px; } .meeting-detail-content .transcript-search { max-height:12dvh; overflow:auto; } .meeting-playback-dock .playback-owner { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; } }
 .topbar { flex:none; min-height:64px; height:auto; gap:12px; flex-wrap:wrap; padding:12px 24px; }

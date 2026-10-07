@@ -4,7 +4,7 @@ import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
 import { TranscriptEditor } from "./transcript";
@@ -121,6 +121,10 @@ function MainWindow() {
   const [meetingBusy, setMeetingBusy] = useState(false);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const [detailTab, setDetailTab] = useState<"transcript" | "minutes">("transcript");
+  const [diarizationHost,setDiarizationHost] = useState<{ meetingId: string; node: HTMLDivElement } | null>(null);
+  const bindDiarizationHost = useCallback((meetingId: string,node: HTMLDivElement | null) => {
+    setDiarizationHost(current => node ? { meetingId,node } : current?.meetingId === meetingId ? null : current);
+  }, []);
   const [meetingToolsOpen, setMeetingToolsOpen] = useState(false);
   useLayoutEffect(() => { setDetailTab("transcript"); }, [selectedMeeting?.id]);
   const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
@@ -524,14 +528,14 @@ function MainWindow() {
               <p>{selectedMeeting.sourceType === "audio_import" && selectedMeeting.lifecycle === "draft" ? "音声取り込みが未完了です。保存状況を確認してから取り込み直してください。" : selectedMeeting.lifecycle === "draft" ? "この会議を選択して録音を開始できます。" : ["recorded","imported"].includes(selectedMeeting.lifecycle) ? "録音・取り込みは完了しています。音声削除後は再生・解析・再解析できません。採用した文字起こしから議事録を生成できます。" : "録音状態を確認してください。"}</p>
             </form>}
           </section>
-          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
+          {selectedMeeting && <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} diarizationHost={diarizationHost?.meetingId === selectedMeeting.id ? diarizationHost.node : null} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}
           </div></details>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
-            <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} />
+            <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onDiarizationHost={bindDiarizationHost} />
           </div>}
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-minutes" role="tabpanel" aria-labelledby="meeting-tab-minutes" hidden={detailTab !== "minutes"}><MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);

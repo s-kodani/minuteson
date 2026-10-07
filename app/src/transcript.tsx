@@ -2,7 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { WorkspacePanel } from "./workspace-panel";
 import { createPortal } from "react-dom";
 import { confirmations } from "./confirmation-service";
 import { TranscriptRecoverySaveQueue, type TranscriptRecovery } from "./transcript-recovery-save";
@@ -39,7 +40,7 @@ export function timeLabel(microseconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playbackHost = null }: { meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null }) {
+export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playbackHost = null, visible = true, onDiarizationHost }: { meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onDiarizationHost?: (meetingId: string,node: HTMLDivElement | null) => void }) {
   const confirm = useActionConfirmation(locked);
   const activeConfirmation = useSyncExternalStore(confirmations.subscribe,confirmations.getSnapshot);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -82,6 +83,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const [noticeVersion, setNoticeVersion] = useState<number | null>(null);
   const addDialog = useRef<HTMLDialogElement>(null);
   const [speakerFilter,setSpeakerFilter]=useState("");
+  const [speakerMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body speaker-panel-body"; return node; });
+  const bindDiarizationHost = useCallback((node: HTMLDivElement | null) => onDiarizationHost?.(meetingId,node), [meetingId,onDiarizationHost]);
   const [query,setQuery]=useState("");
   const [splitting,setSplitting]=useState<Utterance|null>(null);
   const [pendingSplit,setPendingSplit]=useState(false);
@@ -346,6 +349,11 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const matchingBase = Boolean(draft && draft.baseAnalysisId === analysis?.id);
   const view = useMemo(()=>analysis ? projectTranscript(analysis,matchingBase?payload:null) : null,[analysis,matchingBase,payload]);
   const speakers = view ? activeSpeakers(view,matchingBase?payload:null) : [];
+  const speakerCounts = useMemo(() => {
+    const counts = new Map<string,number>();
+    for (const utterance of view?.utterances ?? []) for (const id of new Set(utterance.speakerIds)) counts.set(id,(counts.get(id) ?? 0) + 1);
+    return counts;
+  }, [view]);
   const filtered=useMemo(()=>view?filterUtterances(view,speakerFilter,query):[],[view,speakerFilter,query]);
   const retained = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, [...Object.keys(textSessions), ...(focusedRow ? [focusedRow] : [])]);
   const shown = retained.rows;
@@ -549,7 +557,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
       </div>
       {loading && <p>解析結果を読み込んでいます。</p>}
       {!loading && !analysis && !error && <p>確定済みの解析結果はまだありません。</p>}
-      {analysis && <>
+      {analysis && <div className="transcript-split">
+        <WorkspacePanel content={speakerMount} label="話者一覧" active={visible} />
+        <div className="transcript-main">
         <div className="transcript-actions">
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
           {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty || nameDirty ? "未保存" : "保存済み"}</span>}
@@ -593,14 +603,26 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || nameDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? []) && !namesDirty(nameBuffers.current,view?.speakers ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {!splitting && !playbackHost && audio.controls}
+        {createPortal(<>
+        <h3>話者一覧</h3>
+        {draft && <p role="status" className="hint">{saveError ? "話者名の保存結果を確認してください。入力は保持しています。" : saving ? "保存を確認中" : nameDirty ? "名前は未確定" : "名前は保存済み"}</p>}
+        {saveError && <button type="button" className="small-secondary" disabled={saving || busy || locked || discardPending || !!activeConfirmation} onClick={() => void runRecoveryAction(retryTextBuffers)}>話者名の保存を再試行</button>}
+        <div className="speaker-filters" aria-label="話者一覧から絞り込み">
+          <button type="button" className="small-secondary" aria-pressed={speakerFilter === ""} disabled={loading} onClick={() => setSpeakerFilter("")}>すべての発言</button>
+          <button type="button" className="small-secondary" aria-pressed={speakerFilter === "unknown"} disabled={loading} onClick={() => setSpeakerFilter("unknown")}>話者不明の発言</button>
+        </div>
         <div className="speaker-grid">
           {speakers.map((speaker) => {
             const session = nameSessions[speaker.id], pending = namePending[speaker.id];
             return <div key={speaker.id} className="speaker-name-editor" role="group" aria-label={`${speaker.label}の名前編集`}>
+              <button type="button" className="speaker-filter" aria-label={`${speaker.displayName || speaker.label}の発言で絞り込み`} aria-pressed={speakerFilter === speaker.id} disabled={loading} onClick={() => setSpeakerFilter(speaker.id)}>
+                <strong>{speaker.displayName || speaker.label}</strong><span>{speakerCounts.get(speaker.id) ?? 0}発言</span>
+              </button>
+              {!speaker.displayName && <small className="speaker-unset">名前未設定</small>}
               <label>{speaker.label}<input ref={node => { if(node) nameInputs.current.set(speaker.id,node); else nameInputs.current.delete(speaker.id); }} value={session?.value ?? speaker.displayName ?? ""} onChange={event => changeName(speaker,event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名"
                 onKeyDown={event => {
-                  if(!session || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat || event.altKey || event.shiftKey || overlayOpen()) return;
-                  if(event.key === "Enter" || event.key === "Escape") { event.preventDefault(); void finishName(speaker.id,event.key === "Enter" ? "commit" : "cancel"); }
+                  if(!session || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat || event.altKey || event.shiftKey || overlayOpen(event.currentTarget)) return;
+                  if(event.key === "Enter" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); void finishName(speaker.id,event.key === "Enter" ? "commit" : "cancel"); }
                 }} /></label>
               {session && <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"commit")}>確定</button><button type="button" className="small-secondary" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"cancel")}>キャンセル</button><span>{pending ? "保存を確認中" : "Enterで確定 · Escでキャンセル"}</span></div>}
             </div>;
@@ -619,6 +641,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           }}>話者を統合</button>
         </div>
         {!!payload?.speaker_merges?.length&&<p className="hint">統合済みラベルは割り当て候補から除外しています。推定区間には統合前のラベルを残します。</p>}
+        <details className="speaker-diarization-tools"><summary>人数指定・話者分離</summary><div ref={bindDiarizationHost} /></details>
+        </>,speakerMount)}
         <div className="transcript-actions" aria-label="複数発言の話者変更"><span>選択 {selection.length} 発言（全ページ）</span><label>割り当て先 <select value={bulkSpeaker} disabled={!editable} onChange={e=>setBulkSpeaker(e.target.value)}><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><button type="button" disabled={!editable||!selection.length} onClick={()=>{
           if(!payload)return;
           const ids = [...selection], speaker = bulkSpeaker, expected = JSON.stringify(saveQueue.snapshot().payload);
@@ -665,7 +689,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         </div>
         {!filtered.length&&<p>条件に一致する発言はありません。{retained.extra > 0 && "編集中・フォーカス中の発言は保持しています。"}</p>}
         {filtered.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => setPage((value) => value + 1)} disabled={(page + 1) * PAGE_SIZE >= filtered.length}>次へ</button></div>}
-      </>}
+        </div>
+      </div>}
       {error && <p className="action-error" role="alert">{error}</p>}
       <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存に失敗" message={saveError ? `編集は画面に保持しています。内容を確認して保存を再試行してください: ${saveError}` : ""} action={{ kind: "retry", label: "文字起こし保存を再試行", disabled: saving || locked || busy || confirm.pending || !!conflictPreview, run: () => retryTextBuffers().catch(() => { /* The queue publishes the retained failure. */ }) }} />
       <CommonModal ref={splitDialog} open={!!splitting} blocked={busy} onDismiss={()=>{audio.clear();setSplitting(null);}} restoreReady={!busy} className="analysis-dialog split-dialog" aria-label="発言の手動分割">
