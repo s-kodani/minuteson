@@ -71,6 +71,11 @@ impl MeetingAudio {
                     .checked_add(span.frames)
                     .ok_or("会議音声の長さが範囲外です")?;
             }
+            // Mapped sources retain full physical spans for their filter halo;
+            // only the logical meeting-time output count determines duration.
+            if audio.clock.is_some() {
+                frames = audio.total_frames();
+            }
             // Prepared ranges may round the first/last source frame outward.
             let duration = i128::from(audio.end_us - audio.start_us);
             if (duration * i128::from(audio.sample_rate) - i128::from(frames) * 1_000_000).abs()
@@ -115,6 +120,27 @@ impl MeetingAudio {
             let first = offset.max(source.first_output);
             let last = (offset + frames).min(source.last_output);
             if first >= last {
+                continue;
+            }
+            if let Some(clock) = &mut source.audio.clock {
+                let pcm = clock.read(
+                    &mut source.audio.spans,
+                    source.audio.channels,
+                    MEETING_RATE,
+                    first,
+                    last - first,
+                )?;
+                for (index, frame) in pcm
+                    .chunks_exact(source.audio.channels as usize * 4)
+                    .enumerate()
+                {
+                    let value: f64 = frame
+                        .chunks_exact(4)
+                        .map(|sample| f64::from(f32::from_le_bytes(sample.try_into().unwrap())))
+                        .sum::<f64>()
+                        / f64::from(source.audio.channels);
+                    mixed[(first - offset) as usize + index] += value * gain;
+                }
                 continue;
             }
             let start_us = source.audio.start_us as u128;

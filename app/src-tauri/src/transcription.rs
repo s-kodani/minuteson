@@ -115,15 +115,15 @@ pub(crate) fn retry_preflight(
             track.end_us,
             cancelled,
         )?;
-        if audio.total_frames()
-            != track
-                .chunks
-                .iter()
-                .map(|chunk| chunk.frames as u64)
-                .sum::<u64>()
+        if audio.total_frames() != track.total_frames()?
+            || audio.sample_rate != track.sample_rate
+            || audio.channels != track.channels
         {
             return Err("固定した入力フレーム数が変更されています".into());
         }
+    }
+    if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
+        return Err("固定した録音入力・時刻補正が音声準備中に変更されています".into());
     }
     for output in &decoded.outputs {
         verify_saved_pcm(storage, spec, &parameters, output, cancelled)?;
@@ -317,13 +317,7 @@ fn checked_checkpoint(
 fn units(source: &RecordedAudioPlan) -> Result<Vec<Unit>, String> {
     let mut units = Vec::new();
     for (track_index, track) in source.tracks.iter().enumerate() {
-        let frames = track
-            .chunks
-            .iter()
-            .try_fold(0_u64, |sum, chunk| {
-                sum.checked_add(u64::try_from(chunk.frames).ok()?)
-            })
-            .ok_or("音声フレーム数が不正です")?;
+        let frames = track.total_frames()?;
         let rate = u64::from(track.sample_rate);
         if !(8_000..=384_000).contains(&rate)
             || !(1..=8).contains(&track.channels)
@@ -453,16 +447,16 @@ pub(crate) fn process(
                 track.end_us,
                 &cancelled,
             )?;
-            if audio.total_frames()
-                != track
-                    .chunks
-                    .iter()
-                    .map(|chunk| chunk.frames as u64)
-                    .sum::<u64>()
+            if audio.total_frames() != track.total_frames()?
+                || audio.sample_rate != track.sample_rate
+                || audio.channels != track.channels
             {
                 return Err("録音入力のフレーム数が変更されています".into());
             }
             prepared.push(audio);
+        }
+        if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
+            return Err("固定した録音入力・時刻補正が音声準備中に変更されています".into());
         }
         for index in checkpoint.outputs.len()..parameters.units.len() {
             if cancelled() {

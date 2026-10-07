@@ -2,6 +2,7 @@ mod analysis_flow;
 mod analysis_worker;
 mod application_close;
 mod audio;
+mod audio_clock;
 mod audio_import;
 #[cfg(target_os = "macos")]
 mod bootstrap;

@@ -244,9 +244,6 @@ impl Storage {
             if track.gaps.len() > 1024 || track.mappings.len() > 1024 {
                 return Err("会議音声の時刻・欠損記録が多すぎます".into());
             }
-            if !track.mappings.is_empty() {
-                return Err("時刻補正済みトラックの再生はまだ接続されていません".into());
-            }
         }
         if tracks
             .iter()

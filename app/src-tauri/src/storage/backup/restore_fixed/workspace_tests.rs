@@ -3,6 +3,55 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn corrected_clock_proof_survives_archive_id_rebinding_and_fixed_job_rebuild() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = super::super::tests::fixture_with_clock(&storage, "corrected-backup", true);
+    let original = storage.recorded_audio_plan(&meeting).unwrap();
+    let source = read(&storage, output.path());
+    let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
+        false
+    })
+    .unwrap();
+    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let workspace = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+    let new_meeting = ids.get("meetings", "", &meeting).unwrap();
+    let rebuilt = super::super::super::super::transcription::read_audio_plan(
+        &workspace.database,
+        &new_meeting,
+    )
+    .unwrap();
+    assert_ne!(original.tracks[0].id, rebuilt.tracks[0].id);
+    assert_ne!(
+        original.tracks[0].chunks[0].asset_id,
+        rebuilt.tracks[0].chunks[0].asset_id
+    );
+    assert_eq!(
+        original.tracks[0].chunks[0].hash,
+        rebuilt.tracks[0].chunks[0].hash
+    );
+    assert_eq!(
+        original.tracks[0].chunks[0].clock_segments,
+        rebuilt.tracks[0].chunks[0].clock_segments
+    );
+    assert_eq!(
+        original.tracks[0].total_frames().unwrap(),
+        rebuilt.tracks[0].total_frames().unwrap()
+    );
+    let parameters:Vec<String>=workspace.database.prepare("SELECT parameters_json FROM processing_jobs WHERE kind IN ('transcription','diarization')").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(parameters.len(), 3);
+    for json in parameters {
+        let value: Value = serde_json::from_str(&json).unwrap();
+        let plan = value
+            .get("source")
+            .unwrap_or(&value["diarization"]["source"]);
+        assert_eq!(*plan, serde_json::to_value(&rebuilt).unwrap());
+    }
+    assert_eq!(storage.recorded_audio_plan(&meeting).unwrap(), original);
+}
+
+#[test]
 fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves_live_data() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

@@ -1,5 +1,7 @@
 use super::*;
+use crate::audio_clock::{ClockChunk, ClockLayout, ClockSegment};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[cfg(all(test, unix))]
 #[path = "transcription_tests.rs"]
@@ -36,6 +38,83 @@ pub struct ChunkPlan {
     pub frames: i64,
     pub sample_rate: u32,
     pub channels: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) clock_segments: Vec<ClockSegment>,
+}
+
+pub(super) fn read_clock_segments(
+    db: &Connection,
+    track: &str,
+) -> Result<BTreeMap<String, Vec<ClockSegment>>, String> {
+    // Do not allocate an arbitrarily large archived JSON string before checking
+    // the bound. SQLite tests UTF-8 byte length and returns only a bounded value.
+    let mut query = db.prepare("SELECT chunk_id, source_frame_start, source_frame_end, timeline_start_us, timeline_end_us, CASE WHEN length(CAST(mapping_json AS BLOB)) <= 4096 THEN mapping_json ELSE '' END, length(CAST(mapping_json AS BLOB)) <= 4096 FROM track_clock_segments WHERE track_id=?1 ORDER BY chunk_id, source_frame_start, id LIMIT 1025").map_err(|e| e.to_string())?;
+    let rows = query
+        .query_map(params![track], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ClockSegment {
+                    source_frame_start: row.get(1)?,
+                    source_frame_end: row.get(2)?,
+                    timeline_start_us: row.get(3)?,
+                    timeline_end_us: row.get(4)?,
+                    mapping_json: row.get(5)?,
+                },
+                row.get::<_, bool>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if rows.len() > 1024 {
+        return Err("時刻補正の対応区間が多すぎます".into());
+    }
+    let mut segments = BTreeMap::<String, Vec<ClockSegment>>::new();
+    for (chunk, segment, bounded) in rows {
+        if !bounded {
+            return Err("時刻補正の形式情報が容量上限を超えています".into());
+        }
+        segments.entry(chunk).or_default().push(segment);
+    }
+    Ok(segments)
+}
+
+impl TrackPlan {
+    pub(crate) fn total_frames(&self) -> Result<u64, String> {
+        if self
+            .chunks
+            .iter()
+            .any(|chunk| !chunk.clock_segments.is_empty())
+        {
+            if self.chunks.iter().any(|chunk| {
+                chunk.sample_rate != self.sample_rate || chunk.channels != self.channels
+            }) {
+                return Err("時刻補正のトラックと音声区間の形式が一致しません".into());
+            }
+            let layout = ClockLayout::new(
+                &self
+                    .chunks
+                    .iter()
+                    .map(|chunk| ClockChunk {
+                        frames: chunk.frames,
+                        start_us: chunk.start_us,
+                        end_us: chunk.end_us,
+                        segments: &chunk.clock_segments,
+                    })
+                    .collect::<Vec<_>>(),
+                self.sample_rate,
+            )?;
+            let (first, last) = layout.range(self.start_us, self.end_us, self.sample_rate)?;
+            Ok(last - first)
+        } else {
+            self.chunks
+                .iter()
+                .try_fold(0_u64, |sum, chunk| {
+                    sum.checked_add(u64::try_from(chunk.frames).ok()?)
+                })
+                .ok_or("音声フレーム数が不正です".into())
+        }
+    }
 }
 
 impl Storage {
@@ -111,7 +190,8 @@ fn read_audio_metadata(
         .map_err(|e| e.to_string())?;
     let mut plans = Vec::new();
     for (id, kind, sample_rate, channels) in tracks {
-        let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = ?3 AND f.state = ?3 ORDER BY c.start_us, c.sequence").map_err(|e| e.to_string())?;
+        let mut mappings = read_clock_segments(transaction, &id)?;
+        let mut query = transaction.prepare("SELECT f.id, f.content_hash, f.size_bytes, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels, c.id FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.state = ?3 AND f.state = ?3 ORDER BY c.start_us, c.sequence LIMIT 1025").map_err(|e| e.to_string())?;
         let rows = query
             .query_map(params![id, meeting_id, chunk_state], |row| {
                 Ok(ChunkPlan {
@@ -123,18 +203,26 @@ fn read_audio_metadata(
                     frames: row.get(5)?,
                     sample_rate: row.get(6)?,
                     channels: row.get(7)?,
+                    clock_segments: mappings
+                        .remove(&row.get::<_, String>(8)?)
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| e.to_string())?;
         let chunks = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        if chunks.is_empty() || chunks.len() > 1024 || sample_rate == 0 || channels == 0 {
+        if chunks.is_empty()
+            || chunks.len() > 1024
+            || sample_rate == 0
+            || channels == 0
+            || !mappings.is_empty()
+        {
             return Err("解析入力トラックの区間または形式が不正です".into());
         }
         let start_us = chunks[0].start_us;
         let end_us = chunks.last().unwrap().end_us;
-        plans.push(TrackPlan {
+        let plan = TrackPlan {
             id,
             kind,
             start_us,
@@ -142,7 +230,9 @@ fn read_audio_metadata(
             sample_rate,
             channels,
             chunks,
-        });
+        };
+        plan.total_frames()?;
+        plans.push(plan);
     }
     if plans.is_empty() || plans.len() > 2 || (source_kind == "audio_import" && plans.len() != 1) {
         return Err("解析対象の保存済み音声トラックが不正です".into());

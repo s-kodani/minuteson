@@ -180,6 +180,7 @@ fn directory_sync_failure_reports_published_audio_for_recovery() {
 fn prepared(audio: VerifiedAudio) -> crate::playback::PreparedAudio {
     let frames = audio.format.frames;
     crate::playback::PreparedAudio {
+        clock: None,
         sample_rate: audio.format.sample_rate,
         channels: audio.format.channels,
         start_us: 0,

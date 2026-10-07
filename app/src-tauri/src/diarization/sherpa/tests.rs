@@ -88,6 +88,7 @@ fn wav(directory: &Path) {
     )
     .unwrap();
     let mut source = PreparedAudio {
+        clock: None,
         sample_rate: 16_000,
         channels: 1,
         start_us: 0,
@@ -505,6 +506,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
     let frames = verified.format.frames;
     let duration = (frames * 1_000_000 / u64::from(rate)) as i64;
     let mut audio = PreparedAudio {
+        clock: None,
         sample_rate: rate,
         channels: verified.format.channels,
         start_us: 0,

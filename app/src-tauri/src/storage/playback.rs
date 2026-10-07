@@ -1,8 +1,11 @@
 use super::*;
 use crate::audio::VerifiedAudio;
+use crate::audio_clock::{ClockChunk, ClockLayout};
+use crate::playback::ClockAudio;
 use crate::playback::{AudioSpan, PreparedAudio};
 use std::fs::File;
 
+#[derive(PartialEq, Eq)]
 struct Chunk {
     relative_path: String,
     size: i64,
@@ -12,6 +15,7 @@ struct Chunk {
     frame_count: i64,
     rate: i64,
     channels: i64,
+    id: String,
 }
 
 #[cfg(test)]
@@ -21,6 +25,181 @@ pub(in crate::storage) mod tests {
     use crate::audio::tests::caf_fixture;
     use crate::playback::PlaybackPreparations;
     use crate::playback::PlaybackStore;
+
+    fn corrected(storage: &Storage, drift: bool) {
+        let db = storage.connection.lock().unwrap();
+        for sequence in 0..2 {
+            let start = sequence * if drift { 550000 } else { 500000 };
+            let end = start + if drift { 550000 } else { 500000 };
+            db.execute(
+                "UPDATE audio_chunks SET start_us=?1,end_us=?2 WHERE id=?3",
+                params![start, end, format!("chunk-{sequence}")],
+            )
+            .unwrap();
+            db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track',?2,0,24000,?3,?4,?5)",params![format!("map-{sequence}"),format!("chunk-{sequence}"),start,end,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+        }
+    }
+
+    #[test]
+    fn corrected_identity_preserves_samples_original_files_and_saved_analysis() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        let before = storage.load_current_analysis(&meeting).unwrap();
+        let path = root
+            .path()
+            .join("meetings")
+            .join(&meeting)
+            .join("audio/0.caf");
+        let bytes = std::fs::read(&path).unwrap();
+        let mut original = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .unwrap();
+        let pcm = original.read_pcm(0, 24000).unwrap();
+        corrected(&storage, false);
+        let mut mapped = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .unwrap();
+        assert_eq!(mapped.total_frames(), 24000);
+        assert_eq!(mapped.read_pcm(0, 24000).unwrap(), pcm);
+        assert_eq!(mapped.alignment, "unverified");
+        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), before);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn corrected_drift_moves_chunk_boundary_on_meeting_time_and_keeps_slice_and_seek_phase() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        corrected(&storage, true);
+        let mut full = storage
+            .prepare_track_audio(&meeting, "track", 0, 1100000)
+            .unwrap();
+        let pcm = full.read_pcm(0, 52800).unwrap();
+        let mut sliced = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .unwrap();
+        assert_eq!(sliced.total_frames(), 24000);
+        assert_eq!(
+            sliced.read_pcm(0, 24000).unwrap(),
+            pcm[12000 * 4..36000 * 4]
+        );
+        let values = sliced.read_pcm(14000, 800).unwrap();
+        assert!((f32::from_le_bytes(values[0..4].try_into().unwrap()) - 0.25).abs() < 1e-6);
+        assert!(
+            (f32::from_le_bytes(values[799 * 4..800 * 4].try_into().unwrap()) + 0.5).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn corrected_metadata_changed_during_hash_is_rejected_before_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        corrected(&storage, true);
+        let checks = std::cell::Cell::new(0);
+        let error = storage
+            .prepare_utterance_audio_cancellable(&meeting, &analysis, &utterance, &|| {
+                checks.set(checks.get() + 1);
+                if checks.get() == 4 {
+                    storage
+                        .connection
+                        .lock()
+                        .unwrap()
+                        .execute(
+                            "UPDATE track_clock_segments SET mapping_json='{}' WHERE id='map-0'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                false
+            })
+            .err()
+            .unwrap();
+        assert!(error.contains("時刻補正が変更"), "{error}");
+    }
+
+    #[test]
+    fn corrected_hashing_is_cancellable_and_does_not_change_mapping_or_audio() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        corrected(&storage, true);
+        let checks = std::cell::Cell::new(0);
+        let error = storage
+            .prepare_utterance_audio_cancellable(&meeting, &analysis, &utterance, &|| {
+                checks.set(checks.get() + 1);
+                checks.get() >= 5
+            })
+            .err()
+            .unwrap();
+        assert!(error.contains("中断"), "{error}");
+        assert!(storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .is_ok());
+    }
+
+    #[test]
+    fn corrected_gap_outside_requested_slice_does_not_block_known_audio_or_become_silence() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        corrected(&storage, true);
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute(
+                "UPDATE audio_chunks SET start_us=650000,end_us=1200000 WHERE id='chunk-1'",
+                [],
+            )
+            .unwrap();
+            db.execute("UPDATE track_clock_segments SET timeline_start_us=650000,timeline_end_us=1200000 WHERE id='map-1'",[]).unwrap();
+            db.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES ('gap','track',550000,650000,'missing')",[]).unwrap();
+        }
+        for (start, end, value) in [(0, 550000, 0.25), (650000, 1200000, -0.5)] {
+            let mut audio = storage
+                .prepare_track_audio(&meeting, "track", start, end)
+                .unwrap();
+            assert_eq!(audio.total_frames(), 26400);
+            assert!(audio
+                .read_pcm(0, 26400)
+                .unwrap()
+                .chunks_exact(4)
+                .all(
+                    |sample| (f32::from_le_bytes(sample.try_into().unwrap()) - value).abs() < 1e-6
+                ));
+        }
+        assert!(storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .err()
+            .unwrap()
+            .contains("欠損"));
+    }
+
+    #[test]
+    fn oversized_clock_metadata_is_rejected_by_sql_before_loading_json() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        corrected(&storage, false);
+        let metadata =
+            serde_json::json!({"schema_version":1,"method":"linear","padding":"x".repeat(8192)})
+                .to_string();
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE track_clock_segments SET mapping_json=?1 WHERE id='map-0'",
+                params![metadata],
+            )
+            .unwrap();
+        let error = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .err()
+            .unwrap();
+        assert!(error.contains("容量上限"), "{error}");
+    }
 
     #[test]
     fn native_cancel_interrupts_file_hashing_and_keeps_saved_analysis_and_audio() {
@@ -264,6 +443,21 @@ pub(in crate::storage) mod tests {
             .err()
             .unwrap()
             .contains("保存記録"));
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audio_chunks SET frame_count=24000 WHERE id='chunk-0'",
+                [],
+            )
+            .unwrap();
+        corrected(&storage, false);
+        let mut mapped = storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .unwrap();
+        assert_eq!(mapped.read_pcm(0, 24000).unwrap(), packet[12..]);
+        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), before);
     }
 
     #[test]
@@ -407,11 +601,12 @@ impl Storage {
         if start < 0 || end <= start {
             return Err("音声区間が不正です".into());
         }
-        let (kind, config, chunks) = {
-            let connection = self
+        let read_source = || -> Result<_, String> {
+            let mut db = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
+            let connection = db.transaction().map_err(|e| e.to_string())?;
             #[cfg(unix)]
             super::deletion::audio::require_source(&connection, meeting_id)?;
             let (kind, config): (String, Option<String>) = connection.query_row(
@@ -425,21 +620,13 @@ impl Storage {
             if gaps {
                 return Err("この発言の音声に欠損区間があります".into());
             }
-            let mapped: bool = connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM track_clock_segments WHERE track_id = ?1)",
-                    params![track],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if mapped {
-                return Err("時刻補正済みトラックの再生はまだ接続されていません".into());
-            }
+            let mappings = super::transcription::read_clock_segments(&connection, track)?;
+            let mapped = !mappings.is_empty();
             let mut query = connection.prepare(
-                "SELECT f.relative_path, f.size_bytes, f.content_hash, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND c.start_us < ?4 AND c.end_us > ?3 AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence",
+                "SELECT f.relative_path, f.size_bytes, f.content_hash, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels, c.id FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND (?5 OR (c.start_us < ?4 AND c.end_us > ?3)) AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence LIMIT 1025",
             ).map_err(|e| e.to_string())?;
             let chunks = query
-                .query_map(params![track, meeting_id, start, end], |row| {
+                .query_map(params![track, meeting_id, start, end, mapped], |row| {
                     Ok(Chunk {
                         relative_path: row.get(0)?,
                         size: row.get(1)?,
@@ -449,13 +636,16 @@ impl Storage {
                         frame_count: row.get(5)?,
                         rate: row.get(6)?,
                         channels: row.get(7)?,
+                        id: row.get(8)?,
                     })
                 })
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            (kind, config, chunks)
+            Ok((kind, config, chunks, mappings))
         };
+        let source = read_source()?;
+        let (kind, config, chunks, mappings) = &source;
         if chunks.len() > 1024 {
             return Err("発言の音声セグメントが多すぎます".into());
         }
@@ -463,11 +653,39 @@ impl Storage {
         let mut spans = Vec::new();
         let mut position = start;
         let mut audio_format = None;
+        let layout = if mappings.is_empty() {
+            None
+        } else {
+            if mappings
+                .keys()
+                .any(|id| !chunks.iter().any(|chunk| &chunk.id == id))
+            {
+                return Err("時刻補正の対応先に利用可能な音声がありません".into());
+            }
+            let rate = u32::try_from(chunks.first().ok_or("時刻補正の音声がありません")?.rate)
+                .map_err(|_| "時刻補正の音声形式が不正です")?;
+            let layout = ClockLayout::new(
+                &chunks
+                    .iter()
+                    .map(|chunk| ClockChunk {
+                        frames: chunk.frame_count,
+                        start_us: chunk.start_us,
+                        end_us: chunk.end_us,
+                        segments: mappings.get(&chunk.id).map_or(&[], Vec::as_slice),
+                    })
+                    .collect::<Vec<_>>(),
+                rate,
+            )?;
+            layout.range(start, end, rate)?;
+            Some(layout)
+        };
         for chunk in chunks {
             if cancelled() {
                 return Err("音声の再生準備を取り消しました".into());
             }
-            if chunk.start_us > position || (!spans.is_empty() && chunk.start_us != position) {
+            if layout.is_none()
+                && (chunk.start_us > position || (!spans.is_empty() && chunk.start_us != position))
+            {
                 return Err("音声セグメント間に欠損または重複があります".into());
             }
             let relative = Path::new(&chunk.relative_path);
@@ -491,10 +709,11 @@ impl Storage {
             if format.frames != chunk.frame_count as u64
                 || i64::from(format.sample_rate) != chunk.rate
                 || i64::from(format.channels) != chunk.channels
-                || (i128::from(chunk.end_us - chunk.start_us)
-                    - i128::from(chunk.frame_count) * 1_000_000 / i128::from(chunk.rate))
-                .abs()
-                    > 1
+                || (layout.is_none()
+                    && (i128::from(chunk.end_us - chunk.start_us)
+                        - i128::from(chunk.frame_count) * 1_000_000 / i128::from(chunk.rate))
+                    .abs()
+                        > 1)
             {
                 return Err("音声形式・時間と保存記録が一致しません".into());
             }
@@ -505,10 +724,17 @@ impl Storage {
             audio_format = Some(current_format);
             let from = position.max(chunk.start_us);
             let to = end.min(chunk.end_us);
-            let first =
-                (i128::from(from - chunk.start_us) * i128::from(chunk.rate) / 1_000_000) as u64;
-            let last = ((i128::from(to - chunk.start_us) * i128::from(chunk.rate) + 999_999)
-                / 1_000_000) as u64;
+            let first = if layout.is_some() {
+                0
+            } else {
+                (i128::from(from - chunk.start_us) * i128::from(chunk.rate) / 1_000_000) as u64
+            };
+            let last = if layout.is_some() {
+                format.frames
+            } else {
+                ((i128::from(to - chunk.start_us) * i128::from(chunk.rate) + 999_999) / 1_000_000)
+                    as u64
+            };
             let last = last.min(format.frames);
             if last <= first {
                 return Err("発言の音声フレームがありません".into());
@@ -520,14 +746,21 @@ impl Storage {
             });
             position = to;
         }
-        if position != end || spans.is_empty() {
+        if (layout.is_none() && position != end) || spans.is_empty() {
             return Err("発言に対応する保存音声が不足しています".into());
         }
         let (sample_rate, channels) = audio_format.unwrap();
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
         }
+        if read_source()? != source {
+            return Err("音声準備中に保存記録・時刻補正が変更されました".into());
+        }
+        let clock = layout
+            .map(|layout| ClockAudio::new(layout, start, end, sample_rate))
+            .transpose()?;
         let alignment = config
+            .clone()
             .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
             .and_then(|json| {
                 json.get("timeline_alignment")
@@ -540,9 +773,14 @@ impl Storage {
             channels,
             start_us: start,
             end_us: end,
-            track_kind: kind,
-            alignment,
+            track_kind: kind.clone(),
+            alignment: if clock.is_some() {
+                "unverified".into()
+            } else {
+                alignment
+            },
             spans,
+            clock,
         })
     }
 }

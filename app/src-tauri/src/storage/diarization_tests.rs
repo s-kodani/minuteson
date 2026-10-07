@@ -297,6 +297,66 @@ pub(in crate::storage) fn fixture(
     config.executable = Fingerprint::capture(&cli, &|| false).unwrap();
     (storage, meeting, config, request)
 }
+
+#[test]
+fn corrected_diarization_reads_meeting_time_and_rejects_changed_sealed_map() {
+    for change in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (storage, meeting, config, request) = fixture(root.path(), false);
+        let original = storage.load_current_analysis(&meeting).unwrap();
+        let draft = storage.load_transcript_draft(&meeting).unwrap();
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute(
+                "UPDATE audio_chunks SET end_us=10500000 WHERE id='chunk'",
+                [],
+            )
+            .unwrap();
+            for (id, first, last, start, end) in [
+                ("one", 0, 80000, 0, 5500000),
+                ("two", 80000, 160000, 5500000, 10500000),
+            ] {
+                db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track','chunk',?2,?3,?4,?5,?6)",params![id,first,last,start,end,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+            }
+        }
+        let job = enqueue(&storage, request, config);
+        let (spec, checkpoint) = storage.fixed_job_input(&job.id).unwrap();
+        assert_eq!(
+            spec.parameters["diarization"]["source"]["tracks"][0]["chunks"][0]["clockSegments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        if change {
+            let db = storage.connection.lock().unwrap();
+            db.execute(
+                "UPDATE track_clock_segments SET timeline_end_us=5600000 WHERE id='one'",
+                [],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE track_clock_segments SET timeline_start_us=5600000 WHERE id='two'",
+                [],
+            )
+            .unwrap();
+        }
+        storage.acquire_local_inference_job().unwrap().unwrap();
+        let result = diarization::process(&storage, &job.id, &|| false, &|_| {});
+        if change {
+            let error = result.err().unwrap();
+            assert!(error.contains("固定した録音入力"), "{error}");
+            assert_eq!(
+                storage.fixed_job_input(&job.id).unwrap(),
+                (spec, checkpoint)
+            );
+        } else {
+            assert!(result.unwrap().is_some());
+        }
+        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), original);
+        assert_eq!(storage.load_transcript_draft(&meeting).unwrap(), draft);
+    }
+}
 fn tracks(storage: &Storage, meeting: &str) -> Vec<TrackSettings> {
     storage
         .recorded_audio_plan(meeting)

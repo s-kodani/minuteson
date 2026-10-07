@@ -70,6 +70,89 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
 }
 
 #[test]
+fn corrected_source_is_sealed_in_new_jobs_and_legacy_plan_bytes_keep_their_shape() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, config) = fixture(root.path(), 4);
+    let legacy = storage.recorded_audio_plan(&meeting).unwrap();
+    let value = serde_json::to_value(&legacy).unwrap();
+    assert!(value["tracks"][0]["chunks"][0]
+        .get("clockSegments")
+        .is_none());
+    let decoded: RecordedAudioPlan = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE audio_chunks SET end_us=4400000 WHERE id='chunk'",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES ('map','track','chunk',0,64000,0,4400000,?1)",params![r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+    }
+    let mapped = storage.recorded_audio_plan(&meeting).unwrap();
+    assert_ne!(mapped, legacy);
+    assert_eq!(mapped.tracks[0].total_frames().unwrap(), 70400);
+    let job = enqueue(&storage, &meeting, "corrected", config, "standard").unwrap();
+    let fixed = storage.fixed_job_input(&job.id).unwrap();
+    assert_eq!(
+        fixed.0.parameters["source"],
+        serde_json::to_value(&mapped).unwrap()
+    );
+    assert_eq!(fixed.0.parameters["units"][0]["coreEnd"], 70400);
+    storage.acquire_next_job().unwrap().unwrap();
+    let candidate = process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    assert!(storage
+        .prepare_track_audio(&meeting, "track", 0, 4400000)
+        .is_ok());
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
+    assert!(!candidate.is_empty());
+}
+
+#[test]
+fn corrected_sealed_input_rejects_changed_piecewise_clock_even_with_same_frame_count() {
+    let root = tempfile::tempdir().unwrap();
+    let (storage, meeting, config) = fixture(root.path(), 4);
+    {
+        let db = storage.connection.lock().unwrap();
+        for (id, first, last, start, end) in [
+            ("one", 0, 32000, 0, 2100000),
+            ("two", 32000, 64000, 2100000, 4000000),
+        ] {
+            db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track','chunk',?2,?3,?4,?5,?6)",params![id,first,last,start,end,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+        }
+    }
+    let job = enqueue(&storage, &meeting, "corrected-fixed", config, "standard").unwrap();
+    let fixed = storage.fixed_job_input(&job.id).unwrap();
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE track_clock_segments SET timeline_end_us=2200000 WHERE id='one'",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE track_clock_segments SET timeline_start_us=2200000 WHERE id='two'",
+            [],
+        )
+        .unwrap();
+    }
+    storage.acquire_next_job().unwrap().unwrap();
+    let error = process(&storage, &job.id, &|| false, &|_| {})
+        .err()
+        .unwrap();
+    assert!(error.contains("固定した録音入力"), "{error}");
+    assert_eq!(storage.fixed_job_input(&job.id).unwrap(), fixed);
+    assert_eq!(
+        storage.recorded_audio_plan(&meeting).unwrap().tracks[0]
+            .total_frames()
+            .unwrap(),
+        64000
+    );
+}
+
+#[test]
 fn retry_after_engine_failure_reuses_only_durable_units_and_preserves_edits() {
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting, mut config) = fixture(root.path(), 124);

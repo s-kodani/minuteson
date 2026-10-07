@@ -210,6 +210,7 @@ mod tests {
         .unwrap();
         let frames = verified.format.frames;
         PreparedAudio {
+            clock: None,
             sample_rate: rate,
             channels,
             start_us: 0,

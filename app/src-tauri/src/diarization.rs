@@ -274,11 +274,7 @@ pub(crate) fn restore_result(
 
 fn track_frames(source: &RecordedAudioPlan, index: usize) -> Result<u64, String> {
     let track = &source.tracks[index];
-    let frames = track
-        .chunks
-        .iter()
-        .try_fold(0_u64, |n, c| n.checked_add(u64::try_from(c.frames).ok()?))
-        .ok_or("音声フレーム数が不正です")?;
+    let frames = track.total_frames()?;
     if frames == 0
         || !(8_000..=384_000).contains(&track.sample_rate)
         || !(1..=8).contains(&track.channels)
@@ -467,6 +463,9 @@ fn preflight(
             return Err("固定した音声形式・フレーム数が変更されています".into());
         }
         prepared.push(audio);
+    }
+    if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
+        return Err("固定した録音入力・時刻補正が音声準備中に変更されています".into());
     }
     Ok(prepared)
 }

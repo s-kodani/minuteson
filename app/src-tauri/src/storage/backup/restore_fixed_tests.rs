@@ -2,7 +2,22 @@ use super::super::archive::VerifiedArchive;
 use super::*;
 
 pub(super) fn fixture(storage: &Storage, operation: &str) -> String {
+    fixture_with_clock(storage, operation, false)
+}
+
+pub(super) fn fixture_with_clock(storage: &Storage, operation: &str, corrected: bool) -> String {
     let meeting = super::super::restore_ids::tests::fixture(storage, operation);
+    if corrected {
+        let db = storage.connection.lock().unwrap();
+        let (chunk,track,frames,start,end):(String,String,i64,i64,i64)=db.query_row("SELECT id,track_id,frame_count,start_us,end_us FROM audio_chunks WHERE meeting_id=?1",params![meeting],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).unwrap();
+        let middle = start + (end - start) * 11 / 20;
+        for (id, first, last, from, to) in [
+            ("clock-one", 0, frames / 2, start, middle),
+            ("clock-two", frames / 2, frames, middle, end),
+        ] {
+            db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",params![id,track,chunk,first,last,from,to,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+        }
+    }
     let global = storage.vocabulary_book(None).unwrap();
     storage
         .save_vocabulary_book(

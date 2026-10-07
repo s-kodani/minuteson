@@ -3,8 +3,10 @@ use serde::Serialize;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+mod clock;
 mod meeting;
 mod preparation;
+pub(crate) use clock::ClockAudio;
 pub(crate) use meeting::MeetingAudio;
 pub(crate) use preparation::PlaybackPreparations;
 
@@ -22,11 +24,15 @@ pub struct PreparedAudio {
     pub track_kind: String,
     pub alignment: String,
     pub spans: Vec<AudioSpan>,
+    pub(crate) clock: Option<ClockAudio>,
 }
 
 impl PreparedAudio {
     pub fn total_frames(&self) -> u64 {
-        self.spans.iter().map(|span| span.frames).sum()
+        self.clock.as_ref().map_or_else(
+            || self.spans.iter().map(|span| span.frames).sum(),
+            |clock| clock.frames,
+        )
     }
 
     pub fn read_pcm(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
@@ -38,26 +44,16 @@ impl PreparedAudio {
         {
             return Err("音声の読出し範囲が不正です".into());
         }
-        let mut result = Vec::with_capacity(frames as usize * self.channels as usize * 4);
-        let mut span_start = 0;
-        let end = offset + frames;
-        for span in &mut self.spans {
-            let span_end = span_start + span.frames;
-            let from = offset.max(span_start);
-            let to = end.min(span_end);
-            if to > from {
-                result.extend_from_slice(
-                    &span
-                        .audio
-                        .read_frames(span.first_frame + from - span_start, to - from)?,
-                );
-            }
-            span_start = span_end;
-            if span_start >= end {
-                break;
-            }
+        match &mut self.clock {
+            Some(clock) => clock.read(
+                &mut self.spans,
+                self.channels,
+                self.sample_rate,
+                clock.first_output + offset,
+                frames,
+            ),
+            None => clock::read_raw(&mut self.spans, self.channels, offset, frames),
         }
-        Ok(result)
     }
 }
 

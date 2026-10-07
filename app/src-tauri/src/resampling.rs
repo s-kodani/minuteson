@@ -15,6 +15,21 @@ impl Filter {
     pub(crate) fn new(input_rate: u32, output_rate: u32) -> Self {
         assert!(input_rate > 0 && output_rate > 0);
         let cutoff = (f64::from(output_rate) / f64::from(input_rate)).min(1.0) * 0.95;
+        Self::with_cutoff(cutoff, output_rate)
+    }
+
+    pub(crate) fn for_step(input: u128, output: u128) -> Result<Self, String> {
+        // 64x clock scaling plus 384kHz -> 48kHz needs a 512x filter step.
+        if input == 0 || output == 0 || input > output * 512 || output > input * 512 {
+            return Err("時刻補正の変換比が対応範囲外です".into());
+        }
+        Ok(Self::with_cutoff(
+            (output as f64 / input as f64).min(1.0) * 0.95,
+            1,
+        ))
+    }
+
+    fn with_cutoff(cutoff: f64, output_rate: u32) -> Self {
         let half = (16.0 / cutoff).ceil() as i64;
         let kernels = (0..=PHASES)
             .map(|phase| {

@@ -259,14 +259,50 @@ fn explicit_missing_leading_audio_is_not_ordinary_offset_padding() {
 }
 
 #[test]
-fn corrected_clock_maps_remain_explicitly_unconnected_instead_of_playing_wrong_times() {
+fn unknown_clock_metadata_is_not_played_as_identity() {
     let (_directory, storage, meeting) = fixture();
     storage.connection.lock().unwrap().execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES ('map','track','chunk-0',0,24000,0,500000,'{}')", []).unwrap();
     let error = storage
         .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::Mic))
         .err()
         .unwrap();
-    assert!(error.contains("時刻補正済み"), "{error}");
+    assert!(error.contains("時刻補正の形式情報"), "{error}");
+}
+
+#[test]
+fn corrected_mic_meeting_time_is_used_for_mic_and_both_mix_without_sync_claim() {
+    let (_directory, storage, meeting) = fixture();
+    add_system(&storage, &meeting);
+    {
+        let db = storage.connection.lock().unwrap();
+        for index in 0..2 {
+            db.execute(
+                "UPDATE audio_chunks SET start_us=?1,end_us=?2 WHERE id=?3",
+                params![
+                    index * 550000,
+                    (index + 1) * 550000,
+                    format!("chunk-{index}")
+                ],
+            )
+            .unwrap();
+            db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,'track',?2,0,24000,?3,?4,?5)",params![format!("map-{index}"),format!("chunk-{index}"),index*550000,(index+1)*550000,r#"{"schema_version":1,"method":"linear"}"#]).unwrap();
+        }
+    }
+    let store = PlaybackStore::default();
+    for (mode, before, after) in [
+        (MeetingPlaybackMode::Mic, 0.25, -0.5),
+        (MeetingPlaybackMode::Both, 0.375, 0.0),
+    ] {
+        let audio = storage
+            .prepare_meeting_audio(&request(&meeting, mode))
+            .unwrap();
+        let info = store.insert_meeting(audio).unwrap();
+        assert_eq!(info.alignment, "unverified");
+        assert_eq!(info.total_frames, 84000);
+        let packet = store.read(&info.token, 0).unwrap();
+        assert!((sample(&packet, 25000) - before).abs() < 1e-6);
+        assert!((sample(&packet, 28000) - after).abs() < 1e-6);
+    }
 }
 
 #[test]
@@ -308,19 +344,34 @@ fn managed_hash_and_track_format_checks_cover_the_whole_source() {
 #[test]
 fn changed_native_census_during_file_verification_invalidates_preparation() {
     let (_directory, storage, meeting) = fixture();
-    let checks = Cell::new(0);
-    let error = storage.prepare_meeting_audio_cancellable(&request(&meeting, MeetingPlaybackMode::Mic), &|| {
-        checks.set(checks.get()+1);
-        // Entry, census/track, source, chunk, then the first hash block.
-        if checks.get()==5 {
-            storage.connection.lock().unwrap().execute("UPDATE audio_tracks SET processing_config_json = '{\"timeline_alignment\":\"changed\"}' WHERE id = 'track'", []).unwrap();
-        }
-        false
-    }).err().unwrap();
-    assert!(error.contains("保存記録が変わりました"), "{error}");
-    assert!(storage
-        .prepare_meeting_audio_cancellable(&request(&meeting, MeetingPlaybackMode::Mic), &|| true)
-        .is_err());
+    let baseline = Cell::new(0);
+    storage
+        .prepare_meeting_audio_cancellable(&request(&meeting, MeetingPlaybackMode::Mic), &|| {
+            baseline.set(baseline.get() + 1);
+            false
+        })
+        .unwrap();
+    // The first hash block tests the inner source snapshot. The penultimate
+    // cancellation boundary is after source return but before the outer census.
+    for (boundary, expected) in [
+        (5, "保存記録・時刻補正が変更されました"),
+        (baseline.get() - 1, "保存記録が変わりました"),
+    ] {
+        let (_directory, storage, meeting) = fixture();
+        let checks = Cell::new(0);
+        let error=storage.prepare_meeting_audio_cancellable(&request(&meeting,MeetingPlaybackMode::Mic),&||{
+            checks.set(checks.get()+1);
+            if checks.get()==boundary { storage.connection.lock().unwrap().execute("UPDATE audio_tracks SET processing_config_json = '{\"timeline_alignment\":\"changed\"}' WHERE id = 'track'", []).unwrap(); }
+            false
+        }).err().unwrap();
+        assert!(error.contains(expected), "boundary {boundary}: {error}");
+        assert!(storage
+            .prepare_meeting_audio_cancellable(
+                &request(&meeting, MeetingPlaybackMode::Mic),
+                &|| true
+            )
+            .is_err());
+    }
 }
 
 #[test]

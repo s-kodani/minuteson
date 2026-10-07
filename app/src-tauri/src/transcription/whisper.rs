@@ -375,6 +375,7 @@ mod tests {
         let frames = verified.format.frames;
         let duration = (frames * 1_000_000 / u64::from(verified.format.sample_rate)) as i64;
         let mut audio = PreparedAudio {
+            clock: None,
             sample_rate: verified.format.sample_rate,
             channels: verified.format.channels,
             start_us: 0,

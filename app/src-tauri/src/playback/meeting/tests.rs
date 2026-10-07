@@ -35,6 +35,7 @@ fn audio(
         });
     }
     PreparedAudio {
+        clock: None,
         sample_rate: rate,
         channels,
         start_us,
@@ -257,6 +258,7 @@ fn prepared_source_mutation_is_not_hidden_by_resampling() {
     )
     .unwrap();
     let source = PreparedAudio {
+        clock: None,
         sample_rate: 8000,
         channels: 1,
         start_us: 0,
