@@ -24,7 +24,9 @@ manifestはハッシュ計算前に256KiBの容量上限を検査し、読込み
 
 CAF検証3件も終了コード0で成功した。ログは `/private/tmp/mon-recording-proof-pcm-focused-check.log` にある。録音重点検査との重複はなく、重点検査は計53件である。
 
-最初の通常の `make check` は失敗した。Rustは1377件成功・1件失敗・既存36件ignoredで、保存先の再移動テスト `activation_second_move_uses_current_admitted_root_without_restoring_stale_source` が配置台帳のロック取得に失敗した。ログは `/private/tmp/mon-recording-proof-full-check.log` にある。同テストの単独実行は成功したが、それだけで原因の解消や全体成功とは扱わない。ロック保護と従来の検査対象を維持して追加確認する。
+最初の通常の `make check` は失敗した。Rustは1377件成功・1件失敗・既存36件ignoredで、保存先の再移動テスト `activation_second_move_uses_current_admitted_root_without_restoring_stale_source` が配置台帳のロック取得に失敗した。ログは `/private/tmp/mon-recording-proof-full-check.log` にある。同テストの単独実行は成功したが、それだけで原因の解消や全体成功とは扱わなかった。
+
+[配置ロックの明示解放](placement-lock-owner-release-2026-10-08.md)と時刻補正生成基盤を含む `5484876` の通常の `make check` は終了コード0で成功した。Rust通常1379件・失敗0件・既存36件ignored、フロントエンド406件と型検査・ビルド、Python65件、Swift19件、CAF4800/4800フレームの読戻しとAVFoundation製CAFの読出し1件を確認した。先行した失敗テストと追加のロック解放テストもこの全体実行で成功している。ログは `/private/tmp/mon-recording-proof-final-check.log` にある。
 
 ## 残対応
 
