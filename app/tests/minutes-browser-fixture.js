@@ -75,6 +75,7 @@ async (page) => {
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
+        if (cmd === "get_analysis_notification_jobs") return [];
         if (cmd === "get_ui_preferences") return { id: "ui_preferences", payload: { schemaVersion: 1, theme: "system" }, lockVersion: 0 };
         if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
         if (cmd === "get_data_operation_availability") return { available: true, reason: null };

@@ -54,7 +54,9 @@ pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPref
 pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
 pub(crate) use exports::{ExportRecord, ExportRequest};
-pub(crate) use jobs::{retry_source_permitted, JobKind, JobSnapshot, JobSpec};
+pub(crate) use jobs::{
+    retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
+};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
 pub(crate) use minutes_evidence::{

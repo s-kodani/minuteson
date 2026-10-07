@@ -89,12 +89,16 @@ fn minutes_result_and_job_success_are_atomic_without_adopting_or_replacing_edits
     assert_eq!(snapshot.state, "succeeded");
     assert_eq!(snapshot.output_minutes_id.as_deref(), Some(id.as_str()));
     assert_eq!(snapshot.output_analysis_id, None);
+    let notification = storage.notification_output(&job.id).unwrap();
+    assert_eq!(notification.job.id, job.id);
+    assert_eq!(notification.publication_state, "candidate");
     let view = storage
         .load_minutes_content(&request.meeting_id, &id)
         .unwrap()
         .unwrap();
     assert_eq!(view.content, content);
     assert_eq!(view.generated_content, content);
+    assert_eq!(notification.content_hash, view.content_hash);
     assert_eq!(
         storage.get_meeting(&request.meeting_id).unwrap().unwrap(),
         before
@@ -123,6 +127,13 @@ fn minutes_result_and_job_success_are_atomic_without_adopting_or_replacing_edits
         .commit_minutes_candidate(&request.meeting_id, &id, lock, false)
         .unwrap();
     assert!(storage.verify_minutes_content_hash(&id).unwrap());
+    assert_eq!(
+        storage
+            .notification_output(&job.id)
+            .unwrap()
+            .publication_state,
+        "committed"
+    );
     let markdown = view
         .content
         .markdown(&storage.load_minutes_input(&job.id).unwrap())

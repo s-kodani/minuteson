@@ -1299,6 +1299,35 @@ fn get_analysis_jobs(
 }
 
 #[tauri::command]
+fn get_analysis_notification_jobs(
+    window: WebviewWindow,
+    watched_job_ids: Vec<String>,
+) -> Result<Vec<storage::NotificationJob>, String> {
+    if window.label() != "main" {
+        return Err("解析通知の状態はメイン画面から確認してください".into());
+    }
+    window
+        .state::<Storage>()
+        .notification_jobs(&watched_job_ids)
+}
+
+#[tauri::command]
+async fn get_analysis_notification_output(
+    window: WebviewWindow,
+    job_id: String,
+) -> Result<storage::NotificationOutput, String> {
+    if window.label() != "main" {
+        return Err("解析通知の保存結果はメイン画面から確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().notification_output(&job_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn retry_transcription(
     window: WebviewWindow,
     request: transcription::RetryRequest,
@@ -1968,6 +1997,8 @@ pub fn run() {
             adopt_minutes_candidate,
             restore_minutes_version,
             get_analysis_jobs,
+            get_analysis_notification_jobs,
+            get_analysis_notification_output,
             retry_transcription,
             retry_minutes_generation,
             pause_analysis_job,

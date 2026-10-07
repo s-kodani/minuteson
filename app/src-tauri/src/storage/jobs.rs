@@ -59,7 +59,83 @@ pub struct JobSnapshot {
     pub attempt: i64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NotificationJob {
+    #[serde(flatten)]
+    pub job: JobSnapshot,
+    pub meeting_title: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NotificationOutput {
+    pub job: JobSnapshot,
+    pub content_hash: String,
+    pub publication_state: String,
+}
+
 impl Storage {
+    // Read the exact output, not the UI's bounded candidate history. One
+    // transaction binds the immutable job, meeting ownership and stored hash.
+    pub(crate) fn notification_output(&self, job_id: &str) -> Result<NotificationOutput, String> {
+        uuid::Uuid::parse_str(job_id).map_err(|_| "解析通知のジョブIDが不正です")?;
+        let mut db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|e| e.to_string())?;
+        let job = load_job(&tx, job_id)?.ok_or("通知対象のジョブがありません")?;
+        if job.state != "succeeded" {
+            return Err("通知対象の処理は成功していません".into());
+        }
+        read_fixed_input(&tx, job_id)?;
+        let (id, table, computed) = match job.kind.as_str() {
+            "transcription" | "diarization" => {
+                let id = job
+                    .output_analysis_id
+                    .as_deref()
+                    .ok_or("保存結果の解析版がありません")?;
+                (
+                    id,
+                    "analysis_revisions",
+                    super::revisions::analysis_content_hash(&tx, id)?,
+                )
+            }
+            "minutes_generation" => {
+                let id = job
+                    .output_minutes_id
+                    .as_deref()
+                    .ok_or("保存結果の議事録版がありません")?;
+                (
+                    id,
+                    "minutes_revisions",
+                    super::revisions::minutes_content_hash(&tx, id)?,
+                )
+            }
+            _ => return Err("通知対象の処理種別が不正です".into()),
+        };
+        // Table name comes only from the fixed match above, never caller input.
+        let query = format!("SELECT content_hash, publication_state FROM {table} WHERE id=?1 AND meeting_id=?2 AND publication_state IN ('candidate','committed')");
+        let (content_hash, publication_state): (String, String) = tx
+            .query_row(&query, params![id, job.meeting_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("ジョブと保存結果の会議または公開状態が一致しません")?;
+        if !valid_hash(&content_hash) || content_hash != computed {
+            return Err("保存結果の内容が変更されています。成功通知を保留します".into());
+        }
+        Ok(NotificationOutput {
+            job,
+            content_hash,
+            publication_state,
+        })
+    }
+
     pub(crate) fn resume_recording_jobs(&self) -> Result<(), String> {
         let ids = {
             let connection = self
@@ -366,6 +442,48 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
+    }
+
+    /// Read-only notification census, independent of the selected meeting and
+    /// the UI's 100-row history. Keep watched work after it becomes terminal,
+    /// even when newer work in the same meeting has already been queued.
+    pub(crate) fn notification_jobs(
+        &self,
+        watched: &[String],
+    ) -> Result<Vec<NotificationJob>, String> {
+        if watched.iter().any(|id| uuid::Uuid::parse_str(id).is_err()) {
+            return Err("解析通知の追跡対象が不正です".into());
+        }
+        let watched = serde_json::to_string(watched).map_err(|error| error.to_string())?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = connection.prepare(
+            "WITH ranked AS (
+                SELECT id, ROW_NUMBER() OVER (PARTITION BY meeting_id, kind ORDER BY created_at DESC, rowid DESC) AS position
+                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation')
+            )
+            SELECT j.id, j.meeting_id, j.kind, j.state, j.operation_id, j.input_hash, j.spec_hash,
+                j.completed_units, j.total_units, j.error_code, j.created_at, j.updated_at,
+                j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, j.output_minutes_id, m.title
+            FROM processing_jobs j JOIN meetings m ON m.id = j.meeting_id
+            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation') AND (
+                j.state IN ('queued', 'running', 'pausing', 'paused', 'interrupted')
+                OR j.id IN (SELECT id FROM ranked WHERE position = 1)
+                OR j.id IN (SELECT value FROM json_each(?1))
+            ) ORDER BY j.created_at DESC, j.rowid DESC"
+        ).map_err(|error| error.to_string())?;
+        let rows = query
+            .query_map(params![watched], |row| {
+                Ok(NotificationJob {
+                    job: job_from_row(row)?,
+                    meeting_title: row.get(17)?,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn fixed_job_input(&self, job_id: &str) -> Result<(JobSpec, Option<Value>), String> {
@@ -1012,6 +1130,196 @@ mod tests {
             parameters: json!({"window_seconds": 30}),
             total_units: Some(10),
         }
+    }
+
+    #[test]
+    fn notification_jobs_cross_meetings_and_keep_watched_terminal_work_beyond_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("通知対象").unwrap();
+        let other = storage.create_meeting("別会議").unwrap();
+        let active = storage
+            .enqueue_job(audio_job(&meeting.id, "active"))
+            .unwrap();
+        let watched = storage
+            .enqueue_job(audio_job(&meeting.id, "old-watched"))
+            .unwrap();
+        storage
+            .finish_job(&watched.id, 0, "cancelled", None)
+            .unwrap();
+        for index in 0..110 {
+            let job = storage
+                .enqueue_job(audio_job(&meeting.id, &format!("history-{index}")))
+                .unwrap();
+            storage.finish_job(&job.id, 0, "cancelled", None).unwrap();
+        }
+        let newest = storage.list_jobs(&meeting.id).unwrap()[0].clone();
+        let unrelated = storage
+            .enqueue_job(audio_job(&other.id, "other-active"))
+            .unwrap();
+        assert_eq!(storage.list_jobs(&meeting.id).unwrap().len(), 100);
+        let before = storage.get_job(&active.id).unwrap();
+        let rows = storage
+            .notification_jobs(&[watched.id.clone(), watched.id.clone()])
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        for id in [&active.id, &watched.id, &newest.id, &unrelated.id] {
+            assert_eq!(rows.iter().filter(|row| &row.job.id == id).count(), 1);
+        }
+        assert!(rows.iter().all(|row| row.meeting_title
+            == if row.job.meeting_id == meeting.id {
+                "通知対象"
+            } else {
+                "別会議"
+            }));
+        assert_eq!(
+            storage.get_job(&active.id).unwrap(),
+            before,
+            "notification reads must not advance work"
+        );
+        storage
+            .finish_job(&active.id, 0, "cancelled", None)
+            .unwrap();
+        assert!(storage
+            .notification_jobs(&[active.id.clone()])
+            .unwrap()
+            .iter()
+            .any(|row| row.job.id == active.id && row.job.state == "cancelled"));
+        assert!(!storage
+            .notification_jobs(&[])
+            .unwrap()
+            .iter()
+            .any(|row| row.job.id == active.id));
+    }
+
+    #[test]
+    fn notification_jobs_keep_latest_per_kind_without_invalid_or_missing_watch_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("三工程").unwrap();
+        let transcription = storage
+            .enqueue_job(audio_job(&meeting.id, "transcription"))
+            .unwrap();
+        storage.connection.lock().unwrap().execute(
+            "INSERT INTO analysis_revisions (id, meeting_id, revision_no, origin, publication_state, audio_manifest_hash, profile_snapshot_json, config_json, content_hash, schema_version, created_at) VALUES ('notification-input', ?1, 1, 'engine', 'candidate', ?2, '{}', '{}', ?3, 1, 0)",
+            params![meeting.id, "a".repeat(64), "0".repeat(64)],
+        ).unwrap();
+        let committed = storage
+            .commit_analysis_candidate(&meeting.id, "notification-input", 0, false)
+            .unwrap();
+        for kind in [JobKind::Diarization, JobKind::MinutesGeneration] {
+            let mut spec = audio_job(&meeting.id, kind.as_str());
+            spec.kind = kind;
+            spec.input_analysis_id = Some("notification-input".into());
+            spec.input_hash = committed.content_hash.clone();
+            let job = storage.enqueue_job(spec).unwrap();
+            storage.finish_job(&job.id, 0, "cancelled", None).unwrap();
+        }
+        storage
+            .finish_job(&transcription.id, 0, "cancelled", None)
+            .unwrap();
+        let rows = storage
+            .notification_jobs(&[uuid::Uuid::new_v4().to_string()])
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(storage.notification_jobs(&["not-a-job-id".into()]).is_err());
+        assert_eq!(
+            rows.iter()
+                .map(|row| &row.job.kind)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn notification_output_checks_exact_hash_and_ownership_beyond_visible_candidate_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = super::super::analysis::tests::saved_meeting(&storage);
+        let mut spec = audio_job(&meeting.id, "notification-output");
+        spec.total_units = Some(1);
+        let mut input = super::super::analysis::tests::input();
+        input.profile_snapshot = spec.profile_snapshot.clone();
+        let job = storage.enqueue_job(spec).unwrap();
+        assert!(storage.notification_output(&job.id).is_err());
+        storage.acquire_next_job().unwrap().unwrap();
+        storage
+            .save_job_checkpoint(&job.id, 0, 1, json!({"outputs":[]}))
+            .unwrap();
+        let id = storage
+            .finish_transcription_candidate(&meeting.id, &job.id, 1, input.clone())
+            .unwrap();
+        for _ in 0..25 {
+            storage
+                .create_analysis_candidate(&meeting.id, input.clone())
+                .unwrap();
+        }
+        assert!(!storage
+            .analysis_versions(&meeting.id)
+            .unwrap()
+            .versions
+            .iter()
+            .any(|v| v.id == id));
+        let proof = storage.notification_output(&job.id).unwrap();
+        assert_eq!(proof.job.id, job.id);
+        assert_eq!(proof.job.output_analysis_id.as_deref(), Some(id.as_str()));
+        assert_eq!(proof.publication_state, "candidate");
+        assert!(valid_hash(&proof.content_hash));
+        let before = storage.get_meeting(&meeting.id).unwrap();
+        assert_eq!(
+            storage.notification_output(&job.id).unwrap().content_hash,
+            proof.content_hash
+        );
+        assert_eq!(
+            storage.get_meeting(&meeting.id).unwrap(),
+            before,
+            "proof is read-only"
+        );
+        assert!(storage.notification_output("not-a-job-id").is_err());
+        assert!(storage
+            .notification_output(&uuid::Uuid::new_v4().to_string())
+            .is_err());
+        // Candidate corruption must withhold success without relaxing the
+        // separate immutable-content guard on committed revisions.
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute(
+                "UPDATE utterances SET effective_text='改変' WHERE analysis_revision_id=?1",
+                params![id],
+            )
+            .unwrap();
+        }
+        assert!(storage.notification_output(&job.id).is_err());
+        storage.connection.lock().unwrap().execute("UPDATE utterances SET effective_text=recognized_text WHERE analysis_revision_id=?1", params![id]).unwrap();
+        assert_eq!(
+            storage.notification_output(&job.id).unwrap().content_hash,
+            proof.content_hash
+        );
+        let adopted = storage
+            .commit_analysis_candidate(&meeting.id, &id, 0, false)
+            .unwrap();
+        assert_eq!(
+            storage
+                .notification_output(&job.id)
+                .unwrap()
+                .publication_state,
+            "committed"
+        );
+        assert_eq!(proof.content_hash, adopted.content_hash);
+        assert!(storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE utterances SET effective_text='改変' WHERE analysis_revision_id=?1",
+                params![id],
+            )
+            .is_err());
+        assert_eq!(
+            storage.notification_output(&job.id).unwrap().content_hash,
+            proof.content_hash
+        );
     }
 
     #[test]

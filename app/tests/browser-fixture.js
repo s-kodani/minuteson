@@ -13,6 +13,7 @@ const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: 
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
 const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
+  notificationJobs: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
   lostRetryResponse: false,
   transcriptHistory: [],
   diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
@@ -30,8 +31,28 @@ const switchDraft = (nextId) => {
   fixture.draft = fixture.archivedDrafts[nextId] ? structuredClone(fixture.archivedDrafts[nextId]) : null;
 };
 window.isTauri = true;
+fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.emitWorkerError = message => emit("analysis-worker-error", message);
+fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
+  if (command === "get_analysis_notification_jobs") {
+    fixture.calls.push({ command, args: structuredClone(args) });
+    if (fixture.notificationReadFail) throw Error("模擬解析通知読込失敗");
+    const latest = new Set(), active = new Set(["queued", "running", "pausing", "paused", "interrupted"]);
+    return structuredClone([...fixture.notificationJobs].sort((a, b) => b.createdAt - a.createdAt).filter(job => {
+      const group = JSON.stringify([job.meetingId, job.kind]), first = !latest.has(group); latest.add(group);
+      return first || active.has(job.state) || args.watchedJobIds.includes(job.id);
+    }));
+  }
+  if (command === "get_analysis_notification_output") {
+    fixture.calls.push({ command, args: structuredClone(args) }); fixture.notificationProofReads.push(args.jobId);
+    if (fixture.notificationProofMode === "lost") throw Error("模擬出力照合の応答喪失");
+    if (fixture.notificationProofMode === "delay") await new Promise(resolve => { fixture.releaseNotificationProof = resolve; });
+    const job = fixture.notificationJobs.find(job => job.id === args.jobId);
+    if (!job || job.state !== "succeeded") throw Error("模擬通知対象の成功ジョブがありません");
+    return { job: { ...structuredClone(job), ...(fixture.notificationProofMode === "foreign" ? { meetingId: meetings[1].id } : {}) }, contentHash: "c".repeat(64), publicationState: fixture.notificationProofMode === "hidden" ? "internal_snapshot" : fixture.notificationPublication ?? "candidate" };
+  }
   if (command === "get_ui_preferences" && fixture.uiPreferences) return structuredClone(fixture.uiPreferences);
   const baseline = dataIdleRead(command);
   if (baseline !== undefined) return baseline;
@@ -59,7 +80,7 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.diarizationPreferences);
     case "get_speaker_reviews": return { analysisId: args.request.analysisId, contentHash: args.request.expectedContentHash, reviews: args.request.utteranceIds.map(utteranceId => ({ utteranceId, trackId: "microphone", estimatedState: "unknown", manualAssignment: false, segmentCount: 0, overlapCount: 0, page: args.request.page, pageCount: 1, segments: [], overlaps: [] })) };
     case "list_meetings": return meetings;
-    case "get_meeting": return meetings.find((meeting) => meeting.id === args.id) ?? null;
+    case "get_meeting": return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
     case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
     case "get_transcript_draft": return args.meetingId === meetings[0].id ? fixture.draft : null;
     case "begin_transcript_draft":
