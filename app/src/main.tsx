@@ -23,8 +23,10 @@ import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
 import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice } from "./theme";
+import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
+const isRecordingConfirmation = new URLSearchParams(window.location.search).get("window") === "recording-confirmation";
 
 interface Meeting {
   id: string;
@@ -69,6 +71,7 @@ function useWindowAction() {
 
 function RecorderPanel() {
   const state = useRecordingSession();
+  const decision = useRecordingConfirmation("recorder");
   const action = useWindowAction();
   const idle = state.kind === "ready" && state.snapshot.phase === "idle";
   return (
@@ -81,10 +84,11 @@ function RecorderPanel() {
       <div className="mini-bottom">
         <span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>
         <button type="button" onClick={() => action.run("open_main_window")} disabled={action.busy || !isTauri()}>メインを開く</button>
-        {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <button type="button" className="stop-button" onClick={() => { if (window.confirm(state.snapshot.phase === "preparing" ? "録音準備を中止しますか？ 音声は保存されない場合があります。" : "録音を停止して保存しますか？")) void action.run("stop_recording"); }} disabled={action.busy}>{state.snapshot.phase === "preparing" ? "中止" : "停止"}</button>}
+        {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <button type="button" className="stop-button" onClick={() => void decision.request()} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected}>{state.snapshot.phase === "preparing" ? "中止" : "停止"}</button>}
         {idle && <button type="button" className="text-button" onClick={() => action.run("hide_recorder_preview")} disabled={action.busy}>閉じる</button>}
       </div>
       {action.error && <p className="mini-error" role="alert">{action.error}</p>}
+      {decision.error && <p className="mini-error" role="alert">{decision.error}</p>}
       <ThemeReadNotice />
     </main>
   );
@@ -92,6 +96,7 @@ function RecorderPanel() {
 
 function MainWindow() {
   const state = useRecordingSession();
+  const recordingDecision = useRecordingConfirmation("main");
   const dataOperation = useDataOperation();
   const [dataPending, setDataPending] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState(false);
@@ -149,7 +154,7 @@ function MainWindow() {
       // their local buffers, including when recovery deliberately skipped writes.
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
-  const navigationLocked = navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const navigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
   const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const writeLocked = navigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   useEffect(() => {
@@ -239,16 +244,7 @@ function MainWindow() {
     }
   };
   const stopRecording = async () => {
-    if (!window.confirm(state.kind === "ready" && state.snapshot.phase === "preparing" ? "録音準備を中止しますか？ 音声は保存されない場合があります。" : "録音を停止して保存しますか？")) return;
-    setCaptureBusy(true);
-    setCaptureError("");
-    try {
-      await invoke("stop_recording");
-    } catch (error) {
-      setCaptureError(String(error));
-    } finally {
-      setCaptureBusy(false);
-    }
+    await recordingDecision.request();
   };
   const createMeeting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -340,11 +336,12 @@ function MainWindow() {
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
             <div className="card-actions">
               <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || writeLocked || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
-              <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
+              <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
               <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
             </div>
             {!captureAvailable && <p className="capture-note">macOS録音プローブが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
             {captureError && <p className="action-error" role="alert">{captureError}</p>}
+            {recordingDecision.error && <p className="action-error" role="alert">{recordingDecision.error}</p>}
             {action.error && <p className="action-error" role="alert">{action.error}</p>}
           </section>
           <section className="meetings-card" aria-label="保存済み会議">
@@ -387,4 +384,4 @@ function MainWindow() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</ThemeProvider>);
+createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecordingConfirmation ? <RecordingConfirmationWindow /> : isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</ThemeProvider>);

@@ -142,6 +142,7 @@ export const dataSaveIPC = async (command, args) => {
     return structuredClone(f.snapshot);
   }
   if (command === "get_recording_snapshot") return recording;
+  if (command === "get_recording_confirmation") return dataIdleRead(command);
   if (command === "capture_available") return false;
   if (command === "list_meetings") return structuredClone(f.meetings);
   if (command === "get_meeting") return structuredClone(f.meetings.find(m => m.id === args.id) || null);

@@ -62,10 +62,12 @@ export function useRecordingSession(): BridgeState {
         if (!disposed) setState({ kind: "error", message: String(error) });
       });
     window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 1000);
     return () => {
       disposed = true;
       unlisten?.();
       window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
     };
   }, []);
 

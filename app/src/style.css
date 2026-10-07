@@ -201,3 +201,4 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .common-modal .model-application-changes { font-size: 12px; }
 .common-modal .model-application-changes th, .common-modal .model-application-changes td { padding: 6px; }
 .common-modal-dismiss-row { display: flex; justify-content: flex-end; position: sticky; top: -24px; padding: 8px 0; background: var(--surface); z-index: 2; }
+.recording-confirmation-shell { min-height: 100vh; padding: 0; }

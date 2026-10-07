@@ -16,9 +16,22 @@ struct ActiveCapture {
 }
 
 #[derive(Default)]
-pub struct RecorderController(Mutex<Option<ActiveCapture>>);
+pub struct RecorderController(Mutex<Option<ActiveCapture>>, Mutex<()>);
 
 impl RecorderController {
+    // Starting includes analysis/import admission; ending includes releasing
+    // those intents. Neither may publish over the other session's transition.
+    pub fn with_transition<T>(
+        app: &AppHandle,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let controller = app.state::<Self>();
+        let _transition = controller
+            .1
+            .lock()
+            .map_err(|_| "録音状態の切替ロックに失敗しました")?;
+        action()
+    }
     pub fn available(app: &AppHandle) -> bool {
         probe_path(app).is_ok()
     }
@@ -120,12 +133,31 @@ impl RecorderController {
     }
 
     pub fn stop(app: &AppHandle) -> Result<RecordingSnapshot, String> {
+        Self::stop_target(app, None)
+    }
+
+    pub fn stop_session(app: &AppHandle, session: &str) -> Result<RecordingSnapshot, String> {
+        Self::stop_target(app, Some(session))
+    }
+
+    fn stop_target(app: &AppHandle, expected: Option<&str>) -> Result<RecordingSnapshot, String> {
         let controller = app.state::<RecorderController>();
         let mut active = controller
             .0
             .lock()
             .map_err(|_| "録音ロックを取得できません".to_string())?;
         let current = active.as_mut().ok_or("停止できる録音がありません")?;
+        if expected.is_some_and(|session| session != current.session_id) {
+            return Err("停止対象の録音が変更されました。別の録音には停止を送っていません".into());
+        }
+        if current.stop_operation_id.is_some()
+            && matches!(
+                app.state::<SessionStore>().snapshot().phase,
+                RecordingPhase::Stopping | RecordingPhase::Saving
+            )
+        {
+            return Ok(app.state::<SessionStore>().snapshot());
+        }
         let operation = current
             .stop_operation_id
             .get_or_insert_with(|| Uuid::new_v4().to_string())
@@ -185,6 +217,7 @@ pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> RecordingSnapshot {
     let snapshot = app.state::<SessionStore>().update(change);
+    crate::recording_confirmation_window::session_changed(app, &snapshot);
     let _ = app.emit("session-changed", snapshot.clone());
     snapshot
 }
@@ -290,7 +323,18 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
             let _ = storage.fail_recording(&session_id);
         }
     }
-    if let Ok(mut active) = app.state::<RecorderController>().0.lock() {
+    let controller = app.state::<RecorderController>();
+    let _transition = controller
+        .1
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Ok(mut active) = controller.0.lock() {
+        if !active
+            .as_ref()
+            .is_some_and(|capture| capture.session_id == session_id)
+        {
+            return;
+        }
         if active
             .as_ref()
             .is_some_and(|capture| capture.session_id == session_id)

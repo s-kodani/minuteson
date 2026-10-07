@@ -18,6 +18,8 @@ mod model_placement;
 mod model_rebinding;
 mod playback;
 mod recorder;
+mod recording_confirmation;
+mod recording_confirmation_window;
 mod restored_processing;
 mod saved_artifact;
 mod session;
@@ -29,6 +31,10 @@ use data_controller::DataController;
 use import_controller::ImportController;
 use playback::{PlaybackInfo, PlaybackStore};
 use recorder::RecorderController;
+use recording_confirmation::StopDecisionStore;
+use recording_confirmation_window::{
+    decide_recording_confirmation, get_recording_confirmation, request_recording_confirmation,
+};
 use session::{RecordingSnapshot, SessionStore};
 use std::sync::atomic::{AtomicBool, Ordering};
 use storage::{AnalysisView, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
@@ -728,7 +734,10 @@ fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::Preference
 
 #[tauri::command]
 fn get_ui_preferences(window: WebviewWindow) -> Result<storage::UiPreferencesSnapshot, String> {
-    if !matches!(window.label(), "main" | "recorder") {
+    if !matches!(
+        window.label(),
+        "main" | "recorder" | recording_confirmation_window::LABEL
+    ) {
         return Err("Only application windows can read presentation settings".into());
     }
     window.state::<Storage>().ui_preferences()
@@ -1580,13 +1589,18 @@ async fn start_recording(
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ImportController::prepare_recording(&app)?;
-        let result = AnalysisController::prepare_recording(&app)
-            .and_then(|_| RecorderController::start(&app, &meeting_id));
-        if result.is_err() {
-            AnalysisController::recording_finished(&app);
-        }
-        result
+        RecorderController::with_transition(&app, || {
+            if app.state::<SessionStore>().snapshot().is_active() {
+                return Err("別の録音が進行中です".into());
+            }
+            ImportController::prepare_recording(&app)?;
+            let result = AnalysisController::prepare_recording(&app)
+                .and_then(|_| RecorderController::start(&app, &meeting_id));
+            if result.is_err() {
+                AnalysisController::recording_finished(&app);
+            }
+            result
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1596,6 +1610,9 @@ async fn start_recording(
 fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, String> {
     if !matches!(window.label(), "main" | "recorder") {
         return Err("Only the recording windows can stop recording".into());
+    }
+    if window.state::<StopDecisionStore>().snapshot().visible() {
+        return Err("開いている録音確認で決定してください。停止は重複送信していません".into());
     }
     RecorderController::stop(window.app_handle())
 }
@@ -1764,6 +1781,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SessionStore::default())
         .manage(RecorderController::default())
+        .manage(StopDecisionStore::default())
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(AnalysisController::default())
@@ -1855,6 +1873,9 @@ pub fn run() {
             capture_available,
             start_recording,
             stop_recording,
+            get_recording_confirmation,
+            request_recording_confirmation,
+            decide_recording_confirmation,
             show_recorder_preview,
             hide_recorder_preview,
             open_main_window,
@@ -1921,7 +1942,10 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "recorder" {
+                if window.label() == recording_confirmation_window::LABEL {
+                    api.prevent_close();
+                    recording_confirmation_window::close_requested(window.app_handle());
+                } else if window.label() == "recorder" {
                     if window.state::<SessionStore>().snapshot().is_active() {
                         api.prevent_close();
                     } else {
@@ -1930,7 +1954,9 @@ pub fn run() {
                     }
                 } else if window.label() == "main" {
                     api.prevent_close();
-                    if window.state::<SessionStore>().snapshot().is_active() {
+                    if window.state::<StopDecisionStore>().snapshot().visible() {
+                        recording_confirmation_window::focus(window.app_handle());
+                    } else if window.state::<SessionStore>().snapshot().is_active() {
                         let _ = window.hide();
                     } else {
                         let _ =
@@ -1945,6 +1971,10 @@ pub fn run() {
             if let RunEvent::ExitRequested { api, .. } = event {
                 if !app.state::<ExitGuard>().0.load(Ordering::SeqCst) {
                     api.prevent_exit();
+                    if app.state::<StopDecisionStore>().snapshot().visible() {
+                        recording_confirmation_window::focus(app);
+                        return;
+                    }
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                         let _ = main.set_focus();

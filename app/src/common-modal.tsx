@@ -12,12 +12,13 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
   restoreTarget?: () => HTMLElement | null;
   restoreReady?: boolean;
   dismissLabel?: "キャンセル" | "閉じる";
+  dismissText?: string;
 };
 
 // Native top-layer dialogs supply an inert background. Explicit Tab wrapping
 // keeps focus inside even when a browser would cycle through its own chrome.
 // Controllers retain all command, identity, consent and unknown-result guards.
-export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", className = "", children, ...attributes }: Props) {
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
   const ref = suppliedRef ?? ownRef;
   const confirmation = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
@@ -140,7 +141,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       else if (event.shiftKey && (document.activeElement === first || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && (document.activeElement === last || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
     }}>
-    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label={`確認を${label}`} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}>{label}</button></div>
+    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label={dismissText ?? `確認を${label}`} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}>{dismissText ?? label}</button></div>
     {owned && <ConfirmationBody value={owned} />}
     <div className="common-modal-body" hidden={!!owned}>{children}</div>
   </dialog>;
