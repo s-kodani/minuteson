@@ -18,6 +18,26 @@ struct ActiveCapture {
 #[derive(Default)]
 pub struct RecorderController(Mutex<Option<ActiveCapture>>, Mutex<()>);
 
+fn recording_command(binary: &Path, output: &Path, parent_pid: u32) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg("--output")
+        .arg(output)
+        .arg("--mode")
+        .arg("system")
+        .arg("--backend")
+        .arg("screencapturekit")
+        .arg("--scenario")
+        .arg("mon-app-system")
+        .arg("--stop-on-file")
+        .arg("--parent-pid")
+        .arg(parent_pid.to_string())
+        .arg("--until-stopped")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
 impl RecorderController {
     // Starting includes analysis/import admission; ending includes releasing
     // those intents. Neither may publish over the other session's transition.
@@ -81,22 +101,7 @@ impl RecorderController {
             {
                 return Err("録音先に既存ファイルがあります".into());
             }
-            Command::new(&binary)
-                .arg("--output")
-                .arg(&output)
-                .arg("--duration")
-                .arg("14400")
-                .arg("--mode")
-                .arg("system")
-                .arg("--backend")
-                .arg("screencapturekit")
-                .arg("--scenario")
-                .arg("mon-app-system")
-                .arg("--stop-on-file")
-                .arg("--parent-pid")
-                .arg(std::process::id().to_string())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+            recording_command(&binary, &output, std::process::id())
                 .spawn()
                 .map_err(|error| error.to_string())
         })();
@@ -175,6 +180,42 @@ impl RecorderController {
         }
         let snapshot = publish(app, |state| state.phase = RecordingPhase::Stopping);
         Ok(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn product_recording_waits_for_stop_or_parent_exit_without_a_duration_deadline() {
+        let binary = Path::new("/tmp/mon-command-test/probe");
+        let output = Path::new("/tmp/mon-command-test/audio with spaces");
+        let command = recording_command(binary, output, 1234);
+        assert_eq!(command.get_program(), binary.as_os_str());
+        let arguments: Vec<_> = command.get_args().collect();
+        let expected = [
+            "--output",
+            output.to_str().unwrap(),
+            "--mode",
+            "system",
+            "--backend",
+            "screencapturekit",
+            "--scenario",
+            "mon-app-system",
+            "--stop-on-file",
+            "--parent-pid",
+            "1234",
+            "--until-stopped",
+        ];
+        assert_eq!(
+            arguments,
+            expected
+                .iter()
+                .map(std::ffi::OsStr::new)
+                .collect::<Vec<_>>()
+        );
+        assert!(!arguments.contains(&std::ffi::OsStr::new("--duration")));
     }
 }
 

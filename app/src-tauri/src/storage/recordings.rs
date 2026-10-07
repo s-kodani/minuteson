@@ -41,7 +41,9 @@ impl CaptureTrack {
         }
         let rate = rate as i64;
         let duration = i128::from(self.frames) * 1_000_000 / i128::from(rate);
-        if duration <= 0 || duration > 14_401_000_000 {
+        // The recording requirement is not a four-hour stop policy. Keep the
+        // timeline exactly representable across SQLite and JavaScript instead.
+        if duration <= 0 || duration > 9_007_199_254_740_991 {
             return Err("録音時間が不正です".into());
         }
         Ok((rate, channels, duration as i64))
@@ -519,6 +521,115 @@ fn load_session(connection: &Connection, id: &str) -> Result<Option<RecordingSes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn recording_duration_has_no_four_hour_cap_but_requires_an_exact_safe_timeline() {
+        let mut track = CaptureTrack {
+            frames: 8_000 * 14_460,
+            sample_rate: Some(8_000.0),
+            channels: Some(1),
+            append_failures: 0,
+        };
+        assert_eq!(track.validated_format().unwrap(), (8000, 1, 14_460_000_000));
+        track.frames = 8_000 * 86_400;
+        assert_eq!(track.validated_format().unwrap().2, 86_400_000_000);
+        // Largest complete frame count that fits the exact JS microsecond range.
+        track.frames = (9_007_199_254_740_991_i128 * 8000 / 1_000_000) as i64;
+        assert!(track.validated_format().is_ok());
+        track.frames += 1;
+        assert!(track.validated_format().is_err());
+        for frames in [0, -1, i64::MAX] {
+            track.frames = frames;
+            assert!(track.validated_format().is_err());
+        }
+        track.frames = 8000;
+        for rate in [
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(7999.0),
+            Some(8000.5),
+            Some(384001.0),
+        ] {
+            track.sample_rate = rate;
+            assert!(track.validated_format().is_err());
+        }
+        track.sample_rate = Some(8000.0);
+        for channels in [None, Some(0), Some(9)] {
+            track.channels = channels;
+            assert!(track.validated_format().is_err());
+        }
+        track.channels = Some(1);
+        track.append_failures = 1;
+        assert!(track.validated_format().is_err());
+    }
+
+    #[test]
+    fn saved_recording_beyond_four_hours_verifies_physical_caf_and_commits_after_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+        let frames = 8_000_i64 * 14_460;
+        for (name, channels) in [("microphone", 1_u32), ("system", 2_u32)] {
+            // Valid sparse signed-int16 CAF: no waiting, audio capture, or large Vec.
+            let mut header = crate::audio::tests::caf_fixture(8000, channels, 2, 16, 2, &[]);
+            let data_chunk = header.len() - 16;
+            assert_eq!(&header[data_chunk..data_chunk + 4], b"data");
+            let data_bytes = frames * i64::from(channels) * 2;
+            header[data_chunk + 4..data_chunk + 12]
+                .copy_from_slice(&(data_bytes + 4).to_be_bytes());
+            let mut file = File::create(output.join(format!("{name}.caf"))).unwrap();
+            file.write_all(&header).unwrap();
+            file.set_len(header.len() as u64 + data_bytes as u64)
+                .unwrap();
+            file.sync_all().unwrap();
+            manifest[name] = serde_json::json!({
+                "frames": frames, "sampleRate": 8000, "channels": channels, "appendFailures": 0,
+            });
+        }
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        drop(storage);
+        let reopened = Storage::open(temp.path().into()).unwrap();
+        assert_eq!(
+            reopened.recover_completed_recordings().unwrap(),
+            vec![session.clone()]
+        );
+        let saved = load_session(&reopened.connection.lock().unwrap(), &session)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.state, "saved");
+        assert_eq!(saved.duration_us, 14_460_000_000);
+        assert_eq!(
+            reopened.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+            "recorded"
+        );
+        let connection = reopened.connection.lock().unwrap();
+        let duration: i64 = connection
+            .query_row(
+                "SELECT duration_us FROM meetings WHERE id = ?1",
+                params![meeting],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(duration, 14_460_000_000);
+        let chunks: Vec<(i64, i64, i64, i64, i64, String)> = connection
+            .prepare("SELECT c.frame_count, c.sample_rate, c.channels, c.start_us, c.end_us, t.processing_config_json FROM audio_chunks c JOIN audio_tracks t ON t.id = c.track_id WHERE c.meeting_id = ?1 ORDER BY c.channels")
+            .unwrap().query_map(params![meeting], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))
+            .unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(chunks.len(), 2);
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert_eq!(
+                (chunk.0, chunk.1, chunk.2, chunk.3, chunk.4),
+                (frames, 8000, index as i64 + 1, 0, 14_460_000_000)
+            );
+            assert_eq!(chunk.5, "{\"timeline_alignment\":\"unverified\"}");
+        }
+    }
 
     fn caf(channels: u32) -> Vec<u8> {
         crate::audio::tests::caf_fixture(

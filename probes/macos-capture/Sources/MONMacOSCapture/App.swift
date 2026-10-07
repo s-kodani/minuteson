@@ -4,9 +4,9 @@ import Darwin
 import Foundation
 import ScreenCaptureKit
 
-private struct Options {
+struct Options {
   let output: URL
-  let duration: TimeInterval
+  let duration: TimeInterval?
   let scenario: String
   let mode: String
   let backend: String
@@ -17,6 +17,8 @@ private struct Options {
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
     var duration: TimeInterval = 30
+    var durationSpecified = false
+    var untilStopped = false
     var scenario = "manual"
     var mode = "system"
     var backend = "screencapturekit"
@@ -38,6 +40,7 @@ private struct Options {
           throw ProbeError.usage("--duration must be in (0, 14400]")
         }
         duration = value
+        durationSpecified = true
       case "--scenario":
         index += 1
         guard index < arguments.count, !arguments[index].isEmpty else {
@@ -66,6 +69,8 @@ private struct Options {
         backend = arguments[index]
       case "--stop-on-file":
         stopOnFile = true
+      case "--until-stopped":
+        untilStopped = true
       case "--parent-pid":
         index += 1
         guard index < arguments.count, let value = pid_t(arguments[index]), value > 0 else {
@@ -98,10 +103,23 @@ private struct Options {
     if parentPID != nil && !stopOnFile {
       throw ProbeError.usage("--parent-pid requires --stop-on-file")
     }
+    if untilStopped && (!stopOnFile || parentPID == nil || durationSpecified) {
+      throw ProbeError.usage(
+        "--until-stopped requires --stop-on-file and --parent-pid, without --duration")
+    }
     return Self(
-      output: output.standardizedFileURL, duration: duration, scenario: scenario,
+      output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
+      scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
       parentPID: parentPID)
+  }
+
+  func shouldContinueRecording(
+    startedAt: ContinuousClock.Instant, now: ContinuousClock.Instant,
+    stopRequested: Bool, parentExited: Bool
+  ) -> Bool {
+    !stopRequested && !parentExited
+      && (duration.map { now < startedAt.advanced(by: .seconds($0)) } ?? true)
   }
 }
 
@@ -140,7 +158,7 @@ private struct Manifest: Encodable {
   var targetBundleIdentifier: String?
   let startedAtUTC: String
   var endedAtUTC: String?
-  let requestedDurationSeconds: Double
+  let requestedDurationSeconds: Double?
   let osVersion: String
   let architecture: String
   var state: String
@@ -470,15 +488,19 @@ private enum Main {
         try write(manifest, to: manifestURL)
         if options.stopOnFile {
           let stopRequest = options.output.appendingPathComponent("stop.request")
-          let deadline = ContinuousClock.now.advanced(by: .seconds(options.duration))
-          while ContinuousClock.now < deadline
-            && !FileManager.default.fileExists(atPath: stopRequest.path)
-            && !parentHasExited(options.parentPID)
+          let startedAt = ContinuousClock.now
+          while options.shouldContinueRecording(
+            startedAt: startedAt, now: .now,
+            stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
+            parentExited: parentHasExited(options.parentPID))
           {
             try await Task.sleep(for: .milliseconds(200))
           }
         } else {
-          try await Task.sleep(for: .seconds(options.duration))
+          guard let duration = options.duration else {
+            throw ProbeError.usage("recording without a duration requires a stop mechanism")
+          }
+          try await Task.sleep(for: .seconds(duration))
         }
         mic.stop()
         if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
@@ -532,6 +554,8 @@ private enum Main {
            mon-macos-capture --output <directory> [--duration <seconds>]
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
              [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
+             [--until-stopped]
+    --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
 
