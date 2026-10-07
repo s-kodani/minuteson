@@ -225,6 +225,15 @@ export class TranscriptRecoverySaveQueue<P> {
       this.live();
       if (!this.pending) {
         const context = this.context!;
+        // Reject a locally oversized request before assigning a retry nonce.
+        // A failed native request must be replayed unchanged; user-correctable
+        // limits instead need to retain input without freezing an invalid CAS.
+        if(this.desired.length > 128 || this.desired.some((item,index) =>
+          index > 0 && item.utteranceId === this.desired[index - 1].utteranceId
+          || Array.from(item.text).length > 20_000 || Array.from(item.value).length > 20_000
+          || item.speakerIds.length > 100 || item.speakerIds.some((id,n) => n > 0 && id === item.speakerIds[n - 1]))) throw Error("回復入力の件数・本文・話者の上限または重複を修正してください。入力は保持しています");
+        const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1,basePayload: this.normalizePayload(context.payload),buffers: this.desired })).length;
+        if(bytes > 4 * 1024 * 1024) throw Error("回復入力が4MiBの容量上限を超えています。入力を保持したまま、開いている編集を減らしてください");
         const version = this.saved?.lockVersion ?? 0;
         if (!validVersion(version + 1)) throw Error("回復版番号が安全な範囲を超えています");
         const operationId = this.operationId();

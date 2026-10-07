@@ -2,7 +2,11 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { confirmations } from "./confirmation-service";
+import { TranscriptRecoverySaveQueue, type TranscriptRecovery } from "./transcript-recovery-save";
+import { TranscriptRecoveryEditor } from "./transcript-recovery-editor";
+import { TranscriptRecoveryPanel } from "./transcript-recovery-panel";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
@@ -19,6 +23,7 @@ export interface Draft {
   baseAnalysisId: string;
   payload: DraftPayload;
   lockVersion: number;
+  contentHash: string;
   updatedAt: number;
 }
 
@@ -31,9 +36,25 @@ export function timeLabel(microseconds: number): string {
 
 export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { meetingId: string; meetingTitle?: string; locked?: boolean }) {
   const confirm = useActionConfirmation(locked);
+  const activeConfirmation = useSyncExternalStore(confirmations.subscribe,confirmations.getSnapshot);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [recovery] = useState(() => new TranscriptRecoveryEditor(
+    new TranscriptRecoverySaveQueue<DraftPayload>({
+      persist: request => invoke("save_transcript_edit_recovery",{ request }),
+      read: context => invoke("get_transcript_edit_recovery",{ meetingId: context.meetingId,draftId: context.draftId,baseAnalysisId: context.baseAnalysisId }),
+      operationId: () => crypto.randomUUID(),normalizePayload: canonicalPayload,
+    }),
+    (draftId,expectedLockVersion,payload) => invoke("save_transcript_draft",{ draftId,expectedLockVersion,payload }),
+    owner => invoke("get_transcript_draft",{ meetingId: owner }),
+  ));
+  const [recoverySnapshot,setRecoverySnapshot] = useState(() => recovery.snapshot());
+  const [recoveryReady,setRecoveryReady] = useState(false);
+  const [recoveryManual,setRecoveryManual] = useState(false);
+  const [bodyManual,setBodyManual] = useState(false);
+  const [discardPending,setDiscardPending] = useState(false);
+  const discardPendingRef = useRef(false);
   const [saveQueue] = useState(() => new DraftSaveQueue<DraftPayload, Draft>(
-    (draftId, expectedLockVersion, payload) => invoke<Draft>("save_transcript_draft", { draftId, expectedLockVersion, payload }),
+    (draftId, expectedLockVersion, payload) => recovery.saveDraft(draftId,expectedLockVersion,payload),
     canonicalPayload,
   ));
   const [saveSnapshot, setSaveSnapshot] = useState(() => saveQueue.snapshot());
@@ -69,23 +90,53 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const textInputs = useRef(new Map<string, HTMLTextAreaElement>());
   const transcriptRoot = useRef<HTMLElement>(null);
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const focusAfterRemoval = useRef<{ id: string; row: HTMLElement | null } | null>(null);
   const undoPending = useRef(false);
+  const removingBuffers = useRef(new Map<string,{ session: TextEditSession; kind: "commit" | "cancel" | "barrier" }>());
+  const durableBuffers = () => Object.values(textBuffers.current).filter(session => removingBuffers.current.get(session.utteranceId)?.session !== session);
+  const syncRecoveryBuffers = () => recovery.journal.update(durableBuffers());
   const updateTextSessions = (update: (current: Record<string, TextEditSession>) => Record<string, TextEditSession>) => {
     textBuffers.current = update(textBuffers.current); setTextSessions(textBuffers.current);
+    for(const [id,pending] of removingBuffers.current) if(textBuffers.current[id] !== pending.session) removingBuffers.current.delete(id);
+    syncRecoveryBuffers();
+  };
+  const settleRemovedBuffers = () => {
+    if(!removingBuffers.current.size) return;
+    if(recovery.snapshot().saving || recovery.snapshot().pendingRequest || recovery.snapshot().error || recovery.snapshot().dirty) return;
+    const next = { ...textBuffers.current };
+    for(const [id,pending] of removingBuffers.current) if(pending.kind !== "barrier") {
+      if(next[id] === pending.session) delete next[id]; removingBuffers.current.delete(id);
+    }
+    updateTextSessions(() => next);
   };
   const stageTextBuffers = () => {
-    saveQueue.edit(current => Object.values(textBuffers.current).reduce(stageTextEdit, current));
+    saveQueue.edit(current => durableBuffers().reduce(stageTextEdit, current));
   };
   const flushTextBuffers = async () => {
-    for (;;) { const expected = textBuffers.current; stageTextBuffers(); await saveQueue.flush(); if (expected === textBuffers.current) return; }
+    if(discardPendingRef.current) throw Error("回復入力の破棄結果を確認してから移動してください");
+    if(!recoveryReadyRef.current) { if(saveQueue.snapshot().draft) throw Error("未確定入力の回復記録を先に読み込んでください"); return; }
+    if(!saveQueue.snapshot().draft) return;
+    if(recovery.snapshot().review && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length) return;
+    for (;;) {
+      if(removingBuffers.current.size) { await recovery.flushRecovery(); settleRemovedBuffers(); }
+      const expected = textBuffers.current;
+      stageTextBuffers(); await saveQueue.flush();
+      // A barrier can save while this editor remains mounted (e.g. a candidate
+      // review). Keep its field/baseline so Esc can still record a restoration.
+      for(const session of Object.values(expected)) if(textBuffers.current[session.utteranceId] === session) removingBuffers.current.set(session.utteranceId,{ session,kind: "barrier" });
+      syncRecoveryBuffers(); await recovery.flushRecovery(); settleRemovedBuffers();
+      if(!durableBuffers().length && !saveQueue.snapshot().dirty) return;
+    }
   };
-  const retryTextBuffers = async () => { stageTextBuffers(); await saveQueue.retry(); await flushTextBuffers(); };
+  const recoveryReadyRef = useRef(recoveryReady); recoveryReadyRef.current = recoveryReady;
+  const retryTextBuffers = async () => { stageTextBuffers(); await saveQueue.retry(); await flushTextBuffers(); setBodyManual(false); };
 
   useEffect(() => {
     const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
+    const unsubscribeRecovery = recovery.subscribe(() => setRecoverySnapshot(recovery.snapshot()));
     const unregister = registerPendingEdits(flushTextBuffers);
-    return () => { unsubscribe(); unregister(); };
-  }, [saveQueue]);
+    return () => { unsubscribe(); unsubscribeRecovery(); unregister(); recovery.dispose(); };
+  }, [saveQueue,recovery]);
 
   useEffect(() => {
     // Removing a focused textarea does not reliably emit blur. Clear retained
@@ -98,6 +149,16 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     document.addEventListener("focusin", focus);
     return () => document.removeEventListener("focusin", focus);
   }, []);
+  useLayoutEffect(() => {
+    const pending = focusAfterRemoval.current;
+    if(!pending || textSessions[pending.id]) return;
+    focusAfterRemoval.current = null;
+    // Restore in the DOM commit that removes the input, before the next paint.
+    // A later RAF would leave a filtered retained row briefly unfocused.
+    if(document.activeElement !== document.body && !pending.row?.contains(document.activeElement)) return;
+    if(pending.row?.isConnected) pending.row.focus();
+    else transcriptRoot.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+  },[textSessions]);
 
   const reload = async (propagateFailure = false) => {
     audio.clear();
@@ -108,9 +169,14 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         invoke<Analysis | null>("get_current_analysis", { meetingId }),
         invoke<Draft | null>("get_transcript_draft", { meetingId }),
       ]);
+      const record = working ? await invoke<TranscriptRecovery<DraftPayload> | null>("get_transcript_edit_recovery",{ meetingId,draftId: working.id,baseAnalysisId: working.baseAnalysisId }) : null;
+      recovery.load(working,record);
+      setRecoveryManual(false);
+      setBodyManual(false);
       setAnalysis(current);
       saveQueue.load(working);
-      updateTextSessions(() => ({})); setFocusedRow(null);
+      textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null);
+      recoveryReadyRef.current = true; setRecoveryReady(true);
       setPage(0);
       setSelection([]); setMergeSource(""); setMergeTarget(""); setNotice(""); setNoticeVersion(null);
       setSpeakerFilter("");setQuery("");setSplitting(null);
@@ -128,12 +194,25 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   }, [meetingId]);
 
   useEffect(() => {
-    if (confirm.pending || !draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
+    if (activeConfirmation || locked || loading || busy || discardPending || bodyManual || !recoveryReady || recoverySnapshot.review || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || !draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
     const timer = window.setTimeout(() => {
       void saveQueue.flush().catch(() => { /* The queue retains the error and local edit. */ });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue, confirm.pending]);
+  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue, activeConfirmation,locked,loading,busy,discardPending,bodyManual,recoveryReady,recoverySnapshot.review,recoverySnapshot.bodyBusy,recoverySnapshot.bodyPending]);
+
+  useEffect(() => {
+    if(recoverySnapshot.error) setRecoveryManual(true);
+  },[recoverySnapshot.error]);
+  useEffect(() => { if(saveError) setBodyManual(true); },[saveError]);
+  useEffect(() => {
+    if(!recoveryReady || recoveryManual || !draft || locked || loading || busy || discardPending || activeConfirmation || saving || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || recoverySnapshot.review || recoverySnapshot.saving || recoverySnapshot.error || !recoverySnapshot.dirty) return;
+    const timer = window.setTimeout(() => {
+      if(discardPendingRef.current || saveQueue.snapshot().saving || confirmations.getSnapshot() || recovery.snapshot().bodyBusy || recovery.snapshot().bodyPending) return;
+      void recovery.flushRecovery().catch(() => { /* Keep the exact request and all local input. */ });
+    },300);
+    return () => window.clearTimeout(timer);
+  },[recovery,recoveryReady,recoveryManual,draft,locked,loading,busy,discardPending,activeConfirmation,saving,recoverySnapshot]);
 
   const begin = async () => {
     if (!analysis) return;
@@ -142,6 +221,10 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     setError("");
     try {
       const created = await invoke<Draft>("begin_transcript_draft", { meetingId, analysisId: analysis.id });
+      const record = await invoke<TranscriptRecovery<DraftPayload> | null>("get_transcript_edit_recovery",{ meetingId,draftId: created.id,baseAnalysisId: created.baseAnalysisId });
+      recovery.load(created,record); recoveryReadyRef.current = true; setRecoveryReady(true);
+      setRecoveryManual(false);
+      setBodyManual(false);
       saveQueue.load(created);
     } catch (cause) {
       setError(String(cause));
@@ -158,9 +241,11 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     setError("");
     try {
       if (flushCurrent) await flushTextBuffers();
+      await recovery.flushRecovery();
       const current = saveQueue.snapshot().draft;
       if (!current || current.id !== draft.id || current.baseAnalysisId !== analysis?.id || current.lockVersion === 0) return;
       const previous = await invoke<Draft>("undo_transcript_edit", { draftId: current.id, expectedLockVersion: current.lockVersion });
+      recovery.advance(previous);
       saveQueue.load(previous);
       updateTextSessions(() => ({}));
       setNotice("直前の編集を取り消しました。"); setNoticeVersion(null); setMergeSource(""); setMergeTarget("");
@@ -215,12 +300,19 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const textDirty = textBuffersDirty(textSessions, view?.utterances ?? []);
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
-  const editable = Boolean(matchingBase && payload && !locked && !loading && !busy && !confirm.pending);
+  const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation);
   const beginTextEdit = (utterance: Utterance) => {
     const current = saveQueue.snapshot().payload;
     if (!editable || !current || textOperations.current.has(utterance.id)) return;
+    if(!textBuffers.current[utterance.id] && Object.keys(textBuffers.current).length >= 128) { setError("同時に編集できる発言は128件までです。開いている入力を確定またはキャンセルしてください。"); return; }
+    const opener = document.activeElement;
     if (!textBuffers.current[utterance.id]) updateTextSessions(sessions => ({ ...sessions, [utterance.id]: { ...textEditBaseline(current, utterance), value: utterance.effectiveText } }));
-    requestAnimationFrame(() => textInputs.current.get(utterance.id)?.focus());
+    requestAnimationFrame(() => {
+      const target = textInputs.current.get(utterance.id);
+      // Rendering can outlive a user's next focus move. Opening one editor
+      // must not steal focus back from search or a different input field.
+      if(document.activeElement === document.body || document.activeElement === opener || document.activeElement === target) target?.focus();
+    });
   };
   const finishTextEdit = async (id: string, kind: "commit" | "cancel", source: HTMLElement) => {
     let session = textBuffers.current[id];
@@ -233,24 +325,28 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       // clear a queued error only after reading the same unchanged native draft.
       const failed = saveQueue.snapshot();
       if (failed.error && kind === "cancel") {
-        const saved = await invoke<Draft | null>("get_transcript_draft", { meetingId });
-        if (!saved || !failed.draft || saved.id !== failed.draft.id || saved.baseAnalysisId !== failed.draft.baseAnalysisId || saved.lockVersion !== failed.draft.lockVersion || JSON.stringify(canonicalPayload(saved.payload)) !== JSON.stringify(canonicalPayload(failed.draft.payload))) throw Error("先行する保存結果を確認できません。本文と編集欄は保持しています。保存結果を再確認してください。");
+        const saved = recovery.snapshot().bodyPending ? (await recovery.recheckBody(false)).draft : await invoke<Draft | null>("get_transcript_draft", { meetingId });
+        if (!saved || !failed.draft || saved.id !== failed.draft.id || saved.baseAnalysisId !== failed.draft.baseAnalysisId || saved.lockVersion !== failed.draft.lockVersion || saved.contentHash !== failed.draft.contentHash || JSON.stringify(canonicalPayload(saved.payload)) !== JSON.stringify(canonicalPayload(failed.draft.payload))) throw Error("先行する保存結果を確認できません。本文と編集欄は保持しています。保存結果を再確認してください。");
         saveQueue.load(saved); if (failed.payload) saveQueue.edit(() => failed.payload!);
       }
       if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) return;
-      if (kind === "cancel") {
-        session = { ...session, value: session.text };
-        const restored = session; updateTextSessions(current => ({ ...current, [id]: restored }));
-        saveQueue.edit(current => cancelTextEdit(current, restored));
-      } else saveQueue.edit(current => stageTextEdit(current, session));
+      const removal = removingBuffers.current.get(id);
+      if(removal?.session !== session || removal.kind !== kind) {
+        removingBuffers.current.delete(id); syncRecoveryBuffers();
+        if (kind === "cancel") saveQueue.edit(current => cancelTextEdit(current,session));
+        else saveQueue.edit(current => stageTextEdit(current,session));
+      }
       await saveQueue.flush();
-      if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) return;
+      setBodyManual(false);
+      if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) { await recovery.flushRecovery(); return; }
       const row = source.closest<HTMLElement>(".utterance-row"), restoreFocus = !!row?.contains(document.activeElement);
-      updateTextSessions(current => { const next = { ...current }; delete next[id]; return next; });
-      if (restoreFocus) requestAnimationFrame(() => {
-        if (document.activeElement !== document.body && !row?.contains(document.activeElement)) return;
-        if (row?.isConnected) row.focus(); else document.querySelector<HTMLInputElement>('.transcript-card input[type="search"]')?.focus();
-      });
+      removingBuffers.current.set(id,{ session,kind }); syncRecoveryBuffers();
+      await recovery.flushRecovery();
+      if(restoreFocus && (document.activeElement === document.body || row?.contains(document.activeElement))) {
+        setFocusedRow(id); focusAfterRemoval.current = { id,row };
+      }
+      settleRemovedBuffers();
+      setRecoveryManual(false);
     } catch (cause) { setError(String(cause)); }
     finally {
       if (textOperations.current.get(id) === operation) {
@@ -259,10 +355,36 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     }
   };
   const confirmReload = () => {
-    if (!saveQueue.snapshot().dirty && !textDirty) { void reload(); return; }
+    if(discardPendingRef.current || recovery.snapshot().pendingRequest || recovery.snapshot().bodyPending || recovery.snapshot().saving) { setError("未確認の保存結果を確認してから再読込してください。入力を保持しています。"); return; }
+    if (!saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length) { void reload(); return; }
     const stamp = () => JSON.stringify([saveQueue.snapshot().payload, textBuffers.current]);
     const expected = stamp();
-    void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => stamp() === expected, action: () => reload(true) });
+    void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集とその回復入力を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => stamp() === expected, action: async () => {
+      // Complete fallible reads before consenting input is cleared. The empty
+      // journal CAS then proves no older save can resurrect the discarded text.
+      const [current,working] = await Promise.all([invoke<Analysis | null>("get_current_analysis",{ meetingId }),invoke<Draft | null>("get_transcript_draft",{ meetingId })]);
+      const acknowledged = saveQueue.snapshot().draft;
+      if(stamp() !== expected || !working || !acknowledged || working.id !== acknowledged.id
+        || working.lockVersion !== acknowledged.lockVersion || working.contentHash !== acknowledged.contentHash
+        || working.baseAnalysisId !== current?.id) throw Error("再読込前に本文が変わりました。入力を破棄せず保持しています。");
+      for(const session of Object.values(textBuffers.current)) removingBuffers.current.set(session.utteranceId,{ session,kind: "cancel" });
+      syncRecoveryBuffers(); await recovery.flushRecovery();
+      recovery.load(working,recovery.snapshot().saved); saveQueue.load(working); setAnalysis(current);
+      setRecoveryManual(false); setBodyManual(false);
+      textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null); setError("");
+      setNotice("未保存の編集と回復入力を破棄し、保存済み本文を再読込しました。"); setNoticeVersion(null);
+    } });
+  };
+  const runRecoveryAction = async (action: () => Promise<unknown>) => {
+    setBusy(true); setError("");
+    try { await action(); settleRemovedBuffers(); } catch(cause) { setError(String(cause)); } finally { setBusy(false); }
+  };
+  const recheckBody = async () => {
+    const local = saveQueue.snapshot().payload;
+    const result = await recovery.recheckBody();
+    setBodyManual(true); setRecoveryManual(true);
+    saveQueue.load(result.draft); if(local) saveQueue.edit(() => local);
+    setNotice(result.status === "saved" ? "先行する本文保存を確認しました。新しい入力と確定前の本文は保持しています。" : "本文は確認した版のままです。入力を保持しています。"); setNoticeVersion(null);
   };
   useEffect(()=>{setPage(0);},[speakerFilter,query]);
   useEffect(()=>{const valid=new Set(view?.utterances.map(u=>u.id));setSelection(ids=>ids.every(id=>valid.has(id))?ids:ids.filter(id=>valid.has(id)));setPage(p=>Math.min(p,Math.max(0,Math.ceil(filtered.length/PAGE_SIZE)-1)));},[view,filtered.length]);
@@ -300,10 +422,35 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         <div className="transcript-actions">
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
           {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty ? "未保存" : "保存済み"}</span>}
-          {saveError && <button type="button" className="small-secondary" onClick={() => { void retryTextBuffers().catch(() => {}); }} disabled={saving || locked}>保存を再試行</button>}
-          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || textDirty || locked || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
+          {(saveError || bodyManual && dirty) && <button type="button" className="small-secondary" onClick={() => void runRecoveryAction(retryTextBuffers)} disabled={saving || busy || locked || discardPending || !!activeConfirmation}>保存を再試行</button>}
+          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
           <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
         </div>
+        <TranscriptRecoveryPanel meetingId={meetingId} review={recoverySnapshot.review} currentDraftId={draft?.id}
+          blocked={locked || loading || busy || saving}
+          canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
+          onPending={pending => { discardPendingRef.current = pending; setDiscardPending(pending); }}
+          onResume={async () => {
+            await recovery.resume();
+            textBuffers.current = Object.fromEntries(recovery.snapshot().buffers.map(session => [session.utteranceId,session]));
+            setTextSessions(textBuffers.current); setError(""); setRecoveryManual(false);
+          }}
+          onDiscarded={record => {
+            const current = saveQueue.snapshot().draft;
+            if(current?.id === record.draftId && record.currentContext && record.matchesDraft && record.currentDraftLockVersion === current.lockVersion && record.currentDraftContentHash === current.contentHash
+              && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !recovery.snapshot().pendingRequest && !recovery.snapshot().bodyPending) {
+              recovery.load(current,record); setError("");
+            }
+          }} />
+        {draft && <p className="hint" role="status">未確定入力の回復保存：{recoverySnapshot.error || recoverySnapshot.pendingRequest ? "結果要確認" : recoverySnapshot.saving ? "保存中" : recoverySnapshot.review ? "確認待ち" : recoverySnapshot.dirty ? "未保存" : "保存済み"}（本文の確定とは別です）</p>}
+        {recoverySnapshot.bodyPending && <button type="button" disabled={busy || saving || locked || !!activeConfirmation} onClick={() => void runRecoveryAction(recheckBody)}>本文の保存結果を確認</button>}
+        {recoverySnapshot.pendingRequest && <button type="button" disabled={busy || recoverySnapshot.saving || recoverySnapshot.bodyPending || locked || !!activeConfirmation} onClick={() => void runRecoveryAction(async () => {
+          const result = await recovery.recheckRecovery();
+          setNotice(result === "saved" ? "未確定入力の保存結果を確認しました。本文は確定していません。" : "回復記録は未更新です。入力と同じ保存要求を保持しています。再試行は別操作です。"); setNoticeVersion(null);
+        })}>回復保存の結果を確認</button>}
+        {(recoverySnapshot.error || recoveryManual && recoverySnapshot.dirty) && <div className="action-error" role="alert">未確定入力を保持しています：{recoverySnapshot.error || "保存結果の確認後も、新しい入力の自動再送は停止しています。"}
+          <button type="button" disabled={busy || recoverySnapshot.saving || recoverySnapshot.bodyPending || locked || !!activeConfirmation} onClick={() => void runRecoveryAction(async () => { await recovery.retryRecovery(); setRecoveryManual(false); })}>未確定入力の保存を再試行</button>
+        </div>}
         <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {!splitting&&audio.controls}
@@ -353,7 +500,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
                   const shortcut = appShortcut(event.nativeEvent);
                   if (shortcut === "cancel" || shortcut === "commit") { event.preventDefault(); void finishTextEdit(utterance.id, shortcut === "cancel" ? "cancel" : "commit", event.currentTarget); }
                 }}
-                onChange={event => { const value = event.target.value; updateTextSessions(current => ({ ...current, [utterance.id]: { ...current[utterance.id], value } })); }} disabled={!editable} rows={2} />
+                onChange={event => { const value = event.target.value; updateTextSessions(current => ({ ...current, [utterance.id]: { ...current[utterance.id], value } })); }} disabled={!editable} rows={2} maxLength={20000} />
                 <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={event => void finishTextEdit(utterance.id, "commit", event.currentTarget)}>確定</button><button type="button" className="small-secondary" disabled={!editable || pending === "cancel"} onClick={event => void finishTextEdit(utterance.id, "cancel", event.currentTarget)}>キャンセル</button><span>{pending === "cancel" ? "元の本文の保存を確認中" : pending ? "確定した本文を保存中" : "Ctrl／Cmd＋Enterで確定 · Escでキャンセル"}</span></div>
               </div> : <><p className="utterance-text" aria-label={`${timeLabel(utterance.startUs)}の発言本文`}>{utterance.effectiveText}</p><button type="button" className="small-secondary" aria-label={`${timeLabel(utterance.startUs)}の発言を編集`} disabled={!editable} onClick={() => beginTextEdit(utterance)}>発言を編集</button></>}
               {(utterance.recognitionIsSource||utterance.effectiveText !== utterance.recognizedText) && <small>{utterance.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {utterance.recognizedText}</small>}

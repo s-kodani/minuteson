@@ -229,6 +229,14 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .utterance-text-edit textarea { line-height:1.7; font-size:15px; }
 .utterance-text-edit .transcript-actions { flex-wrap:wrap; }
 .utterance-text-edit .transcript-actions span { font-size:13px; color:var(--muted); }
+.transcript-recovery-dialog p { font-size:14px; line-height:1.7; }
+.transcript-recovery-dialog label { display:grid; gap:8px; margin:16px 0; font-size:13px; color:var(--secondary-text); }
+.transcript-recovery-dialog textarea { width:100%; min-width:0; min-height:80px; resize:vertical; padding:10px; font:inherit; font-size:15px; line-height:1.7; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
+.transcript-recovery-dialog textarea:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.transcript-recovery-dialog button { max-width:100%; white-space:normal; }
+.recovery-actions { display:flex; flex-wrap:wrap; gap:12px; margin:18px 0; }
+.recovery-inventory p { display:grid; gap:8px; padding-block:12px; border-bottom:1px solid var(--border); }
+.recovery-inventory p button { justify-self:start; }
 @media(max-width:1279px) {
   .app-layout { grid-template-columns:64px minmax(0,1fr); }
   .sidebar { padding-inline:8px; }

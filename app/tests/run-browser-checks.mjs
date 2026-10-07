@@ -37,6 +37,7 @@ const suites = [
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["keyboard", "browser-fixture.js", "keyboard-browser-check.js"],
   ["transcript-edit", "browser-fixture.js", "transcript-edit-browser-check.js"],
+  ["transcript-recovery", "browser-fixture.js", "transcript-recovery-browser-check.js"],
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   ["vocabulary-toast", "browser-fixture.js", "vocabulary-toast-browser-check.js"],
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],

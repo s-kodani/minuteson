@@ -36,6 +36,23 @@ function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<Tran
   return { queue, calls, reads, setRecord: (value: TranscriptRecovery<Payload> | null) => { record = value; } };
 }
 
+test("invalid local buffer limits retain input without freezing an unretryable request", async () => {
+  for(const values of [Array.from({ length: 129 },(_,i) => buffer("入力",`u-${i}`)),[buffer("a".repeat(20_001))],
+    [buffer("入力"),buffer("別入力")],[{ ...buffer("入力"),speakerIds: ["s","s"] }]]) {
+    const { queue,calls } = fixture(); queue.update(values);
+    await assert.rejects(queue.flush(),/上限または重複/);
+    assert.equal(queue.snapshot().pendingRequest,null); assert.equal(calls.length,0);
+    assert.equal(queue.snapshot().buffers.length,values.length);
+    queue.update([buffer("修正後")]); await queue.retry(); assert.equal(calls.length,1);
+  }
+});
+test("UTF-8 recovery capacity is checked before creating a nonce and is correctable", async () => {
+  const { queue,calls } = fixture();
+  queue.update(Array.from({ length: 100 },(_,i) => ({ ...buffer("あ".repeat(20_000),`u-${i}`),text: "あ".repeat(20_000) })));
+  await assert.rejects(queue.flush(),/4MiB/); assert.equal(queue.snapshot().pendingRequest,null); assert.equal(calls.length,0);
+  queue.update([buffer("小さい入力")]); await queue.retry(); assert.equal(calls.length,1);
+});
+
 test("recovery coalesces typing after an immutable in-flight request and increments CAS", async () => {
   const wait = deferred<TranscriptRecovery<Payload>>();
   const { queue, calls } = fixture({ persist: req => calls.length === 1 ? wait.promise : Promise.resolve(result(req)) });

@@ -77,7 +77,7 @@ async page => {
   await editor.getByRole("button", { name: "次へ", exact: true }).click(); await editor.getByRole("button", { name: "次へ", exact: true }).click();
   await edit("00:01:42"); await text("00:01:42").fill("末尾の編集中本文");
   const search = editor.getByRole("searchbox", { name: "発言を検索", exact: true }); await search.fill("本文101です。");
-  check(await editor.getByRole("article").count() === 3 && await text("00:00:00").inputValue() === "ページ外の編集中本文" && await text("00:01:42").inputValue() === "末尾の編集中本文", "search/page transition dropped one of the open fields");
+  check(await editor.getByRole("article").count() === 3 && await text("00:00:00").inputValue() === "ページ外の編集中本文" && await text("00:01:42").inputValue() === "末尾の編集中本文", `search/page transition dropped one of the open fields: ${JSON.stringify(await editor.getByRole("article").evaluateAll(rows => rows.map(r => ({ id: r.dataset.utteranceId,value: r.querySelector("textarea")?.value }))))}`);
   check(await text("00:00:00").evaluate(e => e === window.retainedTextNode && e.selectionStart === 2 && e.selectionEnd === 6), "retained editor remounted or lost caret");
   check(await editor.getByText("1 / 103 発言", { exact: true }).isVisible(), "retained rows distorted actual search count");
   results.push("103-row paging and search retain both out-of-page buffers and the exact textarea/caret without inflating search counts");

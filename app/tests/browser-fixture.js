@@ -3,6 +3,7 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
+import { recoveryFixture,stampFixtureDraft } from "./transcript-recovery-browser-fixture.js";
 
 const meetings = ["会議A", "会議B"].map((title, index) => ({ id: `meeting-${index}`, title, lifecycle: "recorded", createdAt: 1791028800000, updatedAt: 1791028800000, lockVersion: 1 }));
 const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".repeat(64), speakers: [{ id: "speaker-a", label: "話者A", displayName: "田中" }, { id: "speaker-b", label: "話者B", displayName: "佐藤" }], utterances: [
@@ -24,6 +25,10 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
   currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
 };
 const currentAnalysis = () => fixture.currentId === analysis.id ? analysis : fixture.candidate;
+fixture.recovery = recoveryFixture({ drafts: () => [fixture.draft,...Object.values(fixture.archivedDrafts)],current: () => fixture.draft });
+const recoveredSeed = sessionStorage.getItem("MON_TRANSCRIPT_RECOVERY_FIXTURE");
+if(recoveredSeed) { sessionStorage.removeItem("MON_TRANSCRIPT_RECOVERY_FIXTURE"); const seed = JSON.parse(recoveredSeed); Object.assign(fixture,seed.fixture); fixture.recovery.records = seed.records; if(seed.utterances) analysis.utterances = seed.utterances; }
+fixture.crashSeed = () => sessionStorage.setItem("MON_TRANSCRIPT_RECOVERY_FIXTURE",JSON.stringify({ fixture: { draft: fixture.draft,archivedDrafts: fixture.archivedDrafts,currentId: fixture.currentId,previousId: fixture.previousId },records: fixture.recovery.records,utterances: analysis.utterances }));
 const versions = () => ({ meetingLockVersion: meetings[0].lockVersion, currentId: fixture.currentId, previousId: fixture.previousId, draft: fixture.draft ? { id: fixture.draft.id, lockVersion: fixture.draft.lockVersion } : null,
   versions: [analysis, fixture.candidate].filter((item) => item.id === fixture.currentId || item.id === fixture.previousId || (item.id === fixture.candidate.id && fixture.candidateVisible)).map((item) => ({ id: item.id, revisionNo: item.id === analysis.id ? 1 : 2, contentHash: item.contentHash, publicationState: item.id === fixture.candidate.id && fixture.candidateVisible ? "candidate" : "committed", utteranceCount: item.utterances.length, createdAt: 1791028800000, profile: { qualityStatus: "unverified" }, config: { diarization: "pending", timelineAlignment: "unverified" } })) });
 const switchDraft = (nextId) => {
@@ -37,6 +42,8 @@ fixture.setUtterances = utterances => { analysis.utterances = structuredClone(ut
 fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
+  const recovery = await fixture.recovery.invoke(command,args);
+  if(recovery !== undefined) { fixture.calls.push({ command,args: structuredClone(args) }); return recovery; }
   if (command === "get_analysis_notification_jobs") {
     fixture.calls.push({ command, args: structuredClone(args) });
     if (fixture.notificationReadFail) throw Error("模擬解析通知読込失敗");
@@ -88,22 +95,23 @@ mockIPC(async (command, args) => {
     case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
     case "get_transcript_draft":
       if (fixture.failDraftRead) throw Error("模擬下書き読込失敗");
-      return args.meetingId === meetings[0].id ? structuredClone(fixture.draft) : null;
+      return args.meetingId === meetings[0].id ? stampFixtureDraft(fixture.draft) : null;
     case "begin_transcript_draft":
-      fixture.draft = { id: `draft-${fixture.currentId}`, meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
-      return structuredClone(fixture.draft);
+      fixture.draft = { id: crypto.randomUUID(), meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
+      return stampFixtureDraft(fixture.draft);
     case "save_transcript_draft":
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
       if (fixture.failSave) throw new Error("模擬保存競合");
       if (args.expectedLockVersion !== fixture.draft.lockVersion) throw new Error("版番号不一致");
       fixture.transcriptHistory.push(structuredClone(fixture.draft.payload));
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
+      await stampFixtureDraft(fixture.draft);
       if (fixture.lostTranscriptSaveResponse) { fixture.lostTranscriptSaveResponse = false; throw Error("模擬本文保存応答喪失"); }
-      return structuredClone(fixture.draft);
+      return stampFixtureDraft(fixture.draft);
     case "undo_transcript_edit": {
       if (args.draftId !== fixture.draft.id || args.expectedLockVersion !== fixture.draft.lockVersion || !fixture.transcriptHistory.length) throw Error("模擬取り消し対象不一致");
       fixture.draft = { ...fixture.draft, payload: fixture.transcriptHistory.pop(), lockVersion: fixture.draft.lockVersion + 1 };
-      return structuredClone(fixture.draft);
+      return stampFixtureDraft(fixture.draft);
     }
     case "get_analysis_preferences": return structuredClone(fixture.preferences);
     case "get_vocabulary_book": return structuredClone(fixture.vocabulary[args.meetingId ?? "global"] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 });
