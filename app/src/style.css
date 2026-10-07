@@ -59,17 +59,17 @@
 .vocabulary-list .analysis-actions label { display: flex; align-items: center; }
 .vocabulary-info ul { max-height: 240px; overflow: auto; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .minutes-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); margin: 12px 0; }
-.minutes-wysiwyg { border: 1px solid var(--input-border); background: var(--surface); border-radius: 10px; padding: 22px; line-height: 1.8; overflow-wrap: anywhere; }
+.minutes-wysiwyg { border: 1px solid var(--input-border); background: var(--surface); border-radius: 10px; padding: 22px; font-size:var(--reading-font-size,15px); line-height: 1.8; overflow-wrap: anywhere; }
 .minutes-rich-field { min-height: 1.8em; white-space: pre-wrap; outline: none; padding: 4px; border-radius: 4px; }
 .minutes-rich-field:focus { outline: 2px solid var(--focus); background: var(--selection); }
 .minutes-rich-field[contenteditable=true]:empty::before { content: attr(data-placeholder); color: var(--subtle); }
-.rich-heading { font-weight: 700; margin-top: 14px; }.rich-heading-1 { font-size: 1.6rem; }.rich-heading-2 { font-size: 1.25rem; }.rich-heading-3 { font-size: 1.1rem; }
+.rich-heading { font-weight: 700; margin-top: 14px; }.rich-heading-1 { font-size: 1.6em; }.rich-heading-2 { font-size: 1.25em; }.rich-heading-3 { font-size: 1.1em; }
 .manual-label { display: block; color: var(--warning-text); font-size: 11px; font-weight: 400; }
-.minutes-document { min-width: 0; }
+.minutes-document { min-width: 0; font-size:var(--reading-font-size,15px); }
 .minutes-document-layout { display: grid; grid-template-columns: minmax(0, 760px); gap: 18px; align-items: start; }
 .minutes-document article { min-width: 0; line-height: 1.8; overflow-wrap: anywhere; }
-.minutes-document h1 { font-size: 1.6rem; }
-.minutes-document h2 { font-size: 1.25rem; margin-top: 24px; }
+.minutes-document h1 { font-size: 1.6em; }
+.minutes-document h2 { font-size: 1.25em; margin-top: 24px; }
 .document-text { white-space: pre-wrap; }
 .evidence-chip { display: inline-block; font-size: 0.75rem; padding: 2px 6px; margin: 2px 4px; min-height: 28px; background: var(--success-surface); color: var(--success-text); border: 1px solid var(--success-border); border-radius: 5px; }
 .fixed-evidence { padding: 16px; background: var(--evidence-surface); border: 1px solid var(--success-border); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
@@ -318,9 +318,9 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .card-actions { flex-wrap:wrap; }
 .content :focus-visible { scroll-margin-block:24px; }
 .utterance-row:focus-visible, .audio-player:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
-.utterance-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; font-size:15px; user-select:text; margin:16px 0; }
+.utterance-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; font-size:var(--reading-font-size,15px); user-select:text; margin:16px 0; }
 .utterance-list { gap:18px; }
-.utterance-text-edit textarea { line-height:1.7; font-size:15px; }
+.utterance-text-edit textarea { line-height:1.7; font-size:var(--reading-font-size,15px); }
 .utterance-text-edit .transcript-actions { flex-wrap:wrap; }
 .utterance-text-edit .transcript-actions span { font-size:13px; color:var(--muted); }
 .speaker-name-editor { flex:1 1 240px; min-width:0; max-width:360px; padding:12px; border:1px solid var(--border); border-radius:10px; }
@@ -357,6 +357,11 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-audio-details label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .meeting-audio-details select { max-width:100%; }
 .meeting-audio-details p { margin:4px 0; line-height:1.6; overflow-wrap:anywhere; }
+.text-size-choice { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block:8px; font-size:13px; }
+.playback-follow-choice { display:flex; align-items:center; gap:8px; margin-block:8px; font-size:13px; }
+.playback-follow-status { flex:none; display:flex; align-items:center; flex-wrap:wrap; gap:8px; max-height:15dvh; overflow:auto; font-size:12px; color:var(--muted); }
+.playback-follow-status button { font-size:12px; padding:4px 8px; }
+.fixed-transcript .document-text { font-size:var(--reading-font-size,15px); }
 @media (min-width:761px) {
   /* Idle actions share the caption row, leaving the transcript its scroll area. */
   .meeting-playback-dock:has(.meeting-audio-actions):not(:has(.audio-player)) { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:16px; }

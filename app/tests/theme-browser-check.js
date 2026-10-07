@@ -106,6 +106,10 @@ async (page, capturePath = path => path, detailUI) => {
   const themeError = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "表示設定の読込・保存" });
   await settings.getByRole("combobox", { name: "テーマ", exact: true }).selectOption("dark"); await waitTheme("dark");
   check(await select().inputValue() === "dark", "settings and header diverged");
+  await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).selectOption("18");
+  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="18px");
+  await settings.getByRole("checkbox",{name:"再生位置に追従",exact:true}).check();
+  await page.waitForFunction(()=>window.themeFixture.stored().payload.followPlayback===true);
   const mini = await page.context().newPage();
   try {
     await mini.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/, async route => {
@@ -114,15 +118,18 @@ async (page, capturePath = path => path, detailUI) => {
       await route.fulfill({ response, body });
     });
     await mini.goto("http://127.0.0.1:1420/?window=recorder"); await mini.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    await mini.waitForFunction(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="18px");
+    check(await mini.evaluate(()=>{const p=window.themeFixture.stored().payload;return p.schemaVersion===2&&p.followPlayback===true&&p.textSize===18;}),"recorder did not read the complete saved v2 preferences");
     await mini.setViewportSize({ width: 380, height: 130 });
     await mini.screenshot({ path: capturePath("mini-dark.png") });
     await page.evaluate(() => { window.themeFixture.suppressEvents = true; });
     await select().selectOption("light"); await waitTheme("light");
     await mini.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    check(await mini.evaluate(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="18px"),"later theme hint/poll reset recorder reading size");
     check(await mini.evaluate(() => window.themeFixture.calls.filter(c => c.command === "save_ui_preferences").length) === 0, "mini wrote theme");
     await mini.screenshot({ path: capturePath("mini-light.png") });
   } finally { await mini.close(); }
-  results.push("settings/header sync; separate recorder window reloads saved theme without events or writes");
+  results.push("settings/header sync; separate simulated recorder window reads full v2 size/follow/theme and follows later theme changes without events or writes");
 
   await page.evaluate(() => { window.themeFixture.mode = "fail"; });
   await select().selectOption("dark"); await themeError().filter({ hasText: "保存できません" }).waitFor();
@@ -153,9 +160,19 @@ async (page, capturePath = path => path, detailUI) => {
   check(await count() === beforePoll, "polling rewrote the committed theme");
   results.push("later authoritative poll resolves lost commit and clears stale uncertainty/choice without events, manual reload or resave");
 
+  await page.evaluate(()=>{window.themeFixture.mode="success";});
+  await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).selectOption("20");
+  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="20px");
+  await page.reload();await waitTheme("light");
+  await page.waitForFunction(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="20px");
+  await page.getByRole("button",{name:"設定",exact:true}).click();
+  check(await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).inputValue()==="20"&&await settings.getByRole("checkbox",{name:"再生位置に追従",exact:true}).isChecked()&&await count()===0,"reload changed stored display values or caused implicit save");
+  results.push("fresh main mount reads persisted theme, size and follow values without implicit preference writes (fixture storage only)");
+
   await page.evaluate(async () => { window.audioDeletionFixture.blocked = true; await window.dataFixture.changed({}); });
   await page.waitForFunction(() => document.querySelector(".theme-quick select")?.disabled);
   check(await settings.getByRole("combobox", { name: "テーマ", exact: true }).isDisabled(), "data write fence failed to disable theme save");
+  check(await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).isDisabled()&&await settings.getByRole("checkbox",{name:"再生位置に追従",exact:true}).isDisabled(),"data write fence did not disable display preference writers");
   results.push("data-maintenance write fence disables both theme writers while saved colors remain");
   return results;
 }

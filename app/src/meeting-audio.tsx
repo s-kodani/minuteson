@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";
 import { meetingPlaybackLabel, meetingPlaybackModes, type MeetingPlaybackMode } from "./meeting-playback-state";
+import { TextSizeSelection, PlaybackFollowingSelection } from "./theme";
 
 export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
   meetingId: string; sourceType: "recording" | "audio_import"; locked: boolean; host: HTMLElement | null;
@@ -21,6 +22,8 @@ export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
         setMode(next);
         if (audio.selected) void audio.startMeeting(next, true);
       }}>{modes.map(value => <option key={value} value={value}>{meetingPlaybackLabel(value)}</option>)}</select></label>
+      <TextSizeSelection locked={locked} />
+      <PlaybackFollowingSelection locked={locked} />
       <p>切替は会議全体の再生に適用します。発言・根拠を選ぶと、その元トラックの区間へ切り替わります。</p>
     </div></details>
   </div>, host)}{audio.controls}</>;

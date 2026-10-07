@@ -8,6 +8,7 @@ import { registerPlaybackStop } from "./playback-barrier";
 import { appShortcut, overlayOpen } from "./keyboard";
 import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface";
 import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode, type MeetingPlaybackRequest, type MeetingPlaybackRestore } from "./meeting-playback-state";
+import { playbackTimeline } from "./playback-follow";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -47,6 +48,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   const request = useRef(0);
   const token = useRef<string | null>(null);
   const meetingCheckpoint = useRef<MeetingPlaybackRestore | null>(null);
+  const followSession = useRef(0),originAnalysis = useRef<string|null>(null);
   const [owner] = useState(() => crypto.randomUUID());
   const preparations = useRef(new Set<Promise<void>>());
   const closing = useRef(new Map<string, { job: Promise<void>; active: boolean }>());
@@ -60,6 +62,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   };
 
   const clear = () => {
+    playbackTimeline.release(owner);
     surface?.release(owner);
     request.current++;
     player.clear();
@@ -92,6 +95,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       // this view disappears. Deletion must not mistake unmount for release.
       detached = true;
       surface?.release(owner);
+      playbackTimeline.release(owner);
       window.clearInterval(timer);
       window.removeEventListener("mon-audio-start", otherStarted);
       request.current++;
@@ -101,10 +105,12 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     };
   }, [clock, player, owner]);
 
-  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest | MeetingPlaybackRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore) => {
+  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest | MeetingPlaybackRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore, preserveFollow = false) => {
     if (locked) return;
     clear();
     const meeting = reference && "mode" in reference ? reference : null;
+    if(!preserveFollow)followSession.current++;
+    originAnalysis.current=meeting?null:analysisId;
     if (meeting) meetingCheckpoint.current = restore ?? null;
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
     if (!options.inline) surface?.claim({ id:owner,meetingId,label:options.label ?? "文字起こしの発言音声" });
@@ -169,11 +175,17 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     const restore = preserve && current.info ? { frame:current.frame, rate:current.rate, playing:current.playing, endUs:current.info.endUs }
       : preserve && meetingCheckpoint.current ? meetingCheckpoint.current
       : { frame:0, rate:current.rate, playing:true };
-    return start("", `meeting:${mode}`, { meetingId, mode }, undefined, restore);
+    return start("", `meeting:${mode}`, { meetingId, mode }, undefined, restore, preserve);
   };
 
   const snapshot = player.snapshot();
   const info = snapshot.info;
+  useEffect(()=>{
+    if(options.inline||!info||!selected||token.current!==info.token){playbackTimeline.release(owner);return;}
+    if(!Number.isSafeInteger(info.startUs)||!Number.isSafeInteger(info.endUs)||!Number.isSafeInteger(snapshot.frame))return;
+    const timeUs=Math.min(info.endUs,Number(BigInt(info.startUs)+BigInt(snapshot.frame)*1000000n/BigInt(info.sampleRate)));
+    playbackTimeline.publish({owner,session:`${owner}:${followSession.current}`,meetingId,analysisId:originAnalysis.current,utteranceId:options.scope==="meeting"?null:selected,scope:options.scope??"utterance",timeUs,playing:snapshot.playing});
+  },[info,snapshot.frame,snapshot.playing,selected,owner,meetingId,options.inline,options.scope]);
   const toggle = () => {
     if (locked || preparing || !player.snapshot().info) return;
     if (player.snapshot().playing) player.pause(); else void player.play();

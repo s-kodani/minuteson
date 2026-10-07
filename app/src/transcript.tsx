@@ -3,6 +3,7 @@ import { CommonModal } from "./common-modal";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { usePlaybackFollowing } from "./playback-following";
 import { WorkspacePanel } from "./workspace-panel";
 import { createPortal } from "react-dom";
 import { confirmations } from "./confirmation-service";
@@ -101,6 +102,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const textOperations = useRef(new Map<string, { kind: "commit" | "cancel" }>());
   const textInputs = useRef(new Map<string, HTMLTextAreaElement>());
   const transcriptRoot = useRef<HTMLElement>(null);
+  const followPort=useRef<HTMLDivElement>(null);
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
   const [nameSessions,setNameSessions] = useState<Record<string,SpeakerNameSession>>({});
   const nameBuffers = useRef<Record<string,SpeakerNameSession>>({});
@@ -362,6 +364,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
   const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation && !conflictPreview);
+  const following=usePlaybackFollowing({meetingId,analysisId:analysis?.id??null,rows:filtered,page,pageSize:PAGE_SIZE,setPage,
+    editing:!!Object.keys(textSessions).length||!!Object.keys(nameSessions).length||saving||dirty||!!conflictPreview||!!activeConfirmation||busy||loading,
+    active:visible&&!locked,port:followPort});
   const finishName = async (id: string,kind: "commit" | "cancel") => {
     const session = nameBuffers.current[id];
     if(!editable || !session || nameOperations.current.has(id)) return;
@@ -650,7 +655,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
         </div></details>
         <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
-        <div className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>
+        {following.enabled&&<div className="playback-follow-status" role="status">{following.suspended?<>手動操作のため再生追従を一時停止しています。<button type="button" className="small-secondary" onClick={following.resume}>再生位置への追従を再開</button></>:"再生位置に追従します。編集中・確認画面・文字選択中はスクロールしません。"}</div>}
+        <div ref={followPort} {...following.handlers} className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>
           {retained.extra > 0 && <p className="hint" role="status">検索・ページ条件外の編集中またはフォーカス中の発言 {retained.extra} 件を保持しています。</p>}
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {
@@ -688,7 +694,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           })}
         </div>
         {!filtered.length&&<p>条件に一致する発言はありません。{retained.extra > 0 && "編集中・フォーカス中の発言は保持しています。"}</p>}
-        {filtered.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => setPage((value) => value + 1)} disabled={(page + 1) * PAGE_SIZE >= filtered.length}>次へ</button></div>}
+        {filtered.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => {following.suspend();setPage((value) => Math.max(0, value - 1));}} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => {following.suspend();setPage((value) => value + 1);}} disabled={(page + 1) * PAGE_SIZE >= filtered.length}>次へ</button></div>}
         </div>
       </div>}
       {error && <p className="action-error" role="alert">{error}</p>}

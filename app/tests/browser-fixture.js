@@ -38,6 +38,7 @@ const switchDraft = (nextId) => {
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
+fixture.emitUiPreferences = () => emit("ui-preferences-changed",fixture.uiPreferences?.lockVersion??0);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
 fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
 fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
@@ -65,6 +66,7 @@ mockIPC(async (command, args) => {
     if (!job || job.state !== "succeeded") throw Error("模擬通知対象の成功ジョブがありません");
     return { job: { ...structuredClone(job), ...(fixture.notificationProofMode === "foreign" ? { meetingId: meetings[1].id } : {}) }, contentHash: "c".repeat(64), publicationState: fixture.notificationProofMode === "hidden" ? "internal_snapshot" : fixture.notificationPublication ?? "candidate" };
   }
+  if (command === "get_ui_preferences" && fixture.uiReadFail) throw Error("模擬表示設定読込失敗");
   if (command === "get_ui_preferences" && fixture.uiPreferences) return structuredClone(fixture.uiPreferences);
   const baseline = dataIdleRead(command);
   if (baseline !== undefined) return baseline;
@@ -73,10 +75,14 @@ mockIPC(async (command, args) => {
     case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
     case "capture_available": return false;
     case "save_ui_preferences": {
+      if(fixture.uiMode === "delay") await new Promise(resolve=>{fixture.releaseUiSave=resolve;});
+      if(fixture.uiMode === "fail") throw Error("模擬表示設定保存失敗");
       const current = fixture.uiPreferences ?? dataIdleRead("get_ui_preferences");
       if (args.expectedLockVersion !== current.lockVersion) throw Error("模擬表示設定の競合");
-      fixture.uiPreferences = { ...current, payload: structuredClone(args.payload), lockVersion: current.lockVersion + (current.payload.theme === args.payload.theme ? 0 : 1) };
+      fixture.uiPreferences = { ...current, payload: structuredClone(args.payload), lockVersion: current.lockVersion + (JSON.stringify(current.payload) === JSON.stringify(args.payload) ? 0 : 1) };
       await emit("ui-preferences-changed", fixture.uiPreferences.lockVersion);
+      if(fixture.uiMode === "lostUnreadable") fixture.uiReadFail=true;
+      if(["lost","lostUnreadable"].includes(fixture.uiMode)) throw Error("模擬表示設定の応答喪失");
       return structuredClone(fixture.uiPreferences);
     }
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };

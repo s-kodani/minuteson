@@ -43,7 +43,7 @@ mockIPC(async (command, args) => {
     const current = stored();
     if (args.expectedLockVersion !== current.lockVersion) throw Error("模擬表示設定の競合");
     if (f.mode === "forged") return { ...current, id: "foreign" };
-    const next = { ...current, payload: args.payload, lockVersion: current.lockVersion + (current.payload.theme === args.payload.theme ? 0 : 1) };
+    const next = { ...current, payload: args.payload, lockVersion: current.lockVersion + (JSON.stringify(current.payload) === JSON.stringify(args.payload) ? 0 : 1) };
     await f.setStored(next);
     if (f.mode === "lostUnreadable") f.readFail = true;
     if (["lost", "lostUnreadable"].includes(f.mode)) throw Error("模擬保存結果の応答喪失");

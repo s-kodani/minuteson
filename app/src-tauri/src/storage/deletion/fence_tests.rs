@@ -191,14 +191,14 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
     let p = f.prepare();
     assert!(f.storage.data_write_blocked());
     assert_eq!(
-        f.storage.ui_preferences().unwrap().payload.theme,
-        Theme::System
+        f.storage.ui_preferences().unwrap().payload,
+        UiPreferences::default()
     );
     assert!(f
         .storage
         .save_ui_preferences(
             0,
-            UiPreferences {
+            UiPreferences::V1 {
                 schema_version: 1,
                 theme: Theme::Dark
             }
@@ -213,7 +213,7 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
     assert!(storage
         .save_ui_preferences(
             0,
-            UiPreferences {
+            UiPreferences::V1 {
                 schema_version: 1,
                 theme: Theme::Light
             }
