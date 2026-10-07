@@ -419,6 +419,7 @@ pub(super) fn portable_json_with_metadata(
             "startedAtUTC",
             "endedAtUTC",
             "requestedDurationSeconds",
+            "captureClock",
             "osVersion",
             "architecture",
             "state",

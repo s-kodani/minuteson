@@ -1,0 +1,106 @@
+use super::{CaptureManifest, CaptureTrack};
+use crate::audio_clock::{ClockChunk, ClockLayout, ClockSegment};
+use rusqlite::{params, Transaction};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct CaptureClock {
+    domain: String,
+    pub(super) origin_utc_ms: i64,
+    uncertainty_ns: i64,
+}
+
+impl CaptureManifest {
+    pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
+        match (self.schema_version, &self.capture_clock) {
+            (1, None) => Ok(None),
+            (2, Some(clock))
+                if clock.domain == "mach_continuous_time"
+                    && (0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
+                    && (0..=9_007_199_254_740_991).contains(&clock.uncertainty_ns) =>
+            {
+                Ok(Some(clock))
+            }
+            _ => Err("録音の共通時計・UTC原点または形式版が不正です".into()),
+        }
+    }
+}
+
+pub(super) struct CaptureTimeline<'a> {
+    pub(super) start_us: i64,
+    pub(super) end_us: i64,
+    segments: &'a [ClockSegment],
+}
+
+impl CaptureTrack {
+    pub(super) fn validated_timeline(
+        &self,
+        corrected: bool,
+    ) -> Result<CaptureTimeline<'_>, String> {
+        let (rate, _, nominal_end) = self.validated_format()?;
+        if !corrected {
+            // Never silently ignore supplied maps on an old manifest or upgrade
+            // old zero-origin nominal audio into verified capture timestamps.
+            if self.clock_segments.is_some() {
+                return Err("旧録音形式に時刻補正区間を混在させることはできません".into());
+            }
+            return Ok(CaptureTimeline {
+                start_us: 0,
+                end_us: nominal_end,
+                segments: &[],
+            });
+        }
+        let segments = self
+            .clock_segments
+            .as_deref()
+            .ok_or("録音の時刻補正区間がありません")?;
+        if segments.is_empty() || segments.len() > 1024 {
+            return Err("録音の時刻補正区間数が不正です".into());
+        }
+        let start = segments[0].timeline_start_us;
+        let end = segments.last().unwrap().timeline_end_us;
+        if end > 9_007_199_254_740_991 {
+            return Err("録音の補正時刻が数値表現の範囲外です".into());
+        }
+        let layout = ClockLayout::new(
+            &[ClockChunk {
+                frames: self.frames,
+                start_us: start,
+                end_us: end,
+                segments,
+            }],
+            rate as u32,
+        )?;
+        // Do not require a contiguous range here: explicit positive gaps are
+        // evidence to save, not PCM to invent. Readers gate each requested run.
+        Ok(CaptureTimeline {
+            start_us: layout.start_us,
+            end_us: layout.end_us,
+            segments,
+        })
+    }
+}
+
+impl CaptureTimeline<'_> {
+    pub(super) fn insert(
+        &self,
+        db: &Transaction<'_>,
+        track: &str,
+        chunk: &str,
+    ) -> Result<(), String> {
+        let mut previous_end = None;
+        for segment in self.segments {
+            if let Some(end) = previous_end.filter(|end| *end < segment.timeline_start_us) {
+                db.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES (?1,?2,?3,?4,'capture_timestamp_gap')", params![Uuid::new_v4().to_string(), track, end, segment.timeline_start_us]).map_err(|e| e.to_string())?;
+            }
+            db.execute("INSERT INTO track_clock_segments(id,track_id,chunk_id,source_frame_start,source_frame_end,timeline_start_us,timeline_end_us,mapping_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![Uuid::new_v4().to_string(), track, chunk, segment.source_frame_start, segment.source_frame_end, segment.timeline_start_us, segment.timeline_end_us, segment.mapping_json]).map_err(|e| e.to_string())?;
+            previous_end = Some(segment.timeline_end_us);
+        }
+        Ok(())
+    }
+}

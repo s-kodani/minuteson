@@ -3,6 +3,9 @@ use rusqlite::{Row, TransactionBehavior};
 use serde::Deserialize;
 use std::fs::File;
 
+mod clock;
+use clock::CaptureClock;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CaptureManifest {
@@ -15,6 +18,8 @@ struct CaptureManifest {
     errors: Vec<String>,
     microphone: CaptureTrack,
     system: CaptureTrack,
+    #[serde(default)]
+    capture_clock: Option<CaptureClock>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +29,8 @@ struct CaptureTrack {
     sample_rate: Option<f64>,
     channels: Option<i64>,
     append_failures: i64,
+    #[serde(default)]
+    clock_segments: Option<Vec<crate::audio_clock::ClockSegment>>,
 }
 
 impl CaptureTrack {
@@ -313,7 +320,9 @@ impl Storage {
             .join(session_id);
         let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
         let manifest = self.read_capture_manifest(&manifest_file)?;
-        if manifest.schema_version != 1 || manifest.state != "saved" || !manifest.errors.is_empty()
+        if !matches!(manifest.schema_version, 1 | 2)
+            || manifest.state != "saved"
+            || !manifest.errors.is_empty()
         {
             return Err("録音manifestは保存完了を示していません".into());
         }
@@ -338,6 +347,24 @@ impl Storage {
         }
         let mic_format = manifest.microphone.validated_format()?;
         let system_format = manifest.system.validated_format()?;
+        let capture_clock = manifest.validated_capture_clock()?;
+        let mic_timeline = manifest
+            .microphone
+            .validated_timeline(capture_clock.is_some())?;
+        let system_timeline = manifest
+            .system
+            .validated_timeline(capture_clock.is_some())?;
+        if capture_clock.is_some() && mic_timeline.start_us.min(system_timeline.start_us) != 0 {
+            return Err("録音の共通原点が最初の保存音声と一致しません".into());
+        }
+        let started_at = capture_clock
+            .map(|clock| clock.origin_utc_ms)
+            .or(session.started_at_utc_ms);
+        let processing_config = if let Some(clock) = capture_clock {
+            serde_json::json!({"timeline_alignment":"unverified","capture_clock":clock}).to_string()
+        } else {
+            "{\"timeline_alignment\":\"unverified\"}".into()
+        };
         let mic_file =
             self.checked_capture_file(&base.join("microphone.caf"), Some(&manifest.microphone))?;
         let system_file =
@@ -362,30 +389,44 @@ impl Storage {
             "application/json",
             now,
         )?;
-        for (kind, file, format) in [
-            ("mic", &mic_file, mic_format),
-            ("system", &system_file, system_format),
+        for (kind, file, format, timeline, frames) in [
+            (
+                "mic",
+                &mic_file,
+                mic_format,
+                &mic_timeline,
+                manifest.microphone.frames,
+            ),
+            (
+                "system",
+                &system_file,
+                system_format,
+                &system_timeline,
+                manifest.system.frames,
+            ),
         ] {
             let asset_id =
                 insert_capture_asset(&transaction, &session.meeting_id, file, "audio/x-caf", now)?;
             let track_id = Uuid::new_v4().to_string();
             transaction.execute(
-                "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, processing_config_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'caf', ?5, ?6, 'ready', '{\"timeline_alignment\":\"unverified\"}', ?7, ?7)",
-                params![track_id, session.meeting_id, session_id, kind, format.0, format.1, now],
+                "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, processing_config_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'caf', ?5, ?6, 'ready', ?7, ?8, ?8)",
+                params![track_id, session.meeting_id, session_id, kind, format.0, format.1, processing_config, now],
             ).map_err(|error| error.to_string())?;
+            let chunk_id = Uuid::new_v4().to_string();
             transaction.execute(
-                "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, ?6, ?7, ?8, 'ready', ?9)",
-                params![Uuid::new_v4().to_string(), session.meeting_id, track_id, asset_id, format.2, if kind == "mic" { manifest.microphone.frames } else { manifest.system.frames }, format.0, format.1, now],
+                "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9, 'ready', ?10)",
+                params![chunk_id, session.meeting_id, track_id, asset_id, timeline.start_us, timeline.end_us, frames, format.0, format.1, now],
             ).map_err(|error| error.to_string())?;
+            timeline.insert(&transaction, &track_id, &chunk_id)?;
         }
-        let duration_us = mic_format.2.max(system_format.2);
+        let duration_us = mic_timeline.end_us.max(system_timeline.end_us);
         transaction.execute(
-            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?3 WHERE id = ?4 AND state IN ('recording', 'stopping', 'interrupted')",
-            params![duration_us, manifest_file.hash, now, session_id],
+            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?3, started_at_utc_ms = ?5 WHERE id = ?4 AND state IN ('recording', 'stopping', 'interrupted')",
+            params![duration_us, manifest_file.hash, now, session_id, started_at],
         ).map_err(|error| error.to_string())?;
         transaction.execute(
             "UPDATE meetings SET lifecycle = 'recorded', duration_us = ?1, started_at_utc_ms = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lifecycle = 'recording'",
-            params![duration_us, session.started_at_utc_ms, now, session.meeting_id],
+            params![duration_us, started_at, now, session.meeting_id],
         ).map_err(|error| error.to_string())?;
         let saved =
             load_session(&transaction, session_id)?.ok_or("録音セッションを読み込めません")?;
@@ -530,6 +571,7 @@ mod tests {
             sample_rate: Some(8_000.0),
             channels: Some(1),
             append_failures: 0,
+            clock_segments: None,
         };
         assert_eq!(track.validated_format().unwrap(), (8000, 1, 14_460_000_000));
         track.frames = 8_000 * 86_400;
@@ -650,7 +692,9 @@ mod tests {
         }
     }
 
-    fn saved_probe_fixture(storage: &Storage) -> (String, String, PathBuf, serde_json::Value) {
+    pub(super) fn saved_probe_fixture(
+        storage: &Storage,
+    ) -> (String, String, PathBuf, serde_json::Value) {
         let meeting = storage.create_meeting("物理音声の確定").unwrap();
         let session = storage
             .prepare_recording(&meeting.id, &config(), &Uuid::new_v4().to_string())
