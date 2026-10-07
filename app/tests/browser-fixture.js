@@ -44,9 +44,46 @@ fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers
 fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
 fixture.setMeetingSource = (id,sourceType) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.sourceType=sourceType;meeting.lifecycle=sourceType === "audio_import" ? "imported" : "recorded"; };
 fixture.meetingAudio = { endUs:3600000000, sessions:{},holdModes:[],pending:[],failModes:[],corrupt:null };
+// Opt-in native preparation protocol for cancellation checks. Older suites
+// intentionally keep their late-reply bridge to exercise client fallback.
+fixture.preparation = { strict:false, reservations:{}, holdRegister:false, registerPending:[], responsive:false, losePrepare:false, loseReceipt:false, failCancel:false, failClose:false };
+const preparationEntry = args => {
+  if(!fixture.preparation.strict)return null;
+  const entry=fixture.preparation.reservations[args.preparationId];
+  if(!entry||entry.claimed||entry.cancelled)throw Error("未登録・使用中・取消済みの音声準備です");
+  entry.claimed=true;return entry;
+};
+const publishPlayback = (entry,info) => {
+  if(entry?.cancelled){delete fixture.preparation.reservations[entry.id];throw Error("音声の再生準備を取り消しました");}
+  fixture.meetingAudio.sessions[info.token]=info;
+  if(entry)entry.token=info.token;
+  if(entry&&fixture.preparation.losePrepare)throw Error("模擬音声準備の応答喪失");
+  return info;
+};
 fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
+  if(fixture.preparation.strict&&["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)){
+    fixture.calls.push({command,args:structuredClone(args)});
+    const data=fixture.preparation,id=args.preparationId;
+    if(command==="register_playback_preparation"){
+      if(data.reservations[id])throw Error("音声準備IDが重複しています");
+      data.reservations[id]={id,claimed:false,cancelled:false,token:null,reject:null};
+      if(data.holdRegister)await new Promise(resolve=>data.registerPending.push({id,release:resolve}));
+    }else if(command==="cancel_playback_preparation"){
+      if(data.failCancel)throw Error("模擬取消要求の失敗");
+      const entry=data.reservations[id];
+      if(entry){entry.cancelled=true;if(entry.token){delete fixture.meetingAudio.sessions[entry.token];delete data.reservations[id];}
+        else if(!entry.claimed)delete data.reservations[id];
+        else if(data.responsive&&entry.reject){entry.reject(Error("音声の照合を中断しました"));delete data.reservations[id];}}
+    }else{
+      const entry=data.reservations[id];
+      if(!entry||entry.cancelled||entry.token!==args.playbackToken)throw Error("音声準備と受取トークンが一致しません");
+      delete data.reservations[id];
+      if(data.loseReceipt)throw Error("模擬受取確認の応答喪失");
+    }
+    return null;
+  }
   const recovery = await fixture.recovery.invoke(command,args);
   if(recovery !== undefined) { fixture.calls.push({ command,args: structuredClone(args) }); return recovery; }
   if (command === "get_analysis_notification_jobs") {
@@ -202,16 +239,19 @@ mockIPC(async (command, args) => {
       return fixture.foreignPublicationReceipt ? { id: "foreign", contentHash: "wrong", previousId: null, meetingLockVersion: 0 } : { id: fixture.currentId, contentHash: target.contentHash, previousId: fixture.previousId, meetingLockVersion: meetings[0].lockVersion };
     }
     case "prepare_meeting_playback": {
+      const entry=preparationEntry(args);
       const data=fixture.meetingAudio,mode=args.request.mode;
       const info={token:crypto.randomUUID(),sampleRate:48000,channels:1,totalFrames:Math.ceil(data.endUs*48000/1000000),startUs:0,endUs:data.endUs,trackKind:mode,alignment:"unverified"};
-      if(data.holdModes.includes(mode)) await new Promise(resolve=>data.pending.push({mode,token:info.token,release:resolve}));
+      if(data.holdModes.includes(mode)) await new Promise((resolve,reject)=>{if(entry)entry.reject=reject;data.pending.push({mode,preparationId:args.preparationId,token:info.token,release:resolve});});
       if(data.failModes.includes(mode)) throw Error("指定した会議音声に欠損があります");
-      Object.assign(info,data.corrupt??{});data.sessions[info.token]=info;return info;
+      Object.assign(info,data.corrupt??{});return publishPlayback(entry,info);
     }
-    case "prepare_utterance_playback":
-      if (fixture.holdPlayback) await new Promise(resolve => { fixture.releasePlayback = resolve; });
+    case "prepare_utterance_playback": {
+      const entry=preparationEntry(args);
+      if (fixture.holdPlayback) await new Promise((resolve,reject) => { fixture.releasePlayback = resolve;if(entry)entry.reject=reject; });
       if (fixture.failPlayback) throw new Error("音声ファイルのハッシュが保存時と一致しません");
-      return { token: "audio-token", sampleRate: 48000, channels: 2, totalFrames: 720000, startUs: 0, endUs: 15000000, trackKind: "mic", alignment: "unverified" };
+      return publishPlayback(entry,{ token: "audio-token", sampleRate: 48000, channels: 2, totalFrames: 720000, startUs: 0, endUs: 15000000, trackKind: "mic", alignment: "unverified" });
+    }
     case "read_playback_chunk": {
       const info=fixture.meetingAudio.sessions[args.token];
       const frames = Math.min(65536, (info?.totalFrames??720000) - args.offsetFrames),channels=info?.channels??2;
@@ -222,7 +262,7 @@ mockIPC(async (command, args) => {
       view.setUint32(8, frames, true);
       return bytes; // Silent PCM: browser verification must not produce noise.
     }
-    case "close_playback": delete fixture.meetingAudio.sessions[args.token]; return null;
+    case "close_playback": if(fixture.preparation.failClose)throw Error("模擬音声解放の失敗");delete fixture.meetingAudio.sessions[args.token]; return null;
     case "finish_main_close": return null;
     case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
     case "get_minutes_versions": return { meetingLockVersion: 1, currentId: null, previousId: null, draft: null, versions: [] };

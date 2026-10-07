@@ -15,10 +15,21 @@ pub(crate) struct DraftUtteranceAudioRequest {
 }
 
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn prepare_draft_utterance_audio(
         &self,
         request: &DraftUtteranceAudioRequest,
     ) -> Result<crate::playback::PreparedAudio, String> {
+        self.prepare_draft_utterance_audio_cancellable(request, &|| false)
+    }
+    pub(crate) fn prepare_draft_utterance_audio_cancellable(
+        &self,
+        request: &DraftUtteranceAudioRequest,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<crate::playback::PreparedAudio, String> {
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
         let resolve = || -> Result<String, String> {
             let mut db = self
                 .connection
@@ -77,12 +88,16 @@ impl Storage {
             Ok(u.track_id.clone())
         };
         let track = resolve()?;
-        let audio = self.prepare_track_audio(
+        let audio = self.prepare_track_audio_cancellable(
             &request.meeting_id,
             &track,
             request.expected_start_us,
             request.expected_end_us,
+            cancelled,
         )?;
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
         if resolve()? != track {
             return Err("音声準備中に分割元トラックが変化しました".into());
         }
@@ -196,6 +211,70 @@ pub(super) fn validate_splits(
 mod tests {
     use super::super::playback::tests::fixture;
     use super::*;
+    use crate::playback::{PlaybackPreparations, PlaybackStore};
+    use std::cell::Cell;
+
+    #[test]
+    fn native_cancel_and_draft_change_during_hash_do_not_publish_split_audio() {
+        for cancel in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let storage = Storage::open(root.path().into()).unwrap();
+            let (meeting, analysis, _) = fixture(&storage);
+            let (draft, p) = payload(&storage, &meeting);
+            let part = p.utterance_splits[0].parts[0].clone();
+            let saved = storage.save_transcript_draft(&draft.id, 0, p).unwrap();
+            let view = storage.load_current_analysis(&meeting).unwrap().unwrap();
+            let request = DraftUtteranceAudioRequest {
+                meeting_id: meeting.clone(),
+                analysis_id: analysis,
+                expected_content_hash: view.content_hash,
+                expected_draft: DraftStamp {
+                    id: saved.id.clone(),
+                    lock_version: saved.lock_version,
+                },
+                utterance_id: part.id,
+                expected_start_us: part.start_us,
+                expected_end_us: part.end_us,
+            };
+            let preparations = PlaybackPreparations::default();
+            let store = PlaybackStore::default();
+            let id = Uuid::new_v4().to_string();
+            preparations.reserve(&id).unwrap();
+            let guard = preparations.claim(&id).unwrap();
+            let checks = Cell::new(0);
+            let error = storage
+                .prepare_draft_utterance_audio_cancellable(&request, &|| {
+                    checks.set(checks.get() + 1);
+                    if cancel && checks.get() == 5 {
+                        preparations.cancel(&id, &store).unwrap();
+                    }
+                    if !cancel && checks.get() == 4 {
+                        storage
+                            .undo_last_transcript_edit(&draft.id, saved.lock_version)
+                            .unwrap();
+                    }
+                    guard.cancelled()
+                })
+                .err()
+                .unwrap();
+            if cancel {
+                assert!(error.contains("照合を中断"), "{error}");
+                assert_eq!(checks.get(), 5);
+                assert_eq!(
+                    storage.load_transcript_draft(&meeting).unwrap(),
+                    Some(saved)
+                );
+                assert!(guard
+                    .publish(|| panic!("cancelled split must not publish"))
+                    .is_err());
+                assert!(storage.prepare_draft_utterance_audio(&request).is_ok());
+            } else {
+                assert!(error.contains("分割下書きが変化"), "{error}");
+            }
+            drop(guard);
+            assert!(preparations.claim(&id).is_err());
+        }
+    }
     fn payload(storage: &Storage, meeting: &str) -> (TranscriptDraft, TranscriptDraftPayload) {
         let view = storage.load_current_analysis(meeting).unwrap().unwrap();
         let draft = storage.create_transcript_draft(meeting, &view.id).unwrap();

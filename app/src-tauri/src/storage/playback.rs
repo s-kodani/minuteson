@@ -19,7 +19,79 @@ pub(in crate::storage) mod tests {
     use super::super::analysis::{AnalysisInput, UtteranceInput};
     use super::*;
     use crate::audio::tests::caf_fixture;
+    use crate::playback::PlaybackPreparations;
     use crate::playback::PlaybackStore;
+
+    #[test]
+    fn native_cancel_interrupts_file_hashing_and_keeps_saved_analysis_and_audio() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        let before = storage.load_current_analysis(&meeting).unwrap();
+        let store = PlaybackStore::default();
+        let preparations = PlaybackPreparations::default();
+        let id = Uuid::new_v4().to_string();
+        preparations.reserve(&id).unwrap();
+        let guard = preparations.claim(&id).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let error = storage
+            .prepare_utterance_audio_cancellable(&meeting, &analysis, &utterance, &|| {
+                checks.set(checks.get() + 1);
+                if checks.get() == 5 {
+                    preparations.cancel(&id, &store).unwrap();
+                }
+                guard.cancelled()
+            })
+            .err()
+            .unwrap();
+        assert!(error.contains("照合を中断"), "{error}");
+        assert_eq!(checks.get(), 5);
+        assert!(guard
+            .publish(|| panic!("cancelled source cannot publish"))
+            .is_err());
+        assert_eq!(storage.load_current_analysis(&meeting).unwrap(), before);
+        drop(guard);
+        assert!(preparations.claim(&id).is_err());
+        assert!(storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .is_ok());
+    }
+    #[test]
+    fn lost_prepare_reply_closes_actual_native_playback_via_preparation_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        let store = PlaybackStore::default();
+        let preparations = PlaybackPreparations::default();
+        let id = Uuid::new_v4().to_string();
+        preparations.reserve(&id).unwrap();
+        let guard = preparations.claim(&id).unwrap();
+        let info = guard
+            .publish(|| {
+                store.insert(storage.prepare_utterance_audio(&meeting, &analysis, &utterance)?)
+            })
+            .unwrap();
+        drop(guard);
+        assert!(store.read(&info.token, 0).is_ok());
+        preparations.cancel(&id, &store).unwrap();
+        assert!(store.read(&info.token, 0).is_err());
+        assert!(preparations.acknowledge(&id, &info.token).is_err());
+        preparations.cancel(&id, &store).unwrap();
+        assert!(storage
+            .prepare_utterance_audio(&meeting, &analysis, &utterance)
+            .is_ok());
+    }
+    #[test]
+    fn utterance_reference_revoked_during_hashing_is_rechecked_before_returning_audio() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path().into()).unwrap();
+        let (meeting, analysis, utterance) = fixture(&storage);
+        let checks = std::cell::Cell::new(0);
+        let error=storage.prepare_utterance_audio_cancellable(&meeting,&analysis,&utterance,&||{
+            checks.set(checks.get()+1);if checks.get()==4 { storage.connection.lock().unwrap().execute("UPDATE meetings SET current_analysis_id=NULL,previous_analysis_id=NULL WHERE id=?1",params![meeting]).unwrap(); }false
+        }).err().unwrap();
+        assert!(error.contains("再生可能な発言がありません"), "{error}");
+    }
 
     pub(in crate::storage) fn fixture(storage: &Storage) -> (String, String, String) {
         let meeting = storage.create_meeting("再生テスト").unwrap();
@@ -256,13 +328,27 @@ pub(in crate::storage) mod tests {
 }
 
 impl Storage {
+    #[cfg(test)]
     pub fn prepare_utterance_audio(
         &self,
         meeting_id: &str,
         analysis_id: &str,
         utterance_id: &str,
     ) -> Result<PreparedAudio, String> {
-        let (track, start, end) = {
+        self.prepare_utterance_audio_cancellable(meeting_id, analysis_id, utterance_id, &|| false)
+    }
+
+    pub(crate) fn prepare_utterance_audio_cancellable(
+        &self,
+        meeting_id: &str,
+        analysis_id: &str,
+        utterance_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        let resolve = || -> Result<(String, i64, i64), String> {
             let mut connection = self
                 .connection
                 .lock()
@@ -279,13 +365,24 @@ impl Storage {
             if super::revisions::analysis_content_hash(&tx, analysis_id)? != hash {
                 return Err("解析版の内容が変更されています".into());
             }
-            (track, start, end)
+            Ok((track, start, end))
         };
-        self.prepare_track_audio(meeting_id, &track, start, end)
+        let before = resolve()?;
+        let audio = self.prepare_track_audio_cancellable(
+            meeting_id, &before.0, before.1, before.2, cancelled,
+        )?;
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        if resolve()? != before {
+            return Err("音声準備中に発言の参照先が変わりました".into());
+        }
+        Ok(audio)
     }
 
     // The analysis worker can read a verified source before a transcript exists.
     // This is deliberately not exposed as an arbitrary-path IPC command.
+    #[cfg(test)]
     pub(crate) fn prepare_track_audio(
         &self,
         meeting_id: &str,
@@ -304,6 +401,9 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
         if start < 0 || end <= start {
             return Err("音声区間が不正です".into());
         }
@@ -364,6 +464,9 @@ impl Storage {
         let mut position = start;
         let mut audio_format = None;
         for chunk in chunks {
+            if cancelled() {
+                return Err("音声の再生準備を取り消しました".into());
+            }
             if chunk.start_us > position || (!spans.is_empty() && chunk.start_us != position) {
                 return Err("音声セグメント間に欠損または重複があります".into());
             }
@@ -421,6 +524,9 @@ impl Storage {
             return Err("発言に対応する保存音声が不足しています".into());
         }
         let (sample_rate, channels) = audio_format.unwrap();
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
         let alignment = config
             .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
             .and_then(|json| {

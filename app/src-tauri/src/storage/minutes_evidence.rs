@@ -170,11 +170,22 @@ impl Storage {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_minutes_transcript_audio(
         &self,
         request: &MinutesTranscriptAudioRequest,
     ) -> Result<PreparedAudio, String> {
-        let (track, start, end) = {
+        self.prepare_minutes_transcript_audio_cancellable(request, &|| false)
+    }
+    pub(crate) fn prepare_minutes_transcript_audio_cancellable(
+        &self,
+        request: &MinutesTranscriptAudioRequest,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        let resolve = || -> Result<(String, i64, i64), String> {
             let mut db = self
                 .connection
                 .lock()
@@ -192,31 +203,72 @@ impl Storage {
             if (u.start_us, u.end_us) != (request.expected_start_us, request.expected_end_us) {
                 return Err("固定発言と確認した再生区間が一致しません".into());
             }
-            (u.track_id.clone(), u.start_us, u.end_us)
+            Ok((u.track_id.clone(), u.start_us, u.end_us))
         };
         // Full-workspace playback still requires a verified minutes reference;
         // arbitrary internal-snapshot playback remains inaccessible.
-        self.prepare_track_audio(&request.reference.meeting_id, &track, start, end)
+        let before = resolve()?;
+        let audio = self.prepare_track_audio_cancellable(
+            &request.reference.meeting_id,
+            &before.0,
+            before.1,
+            before.2,
+            cancelled,
+        )?;
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        if resolve()? != before {
+            return Err("音声準備中に固定発言の参照先が変わりました".into());
+        }
+        Ok(audio)
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_minutes_evidence_audio(
         &self,
         request: &MinutesEvidenceRequest,
     ) -> Result<PreparedAudio, String> {
-        let source = self.minutes_evidence_source(request)?;
-        let utterance = source
-            .utterances
-            .iter()
-            .find(|u| u.id == source.evidence.utterance_id)
-            .ok_or("根拠の元発言がありません")?;
-        // Internal snapshots are not enabled for arbitrary-utterance playback.
-        // Only this verified minutes reference authorizes its bounded interval.
-        self.prepare_track_audio(
+        self.prepare_minutes_evidence_audio_cancellable(request, &|| false)
+    }
+    pub(crate) fn prepare_minutes_evidence_audio_cancellable(
+        &self,
+        request: &MinutesEvidenceRequest,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        let resolve = || -> Result<(String, i64, i64), String> {
+            let source = self.minutes_evidence_source(request)?;
+            let utterance = source
+                .utterances
+                .iter()
+                .find(|u| u.id == source.evidence.utterance_id)
+                .ok_or("根拠の元発言がありません")?;
+            // Internal snapshots are not enabled for arbitrary-utterance playback.
+            // Only this verified minutes reference authorizes its bounded interval.
+            Ok((
+                utterance.track_id.clone(),
+                source.evidence.start_us,
+                source.evidence.end_us,
+            ))
+        };
+        let before = resolve()?;
+        let audio = self.prepare_track_audio_cancellable(
             &request.meeting_id,
-            &utterance.track_id,
-            source.evidence.start_us,
-            source.evidence.end_us,
-        )
+            &before.0,
+            before.1,
+            before.2,
+            cancelled,
+        )?;
+        if cancelled() {
+            return Err("音声の再生準備を取り消しました".into());
+        }
+        if resolve()? != before {
+            return Err("音声準備中に固定根拠の参照先が変わりました".into());
+        }
+        Ok(audio)
     }
 }
 

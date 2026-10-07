@@ -4,7 +4,9 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 mod meeting;
+mod preparation;
 pub(crate) use meeting::MeetingAudio;
+pub(crate) use preparation::PlaybackPreparations;
 
 pub struct AudioSpan {
     pub audio: VerifiedAudio,

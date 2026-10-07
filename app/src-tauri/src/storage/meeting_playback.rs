@@ -59,6 +59,7 @@ struct Census {
 }
 
 impl Storage {
+    #[cfg(test)]
     pub(crate) fn prepare_meeting_audio(
         &self,
         request: &MeetingPlaybackRequest,
@@ -66,11 +67,14 @@ impl Storage {
         self.prepare_meeting_audio_cancellable(request, &|| false)
     }
 
-    fn prepare_meeting_audio_cancellable(
+    pub(crate) fn prepare_meeting_audio_cancellable(
         &self,
         request: &MeetingPlaybackRequest,
         cancelled: &impl Fn() -> bool,
     ) -> Result<MeetingAudio, String> {
+        if cancelled() {
+            return Err("会議音声の準備を中止しました".into());
+        }
         let before = self.meeting_audio_census(&request.meeting_id)?;
         let kinds: &[&str] = match request.mode {
             MeetingPlaybackMode::Mic => &["mic"],
@@ -127,6 +131,9 @@ impl Storage {
         }
         if self.meeting_audio_census(&request.meeting_id)? != before {
             return Err("準備中に会議音声の保存記録が変わりました。選び直してください".into());
+        }
+        if cancelled() {
+            return Err("会議音声の準備を中止しました".into());
         }
         MeetingAudio::new(sources, end)
     }

@@ -31,7 +31,7 @@ mod transcription;
 use analysis_worker::AnalysisController;
 use data_controller::DataController;
 use import_controller::ImportController;
-use playback::{PlaybackInfo, PlaybackStore};
+use playback::{PlaybackInfo, PlaybackPreparations, PlaybackStore};
 use recorder::RecorderController;
 use recording_confirmation::StopDecisionStore;
 use recording_confirmation_window::{
@@ -1445,16 +1445,59 @@ async fn get_minutes_transcript_page(
 }
 
 #[tauri::command]
+fn register_playback_preparation(
+    window: WebviewWindow,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can prepare playback".into());
+    }
+    window
+        .state::<PlaybackPreparations>()
+        .reserve(&preparation_id)
+}
+
+#[tauri::command]
+fn cancel_playback_preparation(
+    window: WebviewWindow,
+    preparation_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can cancel playback preparation".into());
+    }
+    window
+        .state::<PlaybackPreparations>()
+        .cancel(&preparation_id, &window.state::<PlaybackStore>())
+}
+
+#[tauri::command]
+fn finish_playback_preparation(
+    window: WebviewWindow,
+    preparation_id: String,
+    playback_token: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window can acknowledge playback preparation".into());
+    }
+    window
+        .state::<PlaybackPreparations>()
+        .acknowledge(&preparation_id, &playback_token)
+}
+
+#[tauri::command]
 async fn prepare_minutes_transcript_playback(
     window: WebviewWindow,
     request: storage::MinutesTranscriptAudioRequest,
+    preparation_id: String,
 ) -> Result<PlaybackInfo, String> {
     let app = minutes_app(&window)?;
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        guard.check()?;
         let audio = app
             .state::<Storage>()
-            .prepare_minutes_transcript_audio(&request)?;
-        app.state::<PlaybackStore>().insert(audio)
+            .prepare_minutes_transcript_audio_cancellable(&request, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1464,13 +1507,16 @@ async fn prepare_minutes_transcript_playback(
 async fn prepare_minutes_evidence_playback(
     window: WebviewWindow,
     request: storage::MinutesEvidenceRequest,
+    preparation_id: String,
 ) -> Result<PlaybackInfo, String> {
     let app = minutes_app(&window)?;
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        guard.check()?;
         let audio = app
             .state::<Storage>()
-            .prepare_minutes_evidence_audio(&request)?;
-        app.state::<PlaybackStore>().insert(audio)
+            .prepare_minutes_evidence_audio_cancellable(&request, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1480,14 +1526,19 @@ async fn prepare_minutes_evidence_playback(
 async fn prepare_meeting_playback(
     window: WebviewWindow,
     request: storage::MeetingPlaybackRequest,
+    preparation_id: String,
 ) -> Result<PlaybackInfo, String> {
     if window.label() != "main" {
         return Err("Only the main window can play audio".into());
     }
     let app = window.app_handle().clone();
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let audio = app.state::<Storage>().prepare_meeting_audio(&request)?;
-        app.state::<PlaybackStore>().insert_meeting(audio)
+        guard.check()?;
+        let audio = app
+            .state::<Storage>()
+            .prepare_meeting_audio_cancellable(&request, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert_meeting(audio))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1499,18 +1550,22 @@ async fn prepare_utterance_playback(
     meeting_id: String,
     analysis_id: String,
     utterance_id: String,
+    preparation_id: String,
 ) -> Result<PlaybackInfo, String> {
     if window.label() != "main" {
         return Err("Only the main window can play audio".into());
     }
     let app = window.app_handle().clone();
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let audio = app.state::<Storage>().prepare_utterance_audio(
+        guard.check()?;
+        let audio = app.state::<Storage>().prepare_utterance_audio_cancellable(
             &meeting_id,
             &analysis_id,
             &utterance_id,
+            &|| guard.cancelled(),
         )?;
-        app.state::<PlaybackStore>().insert(audio)
+        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1520,16 +1575,19 @@ async fn prepare_utterance_playback(
 async fn prepare_draft_utterance_playback(
     window: WebviewWindow,
     request: storage::DraftUtteranceAudioRequest,
+    preparation_id: String,
 ) -> Result<PlaybackInfo, String> {
     if window.label() != "main" {
         return Err("Only the main window can play audio".into());
     }
     let app = window.app_handle().clone();
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        guard.check()?;
         let audio = app
             .state::<Storage>()
-            .prepare_draft_utterance_audio(&request)?;
-        app.state::<PlaybackStore>().insert(audio)
+            .prepare_draft_utterance_audio_cancellable(&request, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1930,6 +1988,7 @@ pub fn run() {
         .manage(StopDecisionStore::default())
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
+        .manage(PlaybackPreparations::default())
         .manage(AnalysisController::default())
         .manage(ImportController::default())
         .manage(DataController::default())
@@ -2040,6 +2099,9 @@ pub fn run() {
             save_transcript_draft,
             undo_transcript_edit,
             prepare_utterance_playback,
+            register_playback_preparation,
+            cancel_playback_preparation,
+            finish_playback_preparation,
             prepare_meeting_playback,
             prepare_draft_utterance_playback,
             get_minutes_evidence_source,

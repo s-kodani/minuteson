@@ -1,6 +1,6 @@
 use super::*;
 use crate::audio::tests::caf_fixture;
-use crate::playback::PlaybackStore;
+use crate::playback::{PlaybackPreparations, PlaybackStore};
 use std::cell::Cell;
 
 fn fixture() -> (tempfile::TempDir, Storage, String) {
@@ -308,9 +308,11 @@ fn managed_hash_and_track_format_checks_cover_the_whole_source() {
 #[test]
 fn changed_native_census_during_file_verification_invalidates_preparation() {
     let (_directory, storage, meeting) = fixture();
-    let changed = Cell::new(false);
+    let checks = Cell::new(0);
     let error = storage.prepare_meeting_audio_cancellable(&request(&meeting, MeetingPlaybackMode::Mic), &|| {
-        if !changed.replace(true) {
+        checks.set(checks.get()+1);
+        // Entry, census/track, source, chunk, then the first hash block.
+        if checks.get()==5 {
             storage.connection.lock().unwrap().execute("UPDATE audio_tracks SET processing_config_json = '{\"timeline_alignment\":\"changed\"}' WHERE id = 'track'", []).unwrap();
         }
         false
@@ -319,6 +321,44 @@ fn changed_native_census_during_file_verification_invalidates_preparation() {
     assert!(storage
         .prepare_meeting_audio_cancellable(&request(&meeting, MeetingPlaybackMode::Mic), &|| true)
         .is_err());
+}
+
+#[test]
+fn native_cancel_interrupts_whole_meeting_hashing_for_each_capture_mode() {
+    for mode in [
+        MeetingPlaybackMode::Mic,
+        MeetingPlaybackMode::System,
+        MeetingPlaybackMode::Both,
+    ] {
+        let (_directory, storage, meeting) = fixture();
+        add_system(&storage, &meeting);
+        let preparations = PlaybackPreparations::default();
+        let store = PlaybackStore::default();
+        let id = Uuid::new_v4().to_string();
+        preparations.reserve(&id).unwrap();
+        let guard = preparations.claim(&id).unwrap();
+        let checks = Cell::new(0);
+        let error = storage
+            .prepare_meeting_audio_cancellable(&request(&meeting, mode), &|| {
+                checks.set(checks.get() + 1);
+                if checks.get() == 6 {
+                    preparations.cancel(&id, &store).unwrap();
+                }
+                guard.cancelled()
+            })
+            .err()
+            .unwrap();
+        assert!(error.contains("照合を中断"), "{error}");
+        assert_eq!(checks.get(), 6);
+        assert!(guard
+            .publish(|| panic!("cancelled meeting must not publish"))
+            .is_err());
+        drop(guard);
+        assert!(preparations.claim(&id).is_err());
+        assert!(storage
+            .prepare_meeting_audio(&request(&meeting, mode))
+            .is_ok());
+    }
 }
 
 #[test]

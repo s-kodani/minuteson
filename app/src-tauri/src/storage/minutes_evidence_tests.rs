@@ -1,6 +1,93 @@
 use super::*;
 use crate::minutes_document::{from_generated, Block, GeneratedItem, Inline, ItemKind, SourceType};
+use crate::playback::{PlaybackPreparations, PlaybackStore};
 use serde_json::json;
+use std::cell::Cell;
+
+#[test]
+fn fixed_evidence_and_full_transcript_native_cancel_during_file_hash_preserve_the_reference() {
+    for full_transcript in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let s = Storage::open(root.path().into()).unwrap();
+        let (m, id, _) = fixture(&s);
+        let reference = request(&s, &m, &id);
+        let before = s.minutes_evidence_source(&reference).unwrap();
+        let preparations = PlaybackPreparations::default();
+        let store = PlaybackStore::default();
+        let preparation = Uuid::new_v4().to_string();
+        preparations.reserve(&preparation).unwrap();
+        let guard = preparations.claim(&preparation).unwrap();
+        let checks = Cell::new(0);
+        let cancelled = || {
+            checks.set(checks.get() + 1);
+            if checks.get() == 5 {
+                preparations.cancel(&preparation, &store).unwrap();
+            }
+            guard.cancelled()
+        };
+        let audio = MinutesTranscriptAudioRequest {
+            reference: reference.clone(),
+            utterance_id: reference.expected_evidence.utterance_id.clone(),
+            expected_start_us: reference.expected_evidence.start_us,
+            expected_end_us: reference.expected_evidence.end_us,
+        };
+        let error = if full_transcript {
+            s.prepare_minutes_transcript_audio_cancellable(&audio, &cancelled)
+        } else {
+            s.prepare_minutes_evidence_audio_cancellable(&reference, &cancelled)
+        }
+        .err()
+        .unwrap();
+        assert!(error.contains("照合を中断"), "{error}");
+        assert_eq!(checks.get(), 5);
+        assert!(guard
+            .publish(|| panic!("cancelled fixed reference must not publish"))
+            .is_err());
+        drop(guard);
+        assert_eq!(
+            s.minutes_evidence_source(&reference).unwrap().evidence,
+            before.evidence
+        );
+        assert!(s.prepare_minutes_transcript_audio(&audio).is_ok());
+        assert!(s.prepare_minutes_evidence_audio(&reference).is_ok());
+    }
+}
+
+#[test]
+fn fixed_reference_visibility_is_rechecked_after_long_hash_for_both_playback_paths() {
+    for full_transcript in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let s = Storage::open(root.path().into()).unwrap();
+        let (m, id, _) = fixture(&s);
+        s.adopt_minutes(super::super::minutes_ui::tests::request(&s, &m, &id))
+            .unwrap();
+        let reference = request(&s, &m, &id);
+        let audio = MinutesTranscriptAudioRequest {
+            reference: reference.clone(),
+            utterance_id: reference.expected_evidence.utterance_id.clone(),
+            expected_start_us: reference.expected_evidence.start_us,
+            expected_end_us: reference.expected_evidence.end_us,
+        };
+        let checks = Cell::new(0);
+        let changed = || {
+            checks.set(checks.get() + 1);
+            if checks.get() == 4 {
+                s.connection.lock().unwrap().execute("UPDATE meetings SET current_minutes_id=NULL,previous_minutes_id=NULL WHERE id=?1",params![m]).unwrap();
+            }
+            false
+        };
+        let error = if full_transcript {
+            s.prepare_minutes_transcript_audio_cancellable(&audio, &changed)
+        } else {
+            s.prepare_minutes_evidence_audio_cancellable(&reference, &changed)
+        }
+        .err()
+        .unwrap();
+        assert!(error.contains("参照する議事録版がありません"), "{error}");
+        assert!(checks.get() >= 4);
+        assert!(s.load_current_analysis(&m).unwrap().is_some());
+    }
+}
 
 fn candidate(s: &Storage, m: &str) -> String {
     let analysis = s.load_current_analysis(m).unwrap().unwrap();

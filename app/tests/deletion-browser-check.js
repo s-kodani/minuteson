@@ -186,7 +186,9 @@ async (page) => {
   await page.getByRole("button", { name: "模擬区間の再生準備" }).click();
   await page.waitForFunction(() => !!window.deletionFixture.releasePreparation);
   await page.evaluate(() => { window.deletionFixture.unmountPlayback(); window.deletionFixture.releasePreparation(); });
-  await page.waitForFunction(() => window.deletionFixture.closes >= 2);
+  // The preparation pool owns this late token before player adoption. One
+  // failed cleanup is retained; the user's next barrier call retries it.
+  await page.waitForFunction(() => window.deletionFixture.closes >= 1);
   await page.getByRole("button", { name: "既存会議を削除" }).click();
   await notifications().getByRole("alert").filter({ hasText: "模擬ネイティブ再生解放失敗" }).waitFor();
   check((await calls("review_meeting_deletion")).length === 0, "unmounted hook lost failed token release");

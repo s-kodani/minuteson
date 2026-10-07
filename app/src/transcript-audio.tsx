@@ -9,6 +9,7 @@ import { appShortcut, overlayOpen } from "./keyboard";
 import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface";
 import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode, type MeetingPlaybackRequest, type MeetingPlaybackRestore } from "./meeting-playback-state";
 import { playbackTimeline } from "./playback-follow";
+import { PlaybackPreparationPool } from "./playback-preparation";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -50,6 +51,13 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   const meetingCheckpoint = useRef<MeetingPlaybackRestore | null>(null);
   const followSession = useRef(0),originAnalysis = useRef<string|null>(null);
   const [owner] = useState(() => crypto.randomUUID());
+  const [nativePreparations]=useState(()=>new PlaybackPreparationPool({
+    register:preparationId=>invoke("register_playback_preparation",{preparationId}),
+    prepare:(command,args)=>invoke<PlaybackInfo>(command,args),
+    cancel:preparationId=>invoke("cancel_playback_preparation",{preparationId}),
+    acknowledge:(preparationId,playbackToken)=>invoke("finish_playback_preparation",{preparationId,playbackToken}),
+    close:token=>invoke("close_playback",{token}),
+  }));
   const preparations = useRef(new Set<Promise<void>>());
   const closing = useRef(new Map<string, { job: Promise<void>; active: boolean }>());
   const closeToken = (id: string): Promise<void> => {
@@ -62,6 +70,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   };
 
   const clear = () => {
+    nativePreparations.cancelAll();
     playbackTimeline.release(owner);
     surface?.release(owner);
     request.current++;
@@ -78,11 +87,13 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     let detached = false;
     const stop = async () => {
       if (detached) {
+        nativePreparations.cancelAll();
         request.current++; player.clear();
         if (token.current) void closeToken(token.current).catch(() => {});
         token.current = null;
       } else clear();
       await Promise.all(preparations.current);
+      await nativePreparations.stop();
       await Promise.all(Array.from(closing.current.keys(), closeToken));
       if (detached) unregister();
     };
@@ -103,7 +114,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       void stop().catch(() => {});
       clock.dispose();
     };
-  }, [clock, player, owner]);
+  }, [clock, player, owner,nativePreparations]);
 
   const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest | MeetingPlaybackRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore, preserveFollow = false) => {
     if (locked) return;
@@ -124,14 +135,14 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       const transcript = reference && "reference" in reference ? reference : null;
       const split=reference && "expectedDraft" in reference ? reference : null;
       const info = meeting
-        ? await invoke<PlaybackInfo>("prepare_meeting_playback", { request: meeting })
+        ? await nativePreparations.run("prepare_meeting_playback", { request: meeting })
         : split
-        ? await invoke<PlaybackInfo>("prepare_draft_utterance_playback",{request:split})
+        ? await nativePreparations.run("prepare_draft_utterance_playback",{request:split})
         : transcript
-        ? await invoke<PlaybackInfo>("prepare_minutes_transcript_playback", { request: transcript })
+        ? await nativePreparations.run("prepare_minutes_transcript_playback", { request: transcript })
         : reference
-        ? await invoke<PlaybackInfo>("prepare_minutes_evidence_playback", { request: reference })
-        : await invoke<PlaybackInfo>("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
+        ? await nativePreparations.run("prepare_minutes_evidence_playback", { request: reference })
+        : await nativePreparations.run("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
       if (generation !== request.current) {
         await closeToken(info.token);
         return;
@@ -196,8 +207,8 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     event.preventDefault(); toggle();
   }}>
     {preparing && <p role="status">保存音声を検証して再生を準備しています。</p>}
-    {preparing && meetingScope && <button type="button" className="small-secondary" disabled={locked} onClick={clear}>再生準備を取り消す</button>}
-    {preparing && meetingScope && <p>取り消した結果は再生しません。進行中の音声検証が終わるまではバックエンド処理が続きます。</p>}
+    {preparing && <button type="button" className="small-secondary" disabled={locked} onClick={clear}>再生準備を取り消す</button>}
+    {preparing && <p>取消は音声検証の区切りで反映します。停止完了と準備済み音声の解放まで待ちます。</p>}
     {info && <>
       <div className="audio-controls">
         <button type="button" className="small-secondary" onClick={toggle} disabled={preparing || locked}>{snapshot.playing ? "一時停止" : "再生"}</button>

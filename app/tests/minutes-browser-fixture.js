@@ -95,6 +95,7 @@ async (page) => {
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
         if (cmd === "get_ui_preferences") return copy(data.ui);
+        if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(cmd)) return null;
         if (cmd === "save_ui_preferences") {
           if (args.expectedLockVersion !== data.ui.lockVersion) throw Error("synthetic UI preference conflict");
           data.ui = { ...data.ui, payload:copy(args.payload), lockVersion:data.ui.lockVersion + 1 };
