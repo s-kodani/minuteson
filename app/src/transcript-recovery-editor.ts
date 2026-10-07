@@ -1,9 +1,25 @@
 import { canonicalPayload, type DraftPayload } from "./transcript-state.ts";
-import { TranscriptRecoverySaveQueue, type RecoveryContext, type TranscriptRecovery } from "./transcript-recovery-save.ts";
+import { TranscriptRecoverySaveQueue, type RecoveryContext, type RecoveryRebaseReview, type TranscriptRecovery } from "./transcript-recovery-save.ts";
+import type { TextEditSession } from "./transcript-edit-session.ts";
+import type { SpeakerNameSession } from "./speaker-name-edit.ts";
 
 export interface RecoverableDraft {
   id: string; meetingId: string; baseAnalysisId: string; lockVersion: number;
   contentHash: string; payload: DraftPayload; updatedAt: number;
+}
+export interface AdvancedDraftReview {
+  base: RecoverableDraft;
+  latest: RecoverableDraft;
+  pendingPayload: DraftPayload | null;
+  recovery: RecoveryRebaseReview<DraftPayload>;
+}
+interface PendingBodySave { base: RecoverableDraft; payload: DraftPayload }
+function freezeReview<T>(value: T): T {
+  const copy = structuredClone(value);
+  const freeze = (item: unknown) => {
+    if(item && typeof item === "object") { for(const child of Object.values(item)) freeze(child); Object.freeze(item); }
+  };
+  freeze(copy); return copy;
 }
 export const recoveryContext = (draft: RecoverableDraft): RecoveryContext<DraftPayload> => ({
   meetingId: draft.meetingId, draftId: draft.id, baseAnalysisId: draft.baseAnalysisId,
@@ -19,12 +35,13 @@ const validHash = (value: string) => /^[0-9a-f]{64}$/.test(value);
 export class TranscriptRecoveryEditor {
   readonly journal: TranscriptRecoverySaveQueue<DraftPayload>;
   private draft: RecoverableDraft | null = null;
-  private bodyPending: { base: RecoverableDraft; payload: DraftPayload } | null = null;
+  private bodyPending: PendingBodySave | null = null;
   private bodyBusy = false;
   private disposed = false;
   private listeners = new Set<() => void>();
   private writeBody: (id: string,version: number,payload: DraftPayload) => Promise<RecoverableDraft>;
   private readBody: (meetingId: string) => Promise<RecoverableDraft | null>;
+  private advancedReview: { token: AdvancedDraftReview; base: RecoverableDraft; pending: PendingBodySave | null; recovery: RecoveryRebaseReview<DraftPayload> } | null = null;
 
   constructor(journal: TranscriptRecoverySaveQueue<DraftPayload>,
     writeBody: (id: string,version: number,payload: DraftPayload) => Promise<RecoverableDraft>,
@@ -49,6 +66,37 @@ export class TranscriptRecoveryEditor {
   async resume() { this.idleBody(); await this.journal.resume(); }
   advance(draft: RecoverableDraft) {
     this.idleBody(); this.journal.advance(recoveryContext(draft)); this.draft = structuredClone(draft);
+  }
+  async inspectAdvancedDraft(): Promise<AdvancedDraftReview> {
+    this.live();
+    if(this.bodyBusy || !this.draft) throw Error("先行する保存処理の終了を待ってから比較してください");
+    const base = this.draft, pending = this.bodyPending;
+    this.bodyBusy = true; this.notify();
+    try {
+      const latest = await this.readBody(base.meetingId); this.live();
+      if(this.draft !== base || this.bodyPending !== pending || !latest || !sameOwner(latest,base)
+        || !Number.isSafeInteger(latest.lockVersion) || latest.lockVersion <= base.lockVersion || !validHash(latest.contentHash)) throw Error("同じ下書きの新しい保存版を確認できません。元の入力と要求を保持しています");
+      const journal = await this.journal.inspectRebase(recoveryContext(latest)); this.live();
+      const token = freezeReview({ base,latest,pendingPayload: pending?.payload ?? null,recovery: journal });
+      this.advancedReview = { token,base,pending,recovery: journal }; return token;
+    } finally { this.bodyBusy = false; this.notify(); }
+  }
+  async acceptAdvancedDraftReview(token: AdvancedDraftReview,texts: TextEditSession[],names: SpeakerNameSession[]) {
+    this.live();
+    const review = this.advancedReview;
+    if(this.bodyBusy || !review || token !== review.token || this.draft !== review.base || this.bodyPending !== review.pending) throw Error("比較した本文の条件が変わりました。入力と元の要求を保持しています");
+    // Freeze the explicitly selected input before asynchronous reads. This is
+    // only a local rebase, not permission to publish body or rewrite the journal.
+    const selected = freezeReview({ texts,names });
+    this.bodyBusy = true; this.notify();
+    try {
+      const latest = await this.readBody(review.base.meetingId); this.live();
+      if(!latest || !sameOwner(latest,token.latest) || latest.lockVersion !== token.latest.lockVersion
+        || latest.contentHash !== token.latest.contentHash || !samePayload(latest.payload,token.latest.payload)) throw Error("比較後に本文が変わりました。再送・上書きせず、入力と元の要求を保持しています");
+      await this.journal.acceptRebase(review.recovery,selected.texts,selected.names); this.live();
+      this.draft = structuredClone(latest); this.bodyPending = null; this.advancedReview = null;
+      return freezeReview(latest);
+    } finally { this.bodyBusy = false; this.notify(); }
   }
   private validResult(saved: RecoverableDraft, request: NonNullable<typeof this.bodyPending>) {
     return sameOwner(saved,request.base) && Number.isSafeInteger(saved.lockVersion)

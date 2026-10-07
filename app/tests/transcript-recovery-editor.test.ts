@@ -14,7 +14,8 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 function fixture() {
   let actual = structuredClone(draft), record: TranscriptRecovery<DraftPayload> | null = null;
   const calls: { kind: string; req: unknown }[] = [];
-  const state = { failJournal: false,lostBody: false,failBody: false,
+  const state = { failJournal: false,lostBody: false,failBody: false,failReadBody: false,
+    readBodyWait: null as ReturnType<typeof deferred<void>> | null,
     journalWait: null as ReturnType<typeof deferred<void>> | null,bodyWait: null as ReturnType<typeof deferred<void>> | null };
   const journal = new TranscriptRecoverySaveQueue<DraftPayload>({
     operationId: randomUUID,normalizePayload: canonicalPayload,
@@ -39,11 +40,122 @@ function fixture() {
     actual = { ...actual,payload: structuredClone(next),lockVersion: version + 1,contentHash: hash(101 + version) };
     if(state.lostBody) { state.lostBody = false; throw Error("本文応答喪失"); }
     return structuredClone(actual);
-  },async () => { calls.push({ kind: "readBody",req: null }); return structuredClone(actual); });
+  },async () => {
+    calls.push({ kind: "readBody",req: null });
+    if(state.readBodyWait) { const wait = state.readBodyWait; state.readBodyWait = null; await wait.promise; }
+    if(state.failReadBody) throw Error("本文読込失敗");
+    return structuredClone(actual);
+  });
   editor.load(actual,null);
   return { editor,journal,calls,state,get actual() { return actual; },set actual(value) { actual = value; },
     get record() { return record; },set record(value) { record = value; } };
 }
+function advanceExternally(f: ReturnType<typeof fixture>) {
+  f.actual = { ...f.actual,lockVersion: 2,contentHash: hash(102),payload: payload("別操作の本文") };
+  if(f.record) f.record = { ...f.record,currentDraftLockVersion: f.actual.lockVersion,currentDraftContentHash: f.actual.contentHash,matchesDraft: false };
+}
+test("advanced draft comparison exposes latest body and the frozen unresolved request without writing or clearing input", async () => {
+  const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); f.state.failBody = true;
+  await assert.rejects(f.editor.saveDraft(draft.id,0,payload("先行する手元要求"))); advanceExternally(f);
+  const before = f.editor.snapshot(), callCount = f.calls.length;
+  const review = await f.editor.inspectAdvancedDraft();
+  assert.deepEqual(f.calls.slice(callCount).map(call => call.kind),["readBody","readJournal"]);
+  assert.deepEqual(f.editor.snapshot(),before); assert.equal(review.latest.lockVersion,2);
+  assert.equal(review.pendingPayload?.utterances[0].effective_text,"先行する手元要求");
+  assert.deepEqual(review.recovery.nameBuffers,[nameBuffer()]);
+  assert.throws(() => { review.latest.payload.utterances[0].effective_text = "改変"; },TypeError);
+});
+test("explicit advanced draft acceptance rereads body and journal, keeps selected input and makes no publish or recovery write", async () => {
+  const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); f.state.failBody = true;
+  await assert.rejects(f.editor.saveDraft(draft.id,0,payload("元の要求"))); advanceExternally(f);
+  const review = await f.editor.inspectAdvancedDraft(), callCount = f.calls.length;
+  const selectedText = { ...buffer("選んだ入力"),text: "別操作の本文",hadOverride: true };
+  const latest = await f.editor.acceptAdvancedDraftReview(review,[selectedText],[nameBuffer("選んだ名前")]);
+  assert.equal(latest.lockVersion,2);
+  assert.deepEqual(f.calls.slice(callCount).map(call => call.kind),["readBody","readJournal"]);
+  assert.equal(f.editor.snapshot().bodyPending,false); assert.equal(f.editor.snapshot().context?.lockVersion,2);
+  assert.deepEqual(f.editor.snapshot().buffers,[selectedText]); assert.deepEqual(f.editor.snapshot().nameBuffers,[nameBuffer("選んだ名前")]);
+  assert.equal(f.actual.payload.utterances[0].effective_text,"別操作の本文");
+  await assert.rejects(f.editor.saveDraft(draft.id,0,payload("古い版の再送")),/一致/);
+  assert.equal(f.calls.length,callCount + 2);
+  f.state.failBody = false;
+  await f.editor.saveDraft(draft.id,2,payload("明示的な新要求"));
+  assert.equal(f.actual.lockVersion,3);
+  const lastJournal = f.calls.filter(call => call.kind === "journal").at(-1)!.req as RecoverySaveRequest;
+  assert.equal(lastJournal.expectedDraftLockVersion,2);
+  assert.equal(f.calls.filter(call => call.kind === "body").length,2);
+});
+test("recovery-only pending conflict can be reviewed and retired only against a newer same draft", async () => {
+  const f = fixture(); f.state.failJournal = true; f.journal.update([buffer()],[nameBuffer()]);
+  await assert.rejects(f.editor.saveDraft(draft.id,0,payload("未送信本文")));
+  const original = f.editor.snapshot().pendingRequest;
+  assert.equal(f.editor.snapshot().bodyPending,false); advanceExternally(f);
+  const review = await f.editor.inspectAdvancedDraft();
+  assert.equal(f.editor.snapshot().pendingRequest,original);
+  await f.editor.acceptAdvancedDraftReview(review,[buffer()],[nameBuffer()]);
+  assert.equal(f.editor.snapshot().pendingRequest,null); assert.equal(f.editor.snapshot().bodyPending,false);
+  assert.equal(f.calls.filter(call => call.kind === "body").length,0);
+  assert.equal(f.calls.filter(call => call.kind === "journal").length,1);
+});
+test("advanced review rejects foreign, unchanged, invalid and backward bodies without releasing pending save", async () => {
+  for(const patch of [{ id: "other" },{ meetingId: "other" },{ baseAnalysisId: "other" },{ lockVersion: 0 },{ lockVersion: -1 },{ lockVersion: Number.MAX_SAFE_INTEGER + 1 },{ contentHash: "invalid" }]) {
+    const f = fixture(); f.state.failBody = true;
+    await assert.rejects(f.editor.saveDraft(draft.id,0,payload("保持"))); advanceExternally(f); f.actual = { ...f.actual,...patch };
+    await assert.rejects(f.editor.inspectAdvancedDraft());
+    assert.equal(f.editor.snapshot().bodyPending,true); assert.equal(f.editor.snapshot().context?.lockVersion,0);
+    assert.equal(f.calls.filter(call => call.kind === "readJournal").length,0);
+  }
+});
+test("body changing after comparison rejects rebase and retains the original body request and both input types", async () => {
+  for(const patch of [{ id: "other" },{ lockVersion: 3 },{ contentHash: hash(200) },{ payload: payload("さらに変更") }]) {
+    const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); f.state.failBody = true;
+    await assert.rejects(f.editor.saveDraft(draft.id,0,payload("元要求"))); advanceExternally(f);
+    const review = await f.editor.inspectAdvancedDraft(), before = f.editor.snapshot(); f.actual = { ...f.actual,...patch };
+    await assert.rejects(f.editor.acceptAdvancedDraftReview(review,[],[]),/比較後/);
+    assert.deepEqual(f.editor.snapshot(),before); assert.equal(f.calls.filter(call => call.kind === "body").length,1);
+  }
+});
+test("changed journal, newer local input, forged and consumed tokens cannot release a compared body request", async () => {
+  for(const change of ["journal","typing","forged"]) {
+    const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); f.state.failBody = true;
+    await assert.rejects(f.editor.saveDraft(draft.id,0,payload("元要求"))); advanceExternally(f);
+    const review = await f.editor.inspectAdvancedDraft();
+    if(change === "journal") f.record = { ...f.record!,operationId: randomUUID() };
+    if(change === "typing") f.journal.update([buffer("新入力")],[nameBuffer("新名")]);
+    await assert.rejects(f.editor.acceptAdvancedDraftReview(change === "forged" ? structuredClone(review) : review,[],[]));
+    assert.equal(f.editor.snapshot().bodyPending,true); assert.equal(f.editor.snapshot().context?.lockVersion,0);
+    assert.equal(f.editor.snapshot().nameBuffers[0].value,change === "typing" ? "新名" : "未確定名");
+  }
+  const f = fixture(); advanceExternally(f); const review = await f.editor.inspectAdvancedDraft();
+  await f.editor.acceptAdvancedDraftReview(review,[],[]);
+  await assert.rejects(f.editor.acceptAdvancedDraftReview(review,[],[]));
+});
+test("failed read and disposal while accepting a body comparison leave the old base and input intact", async () => {
+  for(const dispose of [false,true]) {
+    const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); advanceExternally(f);
+    const review = await f.editor.inspectAdvancedDraft();
+    if(dispose) {
+      const wait = deferred<void>(); f.state.readBodyWait = wait;
+      const accepting = f.editor.acceptAdvancedDraftReview(review,[],[]); f.editor.dispose(); wait.resolve();
+      await assert.rejects(accepting,/終了/);
+    } else { f.state.failReadBody = true; await assert.rejects(f.editor.acceptAdvancedDraftReview(review,[],[]),/読込失敗/); }
+    assert.equal(f.editor.snapshot().context?.lockVersion,0); assert.equal(f.editor.snapshot().buffers[0].value,"入力");
+    assert.equal(f.calls.filter(call => call.kind === "journal" || call.kind === "body").length,0);
+  }
+});
+test("body inspection/acceptance waits for active work and freezes selected input across its final reads", async () => {
+  const f = fixture(), wait = deferred<void>(); f.state.bodyWait = wait;
+  const saving = f.editor.saveDraft(draft.id,0,payload("元"));
+  for(let i = 0; i < 20 && !f.calls.some(call => call.kind === "body"); i++) await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(f.editor.inspectAdvancedDraft()); wait.resolve(); await saving;
+  advanceExternally(f); const review = await f.editor.inspectAdvancedDraft(), readWait = deferred<void>();
+  f.state.readBodyWait = readWait;
+  const selected = buffer("選択した値"), selectedName = nameBuffer("選択した名");
+  const accepting = f.editor.acceptAdvancedDraftReview(review,[selected],[selectedName]);
+  selected.value = "外部変更"; selectedName.value = "外部変更";
+  await assert.rejects(f.editor.inspectAdvancedDraft()); readWait.resolve(); await accepting;
+  assert.equal(f.editor.snapshot().buffers[0].value,"選択した値"); assert.equal(f.editor.snapshot().nameBuffers[0].value,"選択した名");
+});
 test("body save waits for recovery acknowledgement and rebases remaining input without clearing it", async () => {
   const f = fixture(), wait = deferred<void>(); f.state.journalWait = wait;
   f.journal.update([buffer()]);

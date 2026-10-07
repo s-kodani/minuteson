@@ -39,6 +39,119 @@ function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<Tran
   return { queue, calls, reads, setRecord: (value: TranscriptRecovery<Payload> | null) => { record = value; } };
 }
 
+const newerContext: RecoveryContext<Payload> = { ...context,lockVersion: 2,contentHash: hash(102),payload: { text: "別操作の保存本文" } };
+function oldRecordOnNewBase() {
+  const record = result({ meetingId: context.meetingId,draftId: context.draftId,baseAnalysisId: context.baseAnalysisId,
+    operationId: randomUUID(),expectedDraftLockVersion: 0,expectedRecoveryLockVersion: 0,buffers: [buffer("別操作の回復本文")],nameBuffers: [name("別操作の回復名")] });
+  return { ...record,currentDraftLockVersion: newerContext.lockVersion,currentDraftContentHash: newerContext.contentHash,matchesDraft: false };
+}
+test("advanced-base inspection is immutable and read-only, exposing local input and the complete stored mixed record", async () => {
+  const f = fixture(), record = oldRecordOnNewBase(); f.setRecord(record);
+  f.queue.update([buffer("手元の本文")],[name("手元の名")]);
+  const before = f.queue.snapshot(), review = await f.queue.inspectRebase(newerContext);
+  assert.equal(f.calls.length,0); assert.equal(f.reads.length,1);
+  assert.deepEqual(f.queue.snapshot(),before);
+  assert.deepEqual(review.record,record); assert.deepEqual(review.buffers,[buffer("手元の本文")]);
+  assert.deepEqual(review.nameBuffers,[name("手元の名")]);
+  assert.throws(() => { review.context.payload.text = "改変"; },TypeError);
+  assert.throws(() => { review.record!.payload.nameBuffers![0].value = "改変"; },TypeError);
+});
+test("explicit reviewed rebase rereads its exact record and retires an obsolete request without sending it or new input", async () => {
+  const f = fixture({ persist: async req => { if(req.expectedDraftLockVersion === 0) throw Error("旧回復版競合"); return result(req,newerContext); } });
+  f.queue.update([buffer("元本文")],[name("元名")]); await assert.rejects(f.queue.flush());
+  const old = f.queue.snapshot().pendingRequest; f.setRecord(oldRecordOnNewBase());
+  f.queue.update([buffer("最新手元本文")],[name("最新手元名")]);
+  const review = await f.queue.inspectRebase(newerContext);
+  assert.equal(f.queue.snapshot().pendingRequest,old);
+  const selectedText = { ...buffer("選んだ本文"),text: newerContext.payload.text,hadOverride: true };
+  await f.queue.acceptRebase(review,[selectedText],[name("選んだ名")]);
+  assert.equal(f.calls.length,1); assert.equal(f.reads.length,2); assert.equal(f.queue.snapshot().pendingRequest,null);
+  assert.equal(f.queue.snapshot().context?.lockVersion,2); assert.deepEqual(f.queue.snapshot().buffers,[selectedText]);
+  assert.equal(f.queue.snapshot().dirty,true); assert.equal(f.queue.snapshot().review,null);
+  await f.queue.flush();
+  assert.equal(f.calls.length,2); assert.equal(f.calls[1].expectedDraftLockVersion,2);
+  assert.equal(f.calls[1].expectedRecoveryLockVersion,review.record!.lockVersion);
+  assert.notEqual(f.calls[1].operationId,old!.operationId);
+});
+test("rebase requires a strictly advanced valid same-owner context and refuses stale or foreign record metadata", async () => {
+  for(const patch of [{ lockVersion: 0 },{ lockVersion: -1 },{ lockVersion: Number.MAX_SAFE_INTEGER + 1 },{ contentHash: "invalid" },{ meetingId: "other" },{ draftId: "other" },{ baseAnalysisId: "other" }]) {
+    const f = fixture(); f.queue.update([buffer("保持")],[name("保持")]);
+    await assert.rejects(f.queue.inspectRebase({ ...newerContext,...patch }));
+    assert.equal(f.reads.length,0); assert.equal(f.calls.length,0); assert.equal(f.queue.snapshot().buffers[0].value,"保持");
+  }
+  for(const patch of [{ currentContext: false },{ currentDraftLockVersion: 1 },{ currentDraftContentHash: hash(99) },{ draftId: "other" },{ baseDraftLockVersion: 3 }]) {
+    const f = fixture(); f.setRecord({ ...oldRecordOnNewBase(),...patch });
+    await assert.rejects(f.queue.inspectRebase(newerContext)); assert.equal(f.calls.length,0);
+    assert.equal(f.queue.snapshot().context?.lockVersion,0);
+  }
+});
+test("changed mixed input, pending request and forged or superseded review tokens cannot release the original context", async () => {
+  const f = fixture(); f.setRecord(oldRecordOnNewBase()); f.queue.update([buffer("旧入力")],[name("旧名")]);
+  const review = await f.queue.inspectRebase(newerContext);
+  await assert.rejects(f.queue.acceptRebase(structuredClone(review),[],[]));
+  f.queue.update([buffer("新入力")],[name("新名")]);
+  await assert.rejects(f.queue.acceptRebase(review,[],[]));
+  const newer = await f.queue.inspectRebase(newerContext), last = await f.queue.inspectRebase(newerContext);
+  await assert.rejects(f.queue.acceptRebase(newer,[],[]));
+  await f.queue.acceptRebase(last,[buffer("新入力")],[name("新名")]);
+  assert.equal(f.calls.length,0); assert.equal(f.queue.snapshot().buffers[0].value,"新入力");
+});
+test("a changed or disappeared stored record after comparison keeps input and the immutable pending request", async () => {
+  for(const change of ["name","text","nonce","version","hash","missing"]) {
+    const f = fixture({ persist: async () => { throw Error("競合"); } });
+    f.queue.update([buffer("手元")],[name("手元")]); await assert.rejects(f.queue.flush());
+    const pending = f.queue.snapshot().pendingRequest, record = oldRecordOnNewBase(); f.setRecord(record);
+    const review = await f.queue.inspectRebase(newerContext);
+    const changed = structuredClone(record);
+    if(change === "name") changed.payload.nameBuffers![0].value = "別の名";
+    if(change === "text") changed.payload.buffers[0].value = "別の本文";
+    if(change === "nonce") changed.operationId = randomUUID();
+    if(change === "version") changed.lockVersion++;
+    if(change === "hash") changed.contentHash = hash(99);
+    f.setRecord(change === "missing" ? null : changed);
+    await assert.rejects(f.queue.acceptRebase(review,[],[]),/比較後/);
+    assert.equal(f.queue.snapshot().pendingRequest,pending); assert.equal(f.queue.snapshot().context?.lockVersion,0);
+    assert.equal(f.queue.snapshot().buffers[0].value,"手元"); assert.equal(f.calls.length,1);
+  }
+});
+test("rebase inspection and acceptance detect input changing during their reads and retain both types", async () => {
+  for(const phase of ["inspect","accept"]) {
+    let delayed = false; const wait = deferred<TranscriptRecovery<Payload> | null>();
+    const f = fixture({ read: async () => delayed ? wait.promise : oldRecordOnNewBase() });
+    f.queue.update([buffer("元")],[name("元")]);
+    const review = phase === "accept" ? await f.queue.inspectRebase(newerContext) : null;
+    delayed = true;
+    const running = review ? f.queue.acceptRebase(review,[],[]) : f.queue.inspectRebase(newerContext);
+    await Promise.resolve(); f.queue.update([buffer("途中の本文")],[name("途中の名")]); wait.resolve(oldRecordOnNewBase());
+    await assert.rejects(running); assert.equal(f.queue.snapshot().context?.lockVersion,0);
+    assert.equal(f.queue.snapshot().nameBuffers[0].value,"途中の名"); assert.equal(f.calls.length,0);
+  }
+});
+test("rebase validates selected mixed input and UTF-8 capacity before replacing state or doing its final read", async () => {
+  for(const [texts,names] of [
+    [[buffer("x".repeat(20_001))],[]], [[],[name("x".repeat(201))]],
+    [[buffer("a"),buffer("b")],[]], [[],[name("a"),name("b")]],
+    [Array.from({ length: 128 },(_,i) => buffer("界".repeat(20_000),String(i))),[]],
+  ] as [TextEditSession[],SpeakerNameSession[]][]) {
+    const f = fixture(); f.setRecord(oldRecordOnNewBase()); f.queue.update([buffer("保持")],[name("保持")]);
+    const review = await f.queue.inspectRebase(newerContext);
+    await assert.rejects(f.queue.acceptRebase(review,texts,names));
+    assert.equal(f.reads.length,1); assert.equal(f.calls.length,0); assert.equal(f.queue.snapshot().context?.lockVersion,0);
+    assert.equal(f.queue.snapshot().buffers[0].value,"保持");
+  }
+});
+test("rebase refuses an active save and disposal during final read without accepting late state", async () => {
+  const wait = deferred<TranscriptRecovery<Payload>>();
+  const f = fixture({ persist: async () => wait.promise }); f.queue.update([buffer("保持")]);
+  const saving = f.queue.flush(); await Promise.resolve();
+  await assert.rejects(f.queue.inspectRebase(newerContext)); wait.resolve(result(f.calls[0])); await saving;
+  let delay = false; const readWait = deferred<TranscriptRecovery<Payload> | null>();
+  const g = fixture({ read: async () => delay ? readWait.promise : oldRecordOnNewBase() });
+  const review = await g.queue.inspectRebase(newerContext); delay = true;
+  const accepting = g.queue.acceptRebase(review,[],[]); g.queue.dispose(); readWait.resolve(oldRecordOnNewBase());
+  await assert.rejects(accepting,/終了/); assert.equal(g.queue.snapshot().context?.lockVersion,0);
+});
+
 test("name-only recovery is normalized immutable and uses schema three while old text stays byte-compatible", async () => {
   const { queue,calls } = fixture();
   const input = name("入力中","b");

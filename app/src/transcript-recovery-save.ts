@@ -40,6 +40,15 @@ export interface RecoverySaveRequest {
   nameBuffers?: SpeakerNameSession[];
 }
 
+// A read-only comparison token. It is valid only for the queue that created it
+// and while the captured local input and original pending request are unchanged.
+export interface RecoveryRebaseReview<P> {
+  context: RecoveryContext<P>;
+  record: TranscriptRecovery<P> | null;
+  buffers: TextEditSession[];
+  nameBuffers: SpeakerNameSession[];
+}
+
 function frozen<T>(value: T): T {
   const copy = structuredClone(value);
   const freeze = (item: unknown) => {
@@ -88,6 +97,7 @@ export class TranscriptRecoverySaveQueue<P> {
   private read: (context: RecoveryContext<P>) => Promise<TranscriptRecovery<P> | null>;
   private operationId: () => string;
   private normalizePayload: (payload: P) => P;
+  private rebaseReview: { token: RecoveryRebaseReview<P>; stamp: string } | null = null;
 
   constructor(options: {
     persist: (request: RecoverySaveRequest) => Promise<TranscriptRecovery<P>>;
@@ -185,6 +195,45 @@ export class TranscriptRecoverySaveQueue<P> {
     this.notify();
   }
 
+  private rebaseStamp() {
+    return JSON.stringify([this.context,this.saved,this.desired,this.desiredNames,this.review,this.pending]);
+  }
+  private advancedContext(context: RecoveryContext<P>) {
+    return !!this.context && validVersion(context.lockVersion) && validHash(context.contentHash)
+      && context.lockVersion > this.context.lockVersion && context.meetingId === this.context.meetingId
+      && context.draftId === this.context.draftId && context.baseAnalysisId === this.context.baseAnalysisId;
+  }
+  private rebaseRecord(record: TranscriptRecovery<P> | null,context: RecoveryContext<P>) {
+    return !record || this.validRecord(record,context) && record.currentContext === true
+      && record.currentDraftLockVersion === context.lockVersion && record.currentDraftContentHash === context.contentHash;
+  }
+  async inspectRebase(context: RecoveryContext<P>): Promise<RecoveryRebaseReview<P>> {
+    this.live();
+    if(this.inFlight || !this.advancedContext(context)) throw Error("同じ下書きの新しい保存版だけを比較できます。元の入力と要求を保持しています");
+    const stamp = this.rebaseStamp(), expected = frozen(context);
+    const record = await this.read(expected); this.live();
+    if(this.inFlight || this.rebaseStamp() !== stamp || !this.rebaseRecord(record,expected)) throw Error("比較中に本文・回復記録・入力が変わりました。元の入力と要求を保持しています");
+    const token = frozen({ context: expected,record,buffers: this.desired,nameBuffers: this.desiredNames });
+    this.rebaseReview = { token,stamp }; return token;
+  }
+  async acceptRebase(token: RecoveryRebaseReview<P>,values: TextEditSession[],nameValues: SpeakerNameSession[]) {
+    this.live();
+    const review = this.rebaseReview;
+    if(this.inFlight || !review || token !== review.token || this.rebaseStamp() !== review.stamp || !this.advancedContext(token.context)) throw Error("比較した入力または元の要求が変わりました。基底を切り替えず保持しています");
+    const next = buffers(values), nextNames = names(nameValues);
+    this.validateInputs(token.context,next,nextNames);
+    const record = await this.read(token.context); this.live();
+    if(this.inFlight || this.rebaseReview !== review || this.rebaseStamp() !== review.stamp
+      || !this.rebaseRecord(record,token.context) || !same(record,token.record)) throw Error("比較後に回復記録または本文が変わりました。入力と元の要求を保持しています");
+    // The native draft CAS is now strictly beyond every old local request.
+    // A delayed old write cannot overwrite this base; an exact old nonce can
+    // only read its already saved result. This explicit action makes no write.
+    this.context = token.context; this.saved = record ? frozen(record) : null;
+    this.desired = next; this.desiredNames = nextNames;
+    this.pending = null; this.review = null; this.error = null; this.rebaseReview = null;
+    this.notify();
+  }
+
   async resume() {
     this.live();
     if (this.inFlight || this.pending || !this.context || !this.review) throw Error("再開する回復記録がありません");
@@ -240,6 +289,18 @@ export class TranscriptRecoverySaveQueue<P> {
       && same(names(record.payload.nameBuffers ?? []),req.nameBuffers ?? []);
   }
 
+  private validateInputs(context: RecoveryContext<P>,texts: TextEditSession[],nameValues: SpeakerNameSession[]) {
+    if(texts.length > 128 || texts.some((item,index) =>
+      index > 0 && item.utteranceId === texts[index - 1].utteranceId
+      || typeof item.utteranceId !== "string" || !item.utteranceId || typeof item.text !== "string" || typeof item.value !== "string" || typeof item.hadOverride !== "boolean"
+      || Array.from(item.text).length > 20_000 || Array.from(item.value).length > 20_000
+      || item.speakerIds.length > 100 || item.speakerIds.some((id,n) => typeof id !== "string" || !id || n > 0 && id === item.speakerIds[n - 1]))) throw Error("回復入力の件数・本文・話者の上限または重複を修正してください。入力は保持しています");
+    if(!validNames(nameValues)) throw Error("回復する話者名の件数・文字数の上限または重複を修正してください。入力は保持しています");
+    const nameFields = nameValues.length ? { nameBuffers: nameValues } : {};
+    const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: nameValues.length ? 3 : 1,basePayload: this.normalizePayload(context.payload),buffers: texts,...nameFields })).length;
+    if(bytes > 4 * 1024 * 1024) throw Error("回復入力が4MiBの容量上限を超えています。入力を保持したまま、開いている編集を減らしてください");
+  }
+
   private async drain(retry: boolean) {
     this.live();
     if (this.pending && !retry) throw Error("回復保存の結果を先に確認してください");
@@ -250,14 +311,8 @@ export class TranscriptRecoverySaveQueue<P> {
         // Reject a locally oversized request before assigning a retry nonce.
         // A failed native request must be replayed unchanged; user-correctable
         // limits instead need to retain input without freezing an invalid CAS.
-        if(this.desired.length > 128 || this.desired.some((item,index) =>
-          index > 0 && item.utteranceId === this.desired[index - 1].utteranceId
-          || Array.from(item.text).length > 20_000 || Array.from(item.value).length > 20_000
-          || item.speakerIds.length > 100 || item.speakerIds.some((id,n) => n > 0 && id === item.speakerIds[n - 1]))) throw Error("回復入力の件数・本文・話者の上限または重複を修正してください。入力は保持しています");
-        if(!validNames(this.desiredNames)) throw Error("回復する話者名の件数・文字数の上限または重複を修正してください。入力は保持しています");
+        this.validateInputs(context,this.desired,this.desiredNames);
         const nameFields = this.desiredNames.length ? { nameBuffers: this.desiredNames } : {};
-        const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: this.desiredNames.length ? 3 : 1,basePayload: this.normalizePayload(context.payload),buffers: this.desired,...nameFields })).length;
-        if(bytes > 4 * 1024 * 1024) throw Error("回復入力が4MiBの容量上限を超えています。入力を保持したまま、開いている編集を減らしてください");
         const version = this.saved?.lockVersion ?? 0;
         if (!validVersion(version + 1)) throw Error("回復版番号が安全な範囲を超えています");
         const operationId = this.operationId();
