@@ -383,6 +383,42 @@ fn placement_same_operation_is_locked_and_wrong_operation_or_changed_source_cann
 }
 
 #[test]
+fn placement_owner_drop_releases_only_its_lock_with_a_retained_duplicate_descriptor() {
+    let f = Fixture::new();
+    let snapshot = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
+    f.intent(&snapshot);
+    let p = f
+        .bootstrap
+        .pending_placement(&f.operation, &snapshot)
+        .unwrap();
+    // A duplicated open file description models the descriptor inherited by a
+    // concurrently spawning child before its close-on-exec boundary. It grants
+    // no placement owner and performs no protected SQLite work.
+    let retained = p.lock.try_clone().unwrap();
+    assert!(f
+        .bootstrap
+        .pending_placement(&f.operation, &snapshot)
+        .is_err());
+    drop(p);
+    let next = f
+        .bootstrap
+        .pending_placement(&f.operation, &snapshot)
+        .unwrap();
+    assert!(retained.metadata().unwrap().is_file());
+    // Closing a stale duplicate must not release a separately acquired owner.
+    drop(retained);
+    assert!(f
+        .bootstrap
+        .pending_placement(&f.operation, &snapshot)
+        .is_err());
+    drop(next);
+    assert!(f
+        .bootstrap
+        .pending_placement(&f.operation, &snapshot)
+        .is_ok());
+}
+
+#[test]
 fn placement_cannot_select_models_root_or_nested_model_directory() {
     for nested in [false, true] {
         let f = Fixture::new();

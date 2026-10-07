@@ -49,6 +49,30 @@ struct Node {
     identity: Option<Identity>,
     state: String,
 }
+
+// The guard is created only after successful acquisition. Closing the original
+// descriptor alone does not release flock while a concurrently spawning child
+// still has an inherited duplicate before exec. Keep this field after SQLite
+// in Placement so its explicit release occurs only after the connection closes.
+struct PlacementLock(File);
+impl std::ops::Deref for PlacementLock {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for PlacementLock {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for PlacementLock {
+    fn drop(&mut self) {
+        // On failure, File drop still closes this descriptor; never release or
+        // remove a different owner's lock file, and never bypass acquisition.
+        let _ = self.0.unlock();
+    }
+}
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Progress {
@@ -75,7 +99,7 @@ pub(crate) struct Placement<'a> {
     uncertain: bool,
     // Keep the OS mutex until after the SQLite connection has closed. On macOS
     // a whole-file Rust lock on the DB itself conflicts with SQLite's locks.
-    lock: File,
+    lock: PlacementLock,
     lock_path: PathBuf,
     lock_proof: ControlProof,
 }
@@ -210,7 +234,7 @@ impl Bootstrap {
             } else {
                 0
             };
-        let mut lock = descriptor(unsafe {
+        let lock = descriptor(unsafe {
             libc::openat(
                 self.directory.as_raw_fd(),
                 lock_name_c.as_ptr(),
@@ -221,6 +245,7 @@ impl Bootstrap {
         ControlProof::read(&lock.metadata().map_err(|e| e.to_string())?)?;
         lock.try_lock()
             .map_err(|e| format!("配置台帳を別の操作が使用中です: {e}"))?;
+        let mut lock = PlacementLock(lock);
         let marker = format!(
             "MON relocation 1\n{}\n{}\n",
             pending.operation_id, pending.manifest_hash
