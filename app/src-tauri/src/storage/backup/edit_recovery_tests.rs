@@ -1,7 +1,7 @@
 use super::restore_fixed::{workspace::seal::SealedWorkspace, FixedData};
 use super::restore_ids::{BatchPreparation, RestoreIds};
 use super::*;
-use crate::storage::edit_recovery::{SaveRequest, TextBuffer};
+use crate::storage::edit_recovery::{NameBuffer, SaveRequest, TextBuffer};
 
 fn split_transcript(storage: &Storage) -> String {
     use crate::storage::draft_splits::{SplitPart, UtteranceSplit};
@@ -49,14 +49,15 @@ fn split_transcript(storage: &Storage) -> String {
 }
 
 #[test]
-fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_and_stale_context() {
-    for stale in [false, true] {
+fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_stale_context() {
+    for (stale, with_names) in [(false, false), (true, false), (false, true), (true, true)] {
         let root = tempfile::tempdir().unwrap();
         let source = Storage::open(root.path().into()).unwrap();
         let meeting = split_transcript(&source);
         let draft = source.load_transcript_draft(&meeting).unwrap().unwrap();
         let part = &draft.payload.utterance_splits[0].parts[0];
         let value = format!("未確定の本文に含まれるID {} は置換しない", part.id);
+        let name_value = format!("名前内の {} は置換しない", part.speaker_ids[0]);
         let saved = source
             .save_transcript_edit_recovery(SaveRequest {
                 meeting_id: meeting.clone(),
@@ -65,6 +66,16 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_and_stale_con
                 operation_id: Uuid::new_v4().to_string(),
                 expected_draft_lock_version: draft.lock_version,
                 expected_recovery_lock_version: 0,
+                name_buffers: if with_names {
+                    vec![NameBuffer {
+                        speaker_id: part.speaker_ids[0].clone(),
+                        name: None,
+                        had_override: false,
+                        value: name_value.clone(),
+                    }]
+                } else {
+                    vec![]
+                },
                 buffers: vec![TextBuffer {
                     utterance_id: part.id.clone(),
                     text: part.effective_text.clone(),
@@ -119,6 +130,27 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_and_stale_con
         );
         assert_eq!(loaded.payload.buffers[0].value, value);
         assert_eq!(loaded.payload.buffers[0].text, part.effective_text);
+        assert_eq!(
+            loaded.payload.schema_version,
+            if with_names { 3 } else { 1 }
+        );
+        if with_names {
+            assert_eq!(loaded.payload.name_buffers.len(), 1);
+            let name = &loaded.payload.name_buffers[0];
+            assert_eq!(name.value, name_value);
+            assert_eq!(name.name, None);
+            assert!(!name.had_override);
+            assert_eq!(
+                name.speaker_id,
+                ids.get("speakers", &meeting, &part.speaker_ids[0]).unwrap()
+            );
+            assert_ne!(name.speaker_id, part.speaker_ids[0]);
+        } else {
+            assert!(loaded.payload.name_buffers.is_empty());
+        }
+        let current = target.load_transcript_draft(&new_meeting).unwrap().unwrap();
+        assert!(current.payload.speaker_names.is_empty());
+        assert_eq!(current.payload.manual_speakers.is_empty(), stale);
         assert_eq!(
             loaded.payload.buffers[0].utterance_id,
             ids.get("utterances", &meeting, &part.id).unwrap()
@@ -189,6 +221,12 @@ fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof()
             operation_id: Uuid::new_v4().to_string(),
             expected_draft_lock_version: draft.lock_version,
             expected_recovery_lock_version: 0,
+            name_buffers: vec![NameBuffer {
+                speaker_id: part.speaker_ids[0].clone(),
+                name: None,
+                had_override: false,
+                value: "破棄対象の未確定名".into(),
+            }],
             buffers: vec![TextBuffer {
                 utterance_id: part.id.clone(),
                 text: part.effective_text.clone(),
@@ -251,6 +289,7 @@ fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof()
         assert_eq!(loaded.payload.schema_version, 2);
         assert_eq!(loaded.payload.discarded_from, Some(proof.clone()));
         assert!(loaded.payload.buffers.is_empty());
+        assert!(loaded.payload.name_buffers.is_empty());
         assert!(loaded.matches_draft && loaded.current_context);
         assert_eq!(loaded.lock_version, record.lock_version);
         assert_ne!(loaded.content_hash, record.content_hash);

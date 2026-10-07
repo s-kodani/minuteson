@@ -936,6 +936,14 @@ impl RestoreIds<'_> {
             payload
                 .buffers
                 .sort_by(|a, b| a.utterance_id.cmp(&b.utterance_id));
+            for buffer in &mut payload.name_buffers {
+                // Only the identity is remapped. Names and their original
+                // baseline can contain ID-looking text and must stay verbatim.
+                buffer.speaker_id = self.get("speakers", &meeting, &buffer.speaker_id)?;
+            }
+            payload
+                .name_buffers
+                .sort_by(|a, b| a.speaker_id.cmp(&b.speaker_id));
             let baseline =
                 serde_json::to_string(&payload.base_payload).map_err(|e| e.to_string())?;
             let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;

@@ -35,6 +35,7 @@ export class TranscriptRecoveryDiscard<P> {
       && record.baseDraftLockVersion === request.expectedDraftLockVersion
       && record.baseDraftContentHash === request.expectedDraftContentHash
       && record.payload.schemaVersion === 2 && record.payload.buffers.length === 0
+      && (record.payload.nameBuffers === undefined || Array.isArray(record.payload.nameBuffers) && record.payload.nameBuffers.length === 0)
       && record.payload.discardedFrom?.lockVersion === request.expectedRecoveryLockVersion
       && record.payload.discardedFrom?.contentHash === request.expectedRecoveryContentHash;
   }
@@ -43,7 +44,7 @@ export class TranscriptRecoveryDiscard<P> {
     const nonce = this.operationId();
     if(!operation(nonce) || !version(preview.currentDraftLockVersion) || !hash(preview.currentDraftContentHash)
       || !version(preview.lockVersion) || preview.lockVersion < 1 || !version(preview.lockVersion + 1)
-      || !hash(preview.contentHash) || !preview.payload.buffers.length) throw Error("破棄する回復記録の条件が不正です");
+      || !hash(preview.contentHash) || !(preview.payload.buffers.length || preview.payload.nameBuffers?.length)) throw Error("破棄する回復記録の条件が不正です");
     // Requests contain only scalar values, so freezing suffices to prevent a
     // confirmation or a caller from replacing the consented CAS conditions.
     this.pending = { request: Object.freeze({ meetingId: preview.meetingId,draftId: preview.draftId,

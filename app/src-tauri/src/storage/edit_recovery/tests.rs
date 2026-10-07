@@ -10,6 +10,7 @@ fn request(draft: &TranscriptDraft, utterance: &str) -> SaveRequest {
         operation_id: Uuid::new_v4().to_string(),
         expected_draft_lock_version: draft.lock_version,
         expected_recovery_lock_version: 0,
+        name_buffers: vec![],
         buffers: vec![TextBuffer {
             utterance_id: utterance.into(),
             text: "発言".into(),

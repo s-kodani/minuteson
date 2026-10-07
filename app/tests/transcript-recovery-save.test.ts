@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { TranscriptRecoverySaveQueue, type RecoveryContext, type RecoverySaveRequest, type TranscriptRecovery } from "../src/transcript-recovery-save.ts";
 import type { TextEditSession } from "../src/transcript-edit-session.ts";
+import type { SpeakerNameSession } from "../src/speaker-name-edit.ts";
 
 type Payload = { text: string };
 const hash = (version: number) => version.toString(16).padStart(64,"0");
 const context: RecoveryContext<Payload> = { meetingId: "meeting", draftId: "draft", baseAnalysisId: "base",
   lockVersion: 0, contentHash: hash(100), payload: { text: "確定本文" } };
 const buffer = (value: string, id = "u"): TextEditSession => ({ utteranceId: id, text: "確定本文", speakerIds: [], hadOverride: false, value });
+const name = (value: string, id = "s"): SpeakerNameSession => ({ speakerId: id, name: "田中", hadOverride: true, value });
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
@@ -21,7 +23,8 @@ function result(req: RecoverySaveRequest, base = context): TranscriptRecovery<Pa
     baseDraftContentHash: base.contentHash, contentHash: hash(req.expectedRecoveryLockVersion + 1),
     lockVersion: req.expectedRecoveryLockVersion + 1, updatedAt: 1, matchesDraft: true,
     currentDraftLockVersion: base.lockVersion, currentDraftContentHash: base.contentHash, currentContext: true,
-    payload: { schemaVersion: 1, basePayload: structuredClone(base.payload), buffers: structuredClone(req.buffers) } };
+    payload: { schemaVersion: req.nameBuffers?.length ? 3 : 1, basePayload: structuredClone(base.payload), buffers: structuredClone(req.buffers),
+      ...(req.nameBuffers?.length ? { nameBuffers: structuredClone(req.nameBuffers) } : {}) } };
 }
 function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<TranscriptRecovery<Payload>>;
   read?: () => Promise<TranscriptRecovery<Payload> | null> } = {}) {
@@ -35,6 +38,169 @@ function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<Tran
   queue.load(context,null);
   return { queue, calls, reads, setRecord: (value: TranscriptRecovery<Payload> | null) => { record = value; } };
 }
+
+test("name-only recovery is normalized immutable and uses schema three while old text stays byte-compatible", async () => {
+  const { queue,calls } = fixture();
+  const input = name("入力中","b");
+  queue.update([],[input,{ ...name("別名","a"),name: null,hadOverride: false }]);
+  input.value = "外部変更";
+  await queue.flush();
+  assert.deepEqual(calls[0].buffers,[]);
+  assert.deepEqual(calls[0].nameBuffers?.map(n => n.speakerId),["a","b"]);
+  assert.equal(calls[0].nameBuffers?.[1].value,"入力中");
+  assert.throws(() => { calls[0].nameBuffers![0].value = "変更"; },TypeError);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,3);
+  assert.equal(queue.snapshot().dirty,false);
+  queue.update([buffer("本文だけ")]); await queue.flush();
+  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),false);
+  assert.equal(Object.hasOwn(queue.snapshot().saved!.payload,"nameBuffers"),false);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,1);
+});
+
+test("name and text changes coalesce under one CAS without replacing an in-flight request", async () => {
+  const wait = deferred<TranscriptRecovery<Payload>>();
+  const { queue,calls } = fixture({ persist: req => calls.length === 1 ? wait.promise : Promise.resolve(result(req)) });
+  queue.update([buffer("旧本文")],[name("旧名")]);
+  const saving = queue.flush(); await Promise.resolve();
+  queue.update([buffer("新本文")],[name("新名")]);
+  assert.equal(calls[0].nameBuffers?.[0].value,"旧名");
+  wait.resolve(result(calls[0])); await saving;
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].expectedRecoveryLockVersion,1);
+  assert.equal(calls[1].buffers[0].value,"新本文");
+  assert.equal(calls[1].nameBuffers?.[0].value,"新名");
+  assert.equal(queue.snapshot().dirty,false);
+});
+
+test("clearing names during a delayed write saves an empty next revision and never revives them", async () => {
+  const wait = deferred<TranscriptRecovery<Payload>>();
+  const { queue,calls } = fixture({ persist: req => calls.length === 1 ? wait.promise : Promise.resolve(result(req)) });
+  queue.update([],[name("取消前")]);
+  const saving = queue.flush(); await Promise.resolve(); queue.update([]);
+  wait.resolve(result(calls[0])); await saving;
+  assert.equal(calls.length,2); assert.equal(calls[1].expectedRecoveryLockVersion,1);
+  assert.equal(Object.hasOwn(calls[1],"nameBuffers"),false);
+  assert.equal(queue.snapshot().saved?.payload.schemaVersion,1);
+  assert.deepEqual(queue.snapshot().nameBuffers,[]);
+  assert.equal(queue.snapshot().dirty,false);
+});
+
+test("lost-ack read-back acknowledges only the old mixed request and preserves newer names without sending them", async () => {
+  const { queue,calls,reads,setRecord } = fixture({ persist: async req => { setRecord(result(req)); throw Error("応答喪失"); } });
+  queue.update([buffer("保存済み本文")],[name("保存済み名")]);
+  await assert.rejects(queue.flush());
+  const pending = queue.snapshot().pendingRequest;
+  queue.update([buffer("未送信本文")],[name("未送信名")]);
+  assert.equal(pending?.nameBuffers?.[0].value,"保存済み名");
+  assert.equal(await queue.recheck(),"saved");
+  assert.equal(calls.length,1); assert.equal(reads.length,1);
+  assert.equal(queue.snapshot().nameBuffers[0].value,"未送信名");
+  assert.equal(queue.snapshot().buffers[0].value,"未送信本文");
+  assert.equal(queue.snapshot().dirty,true);
+});
+
+test("name retry preserves the original baseline override and value before saving newer input as a new CAS", async () => {
+  let fail = true;
+  const { queue,calls } = fixture({ persist: async req => { if(fail) throw Error("未保存"); return result(req); } });
+  queue.update([],[name("旧名")]); await assert.rejects(queue.flush());
+  queue.update([],[{ ...name("新名"),name: null,hadOverride: false }]);
+  fail = false; await queue.retry();
+  assert.equal(calls.length,3); assert.equal(calls[1],calls[0]);
+  assert.deepEqual(calls[1].nameBuffers,[name("旧名")]);
+  assert.deepEqual(calls[2].nameBuffers,[{ ...name("新名"),name: null,hadOverride: false }]);
+  assert.equal(calls[2].expectedRecoveryLockVersion,1);
+});
+
+test("name-only reload requires explicit fresh-read resume and stale names are never adopted", async () => {
+  for(const stale of [false,true]) {
+    const record = result({ ...context,operationId: randomUUID(),expectedDraftLockVersion: 0,expectedRecoveryLockVersion: 0,
+      buffers: [],nameBuffers: [name("回復名")] });
+    if(stale) { record.matchesDraft = false; record.currentDraftLockVersion = 1; }
+    const { queue,calls,reads,setRecord } = fixture();
+    queue.load(context,record); setRecord(record);
+    assert.deepEqual(queue.snapshot().nameBuffers,[]); assert.equal(queue.snapshot().dirty,false);
+    assert.ok(queue.snapshot().review); await assert.rejects(queue.flush(),/確認/);
+    if(stale) { await assert.rejects(queue.resume(),/自動適用せず/); assert.ok(queue.snapshot().review); }
+    else { await queue.resume(); assert.deepEqual(queue.snapshot().nameBuffers,[name("回復名")]); assert.equal(queue.snapshot().dirty,false); }
+    assert.equal(calls.length,0); assert.equal(reads.length,1);
+  }
+});
+
+test("name result mismatches never clear the immutable request or the latest input", async () => {
+  for(const field of ["missing","value","baseline","override","owner","extra","schema"]) {
+    const { queue,calls,setRecord } = fixture({ persist: async req => {
+      const bad = result(req);
+      switch(field) {
+        case "missing": delete bad.payload.nameBuffers; break;
+        case "value": bad.payload.nameBuffers![0].value = "別名"; break;
+        case "baseline": bad.payload.nameBuffers![0].name = null; break;
+        case "override": bad.payload.nameBuffers![0].hadOverride = false; break;
+        case "owner": bad.payload.nameBuffers![0].speakerId = "別話者"; break;
+        case "extra": bad.payload.nameBuffers!.push(name("追加","z")); break;
+        default: bad.payload.schemaVersion = 1;
+      }
+      setRecord(bad); return bad;
+    } });
+    queue.update([],[name("保持名")]); await assert.rejects(queue.flush(),/一致/);
+    await assert.rejects(queue.recheck(),/別の回復保存/);
+    assert.ok(queue.snapshot().pendingRequest,field); assert.equal(calls.length,1,field);
+    assert.equal(queue.snapshot().saved,null,field); assert.equal(queue.snapshot().nameBuffers[0].value,"保持名",field);
+  }
+});
+
+test("invalid name limits are correctable before a nonce while 100 names of 200 Unicode characters are supported", async () => {
+  for(const values of [Array.from({ length: 101 },(_,i) => name("名",`s-${i}`)),[name("😀".repeat(201))],
+    [{ ...name("名"),name: "😀".repeat(201) }],[name("名"),name("重複")]]) {
+    const { queue,calls } = fixture(); queue.update([],values); await assert.rejects(queue.flush(),/話者名/);
+    assert.equal(calls.length,0); assert.equal(queue.snapshot().pendingRequest,null);
+    assert.equal(queue.snapshot().nameBuffers.length,values.length);
+    queue.update([],[{ ...name(""),name: null,hadOverride: false }]); await queue.retry();
+    assert.equal(calls.length,1);
+  }
+  const { queue } = fixture();
+  queue.update([],Array.from({ length: 100 },(_,i) => ({ ...name("😀".repeat(200),`s-${i}`),name: "😀".repeat(200) })));
+  await queue.flush(); assert.equal(queue.snapshot().saved?.payload.nameBuffers?.length,100);
+});
+
+test("published draft advancement rebinds names preserving their editing-start baseline", async () => {
+  let base = context;
+  const { queue,calls } = fixture({ persist: async req => result(req,base) });
+  queue.update([],[name("未確定名")]); await queue.flush();
+  base = { ...context,lockVersion: 1,contentHash: hash(101),payload: { text: "確定本文の更新" } };
+  queue.advance(base); assert.equal(queue.snapshot().dirty,true); await queue.flush();
+  assert.equal(calls[1].expectedDraftLockVersion,1); assert.equal(calls[1].expectedRecoveryLockVersion,1);
+  assert.deepEqual(calls[1].nameBuffers,[name("未確定名")]);
+});
+
+test("name JSON bytes count toward the shared UTF-8 capacity before assigning another nonce", async () => {
+  const { queue,calls } = fixture();
+  const text = Array.from({ length: 26 },(_,i) => ({ ...buffer("😀".repeat(20_000),`u-${i}`),text: "😀".repeat(20_000) }));
+  queue.update(text); await queue.flush();
+  const values = Array.from({ length: 100 },(_,i) => ({ ...name("😀".repeat(200),`s-${i}`),name: "😀".repeat(200) }));
+  queue.update(text,values); await assert.rejects(queue.flush(),/4MiB/);
+  assert.equal(calls.length,1); assert.equal(queue.snapshot().pendingRequest,null);
+  assert.equal(queue.snapshot().buffers.length,26); assert.equal(queue.snapshot().nameBuffers.length,100);
+  queue.update(text,[name("短い名")]); await queue.retry();
+  assert.equal(calls.length,2); assert.equal(calls[1].expectedRecoveryLockVersion,1);
+});
+
+test("name record format and sorted identity checks reject malformed reviews before replacing local context", () => {
+  for(const field of ["empty","versionOne","proof","duplicates","unsorted","unknown"]) {
+    const record = result({ ...context,operationId: randomUUID(),expectedDraftLockVersion: 0,expectedRecoveryLockVersion: 0,
+      buffers: [],nameBuffers: [name("名","a"),name("別名","b")] });
+    switch(field) {
+      case "empty": record.payload.nameBuffers = []; break;
+      case "versionOne": record.payload.schemaVersion = 1; break;
+      case "proof": record.payload.schemaVersion = 2; record.payload.discardedFrom = { contentHash: hash(1),lockVersion: 1 }; record.lockVersion = 2; break;
+      case "duplicates": record.payload.nameBuffers![1].speakerId = "a"; break;
+      case "unsorted": record.payload.nameBuffers!.reverse(); break;
+      default: Object.assign(record.payload.nameBuffers![0],{ unknown: true });
+    }
+    const { queue } = fixture();
+    assert.throws(() => queue.load(context,record),/所有または形式/,field);
+    assert.equal(queue.snapshot().saved,null); assert.equal(queue.snapshot().review,null);
+  }
+});
 
 test("invalid local buffer limits retain input without freezing an unretryable request", async () => {
   for(const values of [Array.from({ length: 129 },(_,i) => buffer("入力",`u-${i}`)),[buffer("a".repeat(20_001))],

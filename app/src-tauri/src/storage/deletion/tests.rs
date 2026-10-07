@@ -21,6 +21,7 @@ fn recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequest {
         operation_id: uuid::Uuid::new_v4().to_string(),
         expected_draft_lock_version: draft.lock_version,
         expected_recovery_lock_version: 0,
+        name_buffers: vec![],
         buffers: vec![TextBuffer {
             utterance_id: analysis.utterances[0].id.clone(),
             text: analysis.utterances[0].effective_text.clone(),
@@ -31,104 +32,155 @@ fn recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequest {
     }
 }
 
+fn name_recovery_request(f: &Fixture) -> crate::storage::edit_recovery::SaveRequest {
+    use crate::storage::drafts::ManualSpeaker;
+    use crate::storage::edit_recovery::NameBuffer;
+    let mut request = recovery_request(f);
+    let draft = f
+        .storage
+        .load_transcript_draft(&f.meeting)
+        .unwrap()
+        .unwrap();
+    let mut payload = draft.payload;
+    payload.schema_version = 2;
+    let speaker = format!("manual:{}", uuid::Uuid::new_v4());
+    payload.manual_speakers.push(ManualSpeaker {
+        id: speaker.clone(),
+        label: "削除対象の手動話者".into(),
+    });
+    let saved = f
+        .storage
+        .save_transcript_draft(&draft.id, draft.lock_version, payload)
+        .unwrap();
+    request.expected_draft_lock_version = saved.lock_version;
+    request.buffers.clear();
+    request.name_buffers.push(NameBuffer {
+        speaker_id: speaker,
+        name: None,
+        had_override: false,
+        value: "完全削除する未確定名".into(),
+    });
+    request
+}
+
 #[test]
 fn edit_recovery_is_in_confirmed_deletion_scope_and_new_input_invalidates_old_consent() {
-    let f = Fixture::new();
-    let request = recovery_request(&f);
-    f.storage
-        .save_transcript_edit_recovery(request.clone())
-        .unwrap();
-    let before = f.scope();
-    assert_eq!(
-        before
-            .tables
-            .iter()
-            .find(|t| t.name == "transcript_edit_recovery")
-            .unwrap()
-            .rows,
-        1
-    );
-    let mut updated = request;
-    updated.operation_id = uuid::Uuid::new_v4().to_string();
-    updated.expected_recovery_lock_version = 1;
-    updated.buffers[0].value.push_str("更新");
-    f.storage.save_transcript_edit_recovery(updated).unwrap();
-    let after = f.scope();
-    assert_ne!(before.hash().unwrap(), after.hash().unwrap());
-    let operation = f.consent(&before);
-    let db = f.storage.connection.lock().unwrap();
-    assert!(erase_confirmed_rows(&db, &operation, &before, &|| false).is_err());
-    assert_eq!(
-        db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
-            .get::<_, i64>(
-            0
-        ))
-        .unwrap(),
-        1
-    );
-    assert!(db
+    for with_names in [false, true] {
+        let f = Fixture::new();
+        let request = if with_names {
+            name_recovery_request(&f)
+        } else {
+            recovery_request(&f)
+        };
+        f.storage
+            .save_transcript_edit_recovery(request.clone())
+            .unwrap();
+        let before = f.scope();
+        assert_eq!(
+            before
+                .tables
+                .iter()
+                .find(|t| t.name == "transcript_edit_recovery")
+                .unwrap()
+                .rows,
+            1
+        );
+        let mut updated = request;
+        updated.operation_id = uuid::Uuid::new_v4().to_string();
+        updated.expected_recovery_lock_version = 1;
+        if with_names {
+            updated.name_buffers[0].value.push_str("更新");
+        } else {
+            updated.buffers[0].value.push_str("更新");
+        }
+        f.storage.save_transcript_edit_recovery(updated).unwrap();
+        let after = f.scope();
+        assert_ne!(before.hash().unwrap(), after.hash().unwrap());
+        let operation = f.consent(&before);
+        let db = f.storage.connection.lock().unwrap();
+        assert!(erase_confirmed_rows(&db, &operation, &before, &|| false).is_err());
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
+        assert!(db
         .execute(
             "UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3 WHERE id=?1",
             params![operation, after.encode().unwrap(), after.hash().unwrap()],
         )
         .is_err());
-    assert_eq!(
-        db.query_row(
-            "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
-            params![operation],
-            |r| r.get::<_, String>(0)
-        )
-        .unwrap(),
-        before.encode().unwrap()
-    );
+        assert_eq!(
+            db.query_row(
+                "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
+                params![operation],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            before.encode().unwrap()
+        );
+    }
 }
 
 #[test]
-fn edit_recovery_confirmed_full_deletion_purges_text_and_preserves_unrelated_meeting_and_settings()
-{
-    let f = Fixture::new();
-    let mut request = recovery_request(&f);
-    let marker = format!("RECOVERY-PRIVATE-{}", uuid::Uuid::new_v4());
-    request.buffers[0].value = marker.repeat(200);
-    f.storage.save_transcript_edit_recovery(request).unwrap();
-    let scope = f.scope();
-    let operation = f.consent(&scope);
-    let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
-    finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
-    assert_eq!(
-        db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
-            .get::<_, i64>(
+fn edit_recovery_confirmed_full_deletion_purges_text_and_names_preserving_unrelated_meeting_and_settings(
+) {
+    for with_names in [false, true] {
+        let f = Fixture::new();
+        let mut request = if with_names {
+            name_recovery_request(&f)
+        } else {
+            recovery_request(&f)
+        };
+        let marker = format!("RECOVERY-PRIVATE-{}", uuid::Uuid::new_v4());
+        if with_names {
+            request.name_buffers[0].value = marker.repeat(3);
+        } else {
+            request.buffers[0].value = marker.repeat(200);
+        }
+        f.storage.save_transcript_edit_recovery(request).unwrap();
+        let scope = f.scope();
+        let operation = f.consent(&scope);
+        let db = f.storage.connection.lock().unwrap();
+        erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+        finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM transcript_edit_recovery", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
             0
-        ))
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        db.query_row(
-            "SELECT count(*) FROM meetings WHERE id=?1",
-            params![f.other],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1
-    );
-    assert_eq!(
-        db.query_row(
-            "SELECT value_json FROM app_settings WHERE key='delete-test'",
-            [],
-            |r| r.get::<_, String>(0)
-        )
-        .unwrap(),
-        "{\"keep\":true}"
-    );
-    for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
-        let file = f._root.path().join(name);
-        if file.exists() {
-            assert!(!std::fs::read(file)
-                .unwrap()
-                .windows(marker.len())
-                .any(|bytes| bytes == marker.as_bytes()));
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM meetings WHERE id=?1",
+                params![f.other],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT value_json FROM app_settings WHERE key='delete-test'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "{\"keep\":true}"
+        );
+        for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
+            let file = f._root.path().join(name);
+            if file.exists() {
+                assert!(!std::fs::read(file)
+                    .unwrap()
+                    .windows(marker.len())
+                    .any(|bytes| bytes == marker.as_bytes()));
+            }
         }
     }
 }

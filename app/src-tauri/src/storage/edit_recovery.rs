@@ -1,4 +1,4 @@
-//! Unconfirmed text is durable without publishing a transcript edit or an undo
+//! Unconfirmed text and names are durable without publishing an edit or an undo
 //! entry. A versioned empty record is a tombstone against delayed older writes.
 use super::*;
 use rusqlite::TransactionBehavior;
@@ -27,12 +27,25 @@ pub(crate) struct TextBuffer {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct NameBuffer {
+    pub speaker_id: String,
+    pub name: Option<String>,
+    pub had_override: bool,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Payload {
     pub schema_version: u32,
     // Retain the exact acknowledged context even after a split, adoption or
     // durable Undo changes the current draft. Stale buffers remain readable.
     pub base_payload: TranscriptDraftPayload,
     pub buffers: Vec<TextBuffer>,
+    // v3 adds names. Omit this field for v1/v2 so existing JSON and hashes
+    // remain byte-for-byte compatible; v2 is still an entirely empty proof.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_buffers: Vec<NameBuffer>,
     // v2 empty tombstones identify the exact preview that was discarded, so a
     // lost acknowledgement cannot disguise reuse of an operation with new input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +81,8 @@ pub(crate) struct SaveRequest {
     pub expected_draft_lock_version: i64,
     pub expected_recovery_lock_version: i64,
     pub buffers: Vec<TextBuffer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_buffers: Vec<NameBuffer>,
 }
 
 fn uuid(id: &str) -> bool {
@@ -106,15 +121,45 @@ fn normalize(mut buffers: Vec<TextBuffer>) -> Result<Vec<TextBuffer>, String> {
     Ok(buffers)
 }
 
+fn normalize_names(mut names: Vec<NameBuffer>) -> Result<Vec<NameBuffer>, String> {
+    if names.len() > 100 {
+        return Err("同時に回復保存できる話者名は100件までです".into());
+    }
+    names.sort_by(|a, b| a.speaker_id.cmp(&b.speaker_id));
+    if names
+        .windows(2)
+        .any(|pair| pair[0].speaker_id == pair[1].speaker_id)
+    {
+        return Err("回復対象の話者名が重複しています".into());
+    }
+    if names.iter().any(|name| {
+        name.value.chars().count() > 200
+            || name
+                .name
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > 200)
+    }) {
+        return Err("回復する話者名は200文字までです".into());
+    }
+    Ok(names)
+}
+
 pub(super) fn validate(db: &Connection, base: &str, payload: &Payload) -> Result<(), String> {
     let format = match (payload.schema_version, &payload.discarded_from) {
-        (1, None) => true,
+        (1, None) => payload.name_buffers.is_empty(),
+        (3, None) => !payload.name_buffers.is_empty(),
         (2, Some(proof)) => {
-            payload.buffers.is_empty() && proof.lock_version > 0 && valid_hash(&proof.content_hash)
+            payload.buffers.is_empty()
+                && payload.name_buffers.is_empty()
+                && proof.lock_version > 0
+                && valid_hash(&proof.content_hash)
         }
         _ => false,
     };
-    if !format || normalize(payload.buffers.clone())? != payload.buffers {
+    if !format
+        || normalize(payload.buffers.clone())? != payload.buffers
+        || normalize_names(payload.name_buffers.clone())? != payload.name_buffers
+    {
         return Err("回復下書きの形式が不正です".into());
     }
     // ID remapping can change lexical order without changing the exact saved
@@ -147,7 +192,11 @@ pub(super) fn validate(db: &Connection, base: &str, payload: &Payload) -> Result
     );
     if payload.buffers.iter().any(|b| {
         !ids.contains(&b.utterance_id) || b.speaker_ids.iter().any(|id| !speakers.contains(id))
-    }) {
+    }) || payload
+        .name_buffers
+        .iter()
+        .any(|name| !speakers.contains(&name.speaker_id))
+    {
         return Err("回復下書きは同じ解析版の発言と話者に限ります".into());
     }
     if serde_json::to_vec(payload)
@@ -239,6 +288,7 @@ impl Storage {
             return Err("回復保存の操作IDまたは版番号が不正です".into());
         }
         let buffers = normalize(request.buffers)?;
+        let names = normalize_names(request.name_buffers)?;
         let mut db = self
             .connection
             .lock()
@@ -264,6 +314,7 @@ impl Storage {
                             .checked_add(1)
                             .ok_or("回復版番号が範囲外です")?
                     || saved.payload.buffers != buffers
+                    || saved.payload.name_buffers != names
                 {
                     return Err("同じ回復操作の内容が変更されています".into());
                 }
@@ -277,9 +328,10 @@ impl Storage {
             return Err("下書きまたは回復保存が更新されています。結果を再確認してください".into());
         }
         let payload = Payload {
-            schema_version: 1,
+            schema_version: if names.is_empty() { 1 } else { 3 },
             base_payload: draft.payload.clone(),
             buffers,
+            name_buffers: names,
             discarded_from: None,
         };
         let version = request
@@ -363,5 +415,7 @@ pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
     }
 }
 
+#[cfg(test)]
+mod name_tests;
 #[cfg(test)]
 mod tests;

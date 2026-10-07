@@ -136,3 +136,21 @@ test("unsafe next body version is refused before any body request is frozen or s
   await assert.rejects(f.editor.saveDraft(draft.id,Number.MAX_SAFE_INTEGER,payload("保持")),/安全な範囲/);
   assert.equal(f.calls.length,0); assert.equal(f.editor.snapshot().bodyPending,false);
 });
+test("text-only production resume refuses named records until both input types are connected without replacing local input", () => {
+  for(const mixed of [false,true]) {
+    const f = fixture(); f.journal.update([buffer("保持するローカル本文")]);
+    const record: TranscriptRecovery<DraftPayload> = {
+      meetingId: draft.meetingId,draftId: draft.id,baseAnalysisId: draft.baseAnalysisId,
+      operationId: randomUUID(),lockVersion: 1,contentHash: hash(1),updatedAt: 1,
+      baseDraftLockVersion: draft.lockVersion,baseDraftContentHash: draft.contentHash,
+      currentDraftLockVersion: draft.lockVersion,currentDraftContentHash: draft.contentHash,
+      currentContext: true,matchesDraft: true,
+      payload: { schemaVersion: 3,basePayload: draft.payload,buffers: mixed ? [buffer("保存済み本文")] : [],
+        nameBuffers: [{ speakerId: "s",name: null,hadOverride: false,value: "保存済みの未確定名" }] },
+    };
+    assert.throws(() => f.editor.load(draft,record),/本文だけを再開せず/);
+    assert.equal(f.editor.snapshot().buffers[0].value,"保持するローカル本文");
+    assert.equal(f.editor.snapshot().saved,null); assert.equal(f.editor.snapshot().review,null);
+    assert.equal(f.calls.length,0);
+  }
+});

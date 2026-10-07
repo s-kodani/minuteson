@@ -26,6 +26,26 @@ test("explicit stale preview discard uses current draft stamp and exact recovery
   assert.equal(f.calls[0].expectedRecoveryContentHash,old.contentHash); assert.equal(saved.payload.buffers.length,0);
   assert.equal(f.controller.snapshot().pending,null);
 });
+test("name-only consent and lost-ack read-back clear names without another deletion", async () => {
+  const f = fixture(); f.state.lost = true;
+  const preview = structuredClone(old);
+  preview.payload.schemaVersion = 3; preview.payload.buffers = [];
+  preview.payload.nameBuffers = [{ speakerId: "s",name: null,hadOverride: false,value: "保持する名" }];
+  await assert.rejects(f.controller.start(preview),/応答喪失/);
+  preview.payload.nameBuffers[0].value = "後から変更";
+  assert.equal(f.controller.snapshot().pending?.preview.payload.nameBuffers?.[0].value,"保持する名");
+  assert.equal((await f.controller.recheck()).status,"discarded");
+  assert.equal(f.calls.length,1); assert.equal(f.reads,1);
+});
+test("discard proof that still contains names never counts as successful deletion", async () => {
+  const f = fixture();
+  f.state.patch = { payload: { schemaVersion: 2,basePayload: old.payload.basePayload,buffers: [],
+    nameBuffers: [{ speakerId: "s",name: null,hadOverride: false,value: "残っている名" }],
+    discardedFrom: { contentHash: old.contentHash,lockVersion: old.lockVersion } } };
+  await assert.rejects(f.controller.start(old),/一致しません/);
+  await assert.rejects(f.controller.recheck(),/別の回復記録/);
+  assert.ok(f.controller.snapshot().pending); assert.equal(f.calls.length,1);
+});
 test("lost discard ack keeps original consent through input mutation and retry", async () => {
   const f = fixture(); f.state.lost = true; const preview = structuredClone(old);
   await assert.rejects(f.controller.start(preview),/応答喪失/);

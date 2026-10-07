@@ -12,6 +12,7 @@ fn save_request(draft: &TranscriptDraft, utterance: &str) -> SaveRequest {
         operation_id: Uuid::new_v4().to_string(),
         expected_draft_lock_version: draft.lock_version,
         expected_recovery_lock_version: 0,
+        name_buffers: vec![],
         buffers: vec![TextBuffer {
             utterance_id: utterance.into(),
             text: "発言".into(),
@@ -539,6 +540,7 @@ fn schema_one_serialization_stays_byte_compatible_and_unknown_discard_request_is
         schema_version: 1,
         base_payload: TranscriptDraftPayload::default(),
         buffers: vec![],
+        name_buffers: vec![],
         discarded_from: None,
     };
     let json = serde_json::to_string(&payload).unwrap();

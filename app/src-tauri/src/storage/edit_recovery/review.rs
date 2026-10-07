@@ -81,7 +81,7 @@ impl Storage {
                 content_hash: record.content_hash,
                 lock_version: record.lock_version,
                 updated_at: record.updated_at,
-                buffer_count: record.payload.buffers.len(),
+                buffer_count: record.payload.buffers.len() + record.payload.name_buffers.len(),
                 matches_draft: record.matches_draft,
                 current_context: record.current_context,
             });
@@ -131,6 +131,7 @@ impl Storage {
                 || current.base_draft_lock_version != request.expected_draft_lock_version
                 || current.base_draft_content_hash != request.expected_draft_content_hash
                 || !current.payload.buffers.is_empty()
+                || !current.payload.name_buffers.is_empty()
             {
                 return Err("同じ回復破棄操作の内容が変更されています".into());
             }
@@ -149,6 +150,7 @@ impl Storage {
             schema_version: 2,
             base_payload: draft.payload.clone(),
             buffers: vec![],
+            name_buffers: vec![],
             discarded_from: Some(proof),
         };
         let saved = write_record(&tx, &draft, &request.operation_id, payload, version)?;

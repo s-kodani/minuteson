@@ -18,82 +18,107 @@ struct Fixture {
 
 #[test]
 fn edit_recovery_review_remains_read_only_under_pending_deletion_and_cold_start() {
-    use crate::storage::edit_recovery::{review::DiscardRequest, SaveRequest, TextBuffer};
-    let f = Fixture::new();
-    let (meeting, base, utterance) = crate::storage::playback::tests::fixture(&f.storage);
-    let draft = f.storage.create_transcript_draft(&meeting, &base).unwrap();
-    let request = SaveRequest {
-        meeting_id: meeting.clone(),
-        draft_id: draft.id.clone(),
-        base_analysis_id: base.clone(),
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        expected_draft_lock_version: draft.lock_version,
-        expected_recovery_lock_version: 0,
-        buffers: vec![TextBuffer {
-            utterance_id: utterance,
-            text: "発言".into(),
-            speaker_ids: vec![],
-            had_override: false,
-            value: "保持する未確定入力".into(),
-        }],
+    use crate::storage::drafts::ManualSpeaker;
+    use crate::storage::edit_recovery::{
+        review::DiscardRequest, NameBuffer, SaveRequest, TextBuffer,
     };
-    let record = f
-        .storage
-        .save_transcript_edit_recovery(request.clone())
-        .unwrap();
-    let discard = DiscardRequest {
-        meeting_id: meeting.clone(),
-        draft_id: draft.id.clone(),
-        base_analysis_id: base.clone(),
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        expected_draft_lock_version: draft.lock_version,
-        expected_draft_content_hash: draft.content_hash.clone(),
-        expected_recovery_lock_version: record.lock_version,
-        expected_recovery_content_hash: record.content_hash.clone(),
-    };
-    let prepared = f.prepare();
-    assert!(f.storage.data_write_blocked());
-    assert!(f
-        .storage
-        .discard_transcript_edit_recovery(discard.clone())
-        .is_err());
-    assert!(f
-        .storage
-        .save_transcript_edit_recovery(request.clone())
-        .is_err());
-    let page = f
-        .storage
-        .list_transcript_edit_recoveries(&meeting, None)
-        .unwrap();
-    assert_eq!(page.items[0].content_hash, record.content_hash);
-    assert_eq!(page.items[0].buffer_count, 1);
-    drop(prepared);
-    drop(f.storage);
-    let storage = Storage::open(f.base.path().join("root")).unwrap();
-    assert!(storage.data_write_blocked());
-    assert!(storage.discard_transcript_edit_recovery(discard).is_err());
-    assert!(storage.save_transcript_edit_recovery(request).is_err());
-    assert_eq!(
-        storage
+    for with_names in [false, true] {
+        let f = Fixture::new();
+        let (meeting, base, utterance) = crate::storage::playback::tests::fixture(&f.storage);
+        let mut draft = f.storage.create_transcript_draft(&meeting, &base).unwrap();
+        let mut names = vec![];
+        if with_names {
+            let id = format!("manual:{}", uuid::Uuid::new_v4());
+            let mut payload = draft.payload.clone();
+            payload.schema_version = 2;
+            payload.manual_speakers.push(ManualSpeaker {
+                id: id.clone(),
+                label: "保持する話者".into(),
+            });
+            draft = f
+                .storage
+                .save_transcript_draft(&draft.id, draft.lock_version, payload)
+                .unwrap();
+            names.push(NameBuffer {
+                speaker_id: id,
+                name: None,
+                had_override: false,
+                value: "保持する未確定名".into(),
+            });
+        }
+        let request = SaveRequest {
+            meeting_id: meeting.clone(),
+            draft_id: draft.id.clone(),
+            base_analysis_id: base.clone(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            expected_draft_lock_version: draft.lock_version,
+            expected_recovery_lock_version: 0,
+            name_buffers: names,
+            buffers: vec![TextBuffer {
+                utterance_id: utterance,
+                text: "発言".into(),
+                speaker_ids: vec![],
+                had_override: false,
+                value: "保持する未確定入力".into(),
+            }],
+        };
+        let record = f
+            .storage
+            .save_transcript_edit_recovery(request.clone())
+            .unwrap();
+        let discard = DiscardRequest {
+            meeting_id: meeting.clone(),
+            draft_id: draft.id.clone(),
+            base_analysis_id: base.clone(),
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            expected_draft_lock_version: draft.lock_version,
+            expected_draft_content_hash: draft.content_hash.clone(),
+            expected_recovery_lock_version: record.lock_version,
+            expected_recovery_content_hash: record.content_hash.clone(),
+        };
+        let prepared = f.prepare();
+        assert!(f.storage.data_write_blocked());
+        assert!(f
+            .storage
+            .discard_transcript_edit_recovery(discard.clone())
+            .is_err());
+        assert!(f
+            .storage
+            .save_transcript_edit_recovery(request.clone())
+            .is_err());
+        let page = f
+            .storage
             .list_transcript_edit_recoveries(&meeting, None)
-            .unwrap()
-            .items[0]
-            .content_hash,
-        record.content_hash
-    );
-    assert_eq!(
-        storage.load_transcript_draft(&meeting).unwrap().unwrap(),
-        draft
-    );
-    assert_eq!(
-        storage
-            .transcript_edit_recovery(&meeting, &draft.id, &base)
-            .unwrap()
-            .unwrap()
-            .payload
-            .buffers,
-        record.payload.buffers
-    );
+            .unwrap();
+        assert_eq!(page.items[0].content_hash, record.content_hash);
+        assert_eq!(page.items[0].buffer_count, if with_names { 2 } else { 1 });
+        drop(prepared);
+        drop(f.storage);
+        let storage = Storage::open(f.base.path().join("root")).unwrap();
+        assert!(storage.data_write_blocked());
+        assert!(storage.discard_transcript_edit_recovery(discard).is_err());
+        assert!(storage.save_transcript_edit_recovery(request).is_err());
+        assert_eq!(
+            storage
+                .list_transcript_edit_recoveries(&meeting, None)
+                .unwrap()
+                .items[0]
+                .content_hash,
+            record.content_hash
+        );
+        assert_eq!(
+            storage.load_transcript_draft(&meeting).unwrap().unwrap(),
+            draft
+        );
+        assert_eq!(
+            storage
+                .transcript_edit_recovery(&meeting, &draft.id, &base)
+                .unwrap()
+                .unwrap()
+                .payload,
+            record.payload
+        );
+    }
 }
 impl Fixture {
     fn new() -> Self {
