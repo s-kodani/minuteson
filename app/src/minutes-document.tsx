@@ -128,10 +128,10 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
           aria-label={`${entry.label}へ移動（見出し${entry.blockIndex + 1}）`} onClick={() => goToHeading(entry)}>{entry.label}</button>
       </li>)}</ol> : <p>見出しがありません。本文はそのまま表示します。</p>}
     </nav>
-    {evidence ? <MinutesEvidenceGroup key={`${view.id}:${evidence.id}`} view={view} content={content} selectedId={evidence.id} page={evidencePage} changePage={setEvidencePage} suspended={full || !active} locked={locked} close={() => setSelected(null)} showTranscript={showTranscript} verify={verify} /> : <p className="hint">本文の根拠時刻を選ぶと、生成時に固定した発言・話者・音声を確認できます。</p>}
+    {evidence ? <MinutesEvidenceGroup key={`${view.id}:${evidence.id}`} view={view} content={content} selectedId={evidence.id} page={evidencePage} changePage={setEvidencePage} suspended={full || !active} locked={locked} close={() => setSelected(null)} showTranscript={showTranscript} verify={verify} dockPlayback={!!panelHost} /> : <p className="hint">本文の根拠時刻を選ぶと、生成時に固定した発言・話者・音声を確認できます。</p>}
   </div>;
   return <section className="minutes-document" aria-label={title} ref={section}>
-    {full && fullSource && <FixedTranscriptWorkspace key={`${view.id}:${fullSource.id}`} view={view} evidence={fullSource} locked={locked} active={active} back={() => setShowFull(false)} />}
+    {full && fullSource && <FixedTranscriptWorkspace key={`${view.id}:${fullSource.id}`} view={view} evidence={fullSource} locked={locked} active={active} dockPlayback={!!panelHost} back={() => setShowFull(false)} />}
     {/* Keep the reader/group mounted but inaccessible while looking at the
         fixed transcript. This preserves loaded context and group pagination,
         so asynchronous reloading cannot change the bookmarked layout. */}

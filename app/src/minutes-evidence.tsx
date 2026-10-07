@@ -4,9 +4,9 @@ import { evidenceRequest, assertEvidenceSource, itemEvidencePage, type Evidence,
 import { useTranscriptAudio } from "./transcript-audio";
 import { timeLabel } from "./transcript";
 
-export function MinutesEvidenceGroup({ view, content, selectedId, page, changePage, suspended, locked, close, showTranscript, verify }: {
+export function MinutesEvidenceGroup({ view, content, selectedId, page, changePage, suspended, locked, close, showTranscript, verify, dockPlayback = false }: {
   view: MinutesView; content: MinutesContent; selectedId: string; page: number | null; changePage: (page: number) => void;
-  suspended: boolean; locked: boolean; close: () => void; showTranscript: (id: string) => void; verify?: (id: string, verified: boolean) => void;
+  suspended: boolean; locked: boolean; close: () => void; showTranscript: (id: string) => void; verify?: (id: string, verified: boolean) => void; dockPlayback?: boolean;
 }) {
   const group = itemEvidencePage(content, selectedId, page);
   if (!group) return null;
@@ -17,14 +17,14 @@ export function MinutesEvidenceGroup({ view, content, selectedId, page, changePa
     <p>{verify ? "項目と個々の根拠の対応を確認した場合だけ、確認済みを指定してください。本文・担当者・期限を修正すると、その項目の根拠は未確認へ戻ります。" : "確認状態の変更は、現在版の「議事録を編集」から行えます。候補・直前版は読取り専用です。"}</p>
     <p>{group.first + 1}–{group.first + group.evidence.length} / {group.total}件</p>
     {group.pages > 1 && <nav className="transcript-pages" aria-label="根拠一覧のページ"><button type="button" className="small-secondary" disabled={locked || group.page === 0} onClick={() => changePage(group.page - 1)}>前の10根拠</button><span>{group.page + 1} / {group.pages}</span><button type="button" className="small-secondary" disabled={locked || group.page + 1 === group.pages} onClick={() => changePage(group.page + 1)}>次の10根拠</button></nav>}
-    {group.evidence.map((e, i) => <MinutesEvidencePanel key={`${view.id}:${e.id}`} view={view} evidence={e} index={group.first + i + 1} selected={e.id === selectedId} suspended={suspended} locked={locked} showTranscript={() => showTranscript(e.id)} verify={verify ? (verified) => verify(e.id, verified) : undefined} />)}
+    {group.evidence.map((e, i) => <MinutesEvidencePanel key={`${view.id}:${e.id}`} view={view} evidence={e} index={group.first + i + 1} selected={e.id === selectedId} suspended={suspended} locked={locked} dockPlayback={dockPlayback} showTranscript={() => showTranscript(e.id)} verify={verify ? (verified) => verify(e.id, verified) : undefined} />)}
   </aside>;
 }
 
-function MinutesEvidencePanel({ view, evidence, index, selected, suspended, locked, showTranscript, verify }: {
-  view: MinutesView; evidence: Evidence; index: number; selected: boolean; suspended: boolean; locked: boolean; showTranscript: () => void; verify?: (verified: boolean) => void;
+function MinutesEvidencePanel({ view, evidence, index, selected, suspended, locked, showTranscript, verify, dockPlayback }: {
+  view: MinutesView; evidence: Evidence; index: number; selected: boolean; suspended: boolean; locked: boolean; showTranscript: () => void; verify?: (verified: boolean) => void; dockPlayback: boolean;
 }) {
-  const audio = useTranscriptAudio(view.meetingId, locked);
+  const audio = useTranscriptAudio(view.meetingId, locked, { inline:!dockPlayback,label:`議事録の固定根拠${index} · ${timeLabel(evidence.startUs)}–${timeLabel(evidence.endUs)}` });
   const [source, setSource] = useState<MinutesEvidenceSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");

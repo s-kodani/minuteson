@@ -26,7 +26,7 @@ async (page, capturePath, detailUI) => {
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   await editor.getByRole("button", { name: "音声を再生", exact: true }).click();
   await visit("発言の音声再生", "元トラック");
-  check((await page.getByRole("region", { name: "文字起こしの固定音声プレーヤー", exact: true }).innerText()).includes("同期精度は未検証"), "alignment warning hidden inside help");
+  check((await page.getByRole("region", { name: "会議の共通音声プレーヤー", exact: true }).innerText()).includes("同期精度は未検証"), "alignment warning hidden inside help");
   results.push("production audio help keeps unverified alignment visible; synthetic silence only");
   await page.getByRole("button", { name: "設定", exact: true }).click();
   for (const [label, text] of [["表示テーマ", "OSの明るさ"], ["バックアップと追加復元", "置き換えません"], ["要確認データ", "別の操作"], ["会議削除", "完全削除"], ["音声だけの削除", "再解析"], ["モデル本体削除", "再準備"], ["共通用語", "次回"], ["AIモデル", "起動しません"], ["モデル配置記録", "実会議"], ["プロファイル構成記録", "保証しません"]]) {

@@ -31,6 +31,7 @@ import { withConfirmedEdits } from "./confirmed-action";
 import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
 import { appShortcut, overlayOpen } from "./keyboard";
+import { MeetingPlaybackSurface } from "./playback-surface";
 import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -450,6 +451,7 @@ function MainWindow() {
   const shownMeetings = restoredFilter ? meetings.filter(meeting => restoredFilter.includes(meeting.id)) : meetings;
   const detail = screen === "overview" && !!selectedMeeting;
   return (
+    <MeetingPlaybackSurface host={playbackHost} meetingId={selectedMeeting?.id ?? null} title={selectedMeeting?.title}>
     <div className="app-layout">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark" aria-hidden="true">m</span><span className="brand-name">mon</span></div>
@@ -548,9 +550,10 @@ function MainWindow() {
           </div>}
           </>}
         </main>
-        <div ref={setPlaybackHost} className="meeting-playback-dock" role="region" aria-label="文字起こしの固定音声プレーヤー" hidden={!selectedMeeting || screen === "settings"} />
+        <div ref={setPlaybackHost} className="meeting-playback-dock" role="region" aria-label="会議の共通音声プレーヤー" hidden={!selectedMeeting || screen === "settings"} />
       </div>
     </div>
+    </MeetingPlaybackSurface>
   );
 }
 

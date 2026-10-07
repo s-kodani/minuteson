@@ -6,8 +6,8 @@ import { timeLabel } from "./transcript";
 
 // A read-only workspace within the document, not another modal or editable
 // current transcript. The host document/editor stays mounted around this view.
-export function FixedTranscriptWorkspace({ view, evidence, locked, back, active = true }: {
-  view: MinutesView; evidence: Evidence; locked: boolean; back: () => void; active?: boolean;
+export function FixedTranscriptWorkspace({ view, evidence, locked, back, active = true, dockPlayback = false }: {
+  view: MinutesView; evidence: Evidence; locked: boolean; back: () => void; active?: boolean; dockPlayback?: boolean;
 }) {
   const [data, setData] = useState<MinutesTranscriptPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -20,7 +20,7 @@ export function FixedTranscriptWorkspace({ view, evidence, locked, back, active 
   const scrollToTarget = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
   const target = useRef<HTMLElement>(null);
-  const audio = useTranscriptAudio(view.meetingId, locked);
+  const audio = useTranscriptAudio(view.meetingId, locked, { inline:!dockPlayback,label:"議事録の固定文字起こし音声" });
   useEffect(() => { if (!active) audio.clear(); }, [active]);
   const load = async (page: number | null) => {
     if (busy.current) return;

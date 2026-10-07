@@ -94,7 +94,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const [firstSpeaker,setFirstSpeaker]=useState("keep");
   const [secondSpeaker,setSecondSpeaker]=useState("keep");
   const splitDialog=useRef<HTMLDialogElement>(null);
-  const audio = useTranscriptAudio(meetingId, locked);
+  const audio = useTranscriptAudio(meetingId, locked, { inline:!!splitting });
   const [textSessions, setTextSessions] = useState<Record<string, TextEditSession>>({});
   const textBuffers = useRef(textSessions);
   const [textPending, setTextPending] = useState<Record<string, "commit" | "cancel">>({});
@@ -602,7 +602,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         </div>}
         <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || nameDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? []) && !namesDirty(nameBuffers.current,view?.speakers ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
-        {!splitting && !playbackHost && audio.controls}
+        {!splitting && !playbackHost && !audio.sharedSurface && audio.controls}
         {createPortal(<>
         <h3>話者一覧</h3>
         {draft && <p role="status" className="hint">{saveError ? "話者名の保存結果を確認してください。入力は保持しています。" : saving ? "保存を確認中" : nameDirty ? "名前は未確定" : "名前は保存済み"}</p>}
@@ -717,7 +717,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
       }}>追加話者の保存を再試行</button>}</CommonModal>
       {conflictPreview && <TranscriptConflictPanel key={conflictGeneration.current} preview={conflictPreview} blocked={busy || locked || !!activeConfirmation}
         onClose={() => { if(conflictBusy.current) return; conflictRef.current = null; setConflictPreview(null); }} onRefresh={inspectConflict} onAccept={acceptConflict}/>}
-      {playbackHost && createPortal(<div className="meeting-playback-content" data-meeting-id={meetingId}>
+      {!splitting && audio.sharedSurface && audio.controls}
+      {playbackHost && !audio.sharedSurface && createPortal(<div className="meeting-playback-content" data-meeting-id={meetingId}>
         <span className="playback-owner">{meetingTitle || "選択会議"} · 発言区間の音声</span>
         {splitting ? <p className="playback-empty">手動分割の確認画面で音声を操作できます。</p>
           : audio.controls || <p className="playback-empty">発言の時刻か「音声を再生」を選ぶと、保存音声を検証して再生します。</p>}

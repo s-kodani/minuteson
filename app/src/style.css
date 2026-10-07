@@ -346,6 +346,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-playback-dock[hidden] { display:none; }
 .main-column:has(.meeting-playback-dock:not([hidden])) .toast-host { top:calc(var(--workspace-header-height,64px) + 12px); max-height:max(0px,min(420px,calc(100dvh - var(--workspace-header-height,64px) - var(--playback-dock-height,40dvh) - 24px))); }
 .meeting-playback-content { min-width:0; }
+.shared-playback-local,.shared-playback-controls { display:contents; }
 .playback-owner { display:block; font-size:11px; color:var(--secondary-text); overflow-wrap:anywhere; }
 .playback-empty { margin:8px 0 0; font-size:13px; color:var(--muted); line-height:1.7; }
 .utterance-playing { background:var(--selection); border-left:3px solid var(--accent); }

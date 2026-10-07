@@ -2,7 +2,7 @@
 async (page, capturePath, detailUI) => {
   const results = [],check = (v,m) => { if(!v) throw Error(m); };
   const editor = page.getByRole("region",{ name: "文字起こし編集",exact: true });
-  const dock = page.getByRole("region",{ name: "文字起こしの固定音声プレーヤー",exact: true });
+  const dock = page.getByRole("region",{ name: "会議の共通音声プレーヤー",exact: true });
   const player = dock.getByRole("group",{ name: "発言の音声再生",exact: true });
   const workspace = editor.getByRole("region",{ name: "発言本文",exact: true });
   const nav = page.getByRole("navigation",{ name: "メインナビゲーション",exact: true });

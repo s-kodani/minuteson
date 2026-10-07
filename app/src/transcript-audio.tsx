@@ -6,6 +6,7 @@ import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./mi
 import type { DraftUtteranceAudioRequest } from "./transcript-state";
 import { registerPlaybackStop } from "./playback-barrier";
 import { appShortcut, overlayOpen } from "./keyboard";
+import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface";
 
 class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -34,7 +35,8 @@ function durationLabel(seconds: number) {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-export function useTranscriptAudio(meetingId: string, locked: boolean) {
+export function useTranscriptAudio(meetingId: string, locked: boolean, options: { inline?: boolean; label?: string } = {}) {
+  const surface=usePlaybackSurface();
   const [, refresh] = useState(0);
   const [clock] = useState(() => new BrowserAudioClock());
   const [player] = useState(() => new ChunkPlayer(clock, (token, offsetFrames) => invoke<ArrayBuffer | number[]>("read_playback_chunk", { token, offsetFrames }), () => refresh((value) => value + 1)));
@@ -56,6 +58,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
   };
 
   const clear = () => {
+    surface?.release(owner);
     request.current++;
     player.clear();
     if (token.current) void closeToken(token.current).catch(() => {});
@@ -85,6 +88,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
       // Keep failed/in-flight native releases in the global barrier even after
       // this view disappears. Deletion must not mistake unmount for release.
       detached = true;
+      surface?.release(owner);
       window.clearInterval(timer);
       window.removeEventListener("mon-audio-start", otherStarted);
       request.current++;
@@ -98,6 +102,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     if (locked) return;
     clear();
     window.dispatchEvent(new CustomEvent("mon-audio-start", { detail: owner }));
+    if (!options.inline) surface?.claim({ id:owner,meetingId,label:options.label ?? "文字起こしの発言音声" });
     const generation = request.current;
     setSelected(utteranceId);
     setPreparing(true);
@@ -175,5 +180,6 @@ export function useTranscriptAudio(meetingId: string, locked: boolean) {
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}
   </div>;
-  return { start, clear, controls, selected, preparing, toggle, available: !!info,playing: snapshot.playing };
+  return { start, clear, controls: controls && surface?.target && !options.inline ? <PlaybackSurfaceControls target={surface.target}>{controls}</PlaybackSurfaceControls> : controls,
+    sharedSurface:!!surface, selected, preparing, toggle, available: !!info,playing: snapshot.playing };
 }

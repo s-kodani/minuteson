@@ -6,7 +6,7 @@ async (page, capturePath, detailUI) => {
   const text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   const other = editor.getByRole("textbox", { name: "00:00:20の発言", exact: true });
   const row = editor.getByRole("article", { name: "00:00:00の発言行", exact: true });
-  const player = page.getByRole("region", { name: "文字起こしの固定音声プレーヤー", exact: true }).getByRole("group", { name: "発言の音声再生", exact: true });
+  const player = page.getByRole("region", { name: "会議の共通音声プレーヤー", exact: true }).getByRole("group", { name: "発言の音声再生", exact: true });
   const calls = command => page.evaluate(c => window.monBrowserFixture.calls.filter(x => x.command === c), command);
   const edit = async (at = "00:00:00") => { const field = editor.getByRole("textbox", { name: `${at}の発言`, exact: true }); if (!await field.isVisible()) await editor.getByRole("button", { name: `${at}の発言を編集`, exact: true }).click(); await field.focus(); };
   const readText = (at = "00:00:00") => editor.getByLabel(`${at}の発言本文`, { exact: true }).textContent();
