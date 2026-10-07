@@ -55,6 +55,7 @@ async page => {
   await page.getByRole("button", { name: "開く", exact: true }).first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await editor.getByRole("button", { name: "編集を開始", exact: true }).click();
+  await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("未保存の点検日を保持します。");
   await text.evaluate(e => { window.monBrowserFixture.headerEditNode = e; }); await open().click();
   await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();

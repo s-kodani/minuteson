@@ -224,6 +224,11 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .card-actions { flex-wrap:wrap; }
 .content :focus-visible { scroll-margin-block:24px; }
 .utterance-row:focus-visible, .audio-player:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.utterance-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; font-size:15px; user-select:text; margin:16px 0; }
+.utterance-list { gap:18px; }
+.utterance-text-edit textarea { line-height:1.7; font-size:15px; }
+.utterance-text-edit .transcript-actions { flex-wrap:wrap; }
+.utterance-text-edit .transcript-actions span { font-size:13px; color:var(--muted); }
 @media(max-width:1279px) {
   .app-layout { grid-template-columns:64px minmax(0,1fr); }
   .sidebar { padding-inline:8px; }

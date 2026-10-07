@@ -3,11 +3,13 @@ async page => {
   const host = page.getByRole("complementary", { name: "通知", exact: true });
   await page.getByRole("button", { name: "開く", exact: true }).first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
-  await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await text.fill("点検日について編集中の内容です。");
+  const edit = () => editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
+  const commit = () => editor.getByRole("article", { name: "00:00:00の発言行", exact: true }).getByRole("button", { name: "確定", exact: true }).click();
+  await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); await text.fill("点検日について編集中の内容です。"); await commit();
   await editor.getByText("保存済み", { exact: true }).waitFor();
   check(await host.locator(".toast-card").count() === 0, "routine automatic saving generated success notifications");
-  results.push("ordinary transcript autosaving stays in the save status and emits no success notification");
-  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("保存できない点検日を保持します。");
+  results.push("ordinary confirmed transcript saving stays in the save status and emits no success notification");
+  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await edit(); await text.fill("保存できない点検日を保持します。"); await commit();
   await host.getByRole("alert").filter({ hasText: "文字起こしの保存に失敗" }).waitFor();
   check(await editor.getByLabel("文字起こしの保存に失敗の要対応状態", { exact: true }).isVisible(), "save failure has no retained issue");
   const writes = await page.evaluate(() => window.monBrowserFixture.calls.filter(c => c.command === "save_transcript_draft").length);
@@ -20,7 +22,7 @@ async page => {
   await editor.getByLabel("文字起こしの保存に失敗の要対応状態", { exact: true }).waitFor({ state: "hidden" });
   check(await text.inputValue() === "保存できない点検日を保持します。", "successful retry rewrote user input");
   results.push("successful retry resolves the originating issue while preserving the saved text");
-  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("再び失敗する点検日です。");
+  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("再び失敗する点検日です。"); await commit();
   await host.getByRole("button", { name: "文字起こし保存を再試行", exact: true }).waitFor();
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; }); await host.getByRole("button", { name: "文字起こし保存を再試行", exact: true }).click();
   await host.getByRole("alert").waitFor({ state: "hidden" }); await editor.getByText("保存済み", { exact: true }).waitFor();
@@ -37,7 +39,7 @@ async page => {
   await editor.getByRole("combobox", { name: "統合元", exact: true }).selectOption("speaker-a"); await editor.getByRole("combobox", { name: "統合先", exact: true }).selectOption("speaker-b");
   await editor.getByRole("button", { name: "話者を統合", exact: true }).click();
   await page.getByRole("dialog", { name: "話者の統合を確認", exact: true }).getByRole("button", { name: "話者を統合する", exact: true }).click(); await undo.waitFor();
-  await text.fill("話者統合より後の編集を守ります。"); check(await undo.isDisabled(), "undo remained enabled for an earlier version while newer edits existed");
+  await edit(); await text.fill("話者統合より後の編集を守ります。"); check(await undo.isDisabled(), "undo remained enabled for an earlier version while newer edits existed"); await commit();
   await editor.getByText("保存済み", { exact: true }).waitFor(); check(await undo.isDisabled(), "undo would revert later persisted edits");
   check(await page.evaluate(() => window.monBrowserFixture.calls.filter(c => c.command === "undo_transcript_edit").length) === 1, "later edit caused automatic undo");
   results.push("a later edit disables the old notification's undo both before and after persistence, preserving later work");

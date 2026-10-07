@@ -8,10 +8,12 @@ async page => {
   const row = editor.getByRole("article", { name: "00:00:00の発言行", exact: true });
   const player = editor.getByRole("group", { name: "発言の音声再生", exact: true });
   const calls = command => page.evaluate(c => window.monBrowserFixture.calls.filter(x => x.command === c), command);
+  const edit = async (at = "00:00:00") => { const field = editor.getByRole("textbox", { name: `${at}の発言`, exact: true }); if (!await field.isVisible()) await editor.getByRole("button", { name: `${at}の発言を編集`, exact: true }).click(); await field.focus(); };
+  const readText = (at = "00:00:00") => editor.getByLabel(`${at}の発言本文`, { exact: true }).textContent();
   const boot = async (editing = false) => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    if (editing) { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await text.waitFor(); }
+    if (editing) { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); }
   };
   const focused = locator => locator.evaluate(e => document.activeElement === e);
   const saved = async () => page.waitForFunction(() => document.querySelector('.transcript-actions [role="status"]')?.textContent === "保存済み");
@@ -35,50 +37,53 @@ async page => {
   }
   results.push("Ctrl/Cmd F finds the current transcript search even though closed info popovers have role dialog");
   for (const modifier of ["Control", "Meta"]) {
-    const value = `点検日を確定 ${modifier}`; await text.fill(value); await page.keyboard.press(`${modifier}+Enter`);
+    const value = `点検日を確定 ${modifier}`; await edit(); await text.fill(value); await page.keyboard.press(`${modifier}+Enter`);
     await saved(); await page.waitForFunction(() => document.activeElement?.classList.contains("utterance-row"));
-    check(await text.inputValue() === value && (await page.evaluate(() => window.monBrowserFixture.draft.payload.utterances[0].effective_text)) === value, "confirmation did not persist exact text");
+    check(await readText() === value && (await page.evaluate(() => window.monBrowserFixture.draft.payload.utterances[0].effective_text)) === value, "confirmation did not persist exact text");
   }
   results.push("Ctrl/Cmd Enter acknowledges exact persistence before returning focus to the utterance row");
-  const baseline = await text.inputValue(); await text.focus(); await text.press("End"); await text.press("Enter");
+  const baseline = await readText(); await edit(); await text.press("End"); await text.press("Enter");
   check((await text.inputValue()).includes("\n"), "plain Enter stopped adding a newline"); await text.press("Escape");
-  check(await text.inputValue() === baseline && await focused(row), "Esc did not restore the focus-session baseline"); await saved();
+  await saved(); await page.waitForFunction(() => document.activeElement?.classList.contains("utterance-row")); check(await readText() === baseline && await focused(row), "Esc did not restore the focus-session baseline");
   results.push("plain Enter remains a newline; Esc cancels only the current text session and focuses its row");
-  await other.fill("別の発言の編集を保持"); await text.fill("キャンセル対象"); await text.press("Escape");
+  await edit("00:00:20"); await other.fill("別の発言の編集を保持"); await edit(); await text.fill("キャンセル対象"); await text.press("Escape");
   await other.focus(); await other.press("Control+Enter"); await saved();
-  check(await text.inputValue() === baseline && await other.inputValue() === "別の発言の編集を保持", "cancel discarded another utterance");
+  check(await readText() === baseline && await readText("00:00:20") === "別の発言の編集を保持", "cancel discarded another utterance");
   results.push("cancel preserves other utterance edits and their durable saves");
   await boot(true); const original = await text.inputValue(), saveCount = (await calls("save_transcript_draft")).length;
   await text.fill("保存前にキャンセル"); await text.press("Escape"); await saved();
-  check((await calls("save_transcript_draft")).length === saveCount && (await page.evaluate(() => window.monBrowserFixture.draft.payload.utterances.length)) === 0 && await text.inputValue() === original, "cancel created a redundant text override");
-  results.push("cancel before autosave removes a new override and makes no write");
-  await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 250; }); await text.fill("保存中にキャンセル"); await text.press("Control+Enter");
+  check((await calls("save_transcript_draft")).length === saveCount && (await page.evaluate(() => window.monBrowserFixture.draft.payload.utterances.length)) === 0 && await readText() === original, "cancel created a redundant text override");
+  results.push("cancel before confirmation makes no write and returns to selectable read-only text");
+  await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 250; }); await edit(); await text.fill("保存中にキャンセル"); await text.press("Control+Enter");
   await page.waitForFunction(() => window.monBrowserFixture.calls.some(c => c.command === "save_transcript_draft")); await text.press("Escape"); await saved();
-  check(await text.inputValue() === original && (await calls("save_transcript_draft")).length === 2 && (await page.evaluate(() => window.monBrowserFixture.draft.lockVersion)) === 2, "cancel during save lost restoration or erased history");
+  await text.waitFor({ state: "hidden" }); check(await readText() === original && (await calls("save_transcript_draft")).length === 2 && (await page.evaluate(() => window.monBrowserFixture.draft.lockVersion)) === 2, "cancel during save lost restoration or erased history");
   results.push("cancel during an in-flight save adds a restoration using the next CAS lock without stale focus stealing");
-  await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 0; }); await text.fill("自動保存済みの入力"); await saved();
+  await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 0; }); await edit(); await text.fill("移動前の保存済み入力");
+  await page.evaluate(async () => { const { flushPendingEdits } = await import("/src/draft-save.ts"); await flushPendingEdits(); }); await saved();
   const version = await page.evaluate(() => window.monBrowserFixture.draft.lockVersion); await text.press("Escape"); await saved();
-  check(await text.inputValue() === original && (await page.evaluate(() => window.monBrowserFixture.draft.lockVersion)) === version + 1, "cancel after autosave rewrote old history");
-  results.push("cancel after autosave records a new restoration while retaining acknowledged history");
-  await text.fill("IME入力中");
+  await text.waitFor({ state: "hidden" }); check(await readText() === original && (await page.evaluate(() => window.monBrowserFixture.draft.lockVersion)) === version + 1, "cancel after save barrier rewrote old history");
+  results.push("cancel after a navigation save barrier records restoration while retaining acknowledged history");
+  await edit(); await text.fill("IME入力中");
   for (const args of [{ key: "Enter", ctrlKey: true, isComposing: true }, { key: "Escape", isComposing: true }, { key: "Enter", metaKey: true, keyCode: 229 }, { key: "Escape", repeat: true }]) check(await keyEvent(text, args), "IME/repeated key was consumed");
   check(await focused(text) && await text.inputValue() === "IME入力中", "IME changed focus or cancelled text"); await text.press("Escape"); await saved();
   results.push("IME composition, legacy keyCode 229 and repeated Escape never confirm or cancel the edit");
-  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("保存失敗の入力を保持"); await text.press("Meta+Enter");
+  await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await edit(); await text.fill("保存失敗の入力を保持"); await text.press("Meta+Enter");
   await editor.getByRole("button", { name: "保存を再試行", exact: true }).waitFor();
   check(await focused(text) && await text.inputValue() === "保存失敗の入力を保持", "failed confirmation lost input or claimed completion");
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; }); await editor.getByRole("button", { name: "保存を再試行", exact: true }).click(); await saved();
   results.push("failed confirmation retains input, focus and explicit retry; no false saved state");
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 200; });
-  await text.fill("確認中も入力移動を尊重"); await text.press("Meta+Enter"); await other.fill("別の欄で続けて入力"); await saved();
+  await edit("00:00:20"); await text.fill("確認中も入力移動を尊重"); await text.press("Meta+Enter"); await other.fill("別の欄で続けて入力"); await text.waitFor({ state: "hidden" });
   check(await focused(other) && await other.inputValue() === "別の欄で続けて入力", "older confirmation stole focus from a newer input");
+  check(!(await page.evaluate(() => window.monBrowserFixture.draft.payload.utterances)).some(u => u.effective_text === "別の欄で続けて入力"), "confirming one row persisted another unconfirmed buffer");
+  await other.press("Control+Enter"); await saved();
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 0; });
-  results.push("confirmation drains newer edits but does not steal focus from a different input");
+  results.push("confirmation saves only its own field and never steals focus or confirms another open field");
   const nativeModifier = await page.evaluate(() => navigator.platform.includes("Mac") ? "Meta" : "Control");
-  await text.focus(); await text.press("End"); await page.keyboard.type("追加"); const undoCount = (await calls("undo_transcript_edit")).length; await text.press(`${nativeModifier}+z`);
-  check((await calls("undo_transcript_edit")).length === undoCount && !(await text.inputValue()).endsWith("追加"), "native text Undo was replaced by durable Undo"); await text.press("Escape"); await saved();
+  await edit(); await text.press("End"); const beforeNativeUndo = await text.inputValue(); await page.keyboard.type("X"); check(await text.inputValue() !== beforeNativeUndo, "typing did not change the input before native Undo"); const undoCount = (await calls("undo_transcript_edit")).length; await text.press(`${nativeModifier}+z`);
+  check((await calls("undo_transcript_edit")).length === undoCount && await text.inputValue() === beforeNativeUndo, "native text Undo was replaced by durable Undo"); await text.press("Escape"); await saved();
   results.push("text platform-standard Undo uses browser input history and never invokes persisted history Undo");
-  await row.getByRole("checkbox", { name: "佐藤", exact: true }).check(); await text.focus(); await text.press("Control+Enter"); await saved(); await row.focus();
+  await row.getByRole("checkbox", { name: "佐藤", exact: true }).check(); await saved(); await row.focus();
   const expected = await page.evaluate(() => ({ id: window.monBrowserFixture.draft.id, version: window.monBrowserFixture.draft.lockVersion })); await row.press("Meta+z");
   await page.waitForFunction(n => window.monBrowserFixture.calls.filter(c => c.command === "undo_transcript_edit").length === n + 1, undoCount); await saved();
   const undoCall = (await calls("undo_transcript_edit")).at(-1);
@@ -107,8 +112,8 @@ async page => {
   results.push("Space toggles a focused player without creating another playback token");
   await player.getByRole("button", { name: "再生", exact: true }).press("Space"); await player.getByRole("button", { name: "一時停止", exact: true }).waitFor();
   await player.getByRole("button", { name: "一時停止", exact: true }).press("Space"); await player.getByRole("button", { name: "再生", exact: true }).waitFor();
-  await text.focus(); await text.press("End"); await text.press("Space");
-  check(await player.getByRole("button", { name: "再生", exact: true }).isVisible() && (await text.inputValue()).endsWith(" "), "textarea Space played audio"); await text.press("Escape");
+  await edit(); await text.press("End"); const beforeSpace = await text.evaluate(e => ({ value: e.value, start: e.selectionStart, end: e.selectionEnd })); await text.press("Space");
+  check(await player.getByRole("button", { name: "再生", exact: true }).isVisible() && await text.inputValue() === beforeSpace.value.slice(0, beforeSpace.start) + " " + beforeSpace.value.slice(beforeSpace.end), "textarea Space changed playback or did not insert space at its actual caret"); await text.press("Escape");
   const slider = player.getByRole("slider", { name: "発言内の再生位置", exact: true }); await slider.focus(); await slider.press("ArrowRight");
   check(await player.getByRole("button", { name: "再生", exact: true }).isVisible(), "range input started playback");
   results.push("native buttons toggle once; text Space and slider keys retain their native semantics");

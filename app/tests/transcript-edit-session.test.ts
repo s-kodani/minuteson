@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cancelTextEdit, textEditBaseline } from "../src/transcript-edit-session.ts";
+import { cancelTextEdit, retainedTextRows, stageTextEdit, textBuffersDirty, textEditBaseline } from "../src/transcript-edit-session.ts";
 import { DraftSaveQueue } from "../src/draft-save.ts";
 import { canonicalPayload, type DraftPayload, type Utterance } from "../src/transcript-state.ts";
 const payload = (): DraftPayload => ({ schema_version: 1, speaker_names: [], utterances: [] });
 const utterance: Utterance = { id: "u", startUs: 0, endUs: 1, effectiveText: "点検日", recognizedText: "点検日", speakerIds: ["a"], attributionState: "assigned" };
+test("an unchanged open buffer never creates an override; confirming one buffer preserves unrelated assignments", () => {
+  const session = { ...textEditBaseline(payload(), utterance), value: "点検日" };
+  assert.deepEqual(stageTextEdit(payload(), session), payload());
+  const p = { ...payload(), utterances: [{ utterance_id: "u", effective_text: "点検日", speaker_ids: ["b"] }, { utterance_id: "v", effective_text: "他の本文", speaker_ids: [] }] };
+  const before = structuredClone(p), result = stageTextEdit(p, { ...session, value: "確認した点検日" });
+  assert.deepEqual(p, before); assert.deepEqual(result.utterances, [p.utterances[1], { ...p.utterances[0], effective_text: "確認した点検日" }]);
+});
+test("open text buffers are dirty independently of the durable payload; acknowledgement does not overwrite newer input", () => {
+  const session = { ...textEditBaseline(payload(), utterance), value: "入力中" }, sessions = { u: session };
+  assert.equal(textBuffersDirty(sessions, [utterance]), true);
+  assert.equal(textBuffersDirty(sessions, [{ ...utterance, effectiveText: "入力中" }]), false);
+  assert.equal(textBuffersDirty({ u: { ...session, value: "保存中に続けた入力" } }, [{ ...utterance, effectiveText: "入力中" }]), true);
+  assert.equal(textBuffersDirty(sessions, []), false);
+});
+test("retained editing/focused rows survive filters and pagination in canonical order without changing search counts", () => {
+  const rows = Array.from({ length: 103 }, (_, i) => ({ ...utterance, id: String(i) })), before = structuredClone(rows);
+  const result = retainedTextRows(rows, rows, 1, 50, ["0", "102", "0", "missing"]);
+  assert.deepEqual(result.rows.map(item => item.id), ["0", ...rows.slice(50, 100).map(item => item.id), "102"]); assert.equal(result.extra, 2);
+  assert.deepEqual(retainedTextRows(rows, [], 0, 50, ["102", "0"]).rows.map(item => item.id), ["0", "102"]);
+  assert.deepEqual(retainedTextRows(rows, [], 0, 50, ["missing"]), { rows: [], extra: 0 }); assert.deepEqual(rows, before);
+});
 test("cancel removes only a new text override, preserving unrelated edits and payload structures", () => {
   const original = payload(), baseline = textEditBaseline(original, utterance);
   const current: DraftPayload = { ...original, speaker_names: [{ speaker_id: "a", display_name: "名前" }], manual_speakers: [{ id: "b", label: "追加" }], utterances: [{ utterance_id: "u", effective_text: "誤り", speaker_ids: ["a"] }, { utterance_id: "v", effective_text: "他の発言", speaker_ids: [] }] };

@@ -108,6 +108,7 @@ async page => {
   await boot(); await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.getByRole("button", { name: "開く", exact: true }).first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   await editor.getByRole("button", { name: "編集を開始", exact: true }).click();
+  await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   const text = editor.getByRole("textbox", { name: /の発言$/ }).first(); await page.evaluate(() => window.monBrowserFixture.failSave = true); await text.fill("通知で失われない編集中の本文");
   await start({ meetingId: "meeting-1", meetingTitle: "会議B" });
   await host().getByRole("button", { name: "会議を開く", exact: true }).click(); await page.getByRole("alert").filter({ hasText: "模擬保存競合" }).first().waitFor();

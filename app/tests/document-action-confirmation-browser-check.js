@@ -4,7 +4,7 @@ async (page) => {
   const editor = () => page.getByRole("region", { name: "文字起こし編集", exact: true });
   const modal = title => page.getByRole("dialog", { name: title, exact: true });
   const calls = command => page.evaluate(c => window.monBrowserFixture.calls.filter(x => x.command === c), command);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor().getByRole("button", { name: "編集を開始", exact: true }).click(); await page.waitForFunction(() => !!window.monBrowserFixture.draft); };
+  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor().getByRole("button", { name: "編集を開始", exact: true }).click(); await page.waitForFunction(() => !!window.monBrowserFixture.draft); await editor().getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click(); };
   await boot();
   const text = editor().getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await text.fill("未保存の点検日を保持"); await editor().getByRole("button", { name: "再読込", exact: true }).click();
@@ -13,7 +13,7 @@ async (page) => {
   await page.keyboard.press("Escape"); await modal(discard).waitFor({ state: "hidden" });
   check(await text.inputValue() === "未保存の点検日を保持", "cancel discarded local transcript");
   await editor().getByRole("button", { name: "再読込", exact: true }).click(); await modal(discard).getByRole("button", { name: "入力を破棄して再読込する", exact: true }).click(); await modal(discard).waitFor({ state: "hidden" });
-  check(await text.inputValue() === "次の点検日は来週です。" && (await calls("save_transcript_draft")).length === 0, "discard saved unwanted text");
+  check(await editor().getByLabel("00:00:00の発言本文", { exact: true }).textContent() === "次の点検日は来週です。" && await text.count() === 0 && (await calls("save_transcript_draft")).length === 0, "discard saved unwanted text");
   results.push("transcript discard suspends autosave; cancel preserves input, explicit reload discards only unsaved text");
 
   await boot();

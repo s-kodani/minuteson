@@ -17,6 +17,7 @@ async (page, capturePath = path => path) => {
   await page.getByRole("button", { name: "開く", exact: true }).click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   const text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
+  await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await text.fill("編集中の点検日を保持します。"); await editor.getByRole("searchbox", { name: "発言を検索", exact: true }).fill("点検");
   await text.evaluate(node => { window.themeFixture.editorNode = node; node.setSelectionRange(2, 5); });
   const reads = await page.evaluate(() => [window.audioDeletionFixture.analysisReads, window.audioDeletionFixture.draftReads]);

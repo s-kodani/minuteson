@@ -8,7 +8,7 @@ import { useTranscriptAudio } from "./transcript-audio";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
 import {preciseTime} from "./diarization-state";
 import { appShortcut, nativeTextTarget, overlayOpen } from "./keyboard";
-import { cancelTextEdit, textEditBaseline, type TextEditBaseline } from "./transcript-edit-session";
+import { cancelTextEdit, retainedTextRows, stageTextEdit, textBuffersDirty, textEditBaseline, type TextEditSession } from "./transcript-edit-session";
 
 import { activeSpeakers, addSpeaker, assignSpeakers, canonicalPayload, filterUtterances, mergeSpeaker, projectTranscript, splitPosition, splitUtterance, textPieces, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
 export type { Analysis, DraftPayload } from "./transcript-state";
@@ -62,18 +62,44 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const [secondSpeaker,setSecondSpeaker]=useState("keep");
   const splitDialog=useRef<HTMLDialogElement>(null);
   const audio = useTranscriptAudio(meetingId, locked);
-  const textSession = useRef<TextEditBaseline | null>(null);
+  const [textSessions, setTextSessions] = useState<Record<string, TextEditSession>>({});
+  const textBuffers = useRef(textSessions);
+  const [textPending, setTextPending] = useState<Record<string, "commit" | "cancel">>({});
+  const textOperations = useRef(new Map<string, { kind: "commit" | "cancel" }>());
+  const textInputs = useRef(new Map<string, HTMLTextAreaElement>());
+  const transcriptRoot = useRef<HTMLElement>(null);
+  const [focusedRow, setFocusedRow] = useState<string | null>(null);
   const undoPending = useRef(false);
-  const commitPending = useRef(false);
+  const updateTextSessions = (update: (current: Record<string, TextEditSession>) => Record<string, TextEditSession>) => {
+    textBuffers.current = update(textBuffers.current); setTextSessions(textBuffers.current);
+  };
+  const stageTextBuffers = () => {
+    saveQueue.edit(current => Object.values(textBuffers.current).reduce(stageTextEdit, current));
+  };
+  const flushTextBuffers = async () => {
+    for (;;) { const expected = textBuffers.current; stageTextBuffers(); await saveQueue.flush(); if (expected === textBuffers.current) return; }
+  };
+  const retryTextBuffers = async () => { stageTextBuffers(); await saveQueue.retry(); await flushTextBuffers(); };
 
   useEffect(() => {
     const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
-    const unregister = registerPendingEdits(() => saveQueue.flush());
+    const unregister = registerPendingEdits(flushTextBuffers);
     return () => { unsubscribe(); unregister(); };
   }, [saveQueue]);
 
+  useEffect(() => {
+    // Removing a focused textarea does not reliably emit blur. Clear retained
+    // focus on the next real focus move, including moves outside this section.
+    const focus = (event: FocusEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const row = target?.closest(".utterance-row");
+      setFocusedRow(row && transcriptRoot.current?.contains(row) ? row.getAttribute("data-utterance-id") : null);
+    };
+    document.addEventListener("focusin", focus);
+    return () => document.removeEventListener("focusin", focus);
+  }, []);
+
   const reload = async (propagateFailure = false) => {
-    textSession.current = null;
     audio.clear();
     setLoading(true);
     setError("");
@@ -84,6 +110,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       ]);
       setAnalysis(current);
       saveQueue.load(working);
+      updateTextSessions(() => ({})); setFocusedRow(null);
       setPage(0);
       setSelection([]); setMergeSource(""); setMergeTarget(""); setNotice(""); setNoticeVersion(null);
       setSpeakerFilter("");setQuery("");setSplitting(null);
@@ -124,18 +151,18 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   };
 
   const undo = async (flushCurrent = false) => {
-    if (!draft || !matchingBase || (!flushCurrent && (draft.lockVersion === 0 || dirty || saving)) || busy || locked || confirm.pending || undoPending.current) return;
+    if (!draft || !matchingBase || (!flushCurrent && (draft.lockVersion === 0 || dirty || saving || textDirty)) || busy || locked || confirm.pending || undoPending.current) return;
     undoPending.current = true;
-    textSession.current = null;
     setBusy(true);
     audio.clear();
     setError("");
     try {
-      if (flushCurrent) await saveQueue.flush();
+      if (flushCurrent) await flushTextBuffers();
       const current = saveQueue.snapshot().draft;
       if (!current || current.id !== draft.id || current.baseAnalysisId !== analysis?.id || current.lockVersion === 0) return;
       const previous = await invoke<Draft>("undo_transcript_edit", { draftId: current.id, expectedLockVersion: current.lockVersion });
       saveQueue.load(previous);
+      updateTextSessions(() => ({}));
       setNotice("直前の編集を取り消しました。"); setNoticeVersion(null); setMergeSource(""); setMergeTarget("");
     } catch (cause) {
       setError(String(cause));
@@ -151,7 +178,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     if (!analysis || locked || busy) return false;
     setBusy(true); setError(""); setNotice(""); setNoticeVersion(null);
     audio.clear();
-    try { await saveQueue.flush(); saveQueue.edit(edit); await saveQueue.flush(); setNotice(message); setNoticeVersion(saveQueue.snapshot().draft?.lockVersion ?? null); return true; }
+    try { await flushTextBuffers(); saveQueue.edit(edit); await saveQueue.flush(); setNotice(message); setNoticeVersion(saveQueue.snapshot().draft?.lockVersion ?? null); return true; }
     catch(cause) { setError(String(cause)); if (propagateFailure) throw cause; return false; }
     finally { setBusy(false); }
   };
@@ -183,18 +210,68 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const view = useMemo(()=>analysis ? projectTranscript(analysis,matchingBase?payload:null) : null,[analysis,matchingBase,payload]);
   const speakers = view ? activeSpeakers(view,matchingBase?payload:null) : [];
   const filtered=useMemo(()=>view?filterUtterances(view,speakerFilter,query):[],[view,speakerFilter,query]);
-  const shown = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const retained = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, [...Object.keys(textSessions), ...(focusedRow ? [focusedRow] : [])]);
+  const shown = retained.rows;
+  const textDirty = textBuffersDirty(textSessions, view?.utterances ?? []);
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
   const editable = Boolean(matchingBase && payload && !locked && !loading && !busy && !confirm.pending);
+  const beginTextEdit = (utterance: Utterance) => {
+    const current = saveQueue.snapshot().payload;
+    if (!editable || !current || textOperations.current.has(utterance.id)) return;
+    if (!textBuffers.current[utterance.id]) updateTextSessions(sessions => ({ ...sessions, [utterance.id]: { ...textEditBaseline(current, utterance), value: utterance.effectiveText } }));
+    requestAnimationFrame(() => textInputs.current.get(utterance.id)?.focus());
+  };
+  const finishTextEdit = async (id: string, kind: "commit" | "cancel", source: HTMLElement) => {
+    let session = textBuffers.current[id];
+    const pending = textOperations.current.get(id);
+    if (!editable || !session || pending?.kind === "cancel" || pending && kind === "commit") return;
+    const operation = { kind }; textOperations.current.set(id, operation);
+    setTextPending(current => ({ ...current, [id]: kind })); setError("");
+    try {
+      // A failed response is not proof that nothing was written. Cancel may
+      // clear a queued error only after reading the same unchanged native draft.
+      const failed = saveQueue.snapshot();
+      if (failed.error && kind === "cancel") {
+        const saved = await invoke<Draft | null>("get_transcript_draft", { meetingId });
+        if (!saved || !failed.draft || saved.id !== failed.draft.id || saved.baseAnalysisId !== failed.draft.baseAnalysisId || saved.lockVersion !== failed.draft.lockVersion || JSON.stringify(canonicalPayload(saved.payload)) !== JSON.stringify(canonicalPayload(failed.draft.payload))) throw Error("先行する保存結果を確認できません。本文と編集欄は保持しています。保存結果を再確認してください。");
+        saveQueue.load(saved); if (failed.payload) saveQueue.edit(() => failed.payload!);
+      }
+      if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) return;
+      if (kind === "cancel") {
+        session = { ...session, value: session.text };
+        const restored = session; updateTextSessions(current => ({ ...current, [id]: restored }));
+        saveQueue.edit(current => cancelTextEdit(current, restored));
+      } else saveQueue.edit(current => stageTextEdit(current, session));
+      await saveQueue.flush();
+      if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) return;
+      const row = source.closest<HTMLElement>(".utterance-row"), restoreFocus = !!row?.contains(document.activeElement);
+      updateTextSessions(current => { const next = { ...current }; delete next[id]; return next; });
+      if (restoreFocus) requestAnimationFrame(() => {
+        if (document.activeElement !== document.body && !row?.contains(document.activeElement)) return;
+        if (row?.isConnected) row.focus(); else document.querySelector<HTMLInputElement>('.transcript-card input[type="search"]')?.focus();
+      });
+    } catch (cause) { setError(String(cause)); }
+    finally {
+      if (textOperations.current.get(id) === operation) {
+        textOperations.current.delete(id); setTextPending(current => { const next = { ...current }; delete next[id]; return next; });
+      }
+    }
+  };
   const confirmReload = () => {
-    if (!saveQueue.snapshot().dirty) { void reload(); return; }
-    const expected = JSON.stringify(saveQueue.snapshot().payload);
-    void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: () => reload(true) });
+    if (!saveQueue.snapshot().dirty && !textDirty) { void reload(); return; }
+    const stamp = () => JSON.stringify([saveQueue.snapshot().payload, textBuffers.current]);
+    const expected = stamp();
+    void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => stamp() === expected, action: () => reload(true) });
   };
   useEffect(()=>{setPage(0);},[speakerFilter,query]);
   useEffect(()=>{const valid=new Set(view?.utterances.map(u=>u.id));setSelection(ids=>ids.every(id=>valid.has(id))?ids:ids.filter(id=>valid.has(id)));setPage(p=>Math.min(p,Math.max(0,Math.ceil(filtered.length/PAGE_SIZE)-1)));},[view,filtered.length]);
   useEffect(()=>{if(speakerFilter&&speakerFilter!=="unknown"&&!speakers.some(s=>s.id===speakerFilter))setSpeakerFilter("");},[speakerFilter,speakers]);
+  useEffect(() => {
+    if (!view || loading) return;
+    const valid = new Set(view.utterances.map(item => item.id));
+    if (Object.keys(textBuffers.current).some(id => !valid.has(id))) updateTextSessions(current => Object.fromEntries(Object.entries(current).filter(([id]) => valid.has(id))));
+  }, [view, loading]);
   const play=async(u:Utterance,at?:number)=>{
     if(!analysis)return;
     if(u.sourceUtteranceId){
@@ -209,8 +286,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   if(splitting)try{splitAt=splitPosition(splitting.startUs,splitting.endUs,splitSeconds);if(splitOffset<1||splitOffset>=splitPieces.length)throw Error("空の部分を作らない本文の切れ目を指定してください。");}catch(cause){splitError=String(cause);}
 
   return (
-    <section className="transcript-card" aria-label="文字起こし編集" onKeyDown={event => {
-      if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving) || undoPending.current) return;
+    <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onKeyDown={event => {
+      if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving && !textDirty) || undoPending.current) return;
       event.preventDefault(); void undo(true);
     }}>
       <div className="card-head">
@@ -222,12 +299,12 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       {analysis && <>
         <div className="transcript-actions">
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
-          {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty ? "未保存" : "保存済み"}</span>}
-          {saveError && <button type="button" className="small-secondary" onClick={() => { void saveQueue.retry().catch(() => {}); }} disabled={saving || locked}>保存を再試行</button>}
-          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || locked || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
+          {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty ? "未保存" : "保存済み"}</span>}
+          {saveError && <button type="button" className="small-secondary" onClick={() => { void retryTextBuffers().catch(() => {}); }} disabled={saving || locked}>保存を再試行</button>}
+          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={busy || saving || dirty || textDirty || locked || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
           <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
         </div>
-        <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty) await undo(); } } : undefined} />
+        <ToastNotice scope={meetingId} type="transcript-edit" eventId={noticeVersion !== null ? `${draft?.id}:${noticeVersion}` : undefined} message={notice} onClose={() => setNotice("")} action={noticeVersion !== null ? { kind: "undo", label: "元に戻す", disabled: busy || saving || dirty || textDirty || locked || confirm.pending || !matchingBase || draft?.lockVersion !== noticeVersion, run: async () => { if (saveQueue.snapshot().draft?.lockVersion === noticeVersion && !saveQueue.snapshot().dirty && !textBuffersDirty(textBuffers.current, view?.utterances ?? [])) await undo(); } } : undefined} />
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {!splitting&&audio.controls}
         <div className="speaker-grid">
@@ -254,51 +331,45 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
           void confirm({ title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
         }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
         <div className="utterance-list">
+          {retained.extra > 0 && <p className="hint" role="status">検索・ページ条件外の編集中またはフォーカス中の発言 {retained.extra} 件を保持しています。</p>}
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {
             const speakerIds = utterance.speakerIds;
             const source=analysis.utterances.find(u=>u.id===(utterance.sourceUtteranceId??utterance.id))!;
-            return <article key={utterance.id} className="utterance-row" tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z" onKeyDown={event => {
+            const session = textSessions[utterance.id], pending = textPending[utterance.id];
+            const splitText = session?.value ?? utterance.effectiveText;
+            return <article key={utterance.id} data-utterance-id={utterance.id} className="utterance-row" tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space Control+Z Meta+Z"
+              onFocus={() => setFocusedRow(utterance.id)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedRow(current => current === utterance.id ? null : current); }} onKeyDown={event => {
               if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen() || locked || loading || busy || audio.preparing) return;
               event.preventDefault();
               if (audio.selected === utterance.id && audio.available) audio.toggle(); else void play(utterance);
             }}>
               <div className="utterance-meta"><time title={`${utterance.startUs}–${utterance.endUs} µs`}>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}–{utterance.recognitionIsSource?preciseTime(utterance.endUs):timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span>{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}<button type="button" className="small-secondary" onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
               <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
-              <textarea aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={utterance.effectiveText}
-                onFocus={() => { const current = saveQueue.snapshot().payload; if (current) textSession.current = textEditBaseline(current, utterance); }}
-                onBlur={() => { if (textSession.current?.utteranceId === utterance.id) textSession.current = null; }}
+              {session ? <div className="utterance-text-edit">
+              <textarea ref={node => { if (node) textInputs.current.set(utterance.id, node); else textInputs.current.delete(utterance.id); }} aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={session.value}
                 onKeyDown={event => {
                   if (!editable || overlayOpen()) return;
-                  const shortcut = appShortcut(event.nativeEvent), baseline = textSession.current, input = event.currentTarget;
-                  if (shortcut === "cancel" && baseline?.utteranceId === utterance.id) {
-                    event.preventDefault(); saveQueue.edit(current => cancelTextEdit(current, baseline)); textSession.current = null;
-                    input.closest<HTMLElement>(".utterance-row")?.focus();
-                  } else if (shortcut === "commit") {
-                    event.preventDefault(); if (commitPending.current) return;
-                    commitPending.current = true;
-                    void saveQueue.flush().then(() => {
-                      // Do not steal focus if the user moved to another field
-                      // while an older save was being acknowledged.
-                      if (document.activeElement === input && textSession.current === baseline) { textSession.current = null; input.closest<HTMLElement>(".utterance-row")?.focus(); }
-                    }).catch(() => { /* SaveQueue retains input and the retryable cause. */ }).finally(() => { commitPending.current = false; });
-                  }
+                  const shortcut = appShortcut(event.nativeEvent);
+                  if (shortcut === "cancel" || shortcut === "commit") { event.preventDefault(); void finishTextEdit(utterance.id, shortcut === "cancel" ? "cancel" : "commit", event.currentTarget); }
                 }}
-                onChange={(event) => changeUtterance(utterance, { effective_text: event.target.value })} disabled={!editable} rows={2} />
+                onChange={event => { const value = event.target.value; updateTextSessions(current => ({ ...current, [utterance.id]: { ...current[utterance.id], value } })); }} disabled={!editable} rows={2} />
+                <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={event => void finishTextEdit(utterance.id, "commit", event.currentTarget)}>確定</button><button type="button" className="small-secondary" disabled={!editable || pending === "cancel"} onClick={event => void finishTextEdit(utterance.id, "cancel", event.currentTarget)}>キャンセル</button><span>{pending === "cancel" ? "元の本文の保存を確認中" : pending ? "確定した本文を保存中" : "Ctrl／Cmd＋Enterで確定 · Escでキャンセル"}</span></div>
+              </div> : <><p className="utterance-text" aria-label={`${timeLabel(utterance.startUs)}の発言本文`}>{utterance.effectiveText}</p><button type="button" className="small-secondary" aria-label={`${timeLabel(utterance.startUs)}の発言を編集`} disabled={!editable} onClick={() => beginTextEdit(utterance)}>発言を編集</button></>}
               {(utterance.recognitionIsSource||utterance.effectiveText !== utterance.recognizedText) && <small>{utterance.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {utterance.recognizedText}</small>}
               {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} />{speaker.displayName || speaker.label}</label>)}</div>}
               <button type="button" className="small-secondary" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({utteranceId:utterance.id});}}>新しい話者を作成してこの発言に割り当て</button>
-              <button type="button" className="small-secondary" disabled={!editable||textPieces(utterance.effectiveText).length<2||utterance.endUs-utterance.startUs<2} onClick={()=>{setPendingSplit(false);setError("");setSplitting(utterance);setSplitSeconds(((utterance.endUs-utterance.startUs)/2_000_000).toFixed(6));setSplitOffset(Math.floor(textPieces(utterance.effectiveText).length/2));setFirstSpeaker("keep");setSecondSpeaker("keep");}}>発言を手動分割</button>
+              <button type="button" className="small-secondary" disabled={!editable||!!pending||textPieces(splitText).length<2||utterance.endUs-utterance.startUs<2} onClick={()=>{setPendingSplit(false);setError("");setSplitting({...utterance,effectiveText:splitText});setSplitSeconds(((utterance.endUs-utterance.startUs)/2_000_000).toFixed(6));setSplitOffset(Math.floor(textPieces(splitText).length/2));setFirstSpeaker("keep");setSecondSpeaker("keep");}}>発言を手動分割</button>
               {utterance.sourceUtteranceId&&<small>推定区間と区間再生は分割元全体を参照します。この部分だけを聞くには「音声を再生」を使用してください。</small>}
               <SpeakerReviewDetails analysis={analysis} utteranceId={source.id} startUs={source.startUs} labels={speakerLabels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,source.id,undefined,at)}/>
             </article>;
           })}
         </div>
-        {!filtered.length&&<p>条件に一致する発言はありません。</p>}
+        {!filtered.length&&<p>条件に一致する発言はありません。{retained.extra > 0 && "編集中・フォーカス中の発言は保持しています。"}</p>}
         {filtered.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => setPage((value) => value + 1)} disabled={(page + 1) * PAGE_SIZE >= filtered.length}>次へ</button></div>}
       </>}
       {error && <p className="action-error" role="alert">{error}</p>}
-      <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存に失敗" message={saveError ? `編集は画面に保持しています。内容を確認して保存を再試行してください: ${saveError}` : ""} action={{ kind: "retry", label: "文字起こし保存を再試行", disabled: saving || locked || busy || confirm.pending, run: () => saveQueue.retry().catch(() => { /* The queue publishes the retained failure. */ }) }} />
+      <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存に失敗" message={saveError ? `編集は画面に保持しています。内容を確認して保存を再試行してください: ${saveError}` : ""} action={{ kind: "retry", label: "文字起こし保存を再試行", disabled: saving || locked || busy || confirm.pending, run: () => retryTextBuffers().catch(() => { /* The queue publishes the retained failure. */ }) }} />
       <CommonModal ref={splitDialog} open={!!splitting} blocked={busy} onDismiss={()=>{audio.clear();setSplitting(null);}} restoreReady={!busy} className="analysis-dialog split-dialog" aria-label="発言の手動分割">
         <h3>発言の手動分割</h3><p>音声を聞き、時刻と本文の切れ目をそれぞれ指定してください。単語時刻を自動推定していません。分割した部分の連結は元の本文と完全一致します。保存後は部分ごとに本文・話者を編集できます。</p>
         {splitting&&<><button type="button" disabled={busy||locked||audio.preparing} onClick={()=>void play(splitting)}>分割対象の音声を聞く</button><label>分割位置（発言先頭からの秒）<input type="text" inputMode="decimal" value={splitSeconds} disabled={busy||pendingSplit} onChange={e=>setSplitSeconds(e.target.value)}/></label><label>本文の切れ目（文字数）<input type="number" min={1} max={splitPieces.length-1} value={splitOffset} disabled={busy||pendingSplit} onChange={e=>setSplitOffset(Number(e.target.value))}/></label><div className="split-preview"><section><h4>前半</h4><p>{splitPieces.slice(0,splitOffset).join("")}</p></section><section><h4>後半</h4><p>{splitPieces.slice(splitOffset).join("")}</p></section></div>

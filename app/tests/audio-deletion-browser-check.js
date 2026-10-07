@@ -238,6 +238,7 @@ async (page) => {
   await boot(); await page.getByRole("button", { name: "開く", exact: true }).click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   const text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
+  await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await text.waitFor(); await text.fill("修正済みの点検日です。");
   await editor.getByRole("searchbox", { name: "発言を検索", exact: true }).fill("点検");
   await text.evaluate(e => { window.audioDeletionFixture.editorNode = e; });

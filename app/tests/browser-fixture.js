@@ -33,6 +33,7 @@ const switchDraft = (nextId) => {
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
+fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
 fixture.makeNotificationJob = (patch = {}) => ({ id: crypto.randomUUID(), kind: "transcription", meetingId: meetings[0].id, meetingTitle: meetings[0].title, operationId: crypto.randomUUID(), inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: Date.now(), updatedAt: Date.now(), attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 mockWindows("main");
 mockIPC(async (command, args) => {
@@ -85,7 +86,9 @@ mockIPC(async (command, args) => {
       if (fixture.failMeetingRead) throw Error("模擬会議読込失敗");
       return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;
     case "get_current_analysis": return args.meetingId === meetings[0].id ? structuredClone(currentAnalysis()) : null;
-    case "get_transcript_draft": return args.meetingId === meetings[0].id ? fixture.draft : null;
+    case "get_transcript_draft":
+      if (fixture.failDraftRead) throw Error("模擬下書き読込失敗");
+      return args.meetingId === meetings[0].id ? structuredClone(fixture.draft) : null;
     case "begin_transcript_draft":
       fixture.draft = { id: `draft-${fixture.currentId}`, meetingId: meetings[0].id, baseAnalysisId: fixture.currentId, payload: { schema_version: 1, speaker_names: [], utterances: [] }, lockVersion: 0, updatedAt: 1791028800000 };
       return structuredClone(fixture.draft);
@@ -95,6 +98,7 @@ mockIPC(async (command, args) => {
       if (args.expectedLockVersion !== fixture.draft.lockVersion) throw new Error("版番号不一致");
       fixture.transcriptHistory.push(structuredClone(fixture.draft.payload));
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
+      if (fixture.lostTranscriptSaveResponse) { fixture.lostTranscriptSaveResponse = false; throw Error("模擬本文保存応答喪失"); }
       return structuredClone(fixture.draft);
     case "undo_transcript_edit": {
       if (args.draftId !== fixture.draft.id || args.expectedLockVersion !== fixture.draft.lockVersion || !fixture.transcriptHistory.length) throw Error("模擬取り消し対象不一致");
