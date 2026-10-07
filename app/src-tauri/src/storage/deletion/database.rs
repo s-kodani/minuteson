@@ -15,6 +15,10 @@ const MAX_MANIFEST: usize = 65_536;
 const TARGETS: &[(&str, &str)] = &[
     ("analysis_flows", "meeting_id=?1"),
     (
+        "transcript_edit_recovery",
+        "draft_id IN (SELECT id FROM working_drafts WHERE meeting_id=?1)",
+    ),
+    (
         "edit_operations",
         "draft_id IN (SELECT id FROM working_drafts WHERE meeting_id=?1)",
     ),
@@ -763,6 +767,18 @@ pub(super) fn checkpoint(db: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+// Writing a larger terminal receipt after the first VACUUM can release an old
+// overflow page. Reclaim it without changing the receipt or any consent.
+pub(super) fn compact_receipt_pages(db: &Connection) -> Result<(), String> {
+    let pages: i64 = db
+        .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if pages > 0 {
+        db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // Same mutex/admission/file-phase requirements as erase_confirmed_rows.
 // This may run after reopening a DB whose row phase committed before a crash.
 // It purges application DB/WAL contents, not physical media or user backups.
@@ -818,6 +834,8 @@ pub(super) fn finish_database_purge(
     if state == "cleanup" {
         db.execute("UPDATE maintenance_operations SET state='completed',progress_json='{\"databaseDeleted\":true,\"databasePurged\":true}',error_code=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup'", params![operation,now_ms()?]).map_err(|e| e.to_string())?;
     }
+    cancel(check)?;
+    compact_receipt_pages(db)?;
     // A completed receipt contains no deleted text. Still finish its WAL
     // checkpoint before acknowledging; an acknowledgement retry is safe.
     checkpoint(db)?;

@@ -131,7 +131,10 @@ impl<'p, 's> FixedData<'p, 's> {
         rowid: i64,
     ) -> Result<Vec<rusqlite::types::Value>, String> {
         use rusqlite::types::Value as SqlValue;
-        if matches!(table.name.as_str(), "working_drafts" | "edit_operations") {
+        if matches!(
+            table.name.as_str(),
+            "working_drafts" | "edit_operations" | "transcript_edit_recovery"
+        ) {
             return self.ids.draft_row(&table.name, rowid);
         }
         let mut row = self.ids.relational_row(&table.name, rowid)?;

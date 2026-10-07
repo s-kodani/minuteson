@@ -123,6 +123,7 @@ pub(super) fn owners_sql(table: &str) -> Result<String, String> {
         "minutes_items" | "evidence_links" => format!("SELECT c.rowid,m.meeting_id FROM {table} c JOIN minutes_revisions m ON m.id=c.minutes_revision_id"),
         "track_clock_segments" | "audio_gaps" => format!("SELECT c.rowid,t.meeting_id FROM {table} c JOIN audio_tracks t ON t.id=c.track_id"),
         "edit_operations" => "SELECT c.rowid,d.meeting_id FROM edit_operations c JOIN working_drafts d ON d.id=c.draft_id".into(),
+        "transcript_edit_recovery" => "SELECT c.rowid,d.meeting_id FROM transcript_edit_recovery c JOIN working_drafts d ON d.id=c.draft_id".into(),
         "job_checkpoints" => "SELECT c.rowid,j.meeting_id FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id".into(),
         "diarization_manual_assignments" => "SELECT c.rowid,a.meeting_id FROM diarization_manual_assignments c JOIN analysis_revisions a ON a.id=c.analysis_id".into(),
         "audio_import_options" => "SELECT c.rowid,i.meeting_id FROM audio_import_options c JOIN audio_imports i ON i.id=c.import_id".into(),
@@ -793,6 +794,7 @@ impl Rule {
 
 impl RestoreIds<'_> {
     fn verify_draft_history(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+        crate::storage::edit_recovery::verify_all(&self.source.database, cancelled)?;
         let mut query=self.source.database.prepare("SELECT id,target_kind,payload_json,content_hash,schema_version FROM working_drafts ORDER BY id").map_err(|e|e.to_string())?;
         let mut drafts = query.query([]).map_err(|e| e.to_string())?;
         while let Some(draft) = drafts.next().map_err(|e| e.to_string())? {
@@ -895,6 +897,7 @@ impl RestoreIds<'_> {
         let sql=match table {
             "working_drafts"=>"SELECT meeting_id,target_kind FROM working_drafts WHERE rowid=?1",
             "edit_operations"=>"SELECT d.meeting_id,d.target_kind FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE e.rowid=?1",
+            "transcript_edit_recovery"=>"SELECT d.meeting_id,d.target_kind FROM transcript_edit_recovery e JOIN working_drafts d ON d.id=e.draft_id WHERE e.rowid=?1",
             _=>return Err("復元下書き以外の行です".into()),
         };
         let (meeting, kind): (String, String) = self
@@ -915,6 +918,33 @@ impl RestoreIds<'_> {
                 .position(|c| c.name == name)
                 .ok_or("復元下書き列がありません")
         };
+        if table == "transcript_edit_recovery" {
+            let i = index("payload_json")?;
+            let Value::Text(text) = &row[i] else {
+                return Err("回復下書きの列型が不正です".into());
+            };
+            let mut payload: crate::storage::edit_recovery::Payload = serde_json::from_str(text)
+                .map_err(|e| format!("復元回復下書きのJSONが不正です: {e}"))?;
+            self.transcript(&meeting, &mut payload.base_payload)?;
+            for buffer in &mut payload.buffers {
+                buffer.utterance_id = self.get("utterances", &meeting, &buffer.utterance_id)?;
+                for speaker in &mut buffer.speaker_ids {
+                    *speaker = self.get("speakers", &meeting, speaker)?;
+                }
+                buffer.speaker_ids.sort();
+            }
+            payload
+                .buffers
+                .sort_by(|a, b| a.utterance_id.cmp(&b.utterance_id));
+            let baseline =
+                serde_json::to_string(&payload.base_payload).map_err(|e| e.to_string())?;
+            let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+            row[index("base_draft_content_hash")?] =
+                Value::Text(crate::storage::drafts::draft_hash(&baseline));
+            row[index("content_hash")?] = Value::Text(crate::storage::drafts::draft_hash(&json));
+            row[i] = Value::Text(json);
+            return Ok(row);
+        }
         for (json, hash) in if table == "working_drafts" {
             vec![("payload_json", "content_hash")]
         } else {
@@ -941,38 +971,73 @@ impl RestoreIds<'_> {
         cancelled: &impl Fn() -> bool,
         phase: u8,
     ) -> Result<(), String> {
-        for sql in [
+        let mut documents = vec![
             "SELECT meeting_id,target_kind,payload_json FROM working_drafts",
             "SELECT d.meeting_id,d.target_kind,e.payload_json FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id",
             "SELECT d.meeting_id,d.target_kind,e.inverse_json FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id",
             "SELECT meeting_id,'minutes',generated_document_json FROM minutes_revisions",
             "SELECT meeting_id,'minutes',effective_document_json FROM minutes_revisions",
-        ] {
-            let mut query=db.prepare(sql).map_err(|e|e.to_string())?;
-            let mut rows=query.query([]).map_err(|e|e.to_string())?;
-            while let Some(row)=rows.next().map_err(|e|e.to_string())? {
+        ];
+        if self
+            .tables
+            .iter()
+            .any(|t| t.name == "transcript_edit_recovery")
+        {
+            documents.push("SELECT d.meeting_id,'transcript',json_extract(e.payload_json,'$.basePayload') FROM transcript_edit_recovery e JOIN working_drafts d ON d.id=e.draft_id");
+        }
+        for sql in documents {
+            let mut query = db.prepare(sql).map_err(|e| e.to_string())?;
+            let mut rows = query.query([]).map_err(|e| e.to_string())?;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 check_cancelled(cancelled)?;
-                let meeting:String=row.get(0).map_err(|e|e.to_string())?;
-                let kind:String=row.get(1).map_err(|e|e.to_string())?;
-                let text:String=row.get(2).map_err(|e|e.to_string())?;
-                if kind=="transcript" {
-                    let mut payload:TranscriptDraftPayload=serde_json::from_str(&text).map_err(|e|e.to_string())?;
-                    if phase==0 {
-                        for s in &payload.manual_speakers { self.reserve(&s.id)?; }
-                        for p in payload.utterance_splits.iter().flat_map(|s|&s.parts) { self.reserve(&p.id)?; }
-                    } else if phase==1 {
-                        for s in &payload.manual_speakers { self.manual_identity("speakers","speaker_lineage",&meeting,&s.id)?; }
-                        for p in payload.utterance_splits.iter().flat_map(|s|&s.parts) { self.manual_identity("utterances","utterance_lineage",&meeting,&p.id)?; }
-                    } else { self.transcript(&meeting,&mut payload)?; }
+                let meeting: String = row.get(0).map_err(|e| e.to_string())?;
+                let kind: String = row.get(1).map_err(|e| e.to_string())?;
+                let text: String = row.get(2).map_err(|e| e.to_string())?;
+                if kind == "transcript" {
+                    let mut payload: TranscriptDraftPayload =
+                        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                    if phase == 0 {
+                        for s in &payload.manual_speakers {
+                            self.reserve(&s.id)?;
+                        }
+                        for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+                            self.reserve(&p.id)?;
+                        }
+                    } else if phase == 1 {
+                        for s in &payload.manual_speakers {
+                            self.manual_identity("speakers", "speaker_lineage", &meeting, &s.id)?;
+                        }
+                        for p in payload.utterance_splits.iter().flat_map(|s| &s.parts) {
+                            self.manual_identity(
+                                "utterances",
+                                "utterance_lineage",
+                                &meeting,
+                                &p.id,
+                            )?;
+                        }
+                    } else {
+                        self.transcript(&meeting, &mut payload)?;
+                    }
                 } else {
-                    let mut content:MinutesContent=serde_json::from_str(&text).map_err(|e|e.to_string())?;
-                    if phase==0 {
-                        for item in &content.items { self.reserve(&item.id)?; }
-                        for evidence in &content.evidence { self.reserve(&evidence.id)?; }
-                    } else if phase==1 {
-                        for item in &content.items { self.declare("minutes_items",&meeting,&item.id)?; }
-                        for evidence in &content.evidence { self.declare("evidence_links",&meeting,&evidence.id)?; }
-                    } else { self.minutes(&meeting,&mut content)?; }
+                    let mut content: MinutesContent =
+                        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                    if phase == 0 {
+                        for item in &content.items {
+                            self.reserve(&item.id)?;
+                        }
+                        for evidence in &content.evidence {
+                            self.reserve(&evidence.id)?;
+                        }
+                    } else if phase == 1 {
+                        for item in &content.items {
+                            self.declare("minutes_items", &meeting, &item.id)?;
+                        }
+                        for evidence in &content.evidence {
+                            self.declare("evidence_links", &meeting, &evidence.id)?;
+                        }
+                    } else {
+                        self.minutes(&meeting, &mut content)?;
+                    }
                 }
             }
         }

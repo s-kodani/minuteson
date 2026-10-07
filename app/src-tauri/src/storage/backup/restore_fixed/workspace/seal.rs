@@ -342,12 +342,18 @@ impl SealedWorkspace {
         parent: &Path,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        FixedWorkspace::prepare(fixed, parent, check)?
-            .with_speech_artifacts(fixed, check)?
-            .with_generation_artifacts(fixed, check)?
-            .with_processing_history(fixed, check)?
-            .with_provenance(fixed, check)?
+        FixedWorkspace::prepare(fixed, parent, check)
+            .map_err(|e| format!("復元DB構築: {e}"))?
+            .with_speech_artifacts(fixed, check)
+            .map_err(|e| format!("復元音声成果物構築: {e}"))?
+            .with_generation_artifacts(fixed, check)
+            .map_err(|e| format!("復元生成成果物構築: {e}"))?
+            .with_processing_history(fixed, check)
+            .map_err(|e| format!("復元処理履歴構築: {e}"))?
+            .with_provenance(fixed, check)
+            .map_err(|e| format!("復元由来構築: {e}"))?
             .seal(fixed, check)
+            .map_err(|e| format!("復元最終検査: {e}"))
     }
 
     pub(in crate::storage::backup) fn verify(

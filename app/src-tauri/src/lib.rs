@@ -1827,6 +1827,32 @@ fn begin_transcript_draft(
 }
 
 #[tauri::command]
+fn get_transcript_edit_recovery(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+    draft_id: String,
+    base_analysis_id: String,
+) -> Result<Option<storage::edit_recovery::Recovery>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can read transcript recovery".into());
+    }
+    storage.transcript_edit_recovery(&meeting_id, &draft_id, &base_analysis_id)
+}
+
+#[tauri::command]
+fn save_transcript_edit_recovery(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    request: storage::edit_recovery::SaveRequest,
+) -> Result<storage::edit_recovery::Recovery, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can save transcript recovery".into());
+    }
+    storage.save_transcript_edit_recovery(request)
+}
+
+#[tauri::command]
 fn save_transcript_draft(
     window: WebviewWindow,
     storage: State<'_, Storage>,
@@ -1964,6 +1990,8 @@ pub fn run() {
             get_current_analysis,
             get_transcript_draft,
             begin_transcript_draft,
+            get_transcript_edit_recovery,
+            save_transcript_edit_recovery,
             save_transcript_draft,
             undo_transcript_edit,
             prepare_utterance_playback,

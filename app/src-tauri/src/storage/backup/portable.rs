@@ -28,6 +28,7 @@ pub(super) const TABLES: &[&str] = &[
     "minutes_items",
     "evidence_links",
     "working_drafts",
+    "transcript_edit_recovery",
     "edit_operations",
     "processing_jobs",
     "job_checkpoints",
@@ -122,9 +123,17 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    let has_recovery: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=28)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let expected: BTreeSet<String> = TABLES
         .iter()
         .filter(|&&name| has_ledger || name != "restore_provenance")
+        .filter(|&&name| has_recovery || name != "transcript_edit_recovery")
         .chain(["app_settings", "schema_migrations"].iter())
         .chain(if has_ledger {
             ["restore_batches", "restore_identity_maps"].as_slice()
@@ -209,6 +218,7 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     TABLES
         .iter()
         .filter(|&&name| has_ledger || name != "restore_provenance")
+        .filter(|&&name| has_recovery || name != "transcript_edit_recovery")
         .map(|&name| {
             let columns = db
                 .prepare(&format!("PRAGMA table_info(\"{name}\")"))

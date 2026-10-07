@@ -97,6 +97,9 @@ fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstructi
     assert_eq!(manifest.tables.last().unwrap().name, "restore_provenance");
     assert_eq!(manifest.tables.last().unwrap().row_count, 0);
     manifest.tables.pop();
+    manifest
+        .tables
+        .retain(|t| t.name != "transcript_edit_recovery");
     manifest.schema_version = 20;
     manifest.format_version = 1;
     manifest.model_catalog = None;
@@ -142,6 +145,9 @@ fn restore_journal_reader_publishes_v21_archives_with_current_local_recovery_led
     let source = verified(&path, output.path());
     let mut manifest = source.manifest.clone();
     manifest.schema_version = 21;
+    manifest
+        .tables
+        .retain(|t| t.name != "transcript_edit_recovery");
     manifest.format_version = 1;
     manifest.model_catalog = None;
     let legacy = output.path().join("legacy-21.monbackup");

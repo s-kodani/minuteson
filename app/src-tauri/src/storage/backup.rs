@@ -544,6 +544,7 @@ fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Resu
         check_cancelled(cancelled)?;
         super::jobs::read_fixed_input(&tx, &row.get::<_, String>(0).map_err(|e| e.to_string())?)?;
     }
+    super::edit_recovery::verify_all(&tx, cancelled)?;
     super::vocabulary::verify_saved_books(&tx)?;
     for sql in [
         "SELECT plan_json,plan_hash FROM analysis_flows WHERE plan_json IS NOT NULL",
@@ -815,3 +816,7 @@ fn digest_file(path: &Path, cancelled: &impl Fn() -> bool) -> Result<(u64, Strin
 #[cfg(test)]
 #[path = "backup_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "backup/edit_recovery_tests.rs"]
+mod edit_recovery_tests;

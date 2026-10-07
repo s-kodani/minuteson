@@ -377,6 +377,9 @@ fn run_locked(
     // success until its final checkpoint succeeds; acknowledgement can replay.
     cancel(check)?;
     receipt.verify_live(storage, &db, check)?;
+    storage.managed_anchor.verify()?;
+    database::compact_receipt_pages(&db)?;
+    cancel(check)?;
     database::checkpoint(&db)?;
     event("ackCheckpointed");
     super::startup::resolve(storage, db, receipt, check)?;

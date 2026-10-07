@@ -20,6 +20,7 @@ mod diarization;
 mod diarization_preferences;
 mod draft_splits;
 mod drafts;
+pub(crate) mod edit_recovery;
 mod exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
@@ -103,6 +104,7 @@ const MIGRATION_24: &str = include_str!("migrations/0024_model_compatibility.sql
 const MIGRATION_25: &str = include_str!("migrations/0025_model_profile_applications.sql");
 const MIGRATION_26: &str = include_str!("migrations/0026_job_model_rebinding.sql");
 const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.sql");
+const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -652,6 +654,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (25, MIGRATION_25),
     (26, MIGRATION_26),
     (27, MIGRATION_27),
+    (28, MIGRATION_28),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

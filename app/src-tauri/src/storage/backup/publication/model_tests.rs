@@ -343,7 +343,7 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         drop(reopened);
         source = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
         assert_eq!(source.manifest.file_references, original);
-        assert_eq!(source.manifest.tables.len(), 31);
+        assert_eq!(source.manifest.tables.len(), 32);
         for table in crate::storage::model_metadata::TABLES {
             assert_eq!(
                 source

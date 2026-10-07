@@ -114,6 +114,9 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
     let mut legacy = verified.manifest.clone();
     legacy.format_version = 1;
     legacy.schema_version = 26;
+    legacy
+        .tables
+        .retain(|t| t.name != "transcript_edit_recovery");
     legacy.model_catalog = None;
     let manifest = serde_json::to_vec(&legacy).unwrap();
     assert!(!serde_json::from_slice::<serde_json::Value>(&manifest)

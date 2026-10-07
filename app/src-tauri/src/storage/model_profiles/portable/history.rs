@@ -239,6 +239,7 @@ pub(in crate::storage) fn read(
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
+    crate::storage::edit_recovery::remove_schema_for_test(db);
     if db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=27)",
