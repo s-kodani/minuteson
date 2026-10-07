@@ -151,6 +151,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
       <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void reload()}>議事録編集を再読込</button>
     </div>
     {editing && <>
+      <details className="workspace-tools minutes-format-tools"><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>
       <div className="minutes-toolbar" role="toolbar" aria-label="議事録の書式と構造">
         {(["bold", "italic"] as const).map((mark) => <span key={mark}>{toolbarButton(mark === "bold" ? "太字" : "斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, mark))); }, !selection || selection.end <= selection.start)}</span>)}
@@ -168,6 +169,10 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
           void confirm({ title: "議事録ブロックの削除を確認", target: `議事録ブロック${block + 1}`, confirmLabel: "ブロックを削除する", message: "選択した文書ブロックと、その項目・根拠を下書きから削除します。保存済みの生成原文は保持し、直前の編集の取り消しで戻せます。", validate: () => !compositions.current.size && !failure.current && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await queue.flush(); if (!structural(d => removeBlock(d, block))) throw Error("ブロックを変更できませんでした。入力と選択を再確認してください。"); await queue.flush(); } });
         }, !selection)}
       </div>
+      </div></details>
+    </>}
+    <div className="minutes-body-scroll" role="region" aria-label="議事録本文" tabIndex={0}>
+    {editing && <>
       <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト">
         {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {
           const b = doc.blocks[index];
@@ -182,5 +187,6 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     <IssueNotice scope={view.meetingId} type="minutes-save" label="議事録の保存に失敗" message={saved.error ? `入力はこの画面に保持しています。修正後に再試行してください: ${saved.error}` : ""} action={{ kind: "retry", label: "議事録保存を再試行", disabled: locked || busy || saved.saving || confirm.pending, run: () => run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); }) }} />
     <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"}
       verify={disabled || failure.current || compositions.current.size ? undefined : (id, verified) => { edit((d) => setEvidenceVerification(d, id, verified)); }} />
+    </div>
   </section>;
 }

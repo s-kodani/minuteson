@@ -56,6 +56,7 @@ async (page) => {
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
     const stamp = () => data.drafts[data.current] ? { id: data.drafts[data.current].id, lockVersion: data.drafts[data.current].lockVersion } : null;
     window.__mon = data;
+    data.ui = { id:"ui_preferences", payload:{ schemaVersion:1, theme:"system" }, lockVersion:0 };
     data.complete = () => {
       const j=data.jobs.at(-1); if (!j) throw Error("no job"); j.state="succeeded"; j.completedUnits=3; j.outputMinutesId="b";
       data.views.b=view("b","fixed-b","点検日を確認することを決定"); data.versions.unshift({id:"b",revisionNo:3,contentHash:"h-b",publicationState:"candidate",inputAnalysisId:"fixed-b",inputUpdated:false,itemCount:2,createdAt:0,profile:{engine:"fixture",qualityStatus:"unverified"}});
@@ -81,7 +82,12 @@ async (page) => {
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
-        if (cmd === "get_ui_preferences") return { id: "ui_preferences", payload: { schemaVersion: 1, theme: "system" }, lockVersion: 0 };
+        if (cmd === "get_ui_preferences") return copy(data.ui);
+        if (cmd === "save_ui_preferences") {
+          if (args.expectedLockVersion !== data.ui.lockVersion) throw Error("synthetic UI preference conflict");
+          data.ui = { ...data.ui, payload:copy(args.payload), lockVersion:data.ui.lockVersion + 1 };
+          return copy(data.ui);
+        }
         if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
         if (cmd === "get_data_operation_availability") return { available: true, reason: null };
         if (cmd === "get_recovery_items") return { supported: true, root: "/mock", items: [] };

@@ -1,5 +1,5 @@
 // CLI-first browser verification against synthetic IPC, not native WebView.
-async (page) => {
+async (page, capturePath, detailUI) => {
   page.setDefaultTimeout(10000);
   const results = [], check = (v, msg) => { if (!v) throw Error(msg); };
   const set = patch => page.evaluate(p => Object.assign(window.audioDeletionFixture, p), patch);
@@ -243,6 +243,7 @@ async (page) => {
   await editor.getByRole("searchbox", { name: "発言を検索", exact: true }).fill("点検");
   await text.evaluate(e => { window.audioDeletionFixture.editorNode = e; });
   const reads = await page.evaluate(() => [window.audioDeletionFixture.analysisReads, window.audioDeletionFixture.draftReads]);
+  await detailUI.openMeetingTools();
   await review(); await understand(); await publish().click(); await done();
   check(await text.inputValue() === "修正済みの点検日です。" && await text.evaluate(e => e === window.audioDeletionFixture.editorNode), "audio completion remounted editor or lost text");
   check(await editor.getByRole("searchbox", { name: "発言を検索", exact: true }).inputValue() === "点検", "audio completion reset document UI state");

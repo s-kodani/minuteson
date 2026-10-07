@@ -1,15 +1,16 @@
 // Production layout/player; IPC returns synthetic silence, not native recording.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [],check = (v,m) => { if(!v) throw Error(m); };
   const editor = page.getByRole("region",{ name: "文字起こし編集",exact: true });
   const dock = page.getByRole("region",{ name: "文字起こしの固定音声プレーヤー",exact: true });
   const player = dock.getByRole("group",{ name: "発言の音声再生",exact: true });
-  const workspace = page.getByRole("main",{ name: "会議ワークスペース",exact: true });
+  const workspace = editor.getByRole("region",{ name: "発言本文",exact: true });
   const nav = page.getByRole("navigation",{ name: "メインナビゲーション",exact: true });
   const row = editor.getByRole("article",{ name: "00:00:00の発言行",exact: true });
   const counts = () => page.evaluate(() => { const calls = window.monBrowserFixture.calls; return { prepare: calls.filter(c => c.command === "prepare_utterance_playback").length,close: calls.filter(c => c.command === "close_playback").length,body: calls.filter(c => c.command === "save_transcript_draft").length }; });
   const open = async () => {
     await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
+    if (await page.locator(".meeting-workspace-tools").count()) await detailUI.openMeetingTools();
     await page.getByRole("button",{ name: "開く",exact: true }).first().click();
     await editor.getByRole("button",{ name: "編集を開始",exact: true }).waitFor();
   };
@@ -17,9 +18,9 @@ async page => {
   const play = async () => { await row.getByRole("button",{ name: "音声を再生",exact: true }).click(); await player.getByRole("button",{ name: "一時停止",exact: true }).waitFor(); };
   const pause = async () => { await player.getByRole("button",{ name: "一時停止",exact: true }).click(); await player.getByRole("button",{ name: "再生",exact: true }).waitFor(); };
   const bounds = () => page.evaluate(() => {
-    const m = document.querySelector(".content"),d = document.querySelector(".meeting-playback-dock"),h = document.querySelector(".topbar");
+    const m = document.querySelector(".content"),d = document.querySelector(".meeting-playback-dock"),h = document.querySelector(".topbar"),t = document.querySelector(".meeting-detail-tabs");
     const b = el => { const r = el.getBoundingClientRect(); return { top:r.top,bottom:r.bottom,left:r.left,right:r.right }; };
-    return { main:b(m),dock:b(d),header:b(h),height:innerHeight,width:innerWidth,pageHeight:document.documentElement.scrollHeight,pageWidth:document.documentElement.scrollWidth,pageScroll:scrollY,dockOverflow:d.scrollWidth > d.clientWidth + 1 };
+    return { main:b(m),dock:b(d),header:b(h),tabs:b(t),height:innerHeight,width:innerWidth,pageHeight:document.documentElement.scrollHeight,pageWidth:document.documentElement.scrollWidth,pageScroll:scrollY,dockOverflow:d.scrollWidth > d.clientWidth + 1 };
   });
 
   await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
@@ -38,7 +39,7 @@ async page => {
     for(const end of [false,true]) {
       await workspace.evaluate((e,last) => { e.scrollTop = last ? e.scrollHeight : 0; },end);
       const b = await bounds();
-      check(b.header.top === 0 && b.main.top === b.header.bottom && Math.abs(b.main.bottom - b.dock.top) <= 1 && Math.abs(b.dock.bottom - b.height) <= 1 && b.pageHeight <= b.height + 1 && b.pageWidth <= width && !b.dockOverflow && b.pageScroll === 0,`body/dock overlap or overflow ${JSON.stringify(b)}`);
+      check(b.header.top === 0 && b.tabs.top === b.header.bottom && b.main.top === b.tabs.bottom && Math.abs(b.main.bottom - b.dock.top) <= 1 && Math.abs(b.dock.bottom - b.height) <= 1 && b.pageHeight <= b.height + 1 && b.pageWidth <= width && !b.dockOverflow && b.pageScroll === 0,`body/dock overlap or overflow ${JSON.stringify(b)}`);
       check(await player.evaluate(e => e === window.monBrowserFixture.playerNode),"scroll/resize remounted player");
     }
     await player.getByRole("button",{ name:"再生",exact:true }).focus();
@@ -84,7 +85,7 @@ async page => {
   await dock.waitFor({ state:"hidden" }); await page.waitForFunction(() => window.monBrowserFixture.calls.some(c => c.command === "close_playback"));
   await nav.getByRole("button",{ name:"概要",exact:true }).click(); await dock.waitFor(); check(await player.count() === 0,"settings return resurrected old audio");
   results.push("settings navigation hides dock and releases old token; returning does not auto-play");
-  await play(); const beforeSwitch = (await counts()).close; await page.getByRole("button",{ name:"開く",exact:true }).nth(1).click();
+  await play(); const beforeSwitch = (await counts()).close; await detailUI.openMeetingTools(); await page.getByRole("button",{ name:"開く",exact:true }).nth(1).click();
   await page.waitForFunction(() => document.querySelector(".meeting-playback-content")?.getAttribute("data-meeting-id") === "meeting-1");
   await page.waitForFunction(n => window.monBrowserFixture.calls.filter(c => c.command === "close_playback").length > n,beforeSwitch);
   check((await dock.innerText()).includes("会議B") && await player.count() === 0,"different meeting adopted old audio");

@@ -1,5 +1,5 @@
 // Actual React name controls, synthetic CAS/IPC only. No native data or audio.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok,message) => { if(!ok) throw Error(message); };
   const editor = page.getByRole("region",{ name: "文字起こし編集",exact: true });
   const group = label => editor.getByRole("group",{ name: `${label}の名前編集`,exact: true });
@@ -13,7 +13,7 @@ async page => {
   const boot = async () => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    await page.getByRole("button",{ name: "開く",exact: true }).first().click();
+    await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools();
     await editor.getByRole("button",{ name: "編集を開始",exact: true }).click(); await name("話者A").waitFor();
   };
   await boot(); await name("話者A").fill("入力中の名前"); await page.waitForTimeout(950);

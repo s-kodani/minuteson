@@ -35,6 +35,7 @@ const suites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
+  ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["fixed-player", "browser-fixture.js", "fixed-player-browser-check.js"],
   ["keyboard", "browser-fixture.js", "keyboard-browser-check.js"],
   ["transcript-edit", "browser-fixture.js", "transcript-edit-browser-check.js"],
@@ -53,6 +54,7 @@ const suites = [
   ["publication-toast", "browser-fixture.js", "publication-toast-browser-check.js"],
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
+  ["detail-minutes", "minutes-init", "detail-minutes-browser-check.js"],
   ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],
   ["minutes-toast", "minutes-init", "minutes-toast-browser-check.js"],
   ["minutes-publication-toast", "minutes-init", "minutes-publication-toast-browser-check.js"],
@@ -81,7 +83,10 @@ for (const [name, fixture, source] of suites) {
   // The browser daemon's cwd can differ from this runner's cwd. Always route
   // generated captures to the explicit output directory, not the repo root.
   const capturePrefix = JSON.stringify(resolve(output, name + "-"));
-  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath);}finally{page.screenshot=screenshot;}}`;
+  // Explicit drivers for the production workspace: real tab/summary clicks,
+  // never forcing hidden controls visible or replacing the application's UI.
+  const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const detailUI={openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:()=>openDetails(".transcript-workspace-tools"),openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
+  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
   const run = spawnSync(process.execPath, [cli, `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
   const log = (run.stdout ?? "") + (run.stderr ?? "");
   writeFileSync(resolve(output, `${name}.log`), log);

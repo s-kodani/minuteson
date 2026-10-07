@@ -1,4 +1,4 @@
-async page => {
+async (page, capturePath, detailUI) => {
   const context = page.context(), results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/, async route => {
     const response = await route.fetch();
@@ -13,7 +13,7 @@ async page => {
   const boot = async (select = false) => {
     await page.goto("http://127.0.0.1:1420/");
     await page.waitForFunction(() => !!window.closeFixture && !!document.querySelector(".meeting-list li"));
-    if (select) { await page.locator(".meeting-list li").first().getByRole("button", { name: "開く", exact: true }).click(); await page.waitForFunction(() => document.querySelector('[aria-label="録音状態"] button')?.disabled === false); }
+    if (select) { await page.locator(".meeting-list li").first().getByRole("button", { name: "開く", exact: true }).click(); await detailUI.openMeetingTools(); await page.waitForFunction(() => document.querySelector('[aria-label="録音状態"] button')?.disabled === false); }
   };
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));

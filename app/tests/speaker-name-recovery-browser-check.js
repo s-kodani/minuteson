@@ -1,5 +1,5 @@
 // Production React controls with synthetic CAS storage, not macOS crash proof.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok,message) => { if(!ok) throw Error(message); };
   const editor = page.getByRole("region",{ name: "文字起こし編集",exact: true });
   const group = label => editor.getByRole("group",{ name: `${label}の名前編集`,exact: true });
@@ -16,7 +16,7 @@ async page => {
   const savedText = value => page.waitForFunction(v => { const f = window.monBrowserFixture; return f.recovery.records[f.draft?.id]?.payload.buffers.some(b => b.value === v); },value);
   const openMeeting = async () => {
     await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await name("話者A").waitFor();
+    await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools(); await name("話者A").waitFor();
   };
   const boot = async () => { await page.reload(); await openMeeting(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).click(); await name("話者A").waitFor(); };
   const crash = async () => { await page.evaluate(() => window.monBrowserFixture.crashSeed()); await page.reload(); await openMeeting(); };
@@ -133,7 +133,7 @@ async page => {
     f.draft.payload.speaker_merges = [{ source_id: "speaker-a",target_id: "speaker-b" }]; await module.stampFixtureDraft(f.draft);
     r.payload.basePayload = structuredClone(f.draft.payload); r.baseDraftContentHash = f.draft.contentHash; r.contentHash = await module.fixtureHash(r.payload);
   });
-  await page.evaluate(() => window.monBrowserFixture.crashSeed()); await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await name("話者B").waitFor();
+  await page.evaluate(() => window.monBrowserFixture.crashSeed()); await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools(); await name("話者B").waitFor();
   await preview(); await dialog().getByRole("button",{ name: "確認した入力の編集を再開",exact: true }).click(); await dialog().getByRole("alert").filter({ hasText: "部分的に再開せず" }).waitFor();
   check((await record()).payload.nameBuffers[0].value === "見えない統合元を保持" && await name("話者B").isDisabled() && (await bodyWrites()).length === 0,"invisible recovered name was silently applied or lost");
   results.push("merged-away speaker name refuses partial resume while retaining the complete copyable record");

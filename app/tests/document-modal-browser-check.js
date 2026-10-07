@@ -1,10 +1,10 @@
 // CLI-first integration check against browser-fixture.js and production panels.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const editor = () => page.getByRole("region", { name: "文字起こし編集", exact: true });
   const modal = name => page.getByRole("dialog", { name, exact: true });
   const boot = async () => {
-    await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click();
+    await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openTranscriptTools();
     await editor().getByRole("button", { name: "編集を開始", exact: true }).click();
     await page.waitForFunction(() => !!window.monBrowserFixture.draft);
   };
@@ -68,7 +68,7 @@ async (page) => {
   check(await calls("save_transcript_draft") === 2 && await page.evaluate(() => window.monBrowserFixture.draft.payload.utterance_splits.length === 1), "explicit split retry lost queued change");
   results.push("split save failure retains queued change; explicit retry commits same draft");
 
-  await boot(); const review = page.getByRole("region", { name: "解析操作", exact: true }).getByRole("button", { name: "内容を確認", exact: true });
+  await boot(); await detailUI.openMeetingTools(); const review = page.getByRole("region", { name: "解析操作", exact: true }).getByRole("button", { name: "内容を確認", exact: true });
   await review.click(); await modal("候補版の採用確認 #2").waitFor();
   await page.keyboard.press("Escape"); await cancelled("候補版の採用確認 #2", review);
   check(await calls("adopt_analysis_candidate") === 0, "Escape adopted analysis");

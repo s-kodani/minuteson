@@ -558,6 +558,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || nameDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
           <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
         </div>
+        <details className="workspace-tools transcript-workspace-tools"><summary>回復入力・話者・一括編集操作</summary><div className="workspace-tools-body">
         <TranscriptRecoveryPanel meetingId={meetingId} review={recoverySnapshot.review} currentDraftId={draft?.id}
           blocked={locked || loading || busy || saving || !!conflictPreview}
           canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !Object.keys(nameSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
@@ -606,7 +607,6 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           })}
         </div>
         {!!Object.keys(nameSessions).length && <p className="hint">未確定の話者名は本文と一緒に回復記録へ保存します。編集再開だけでは確定せず、確定・通常の画面移動で反映します。最後の入力は回復保存の確認前に終了すると失われる可能性があります。</p>}
-        <div className="transcript-actions" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
         <div className="transcript-actions" aria-label="話者統合">
           <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
           <label>統合先 <select value={mergeTarget} disabled={!editable} onChange={e=>setMergeTarget(e.target.value)}><option value="">選択</option>{speakers.filter(s=>s.id!==mergeSource).map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
@@ -624,7 +624,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           const ids = [...selection], speaker = bulkSpeaker, expected = JSON.stringify(saveQueue.snapshot().payload);
           void confirm({ title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
         }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
-        <div className="utterance-list">
+        </div></details>
+        <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
+        <div className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>
           {retained.extra > 0 && <p className="hint" role="status">検索・ページ条件外の編集中またはフォーカス中の発言 {retained.extra} 件を保持しています。</p>}
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
           {shown.map((utterance) => {

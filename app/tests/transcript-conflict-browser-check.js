@@ -1,5 +1,5 @@
 // Production React controls with synthetic IPC/CAS. No native app or recording.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [],check = (v,m) => { if(!v) throw Error(m); };
   const editor = page.getByRole("region",{ name: "文字起こし編集",exact: true }), dialog = () => page.getByRole("dialog",{ name: "文字起こしの保存競合を比較",exact: true });
   const row = () => editor.getByRole("article",{ name: "00:00:00の発言行",exact: true }), input = () => row().getByRole("textbox",{ name: "00:00:00の発言",exact: true });
@@ -9,7 +9,7 @@ async page => {
     const f = window.monBrowserFixture; f.failSave = false; f.draft.lockVersion = 2;
     f.draft.payload = { schema_version: 1,speaker_names: [{ speaker_id: "speaker-a",display_name: "最新確定名" }],utterances: [{ utterance_id: "speech-a",effective_text: "別操作の最新本文",speaker_ids: ["speaker-b"] }] };
   });
-  const openMeeting = async () => { await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).waitFor(); };
+  const openMeeting = async () => { await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).waitFor(); };
   const boot = async () => {
     await page.reload(); await openMeeting(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).click();
     await row().getByRole("button",{ name: "00:00:00の発言を編集",exact: true }).click(); await input().fill("旧確定要求");
@@ -83,7 +83,7 @@ async page => {
   results.push("a different active draft cannot retire the original body's pending request");
 
   await boot(); await page.evaluate(() => window.monBrowserFixture.crashSeed()); await page.reload();
-  await page.waitForFunction(() => !!window.monBrowserFixture); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await editor.getByRole("button",{ name: "未確定入力を確認",exact: true }).waitFor(); await compare();
+  await page.waitForFunction(() => !!window.monBrowserFixture); await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button",{ name: "未確定入力を確認",exact: true }).waitFor(); await compare();
   check(await dialog().getByRole("group",{ name: "未確定本文 speech-a",exact: true }).getByRole("combobox",{ name: "再開する入力",exact: true }).locator('option[value="local"]').getAttribute("disabled") !== null,"stored-only local side offered");
   await dialog().getByRole("group",{ name: "未確定本文 speech-a",exact: true }).getByRole("combobox",{ name: "再開する入力",exact: true }).selectOption("stored"); const beforeReloadResume = await counts(); await accept(); await dialog().waitFor({ state: "hidden" });
   check(await input().inputValue() === "旧確定要求" && JSON.stringify(beforeReloadResume) === JSON.stringify(await counts()),"stale durable restart could not resume without write");

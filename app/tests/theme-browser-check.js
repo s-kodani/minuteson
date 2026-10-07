@@ -1,4 +1,4 @@
-async (page, capturePath = path => path) => {
+async (page, capturePath = path => path, detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const select = () => page.getByRole("combobox", { name: "表示テーマ", exact: true });
   const waitTheme = theme => page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
@@ -38,7 +38,7 @@ async (page, capturePath = path => path) => {
   }
   results.push("mounted production transcript edit/search/selection and actual silent AudioContext playback position/rate retained");
 
-  await page.getByRole("button", { name: "議事録を編集", exact: true }).click();
+  await detailUI.openMinutes(); await page.getByRole("button", { name: "議事録を編集", exact: true }).click();
   const rich = page.getByRole("textbox", { name: "議事録ブロック2", exact: true });
   await page.evaluate(() => { window.themeFixture.minutesSaveDelay = true; });
   await rich.fill("編集中の点検日と議事録を保持します。");
@@ -78,7 +78,7 @@ async (page, capturePath = path => path) => {
     });
     for (const pair of ratios) check(Number.isFinite(pair.ratio) && pair.ratio >= pair.minimum, `${theme} ${pair.fg}/${pair.bg} contrast ${pair.ratio}`);
     contrast.push({ theme, ratios });
-    await text.focus();
+    await page.getByRole("tab", { name:"文字起こし", exact:true }).click(); await text.focus();
     check(await text.evaluate(node => getComputedStyle(node).outlineStyle !== "none" && parseFloat(getComputedStyle(node).outlineWidth) >= 2), "editor focus indicator invisible");
     for (const width of [960, 1280]) {
       await page.setViewportSize({ width, height: 800 });
@@ -89,7 +89,7 @@ async (page, capturePath = path => path) => {
 
   // Dialogs are modal: OS follow must recolor them without dismissing state.
   await select().selectOption("system"); await waitTheme("light");
-  await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).click();
+  await detailUI.openMeetingTools(); await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).click();
   const dialog = page.getByRole("dialog"); await dialog.waitFor();
   for (const theme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: theme }); await waitTheme(theme);

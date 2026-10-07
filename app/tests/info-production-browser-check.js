@@ -1,5 +1,5 @@
 // Actual main-window panels with theme-browser-fixture.js, not UI replicas.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const info = label => page.getByRole("button", { name: `${label}の説明を開く`, exact: true });
   const visit = async (label, expected) => {
@@ -13,12 +13,14 @@ async (page) => {
   await page.reload(); await page.getByRole("combobox", { name: "表示テーマ", exact: true }).waitFor();
   await visit("録音セッション", "会議以外の音"); results.push("main recording range and consent help without recording");
   await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await detailUI.openMeetingTools();
   const expected = [["音声保存後の解析工程", "自動推定"], ["ローカル文字起こし", "現在版と編集"], ["会議の用語", "自動置換"], ["話者分離", "同一人物"], ["話者の人数", "トラックごと"], ["議事録", "根拠"]];
-  for (const [label, text] of expected) { await visit(label, text); results.push(`production ${label}: keyboard dismissal and bounds`); }
+  for (const [label, text] of expected) { if (label === "議事録") await detailUI.openMinutes(); await visit(label, text); results.push(`production ${label}: keyboard dismissal and bounds`); }
   for (const [summary, label] of [["エンジン設定（端末内に保存）", "文字起こしの標準／高精度"], ["sherpa-onnx 設定（端末内に保存）", "話者分離の標準／高精度"], ["議事録エンジン設定（端末内に保存）", "議事録の標準／高精度"]]) {
     await page.getByText(summary, { exact: true }).click(); await visit(label, "未検証");
     results.push(`production ${label}: configuration values unchanged`);
   }
+  await page.getByRole("tab", { name:"文字起こし", exact:true }).click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   await editor.getByRole("button", { name: "音声を再生", exact: true }).click();
   await visit("発言の音声再生", "元トラック");

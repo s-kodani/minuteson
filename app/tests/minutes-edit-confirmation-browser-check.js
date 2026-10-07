@@ -1,10 +1,10 @@
 // Production rich editor with minutes-browser-fixture.js; no real documents.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const editor = () => page.getByRole("region", { name: "議事録文書と編集", exact: true });
   const modal = title => page.getByRole("dialog", { name: title, exact: true });
   const count = command => page.evaluate(c => window.__mon.calls.filter(x => x.cmd === c).length, command);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor().getByRole("button", { name: "議事録を編集", exact: true }).click(); await editor().getByRole("textbox", { name: "議事録ブロック2", exact: true }).waitFor(); };
+  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMinutes(); await editor().getByRole("button", { name: "議事録を編集", exact: true }).click(); await editor().getByRole("textbox", { name: "議事録ブロック2", exact: true }).waitFor(); };
   await boot(); const text = editor().getByRole("textbox", { name: "議事録ブロック2", exact: true });
   const original = await text.textContent(); await text.fill("未保存の点検日メモ");
   await editor().getByRole("button", { name: "議事録編集を再読込", exact: true }).click();
@@ -20,7 +20,7 @@ async (page) => {
   await boot(); const originalDraft = await page.evaluate(() => JSON.stringify(window.__mon.drafts.a.payload));
   const generated = await page.evaluate(() => JSON.stringify(window.__mon.views.a.content));
   const item = editor().getByRole("textbox", { name: "議事録リスト3の項目1", exact: true });
-  await item.click(); const remove = editor().getByRole("button", { name: "ブロックを削除", exact: true }); await remove.click();
+  await editor().getByText("議事録の書式・構造操作", { exact:true }).click(); await item.click(); const remove = editor().getByRole("button", { name: "ブロックを削除", exact: true }); await remove.click();
   const deletion = "議事録ブロックの削除を確認"; await modal(deletion).waitFor();
   check((await modal(deletion).innerText()).includes("項目・根拠") && await count("save_minutes_draft") === 0, "delete scope omitted or started before consent");
   await page.keyboard.press("Escape"); await modal(deletion).waitFor({ state: "hidden" });
@@ -35,7 +35,7 @@ async (page) => {
   await page.waitForFunction(v => JSON.stringify(window.__mon.drafts.a.payload) === v, originalDraft);
   results.push("explicit block deletion waits for durable save, removes owned items/evidence only, focuses remaining field and is undone exactly");
 
-  await boot(); await item.click(); await remove.click(); await page.evaluate(() => window.__mon.failMinutesSave = true);
+  await boot(); await editor().getByText("議事録の書式・構造操作", { exact:true }).click(); await item.click(); await remove.click(); await page.evaluate(() => window.__mon.failMinutesSave = true);
   await modal(deletion).getByRole("button", { name: "ブロックを削除する", exact: true }).click(); await modal(deletion).getByRole("alert").waitFor();
   check(await count("save_minutes_draft") === 1 && await page.evaluate(n => window.__mon.drafts.a.payload.blocks.length === n, JSON.parse(originalDraft).blocks.length), "failed deletion claimed native save or replayed");
   await modal(deletion).getByRole("button", { name: "確認を閉じる", exact: true }).click();

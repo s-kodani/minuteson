@@ -1,5 +1,5 @@
 // Production UI shortcuts with synthetic IPC and silent PCM only.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const nav = page.getByRole("navigation", { name: "メインナビゲーション", exact: true });
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
@@ -13,7 +13,7 @@ async page => {
   const boot = async (editing = false) => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    if (editing) { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); }
+    if (editing) { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); }
   };
   const focused = locator => locator.evaluate(e => document.activeElement === e);
   const saved = async () => page.waitForFunction(() => document.querySelector('.transcript-actions [role="status"]')?.textContent === "保存済み");
@@ -149,7 +149,7 @@ async page => {
   await page.evaluate(async snapshot => { window.monBrowserFixture.recording = snapshot; await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "session-changed", payload: snapshot }); }, session);
   await page.getByRole("button", { name: "録音画面へ", exact: true }).waitFor(); await nav.getByRole("button", { name: "設定", exact: true }).click(); await page.keyboard.press("Meta+n");
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "録音状態");
-  check(await page.getByRole("textbox", { name: "会議名を変更", exact: true }).inputValue() === "会議B", "recording shortcut opened another meeting"); await page.keyboard.press("Escape");
+  check(await page.locator("#rename-title").inputValue() === "会議B", "recording shortcut opened another meeting"); await page.keyboard.press("Escape");
   check((await page.evaluate(() => window.monBrowserFixture.recording.phase)) === "recording" && (await page.evaluate(() => window.monBrowserFixture.calls.filter(c => /^(start_recording|stop_recording|request_recording_confirmation|decide_recording_confirmation)$/u.test(c.command)).length)) === 0, "shortcuts changed recording");
   results.push("Cmd N during recording returns to its exact meeting; Escape never issues recording start/stop/confirmation");
   await boot(true);
@@ -157,13 +157,13 @@ async page => {
   await update(session); await page.getByRole("button", { name: "録音画面へ", exact: true }).waitFor();
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("移動失敗でも保持する本文"); await text.press("Control+n");
   await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
-  check(await text.inputValue() === "移動失敗でも保持する本文" && await page.getByRole("textbox", { name: "会議名を変更", exact: true }).inputValue() === "会議A", "recording shortcut navigated despite failed flush");
+  check(await text.inputValue() === "移動失敗でも保持する本文" && await page.locator("#rename-title").inputValue() === "会議A", "recording shortcut navigated despite failed flush");
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; }); await editor.getByRole("button", { name: "保存を再試行", exact: true }).click(); await saved();
   results.push("recording shortcut refuses navigation when flushing fails and retains current meeting/input for retry");
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 250; }); await text.fill("録音対象の変更を確認"); await text.press("Meta+n");
   await update({ ...session, revision: 9, sessionId: "different-keyboard-session" });
   await page.getByRole("alert").filter({ hasText: "録音の対象が変更" }).waitFor();
-  check(await text.inputValue() === "録音対象の変更を確認" && await page.getByRole("textbox", { name: "会議名を変更", exact: true }).inputValue() === "会議A", "changed recording was adopted after a delayed flush");
+  check(await text.inputValue() === "録音対象の変更を確認" && await page.locator("#rename-title").inputValue() === "会議A", "changed recording was adopted after a delayed flush");
   check((await page.evaluate(() => window.monBrowserFixture.calls.filter(c => /^(start_recording|stop_recording|request_recording_confirmation|decide_recording_confirmation)$/u.test(c.command)).length)) === 0, "navigation guards changed recording");
   results.push("recording shortcut rejects a session changed during save; guards never start or stop recording");
   return { passed: results.length, results };

@@ -1,9 +1,9 @@
 // Real React and synthetic export receipts only; never opens an OS save dialog.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true });
   const write = () => page.getByRole("button", { name: "Markdownを書き出す", exact: true }).click();
-  const boot = async mode => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await page.getByRole("button", { name: "Markdownを書き出す", exact: true }).waitFor(); await page.evaluate(m => { window.__mon.exportMode = m; }, mode); };
+  const boot = async mode => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMinutes(); await page.getByRole("button", { name: "Markdownを書き出す", exact: true }).waitFor(); await page.evaluate(m => { window.__mon.exportMode = m; }, mode); };
   await boot("success"); await write(); await host.getByRole("status").filter({ hasText: "書き出し完了" }).waitFor();
   check((await host.innerText()).includes("成功：") && await page.evaluate(() => window.__mon.exports.length) === 1, "persisted export was not a single successful result");
   results.push("a successful export receipt emits a success toast once after persistence");

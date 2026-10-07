@@ -1,17 +1,18 @@
 // CLI-first browser verification, not a Playwright test spec. Run with
 // playwright-cli -s=mon-rebinding run-code --filename <absolute path> after
 // routing index.html to model-rebinding-browser-fixture.js in the local dev server.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [];
   const check = (value, message) => { if (!value) throw Error(message); };
   const count = command => page.evaluate(c => window.rebindingFixture.calls.filter(x => x.command === c).length, command);
   const fixture = values => page.evaluate(v => Object.assign(window.rebindingFixture, v), values);
   const boot = async () => {
     await page.reload();
-    await page.getByRole("button", { name: "開く", exact: true }).first().click();
+    await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools();
     await page.getByRole("list", { name: "解析ジョブ", exact: true }).waitFor();
   };
   const prepare = async (list = "解析ジョブ", packageId = "11111111-1111-4111-8111-111111111111") => {
+    if (list === "議事録生成ジョブ") await detailUI.openMinutes();
     await page.getByRole("list", { name: list, exact: true }).getByRole("button", { name: "再配置モデルで同条件の再試行を確認" }).click();
     await page.getByRole("combobox", { name: "再配置先モデル" }).selectOption(packageId);
     await page.getByRole("button", { name: "元の固定条件と配置先を照合" }).click();
@@ -86,8 +87,8 @@ async (page) => {
   await boot(); await prepare(); await fixture({ mode: "lost", failReceipt: true }); await apply(); await receipt();
   await page.getByRole("alert").filter({ hasText: "結果を確認できません" }).waitFor();
   await page.getByRole("dialog").getByRole("button", { name: "閉じる", exact: true }).click();
-  await page.getByRole("button", { name: "開く", exact: true }).nth(1).click();
-  await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await page.getByRole("button", { name: "開く", exact: true }).nth(1).click(); await detailUI.openMeetingTools();
+  await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools();
   await page.getByRole("button", { name: "モデル再試行の受付結果を確認" }).click();
   await fixture({ failReceipt: false }); await receipt(); await closed();
   check(await count("apply_job_model_rebinding") === 1, "meeting switch replaced unknown operation");
