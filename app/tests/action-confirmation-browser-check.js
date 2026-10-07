@@ -21,12 +21,13 @@ async (page) => {
   await reset(); await page.evaluate(() => window.actionFixture.mode = "delay"); await choose();
   await prompt().getByRole("button", { name: "対象を変更する", exact: true }).dblclick();
   await page.waitForFunction(() => window.actionFixture.commands.length === 1);
-  await page.keyboard.press("Escape"); await page.mouse.click(1, 1); await single();
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Escape");
+  await page.mouse.click(1, 1); await single();
   check(await prompt().getByRole("button", { name: "確認をキャンセル", exact: true }).isDisabled(), "running request dismissed");
   check(await calls() === 1 && (await prompt().innerText()).includes("完了応答を待っています"), "running status or duplicate protection missing");
   await page.evaluate(() => window.actionFixture.complete()); await prompt().waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.textContent === "変更の確認を開く");
-  results.push("explicit single execution, progress and non-dismissal until actual completion, focus after caller unlock");
+  results.push("explicit single execution, repeated Escape non-dismissal until actual completion, focus after caller unlock");
 
   await reset(); await choose(); await page.evaluate(() => window.actionFixture.version++);
   await prompt().getByRole("button", { name: "対象を変更する", exact: true }).click(); await prompt().getByRole("alert").waitFor();
@@ -71,5 +72,16 @@ async (page) => {
   results.push("small-window margins, loss text and keyboard containment");
   await reset(); await choose(); await page.evaluate(() => window.actionFixture.removeOwner()); await prompt().waitFor({ state: "hidden" });
   check(await calls() === 0, "removed owner executed"); results.push("removed decision owner settles cancellation without acting on a new target");
+  await reset(); await page.evaluate(() => { window.actionFixture.mode = "delay"; window.actionFixture.progress = true; }); await choose();
+  check(await prompt().getByRole("button", { name: "準備の停止を要求する", exact: true }).count() === 0, "progress cancellation offered before acceptance");
+  await prompt().getByRole("button", { name: "対象を変更する", exact: true }).click();
+  await prompt().getByRole("button", { name: "準備の停止を要求する", exact: true }).dblclick();
+  check(await page.evaluate(() => window.actionFixture.cancellationCalls) === 1 && await calls() === 1, "progress request repeated or restarted work");
+  await page.keyboard.press("Escape"); check(await prompt().isVisible(), "progress cancellation dismissed actual work");
+  await page.evaluate(() => window.actionFixture.completeCancel());
+  await prompt().getByText("停止を要求しました。処理の終了応答を待っています。", { exact: true }).waitFor();
+  check(await prompt().getByRole("button", { name: "準備の停止を要求する", exact: true }).isDisabled(), "acknowledged progress request remained repeatable");
+  await page.evaluate(() => window.actionFixture.complete()); await prompt().waitFor({ state: "hidden" });
+  results.push("explicit progress cancellation is single and keeps the original work awaited through its real completion");
   return { passed: results.length, results };
 }

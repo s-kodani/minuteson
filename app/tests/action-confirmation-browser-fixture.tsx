@@ -6,15 +6,15 @@ import { ConfirmationHost } from "../src/confirmation-host";
 import { useActionConfirmation } from "../src/confirmation-service";
 import "../src/style.css";
 
-declare global { interface Window { actionFixture: { commands: { target: string; version: number }[]; mounts: number; version: number; mode: string; complete: () => void; closeParent: () => void; removeOwner: () => void; blocked: (v: boolean) => void } } }
-window.actionFixture = { commands: [], mounts: 0, version: 1, mode: "success", complete: () => {}, closeParent: () => {}, removeOwner: () => {}, blocked: () => {} };
+declare global { interface Window { actionFixture: { commands: { target: string; version: number }[]; mounts: number; version: number; mode: string; progress: boolean; cancellationCalls: number; completeCancel: () => void; complete: () => void; closeParent: () => void; removeOwner: () => void; blocked: (v: boolean) => void } } }
+window.actionFixture = { commands: [], mounts: 0, version: 1, mode: "success", progress: false, cancellationCalls: 0, completeCancel: () => {}, complete: () => {}, closeParent: () => {}, removeOwner: () => {}, blocked: () => {} };
 function Owner({ nested = false, blocked }: { nested?: boolean; blocked: boolean }) {
   const confirm = useActionConfirmation(blocked), [busy, setBusy] = useState(false), [text, setText] = useState("保持する編集中の本文");
   useEffect(() => { window.actionFixture.mounts++; }, []);
   const request = async (opener: HTMLElement) => {
     const version = window.actionFixture.version, mode = window.actionFixture.mode, target = nested ? "比較中の候補 #2" : "合成対象 #1";
     setBusy(true);
-    try { await confirm({ opener, title: "対象の変更を確認", target, confirmLabel: "対象を変更する", message: "この対象の未保存入力と古い直前版は復元できなくなります。現在の版とその編集は保持します。", validate: () => window.actionFixture.version === version, action: async () => {
+    try { await confirm({ opener, title: "対象の変更を確認", target, confirmLabel: "対象を変更する", message: "この対象の未保存入力と古い直前版は復元できなくなります。現在の版とその編集は保持します。", validate: () => window.actionFixture.version === version, progressAction: window.actionFixture.progress ? { label: "準備の停止を要求する", action: async () => { window.actionFixture.cancellationCalls++; await new Promise<void>(resolve => { window.actionFixture.completeCancel = resolve; }); } } : undefined, action: async () => {
       window.actionFixture.commands.push({ target, version });
       if (mode === "delay") await new Promise<void>(resolve => { window.actionFixture.complete = resolve; });
       if (mode === "lost") throw Error("確定した結果の応答を受け取れませんでした");

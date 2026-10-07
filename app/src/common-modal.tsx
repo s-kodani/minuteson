@@ -52,7 +52,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
   };
   const restoreSuspended = () => {
     const element = ref.current;
-    if (!suspended.current || !element?.open || latest.current.blocked || confirmations.getSnapshot()?.parent === element || document.querySelector("dialog[open]") !== element) return;
+    if (!suspended.current || !element?.open || confirmations.getSnapshot()?.parent === element || document.querySelector("dialog[open]") !== element) return;
     const target = suspendedOpener.current;
     if (target?.isConnected && target.matches(":disabled")) return;
     suspended.current = false;
@@ -125,6 +125,10 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       downOutside.current = false;
     }}
     onKeyDown={event => {
+      // Repeated native Escape requests may become non-cancelable. Handle the
+      // key here so declining a nested choice cannot close its parent or bypass
+      // the in-flight guard. Platform cancel events still use the same handler.
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
       if (event.key === "Enter" && (event.target === event.currentTarget || (event.target instanceof HTMLElement && event.target.matches("h2, h3")))) event.preventDefault();
       if (event.key !== "Tab") return;
       const element = event.currentTarget;

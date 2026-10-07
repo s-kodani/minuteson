@@ -370,7 +370,7 @@ function MainWindow() {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
           }} />}
-          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} locked={writeLocked} />}
+          {selectedMeeting && <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} />}
           {selectedMeeting && <MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} onHeadChanged={async () => {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);

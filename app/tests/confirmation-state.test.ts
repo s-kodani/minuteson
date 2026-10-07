@@ -59,3 +59,33 @@ test("closing a parent transfers the same active request without another action 
   c.detachParent(parent); assert.equal(c.getSnapshot()!.id, before.id); assert.equal(c.getSnapshot()!.opener, opener); assert.equal(c.getSnapshot()!.parent, null);
   c.cancel(before.id); await result;
 });
+test("explicit progress cancellation is single, never accepts or dismisses the original work", async () => {
+  const c = controller(); let actions = 0, cancels = 0, finish!: () => void, finishCancel!: () => void;
+  const result = c.request({}, null, null, { ...options(async () => { actions++; await new Promise<void>(r => { finish = r; }); }), progressAction: { label: "停止要求", action: async () => { cancels++; await new Promise<void>(r => { finishCancel = r; }); } } });
+  const id = c.getSnapshot()!.id;
+  await c.runProgressAction(id); assert.equal(cancels, 0); assert.equal(actions, 0);
+  const work = c.execute(id), cancellation = c.runProgressAction(id);
+  await c.runProgressAction(id); c.cancel(id);
+  assert.equal(cancels, 1); assert.equal(actions, 1); assert.equal(c.getSnapshot()!.phase, "running");
+  finishCancel(); await cancellation; assert.equal(c.getSnapshot()!.progressDone, true);
+  await c.runProgressAction(id); assert.equal(cancels, 1);
+  finish(); await work; assert.equal(await result, "completed");
+});
+test("failed progress request retains awaited work and requires explicit progress retry", async () => {
+  const c = controller(); let cancels = 0, finish!: () => void;
+  const result = c.request({}, null, null, { ...options(async () => { await new Promise<void>(r => { finish = r; }); }), progressAction: { label: "停止要求", action: async () => { if (++cancels === 1) throw Error("停止要求の応答喪失"); } } });
+  const id = c.getSnapshot()!.id, work = c.execute(id);
+  await c.runProgressAction(id); assert.equal(cancels, 1); assert.equal(c.getSnapshot()!.phase, "running");
+  assert.match(c.getSnapshot()!.progressError!, /応答喪失/u); assert.equal(c.getSnapshot()!.progressDone, undefined);
+  await c.runProgressAction(id); assert.equal(cancels, 2); assert.equal(c.getSnapshot()!.progressDone, true);
+  finish(); await work; await result;
+});
+test("late progress acknowledgement cannot change a completed or newer decision", async () => {
+  const c = controller(); let finish!: () => void, finishCancel!: () => void;
+  const first = c.request({}, null, null, { ...options(async () => { await new Promise<void>(r => { finish = r; }); }), progressAction: { label: "停止要求", action: async () => { await new Promise<void>(r => { finishCancel = r; }); } } });
+  const id = c.getSnapshot()!.id, work = c.execute(id), cancellation = c.runProgressAction(id);
+  finish(); await work; await first;
+  const next = c.request({}, null, null, options(async () => {})), nextId = c.getSnapshot()!.id;
+  finishCancel(); await cancellation; assert.equal(c.getSnapshot()!.id, nextId); assert.equal(c.getSnapshot()!.phase, "choosing");
+  c.cancel(nextId); await next;
+});

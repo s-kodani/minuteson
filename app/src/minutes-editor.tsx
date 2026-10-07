@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { useActionConfirmation } from "./confirmation-service";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
@@ -10,9 +11,10 @@ import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minute
 import { timeLabel } from "./transcript";
 
 export type EditorGuard = (nextId: string | null) => boolean;
-export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
-  view: MinutesView; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void;
+export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard }: {
+  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void;
 }) {
+  const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<MinutesContent, MinutesDraft>(
     (draftId, expectedLockVersion, payload) => invoke("save_minutes_draft", { draftId, expectedLockVersion, payload }),
     (value) => structuredClone(value),
@@ -30,15 +32,29 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
   const mounted = useRef(true);
   const editorRoot = useRef<HTMLElement>(null);
   const focusAddress = useRef<InlineAddress | null>(null);
+  const focusAfterConfirmation = useRef(false);
   const doc = saved.payload ?? view.content;
   const plan = documentPage(doc.blocks, page);
   useLayoutEffect(() => {
-    if (!editing || focusAddress.current === null) return;
-    const key = inlineAddressKey(focusAddress.current);
-    const field = [...(editorRoot.current?.querySelectorAll<HTMLElement>(".minutes-rich-field") ?? [])].find((field) => field.dataset.inlineAddress === key) ?? editorRoot.current?.querySelector<HTMLElement>(".minutes-rich-field");
-    focusAddress.current = null;
-    field?.focus();
-  }, [epoch, editing, plan.page]);
+    if (confirm.pending) { focusAfterConfirmation.current = true; return; }
+    const afterConfirmation = focusAfterConfirmation.current;
+    focusAfterConfirmation.current = false;
+    if (!editing || busy || locked || focusAddress.current === null) return;
+    // The confirmation's layout effects close its native dialog and restore its
+    // opener first. Focus the surviving rich field after that restoration; a
+    // removed field must not leave focus on an unrelated preview heading.
+    const focus = () => {
+      if (document.querySelector("dialog[open]") || focusAddress.current === null) return;
+      const key = inlineAddressKey(focusAddress.current);
+      const field = [...(editorRoot.current?.querySelectorAll<HTMLElement>(".minutes-rich-field") ?? [])].find((field) => field.dataset.inlineAddress === key) ?? editorRoot.current?.querySelector<HTMLElement>(".minutes-rich-field");
+      if (!field?.isConnected || !field.matches('[contenteditable="true"]')) return;
+      focusAddress.current = null;
+      field.focus({ preventScroll: true });
+    };
+    if (!afterConfirmation) { focus(); return; }
+    const frame = requestAnimationFrame(focus);
+    return () => cancelAnimationFrame(frame);
+  }, [epoch, editing, plan.page, confirm.pending, busy, locked]);
   useEffect(() => {
     mounted.current = true;
     const stop = queue.subscribe(() => setSaved(queue.snapshot()));
@@ -60,10 +76,10 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     queue.load(initialDraft);
   }, [initialDraft, queue, view.id]);
   useEffect(() => {
-    if (!saved.dirty || saved.saving || saved.error || compositions.current.size || failure.current) return;
+    if (confirm.pending || !saved.dirty || saved.saving || saved.error || compositions.current.size || failure.current) return;
     const timer = window.setTimeout(() => { void queue.flush().catch(() => {}); }, 800);
     return () => window.clearTimeout(timer);
-  }, [saved, queue]);
+  }, [saved, queue, confirm.pending]);
   const run = async (action: () => Promise<void>) => {
     if (busyRef.current || locked) return;
     busyRef.current = true; setBusy(true); setError("");
@@ -83,17 +99,22 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     if (mounted.current) { queue.load(result); setSelection(null); setEpoch((v) => v + 1); }
   });
   const reload = () => run(async () => {
-    if ((queue.snapshot().dirty || failure.current) && !window.confirm("未保存の議事録編集を破棄して保存済み内容を再読込しますか？")) return;
     if (compositions.current.size) throw new Error("日本語入力を確定してから再読込してください");
+    const read = async () => {
     const draft = await invoke<MinutesDraft | null>("get_minutes_draft", { meetingId: view.meetingId, minutesId: view.id });
     if (mounted.current) { queue.load(draft); failure.current = ""; setSelection(null); setEpoch((v) => v + 1); }
+    };
+    if (queue.snapshot().dirty || failure.current) {
+      const expected = JSON.stringify(queue.snapshot().payload), expectedFailure = failure.current;
+      await confirm({ title: "議事録編集の破棄を確認", target: `会議「${meetingTitle ?? view.meetingId}」の議事録編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の議事録編集を破棄して保存済み内容を再読込します。この入力は復元できません。生成原文と保存済み編集は保持します。", validate: () => !compositions.current.size && failure.current === expectedFailure && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: read });
+    } else await read();
   });
   const failed = (cause: unknown) => { failure.current = String(cause); setError(String(cause)); };
   const edit = (action: (doc: MinutesContent) => MinutesContent, fromDOM = false) => {
     if (!editing || locked || busy) return false;
     try { queue.edit(action); if (fromDOM) failure.current = ""; setError(""); return true; } catch (cause) { if (fromDOM) failed(cause); else setError(String(cause)); return false; }
   };
-  const disabled = locked || busy || !editing || !saved.draft;
+  const disabled = locked || busy || confirm.pending || !editing || !saved.draft;
   const changingPageDisabled = disabled || !!failure.current || compositions.current.size > 0;
   const chipLabel = (id: string) => { const e = doc.evidence.find((e) => e.id === id); return e ? `${timeLabel(e.startUs)}${e.verificationState === "user_verified" ? " ✓" : " · 未確認"}` : "根拠"; };
   const field = (nodes: Inline[], address: InlineAddress, label: string, evidenceOnly = false) => <MinutesRichField key={`${epoch}:${JSON.stringify(address)}`} value={nodes} label={label} blockIndex={address.block} addressKey={inlineAddressKey(address)} disabled={disabled} evidenceOnly={evidenceOnly} chipLabel={chipLabel}
@@ -101,14 +122,15 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
     onCompositionChange={(active) => { const key = JSON.stringify(address); if (active) compositions.current.add(key); else compositions.current.delete(key); setSaved(queue.snapshot()); }} />;
   const selectedBlock = selection ? doc.blocks[selection.address.block] : null;
   const structural = (action: (doc: MinutesContent) => MinutesContent, next: InlineAddress | number = selection?.address ?? { block: 0 }) => {
-    if (compositions.current.size || failure.current) return;
-    if (!edit(action)) return;
+    if (compositions.current.size || failure.current) return false;
+    if (!edit(action)) return false;
     const blocks = queue.snapshot().payload!.blocks;
     const requested = typeof next === "number" ? { block: next } : next;
     focusAddress.current = documentAddress(blocks, requested);
     const nextPage = documentPageForAddress(blocks, focusAddress.current ?? requested);
     if (!focusAddress.current) focusAddress.current = firstDocumentAddress(blocks, nextPage);
     setPage(nextPage); setSelection(null); setEpoch((v) => v + 1);
+    return true;
   };
   const changePage = (next: number) => {
     if (changingPageDisabled || busyRef.current || compositions.current.size || failure.current) return;
@@ -139,7 +161,11 @@ export function MinutesEditor({ view, initialDraft, locked, registerGuard }: {
         {toolbarButton("項目を削除", () => { if (selection) structural((d) => changeList(d, selection.address, true)); }, selectedBlock?.type !== "list")}
         {(["paragraph", "heading", "list", "table"] as const).map((type) => <span key={type}>{toolbarButton(({ paragraph: "段落を挿入", heading: "見出しを挿入", list: "リストを挿入", table: "表を挿入" })[type], () => structural((d) => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, type), (selection?.address.block ?? doc.blocks.length - 1) + 1))}</span>)}
         {(["addRow", "removeRow", "addColumn", "removeColumn"] as const).map((action) => <span key={action}>{toolbarButton(({ addRow: "表の行を追加", removeRow: "表の行を削除", addColumn: "表の列を追加", removeColumn: "表の列を削除" })[action], () => { if (selection) structural((d) => changeTable(d, selection.address, action), action === "addRow" ? { block: selection.address.block, row: (selection.address.row ?? (selectedBlock?.type === "table" ? selectedBlock.rows.length - 1 : 0)) + 1, column: 0 } : selection.address); }, selectedBlock?.type !== "table" || (action === "removeRow" && selection?.address.header))}</span>)}
-        {toolbarButton("ブロックを削除", () => { if (selection && window.confirm("選択した文書ブロックと、その項目・根拠を下書きから削除しますか？ 保存済みの生成原文は保持し、編集の取り消しで戻せます。")) structural((d) => removeBlock(d, selection.address.block)); }, !selection)}
+        {toolbarButton("ブロックを削除", () => {
+          if (!selection) return;
+          const block = selection.address.block, expected = JSON.stringify(queue.snapshot().payload);
+          void confirm({ title: "議事録ブロックの削除を確認", target: `議事録ブロック${block + 1}`, confirmLabel: "ブロックを削除する", message: "選択した文書ブロックと、その項目・根拠を下書きから削除します。保存済みの生成原文は保持し、直前の編集の取り消しで戻せます。", validate: () => !compositions.current.size && !failure.current && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await queue.flush(); if (!structural(d => removeBlock(d, block))) throw Error("ブロックを変更できませんでした。入力と選択を再確認してください。"); await queue.flush(); } });
+        }, !selection)}
       </div>
       <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト">
         {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {

@@ -13,6 +13,7 @@ const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads:
 const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
   lostRetryResponse: false,
+  transcriptHistory: [],
   diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
   vocabulary: { global: { id: "global", payload: [], lockVersion: 0 } }, failVocabulary: false,
   preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
@@ -57,8 +58,14 @@ mockIPC(async (command, args) => {
       await new Promise((resolve) => setTimeout(resolve, fixture.persistenceDelayMs));
       if (fixture.failSave) throw new Error("模擬保存競合");
       if (args.expectedLockVersion !== fixture.draft.lockVersion) throw new Error("版番号不一致");
+      fixture.transcriptHistory.push(structuredClone(fixture.draft.payload));
       fixture.draft = { ...fixture.draft, payload: structuredClone(args.payload), lockVersion: fixture.draft.lockVersion + 1 };
       return structuredClone(fixture.draft);
+    case "undo_transcript_edit": {
+      if (args.draftId !== fixture.draft.id || args.expectedLockVersion !== fixture.draft.lockVersion || !fixture.transcriptHistory.length) throw Error("模擬取り消し対象不一致");
+      fixture.draft = { ...fixture.draft, payload: fixture.transcriptHistory.pop(), lockVersion: fixture.draft.lockVersion + 1 };
+      return structuredClone(fixture.draft);
+    }
     case "get_analysis_preferences": return structuredClone(fixture.preferences);
     case "get_vocabulary_book": return structuredClone(fixture.vocabulary[args.meetingId ?? "global"] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 });
     case "get_meeting_vocabulary": return { global: structuredClone(fixture.vocabulary.global), meeting: structuredClone(fixture.vocabulary[args.meetingId] ?? { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 }) };

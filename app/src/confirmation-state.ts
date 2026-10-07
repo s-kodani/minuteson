@@ -5,14 +5,17 @@ export type ConfirmationOptions = {
   action: () => Promise<void>;
   validate?: () => boolean;
   onError?: (cause: unknown) => void;
+  progressAction?: { label: string; action: () => Promise<void> };
 };
 export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
   phase: ConfirmationPhase; error: string;
+  progressLabel?: string; progressPending?: boolean; progressDone?: boolean; progressError?: string;
 };
 
-// No IPC, implicit acceptance, retry, queue or cancellation of native work.
+// No IPC, implicit acceptance, retry or queue. Only an explicit, caller-supplied
+// progress action may request safe cancellation; the original work stays awaited.
 export class ConfirmationController<Parent, Opener> {
   private snapshot: Confirmation<Parent, Opener> | null = null;
   private pending: { options: ConfirmationOptions; resolve: (outcome: ConfirmationOutcome) => void } | null = null;
@@ -25,7 +28,7 @@ export class ConfirmationController<Parent, Opener> {
     if (this.snapshot) return Promise.resolve<ConfirmationOutcome>("cancelled");
     return new Promise<ConfirmationOutcome>(resolve => {
       this.pending = { options, resolve };
-      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, phase: "choosing", error: "" });
+      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, phase: "choosing", error: "", progressLabel: options.progressAction?.label });
     });
   }
   cancel(id: string) {
@@ -41,6 +44,17 @@ export class ConfirmationController<Parent, Opener> {
   private finish(outcome: ConfirmationOutcome) {
     const pending = this.pending;
     this.pending = null; this.publish(null); pending?.resolve(outcome);
+  }
+  async runProgressAction(id: string) {
+    const view = this.snapshot, pending = this.pending;
+    if (!view || view.id !== id || view.phase !== "running" || view.progressPending || view.progressDone || !pending?.options.progressAction) return;
+    this.publish({ ...view, progressPending: true, progressError: "" });
+    try {
+      await pending.options.progressAction.action();
+      if (this.pending === pending && this.snapshot?.phase === "running") this.publish({ ...this.snapshot, progressPending: false, progressDone: true });
+    } catch (cause) {
+      if (this.pending === pending && this.snapshot?.phase === "running") this.publish({ ...this.snapshot, progressPending: false, progressError: String(cause) });
+    }
   }
   async execute(id: string) {
     const view = this.snapshot, pending = this.pending;

@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { useActionConfirmation } from "./confirmation-service";
 import { InfoPopover } from "./info-popover";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementReceipt, assertCompatibilitySummary, type ModelCompatibilitySummary, type ModelInspectionReport, type ModelPlacementReceipt, type ModelPlacementEntry } from "./model-inspection-state";
@@ -8,6 +9,7 @@ import { assertModelDeletionPreview, modelDeletionEntryLabel, type ModelDeletion
 import type { ModelBodyDeletionControl } from "./model-body-deletion";
 
 export function ModelInspectionPanel({ locked, recordingActive, deletionControl, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; deletionControl?: ModelBodyDeletionControl; refreshEpoch?: number }) {
+  const confirm = useActionConfirmation(locked || recordingActive);
   const [directory, setDirectory] = useState("");
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -35,6 +37,8 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const opener = useRef<HTMLElement | null>(null);
   const attempt = useRef(new InspectionAttempt());
   const mounted = useRef(true);
+  const confirmedState = useRef({ report, directory, placements, busy });
+  confirmedState.current = { report, directory, placements, busy };
   const loadPlacements = async () => {
     if (!isTauri()) return;
     const sequence = ++catalogSequence.current;
@@ -154,42 +158,47 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   };
   const place = async () => {
     if (!report || busy || locked || recordingActive || !isTauri()) return;
-    if (!window.confirm(`「${report.manifest.modelName}」の検査済みファイル（${report.totalBytes.toLocaleString()} bytes）をアプリのモデル管理領域へコピーしますか？\n元ファイル・既存会議・ジョブ・設定は変更しません。実行ファイルは起動せず、配置後も互換性検証待ちです。\n中断時の途中配置は削除せず保全します。配布元・ライセンスの確認は利用者が行ってください。`)) return;
-    const token = crypto.randomUUID(), reviewHash = report.reviewHash;
+    const review = report, source = directory.trim(), reviewHash = report.reviewHash;
+    await confirm({ title: "モデルのコピー配置を確認", target: review.manifest.modelName, confirmLabel: "管理領域へコピーする", message: `「${review.manifest.modelName}」の検査済みファイル（${review.totalBytes.toLocaleString()} bytes）をアプリのモデル管理領域へコピーします。\n元ファイル・既存会議・ジョブ・設定は変更しません。実行ファイルは起動せず、配置後も互換性検証待ちです。\n中断時の途中配置は削除せず保全します。配布元・ライセンスの確認は利用者が行ってください。`, validate: () => !confirmedState.current.busy && confirmedState.current.report?.reviewHash === reviewHash && confirmedState.current.directory.trim() === source, progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
+    const token = crypto.randomUUID();
     attempt.current.begin(token); setBusy(true); setPlacing(true); setChecking(false); setCancelling(false); setError(""); setPlacementMessage("");
     try {
-      const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, directory: directory.trim(), expectedReviewHash: reviewHash });
+      const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, directory: source, expectedReviewHash: reviewHash });
       if (mounted.current && attempt.current.accepts(token)) { assertPlacementReceipt(receipt, token, reviewHash); setPlacementMessage("管理領域への配置を記録しました。エンジン互換性は未検証で、AI準備完了ではありません。"); setReport(null); }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(`${String(cause)} 未完了の配置は保全されます。再検査後、新しい操作として配置し直せます。`);
+      throw cause;
     } finally {
       if (attempt.current.finish(token) && mounted.current) { setBusy(false); setPlacing(false); setCancelling(false); await loadPlacements(); }
     }
+    } });
   };
   const check = async (entry: ModelPlacementEntry) => {
     if (!entry.placementRecorded || entry.bodyRemoved || busy || locked || recordingActive || !isTauri()) return;
-    if (!window.confirm(`「${entry.modelName}」のCPU互換性を確認しますか？\n取り込んだ実行ファイル（${entry.engine} / 申告版 ${entry.engineVersion}）を利用者の権限で起動します。配布元・ライセンス・実行ファイルを信頼できることを確認してください。ネットワークや利用者のファイルへのアクセスを隔離する仕組みはありません。\nCPU・1スレッドで合成入力だけを使用します。会議音声は使いません。アプリは既存ジョブ・設定・プロファイルを変更しません。推論の待ち時間は最大120秒（ファイル照合は別）で、途中ログを保全します。\n成功しても精度・速度・話者数の正式評価や、解析への適用済みにはなりません。`)) return;
+    await confirm({ title: "モデル実行によるCPU互換性確認", target: `${entry.modelName} · ${entry.engine} / ${entry.engineVersion}`, confirmLabel: "実行ファイルを起動して確認する", message: `「${entry.modelName}」のCPU互換性を確認します。\n取り込んだ実行ファイル（${entry.engine} / 申告版 ${entry.engineVersion}）を利用者の権限で起動します。配布元・ライセンス・実行ファイルを信頼できることを確認してください。ネットワークや利用者のファイルへのアクセスを隔離する仕組みはありません。\nCPU・1スレッドで合成入力だけを使用します。会議音声は使いません。アプリは既存ジョブ・設定・プロファイルを変更しません。推論の待ち時間は最大120秒（ファイル照合は別）で、途中ログを保全します。\n成功しても精度・速度・話者数の正式評価や、解析への適用済みにはなりません。`, validate: () => !confirmedState.current.busy && confirmedState.current.placements.some(item => item.packageId === entry.packageId && item.reviewHash === entry.reviewHash && item.placementRecorded && !item.bodyRemoved), progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
     const token = crypto.randomUUID();
     attempt.current.begin(token); setBusy(true); setPlacing(false); setChecking(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage("");
     try {
       const summary = await invoke<ModelCompatibilitySummary>("check_model_compatibility", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
       if (mounted.current && attempt.current.accepts(token)) {
         assertCompatibilitySummary(summary, token, entry);
-        if (summary.state === "failed") setError(`今回のCPU互換性確認は失敗しました: ${summary.errorMessage} モデルの恒久的な不適合を示すものではありません。ログを確認し、新しい操作として再確認できます。`);
+        if (summary.state === "failed") throw Error(`今回のCPU互換性確認は失敗しました: ${summary.errorMessage} モデルの恒久的な不適合を示すものではありません。ログを確認し、新しい操作として再確認できます。`);
         else setPlacementMessage(summary.state === "succeeded" ? "固定した合成入力でCPU互換性を確認しました。プロファイルは変更していません。適用状態は構成記録を確認してください。精度・速度・実データの互換性は未評価です。" : "互換性確認を取り消しました。ログを保全しました。自動再実行はしません。");
       }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(String(cause));
+      throw cause;
     } finally {
       if (attempt.current.finish(token) && mounted.current) { setBusy(false); setChecking(false); setCancelling(false); await loadPlacements(); }
     }
+    } });
   };
-  const cancel = async () => {
+  const cancel = async (propagateFailure = false) => {
     const token = attempt.current.cancel();
     if (!token) return;
     setCancelling(true); setReport(null); setError("");
     try { await invoke("cancel_model_inspection", { token }); }
-    catch (cause) { if (mounted.current) setError(`取消要求を送信できませんでした。処理終了を待ってください: ${String(cause)}`); }
+    catch (cause) { if (mounted.current) setError(`取消要求を送信できませんでした。処理終了を待ってください: ${String(cause)}`); if (propagateFailure) throw cause; }
   };
   return <section className="analysis-card model-inspection" aria-label="AIモデルの事前検査">
     <div className="heading-with-info"><h2>AIモデル</h2><InfoPopover label="AIモデル" details={<p>手動取り込みの事前検査・管理領域へのコピー・CPU互換性確認と、標準／高精度へのモデル選択を利用できます。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・コピー・適用では起動しません。ダウンロードは開発中です。</p>}>モデルを手動取り込みし、互換性確認後に標準／高精度へ選択できます。検査・コピー・適用では実行ファイルを起動しません。ダウンロードは開発中です。</InfoPopover></div>

@@ -1,5 +1,6 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { useActionConfirmation } from "./confirmation-service";
 import { InfoPopover } from "./info-popover";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -15,6 +16,7 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
   locked:boolean;recordingActive:boolean;visible:boolean;
   withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void;
 }) {
+  const confirm = useActionConfirmation(locked || recordingActive);
   const [snapshot,setSnapshot]=useState<ImportSnapshot|null>(null);
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [title,setTitle]=useState(""),[profile,setProfile]=useState<"standard"|"high_accuracy">("standard");
@@ -27,6 +29,8 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
   const [openFailed,setOpenFailed]=useState(false);
   const accept=(next:ImportSnapshot)=>setSnapshot(current=>acceptImport(current,next));
   snapshotRef.current=snapshot;
+  const inputRef = useRef({ title, terms, profile });
+  inputRef.current = { title, terms, profile };
   useEffect(()=>{
     mounted.current=true;
     if(!isTauri())return;
@@ -63,31 +67,40 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
   };
   const select=async(path:string|null)=>{
     if(selecting.current||busy||snapshotRef.current?.busy||locked||recordingActive||snapshotRef.current?.recordingBlocked){setError("録音・取り込み・保存中は音声を選べません。");return;}
-    if(open&&terms.length&&!window.confirm("会議の用語入力を破棄して音声を選び直しますか？ 元ファイルは変更しません。"))return;
+    const sourceOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const expectedInput = JSON.stringify(inputRef.current), expectedToken = snapshotRef.current?.token;
     selecting.current=true;
-    try{await withSavedEdits(async()=>{
-      opener.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
+    const change = async (propagateFailure = false) => withSavedEdits(async()=>{
+      if (!open) opener.current=sourceOpener;
       setError("");setOpenFailed(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");
       try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
-      catch(cause){setError(String(cause));}finally{setBusy(false);}
-    });}finally{selecting.current=false;}
+      catch(cause){setError(String(cause)); if (propagateFailure) throw cause;}finally{setBusy(false);}
+    });
+    try {
+      if (open && (terms.length || title)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
+      else await change();
+    } catch (cause) { if (mounted.current) setError(String(cause)); } finally { selecting.current=false; }
   };
   selectRef.current=select;
   const priorToken=useRef<string|null>(null);
   useEffect(()=>{
     if(snapshot?.phase==="ready"&&snapshot.token!==priorToken.current){priorToken.current=snapshot.token;setTitle(snapshot.fileName?.replace(/\.[^.]+$/u,"")??"");}
   },[snapshot]);
+  const cancelNative=async(s:ImportSnapshot)=>{
+    setBusy(true);setError("");
+    try{accept(await invoke<ImportSnapshot>("cancel_audio_import",{token:s.token}));}catch(cause){setError(String(cause));throw cause;}finally{setBusy(false);}
+  };
   const cancel=async()=>{
     const s=snapshotRef.current;if(!s?.token)return true;
-    if(s.busy&&!window.confirm("進行中の取り込みを取り消しますか？ 未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。"))return false;
-    setBusy(true);setError("");
-    try{accept(await invoke<ImportSnapshot>("cancel_audio_import",{token:s.token}));return true;}catch(cause){setError(String(cause));return false;}finally{setBusy(false);}
+    if (s.busy) return await confirm({ title: "進行中の取り込み取消を確認", target: s.fileName ?? `取り込み ${s.token}`, confirmLabel: "取り込みを取り消す", message: "進行中の取り込みを取り消します。未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。", validate: () => snapshotRef.current?.token === s.token && !snapshotRef.current?.saved, action: () => cancelNative(s) }) === "completed";
+    try { await cancelNative(s); return true; } catch { return false; }
   };
   const close=async()=>{
     if(snapshotRef.current?.busy||busy){setError("取り込みの取消・保存が完了してから閉じてください。");return;}
-    if((terms.length||title)&&snapshotRef.current?.phase==="ready"&&!window.confirm("確認内容を破棄して閉じますか？ 元ファイルは変更しません。"))return;
-    if(snapshotRef.current?.token&&snapshotRef.current.phase==="ready"&&!await cancel())return;
-    setOpen(false);
+    const s = snapshotRef.current, expected = JSON.stringify(inputRef.current);
+    const dismiss = async () => { if (s?.token && s.phase === "ready") await cancelNative(s); setOpen(false); };
+    if ((terms.length || title) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss });
+    else try { await dismiss(); } catch { /* error stays visible */ }
   };
   const start=async()=>{
     if(!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)||!snapshot?.token)return;
@@ -95,9 +108,13 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
       accept(await invoke<ImportSnapshot>("start_audio_import",{request:{token:snapshot.token,title:title.trim(),options:{profile,meetingVocabulary:terms,expectedGlobalVersion:common!.lockVersion}}}));
     }catch(cause){setError(String(cause));}finally{setBusy(false);}});
   };
-  const disabled=busy||locked||!!snapshot?.busy||recordingActive||!!snapshot?.recordingBlocked;
+  const disabled=busy||locked||confirm.pending||!!snapshot?.busy||recordingActive||!!snapshot?.recordingBlocked;
   const index=Math.min(page,Math.max(0,Math.ceil(terms.length/50)-1));
   const update=(id:string,patch:Partial<VocabularyEntry>)=>setTerms(items=>items.map(item=>item.id===id?{...item,...patch}:item));
+  const removeTerm = (entry: VocabularyEntry) => {
+    const expected = JSON.stringify(inputRef.current), token = snapshotRef.current?.token;
+    void confirm({ title: "取り込み用語の削除を確認", target: entry.term || "空欄の用語", confirmLabel: "用語を削除する", message: `用語「${entry.term || "空欄"}」を取り込み入力から削除します。この入力は復元できません。共通用語・元ファイル・保存済み会議は変更しません。`, validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === token && !snapshotRef.current?.busy && !snapshotRef.current?.saved, action: async () => { setTerms(items => items.filter(item => item.id !== entry.id)); } });
+  };
   const engineKey=profile==="standard"?"standard":"highAccuracy";
   const configured=settings&&engineConfigured(settings.w[engineKey])&&diarizationConfigured(settings.d[engineKey]);
   return <>
@@ -118,7 +135,7 @@ export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,
         <p>{configured?"保存後、選択した設定で文字起こしと話者分離を開始します。推定品質は未検証です。":"選択したAI設定は未準備です。音声を先に保存し、会議詳細で設定してから解析できます。"} 結果は候補として保存し、自動採用・議事録生成は行いません。</p>
         <details className="analysis-settings"><summary>会議の用語（任意）</summary><p>共通用語は有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件 · 適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件</p>
           <button type="button" className="small-secondary" disabled={terms.length>=500} onClick={()=>{setTerms(items=>[...items,{id:crypto.randomUUID(),term:"",reading:null,note:null,enabled:true}]);setPage(Math.floor(terms.length/50));}}>会議の用語を追加</button>
-          {terms.slice(index*50,(index+1)*50).map((entry,i)=><article key={entry.id} className="import-term" aria-label={`取り込み用語 ${index*50+i+1}`}><label>用語<input value={entry.term} maxLength={200} onChange={e=>update(entry.id,{term:e.target.value})}/></label><label>読み<input value={entry.reading??""} maxLength={200} onChange={e=>update(entry.id,{reading:e.target.value||null})}/></label><label>補足<textarea value={entry.note??""} maxLength={1000} onChange={e=>update(entry.id,{note:e.target.value||null})}/></label><label><input type="checkbox" checked={entry.enabled} onChange={e=>update(entry.id,{enabled:e.target.checked})}/>有効</label><button type="button" className="small-secondary" onClick={()=>{if(window.confirm(`用語「${entry.term||"空欄"}」を削除しますか？ この入力は復元できません。`))setTerms(items=>items.filter(e=>e.id!==entry.id));}}>用語を削除</button></article>)}
+          {terms.slice(index*50,(index+1)*50).map((entry,i)=><article key={entry.id} className="import-term" aria-label={`取り込み用語 ${index*50+i+1}`}><label>用語<input value={entry.term} maxLength={200} onChange={e=>update(entry.id,{term:e.target.value})}/></label><label>読み<input value={entry.reading??""} maxLength={200} onChange={e=>update(entry.id,{reading:e.target.value||null})}/></label><label>補足<textarea value={entry.note??""} maxLength={1000} onChange={e=>update(entry.id,{note:e.target.value||null})}/></label><label><input type="checkbox" checked={entry.enabled} onChange={e=>update(entry.id,{enabled:e.target.checked})}/>有効</label><button type="button" className="small-secondary" onClick={()=>removeTerm(entry)}>用語を削除</button></article>)}
           {!validVocabulary(terms)&&<p role="status">空欄・重複・文字数を修正してから取り込んでください。入力は保持しています。</p>}
           {terms.length>50&&<nav aria-label="取り込み用語のページ"><button type="button" disabled={index===0} onClick={()=>setPage(index-1)}>前へ</button><span>{index+1} / {Math.ceil(terms.length/50)}</span><button type="button" disabled={(index+1)*50>=terms.length} onClick={()=>setPage(index+1)}>次へ</button></nav>}
         </details>

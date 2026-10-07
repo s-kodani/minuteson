@@ -25,7 +25,8 @@ async (page) => {
 
   await open(); await dialog().getByRole("button", { name: "対象を変更する", exact: true }).click();
   await page.waitForFunction(() => window.modalFixture.commands === 1);
-  await page.keyboard.press("Escape"); await page.mouse.click(1, 1);
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Escape");
+  await page.mouse.click(1, 1);
   check(await dialog().isVisible() && await dialog().getByRole("button", { name: "確認をキャンセル", exact: true }).isDisabled(), "busy modal dismissed");
   check(await page.evaluate(() => window.modalFixture.commands) === 1, "busy command duplicated");
   await page.evaluate(() => window.modalFixture.finish());

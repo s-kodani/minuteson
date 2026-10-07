@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
+import { useActionConfirmation } from "./confirmation-service";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
@@ -25,7 +26,8 @@ export function timeLabel(microseconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function TranscriptEditor({ meetingId, locked = false }: { meetingId: string; locked?: boolean }) {
+export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { meetingId: string; meetingTitle?: string; locked?: boolean }) {
+  const confirm = useActionConfirmation(locked);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [saveQueue] = useState(() => new DraftSaveQueue<DraftPayload, Draft>(
     (draftId, expectedLockVersion, payload) => invoke<Draft>("save_transcript_draft", { draftId, expectedLockVersion, payload }),
@@ -63,7 +65,7 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
     return () => { unsubscribe(); unregister(); };
   }, [saveQueue]);
 
-  const reload = async () => {
+  const reload = async (propagateFailure = false) => {
     audio.clear();
     setLoading(true);
     setError("");
@@ -79,6 +81,7 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
       setSpeakerFilter("");setQuery("");setSplitting(null);
     } catch (cause) {
       setError(String(cause));
+      if (propagateFailure) throw cause;
     } finally {
       setLoading(false);
     }
@@ -90,12 +93,12 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
   }, [meetingId]);
 
   useEffect(() => {
-    if (!draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
+    if (confirm.pending || !draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
     const timer = window.setTimeout(() => {
       void saveQueue.flush().catch(() => { /* The queue retains the error and local edit. */ });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue]);
+  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue, confirm.pending]);
 
   const begin = async () => {
     if (!analysis) return;
@@ -130,12 +133,12 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
 
   // Structural operations get their own durable undo entry, after preceding
   // text/name edits have been acknowledged. Failure retains the queued change.
-  const structuralEdit = async (edit:(current:DraftPayload)=>DraftPayload,message:string) => {
+  const structuralEdit = async (edit:(current:DraftPayload)=>DraftPayload,message:string,propagateFailure=false) => {
     if (!analysis || locked || busy) return false;
     setBusy(true); setError(""); setNotice("");
     audio.clear();
     try { await saveQueue.flush(); saveQueue.edit(edit); await saveQueue.flush(); setNotice(message); return true; }
-    catch(cause) { setError(String(cause)); return false; }
+    catch(cause) { setError(String(cause)); if (propagateFailure) throw cause; return false; }
     finally { setBusy(false); }
   };
 
@@ -169,7 +172,12 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
   const shown = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
-  const editable = Boolean(matchingBase && payload && !locked && !loading && !busy);
+  const editable = Boolean(matchingBase && payload && !locked && !loading && !busy && !confirm.pending);
+  const confirmReload = () => {
+    if (!saveQueue.snapshot().dirty) { void reload(); return; }
+    const expected = JSON.stringify(saveQueue.snapshot().payload);
+    void confirm({ title: "文字起こし編集の破棄を確認", target: `会議「${meetingTitle ?? meetingId}」の文字起こし編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の文字起こし編集を破棄して再読込します。この入力は復元できません。保存済みの編集と認識原文は保持します。", validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: () => reload(true) });
+  };
   useEffect(()=>{setPage(0);},[speakerFilter,query]);
   useEffect(()=>{const valid=new Set(view?.utterances.map(u=>u.id));setSelection(ids=>ids.every(id=>valid.has(id))?ids:ids.filter(id=>valid.has(id)));setPage(p=>Math.min(p,Math.max(0,Math.ceil(filtered.length/PAGE_SIZE)-1)));},[view,filtered.length]);
   useEffect(()=>{if(speakerFilter&&speakerFilter!=="unknown"&&!speakers.some(s=>s.id===speakerFilter))setSpeakerFilter("");},[speakerFilter,speakers]);
@@ -190,7 +198,7 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
     <section className="transcript-card" aria-label="文字起こし編集">
       <div className="card-head">
         <h2>文字起こし</h2>
-        <button type="button" className="small-secondary" onClick={() => { if (!dirty || window.confirm("未保存の編集を破棄して再読込しますか？")) void reload(); }} disabled={loading || saving || busy || locked}>再読込</button>
+        <button type="button" className="small-secondary" onClick={confirmReload} disabled={loading || saving || busy || locked || confirm.pending}>再読込</button>
       </div>
       {loading && <p>解析結果を読み込んでいます。</p>}
       {!loading && !analysis && !error && <p>確定済みの解析結果はまだありません。</p>}
@@ -218,13 +226,15 @@ export function TranscriptEditor({ meetingId, locked = false }: { meetingId: str
             if(!view||!payload)return;
             const count=view.utterances.filter(u=>u.speakerIds.includes(mergeSource)).length;
             const message=`${speakerLabels.get(mergeSource)}の${count}発言を${speakerLabels.get(mergeTarget)}にまとめます。本文・時刻・推定元の区間は変更しません。続けますか？`;
-            if(window.confirm(message))void structuralEdit(p=>mergeSpeaker(analysis,p,mergeSource,mergeTarget),"話者を統合しました。直前の編集を取り消すことができます。").then(ok=>{if(ok){setMergeSource("");setMergeTarget("");setBulkSpeaker("");}});
+            const expected = JSON.stringify(saveQueue.snapshot().payload), source = mergeSource, target = mergeTarget;
+            void confirm({ title: "話者の統合を確認", target: `${speakerLabels.get(source)} → ${speakerLabels.get(target)} · ${count}発言`, confirmLabel: "話者を統合する", message: `${message} 直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { if (await structuralEdit(p=>mergeSpeaker(analysis,p,source,target),"話者を統合しました。直前の編集を取り消すことができます。",true)) { setMergeSource("");setMergeTarget("");setBulkSpeaker(""); } } });
           }}>話者を統合</button>
         </div>
         {!!payload?.speaker_merges?.length&&<p className="hint">統合済みラベルは割り当て候補から除外しています。推定区間には統合前のラベルを残します。</p>}
         <div className="transcript-actions" aria-label="複数発言の話者変更"><span>選択 {selection.length} 発言（全ページ）</span><label>割り当て先 <select value={bulkSpeaker} disabled={!editable} onChange={e=>setBulkSpeaker(e.target.value)}><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><button type="button" disabled={!editable||!selection.length} onClick={()=>{
-          if(!payload||!window.confirm(`選択した${selection.length}発言の割り当てを${speakerLabels.get(bulkSpeaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。`))return;
-          void structuralEdit(p=>assignSpeakers(analysis,p,selection,bulkSpeaker?[bulkSpeaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。");
+          if(!payload)return;
+          const ids = [...selection], speaker = bulkSpeaker, expected = JSON.stringify(saveQueue.snapshot().payload);
+          void confirm({ title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
         }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
         <div className="utterance-list">
           {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
