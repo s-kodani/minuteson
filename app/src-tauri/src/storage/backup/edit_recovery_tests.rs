@@ -172,3 +172,122 @@ fn portable_v27_and_v28_have_exact_version_specific_tables() {
     crate::storage::edit_recovery::verify_all(&old, &|| false).unwrap();
     crate::storage::edit_recovery::verify_all(&new, &|| false).unwrap();
 }
+
+#[test]
+fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof() {
+    use crate::storage::edit_recovery::review::DiscardRequest;
+    let mut roots = vec![tempfile::tempdir().unwrap()];
+    let mut source = Storage::open(roots[0].path().into()).unwrap();
+    let mut meeting = split_transcript(&source);
+    let draft = source.load_transcript_draft(&meeting).unwrap().unwrap();
+    let part = &draft.payload.utterance_splits[0].parts[0];
+    let input = source
+        .save_transcript_edit_recovery(SaveRequest {
+            meeting_id: meeting.clone(),
+            draft_id: draft.id.clone(),
+            base_analysis_id: draft.base_analysis_id.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected_draft_lock_version: draft.lock_version,
+            expected_recovery_lock_version: 0,
+            buffers: vec![TextBuffer {
+                utterance_id: part.id.clone(),
+                text: part.effective_text.clone(),
+                speaker_ids: part.speaker_ids.clone(),
+                had_override: false,
+                value: "破棄対象の未確定入力".into(),
+            }],
+        })
+        .unwrap();
+    let old_request = DiscardRequest {
+        meeting_id: meeting.clone(),
+        draft_id: draft.id.clone(),
+        base_analysis_id: draft.base_analysis_id.clone(),
+        operation_id: Uuid::new_v4().to_string(),
+        expected_draft_lock_version: draft.lock_version,
+        expected_draft_content_hash: draft.content_hash.clone(),
+        expected_recovery_lock_version: input.lock_version,
+        expected_recovery_content_hash: input.content_hash.clone(),
+    };
+    let mut record = source
+        .discard_transcript_edit_recovery(old_request.clone())
+        .unwrap();
+    let proof = record.payload.discarded_from.clone().unwrap();
+    let original_hash = record.content_hash.clone();
+    for _ in 0..2 {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("discard.monbackup");
+        source.create_backup_archive(&path, &|| false).unwrap();
+        let archive =
+            archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let target = Storage::open(root.path().into()).unwrap();
+        let keep = target.create_meeting("既存会議は保持").unwrap();
+        let ids = match RestoreIds::prepare_for_batch(
+            &archive,
+            output.path(),
+            &Uuid::new_v4().to_string(),
+            &target.connection.lock().unwrap(),
+            &|| false,
+        )
+        .unwrap()
+        {
+            BatchPreparation::Pending(ids) => ids,
+            _ => panic!("new batch"),
+        };
+        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
+        target.publish_restore(&sealed, &ids, &|| false).unwrap();
+        let new_meeting = ids.get("meetings", "", &meeting).unwrap();
+        let new_draft = ids
+            .get("working_drafts", &meeting, &record.draft_id)
+            .unwrap();
+        let new_base = ids
+            .get("analysis_revisions", &meeting, &record.base_analysis_id)
+            .unwrap();
+        let loaded = target
+            .transcript_edit_recovery(&new_meeting, &new_draft, &new_base)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.payload.schema_version, 2);
+        assert_eq!(loaded.payload.discarded_from, Some(proof.clone()));
+        assert!(loaded.payload.buffers.is_empty());
+        assert!(loaded.matches_draft && loaded.current_context);
+        assert_eq!(loaded.lock_version, record.lock_version);
+        assert_ne!(loaded.content_hash, record.content_hash);
+        assert_ne!(loaded.operation_id, record.operation_id);
+        assert_ne!(loaded.draft_id, record.draft_id);
+        assert!(target
+            .discard_transcript_edit_recovery(old_request.clone())
+            .is_err());
+        // Even with remapped ownership, the old operation is not the new
+        // operation's authority; its historical hash was not remapped.
+        let mut rebound_old = old_request.clone();
+        rebound_old.meeting_id = new_meeting.clone();
+        rebound_old.draft_id = new_draft.clone();
+        rebound_old.base_analysis_id = new_base.clone();
+        assert!(target
+            .discard_transcript_edit_recovery(rebound_old)
+            .is_err());
+        assert_eq!(target.get_meeting(&keep.id).unwrap(), Some(keep));
+        let page = target
+            .list_transcript_edit_recoveries(&new_meeting, None)
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].content_hash, loaded.content_hash);
+        assert_eq!(page.items[0].buffer_count, 0);
+        assert_eq!(
+            source
+                .transcript_edit_recovery(&meeting, &record.draft_id, &record.base_analysis_id)
+                .unwrap()
+                .unwrap()
+                .content_hash,
+            record.content_hash
+        );
+        roots.push(root);
+        source = target;
+        meeting = new_meeting;
+        record = loaded;
+    }
+    assert_ne!(record.content_hash, original_hash);
+    assert_eq!(record.payload.discarded_from, Some(proof));
+}

@@ -6,6 +6,15 @@ use std::collections::HashSet;
 
 pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+pub(crate) mod review;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct DiscardProof {
+    pub content_hash: String,
+    pub lock_version: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct TextBuffer {
@@ -24,6 +33,10 @@ pub(crate) struct Payload {
     // durable Undo changes the current draft. Stale buffers remain readable.
     pub base_payload: TranscriptDraftPayload,
     pub buffers: Vec<TextBuffer>,
+    // v2 empty tombstones identify the exact preview that was discarded, so a
+    // lost acknowledgement cannot disguise reuse of an operation with new input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discarded_from: Option<DiscardProof>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,6 +53,9 @@ pub(crate) struct Recovery {
     pub lock_version: i64,
     pub updated_at: i64,
     pub matches_draft: bool,
+    pub current_draft_lock_version: i64,
+    pub current_draft_content_hash: String,
+    pub current_context: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +72,13 @@ pub(crate) struct SaveRequest {
 
 fn uuid(id: &str) -> bool {
     Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
+}
+
+fn valid_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn normalize(mut buffers: Vec<TextBuffer>) -> Result<Vec<TextBuffer>, String> {
@@ -84,7 +107,14 @@ fn normalize(mut buffers: Vec<TextBuffer>) -> Result<Vec<TextBuffer>, String> {
 }
 
 pub(super) fn validate(db: &Connection, base: &str, payload: &Payload) -> Result<(), String> {
-    if payload.schema_version != 1 || normalize(payload.buffers.clone())? != payload.buffers {
+    let format = match (payload.schema_version, &payload.discarded_from) {
+        (1, None) => true,
+        (2, Some(proof)) => {
+            payload.buffers.is_empty() && proof.lock_version > 0 && valid_hash(&proof.content_hash)
+        }
+        _ => false,
+    };
+    if !format || normalize(payload.buffers.clone())? != payload.buffers {
         return Err("回復下書きの形式が不正です".into());
     }
     // ID remapping can change lexical order without changing the exact saved
@@ -148,10 +178,18 @@ pub(super) fn read(db: &Connection, draft: &TranscriptDraft) -> Result<Option<Re
     let payload: Payload =
         serde_json::from_str(&json).map_err(|e| format!("回復下書きのJSONが不正です: {e}"))?;
     validate(db, &draft.base_analysis_id, &payload)?;
+    if payload
+        .discarded_from
+        .as_ref()
+        .is_some_and(|proof| proof.lock_version.checked_add(1) != Some(version))
+    {
+        return Err("破棄した回復記録の版番号が一致しません".into());
+    }
     let baseline = serde_json::to_string(&payload.base_payload).map_err(|e| e.to_string())?;
     if drafts::draft_hash(&baseline) != base_hash {
         return Err("回復下書きの基底内容が一致しません".into());
     }
+    let current_context: bool = db.query_row("SELECT d.active=1 AND coalesce(m.current_analysis_id=d.base_analysis_id,0) FROM working_drafts d JOIN meetings m ON m.id=d.meeting_id WHERE d.id=?1 AND d.meeting_id=?2 AND d.base_analysis_id=?3 AND d.target_kind='transcript'",params![draft.id,draft.meeting_id,draft.base_analysis_id],|r|r.get(0)).map_err(|e|e.to_string())?;
     Ok(Some(Recovery {
         draft_id: draft.id.clone(),
         meeting_id: draft.meeting_id.clone(),
@@ -164,6 +202,9 @@ pub(super) fn read(db: &Connection, draft: &TranscriptDraft) -> Result<Option<Re
         lock_version: version,
         updated_at,
         matches_draft: base_version == draft.lock_version && base_hash == draft.content_hash,
+        current_draft_lock_version: draft.lock_version,
+        current_draft_content_hash: draft.content_hash.clone(),
+        current_context,
     }))
 }
 
@@ -215,7 +256,8 @@ impl Storage {
             // A retry of the same request may prove a lost acknowledgement,
             // but cannot replace a later operation or revise that request.
             if saved.operation_id == request.operation_id {
-                if saved.base_draft_lock_version != request.expected_draft_lock_version
+                if saved.payload.discarded_from.is_some()
+                    || saved.base_draft_lock_version != request.expected_draft_lock_version
                     || saved.lock_version
                         != request
                             .expected_recovery_lock_version
@@ -238,20 +280,31 @@ impl Storage {
             schema_version: 1,
             base_payload: draft.payload.clone(),
             buffers,
+            discarded_from: None,
         };
-        validate(&tx, &draft.base_analysis_id, &payload)?;
-        let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-        let hash = drafts::draft_hash(&json);
         let version = request
             .expected_recovery_lock_version
             .checked_add(1)
             .ok_or("回復版番号が範囲外です")?;
-        tx.execute("INSERT INTO transcript_edit_recovery VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(draft_id) DO UPDATE SET operation_id=excluded.operation_id,base_draft_lock_version=excluded.base_draft_lock_version,base_draft_content_hash=excluded.base_draft_content_hash,payload_json=excluded.payload_json,content_hash=excluded.content_hash,lock_version=excluded.lock_version,updated_at=excluded.updated_at",params![draft.id,request.operation_id,draft.lock_version,draft.content_hash,json,hash,version,now_ms()?]).map_err(|e|e.to_string())?;
+        let saved = write_record(&tx, &draft, &request.operation_id, payload, version)?;
         self.require_data_writable()?;
-        let saved = read(&tx, &draft)?.ok_or("回復保存結果がありません")?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(saved)
     }
+}
+
+fn write_record(
+    tx: &rusqlite::Transaction<'_>,
+    draft: &TranscriptDraft,
+    operation: &str,
+    payload: Payload,
+    version: i64,
+) -> Result<Recovery, String> {
+    validate(tx, &draft.base_analysis_id, &payload)?;
+    let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let hash = drafts::draft_hash(&json);
+    tx.execute("INSERT INTO transcript_edit_recovery VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(draft_id) DO UPDATE SET operation_id=excluded.operation_id,base_draft_lock_version=excluded.base_draft_lock_version,base_draft_content_hash=excluded.base_draft_content_hash,payload_json=excluded.payload_json,content_hash=excluded.content_hash,lock_version=excluded.lock_version,updated_at=excluded.updated_at",params![draft.id,operation,draft.lock_version,draft.content_hash,json,hash,version,now_ms()?]).map_err(|e|e.to_string())?;
+    read(tx, draft)?.ok_or("回復保存結果がありません".into())
 }
 
 // Include inactive drafts and stale buffers in backup integrity checks. Their

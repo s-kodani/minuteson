@@ -1841,6 +1841,31 @@ fn get_transcript_edit_recovery(
 }
 
 #[tauri::command]
+fn list_transcript_edit_recoveries(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    meeting_id: String,
+    after: Option<String>,
+) -> Result<storage::edit_recovery::review::Page, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can list transcript recovery".into());
+    }
+    storage.list_transcript_edit_recoveries(&meeting_id, after.as_deref())
+}
+
+#[tauri::command]
+fn discard_transcript_edit_recovery(
+    window: WebviewWindow,
+    storage: State<'_, Storage>,
+    request: storage::edit_recovery::review::DiscardRequest,
+) -> Result<storage::edit_recovery::Recovery, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can discard transcript recovery".into());
+    }
+    storage.discard_transcript_edit_recovery(request)
+}
+
+#[tauri::command]
 fn save_transcript_edit_recovery(
     window: WebviewWindow,
     storage: State<'_, Storage>,
@@ -1991,6 +2016,8 @@ pub fn run() {
             get_transcript_draft,
             begin_transcript_draft,
             get_transcript_edit_recovery,
+            list_transcript_edit_recoveries,
+            discard_transcript_edit_recovery,
             save_transcript_edit_recovery,
             save_transcript_draft,
             undo_transcript_edit,
