@@ -250,11 +250,16 @@ async (page) => {
 
   await boot(); await set({ mode: "delay" }); await review(); await understand(); await publish().click();
   await page.evaluate(async () => {
-    window.confirm = message => { window.audioDeletionFixture.closeMessage = message; return true; };
     const { emit } = await import("/@fs/Users/skodani/Codebase/mon/app/node_modules/@tauri-apps/api/event.js"); await emit("main-close-requested", { quit: true });
   });
+  const closing = page.getByRole("dialog", { name: "進行中の処理を停止して終了しますか？", exact: true });
+  await closing.waitFor();
+  const closeMessage = await closing.innerText();
+  await closing.getByRole("button", { name: "安全な停止を待って終了する", exact: true }).dblclick();
+  await page.waitForFunction(() => window.dataFixture.snapshot.phase === "cancelling");
+  check(!await page.evaluate(() => window.dataFixture.calls.some(c => c.command === "finish_main_close")), "close did not wait for actual audio worker stop");
+  await page.evaluate(() => window.audioDeletionFixture.complete());
   await page.waitForFunction(() => window.dataFixture.calls.some(c => c.command === "finish_main_close"));
-  const closeMessage = await page.evaluate(() => window.audioDeletionFixture.closeMessage);
   check(closeMessage.includes("音声削除") && closeMessage.includes("復元しません"), "close used misleading backup wording"); results.push("main close uses audio-specific irreversible stop confirmation");
 
   await boot(); await review();

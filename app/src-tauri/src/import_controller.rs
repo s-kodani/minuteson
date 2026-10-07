@@ -402,20 +402,40 @@ impl ImportController {
         Self::update(app, |s| s.snapshot.recording_blocked = false);
     }
     pub(crate) fn shutdown(app: &AppHandle) -> Result<(), String> {
+        Self::shutdown_inner(app, None)
+    }
+    pub(crate) fn shutdown_checked(
+        app: &AppHandle,
+        expected: &Option<String>,
+    ) -> Result<(), String> {
+        Self::shutdown_inner(app, Some(expected))
+    }
+    fn shutdown_inner(app: &AppHandle, expected: Option<&Option<String>>) -> Result<(), String> {
         let c = app.state::<Self>();
-        Self::update(app, |s| {
-            s.closing = true;
-            s.cancel.store(true, Ordering::Release);
-            s.selected = None;
-            if s.snapshot.busy {
-                s.snapshot.phase = "cancelling".into();
-            }
-        });
+        let snapshot = c.begin_shutdown(expected)?;
+        Self::emit(app, snapshot);
         if let Err(error) = c.wait_idle(Duration::from_secs(15)) {
             Self::update(app, |s| s.closing = false);
             return Err(error);
         }
         Ok(())
+    }
+    fn begin_shutdown(&self, expected: Option<&Option<String>>) -> Result<Snapshot, String> {
+        let mut s = self
+            .state
+            .lock()
+            .map_err(|_| "取り込み状態を取得できません")?;
+        if let Some(expected) = expected {
+            crate::application_close::require_target(expected, &s.snapshot.token)?;
+        }
+        s.closing = true;
+        s.cancel.store(true, Ordering::Release);
+        s.selected = None;
+        if s.snapshot.busy {
+            s.snapshot.phase = "cancelling".into();
+        }
+        s.snapshot.revision += 1;
+        Ok(s.snapshot.clone())
     }
     pub(crate) fn abort_shutdown(app: &AppHandle) {
         Self::update(app, |s| {
@@ -536,6 +556,22 @@ async fn select_file(window: &WebviewWindow) -> Result<Option<PathBuf>, String> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn checked_close_rejects_changed_import_without_cancelling_or_discarding() {
+        let controller = super::ImportController::default();
+        let before = controller.begin("inspecting").unwrap();
+        assert!(controller.begin_shutdown(Some(&None)).is_err());
+        assert!(controller
+            .begin_shutdown(Some(&Some("foreign".into())))
+            .is_err());
+        let state = controller.state.lock().unwrap();
+        assert!(!state.closing);
+        assert!(!state.cancel.load(super::Ordering::Acquire));
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(&state.snapshot).unwrap()
+        );
+    }
     use super::*;
 
     #[test]

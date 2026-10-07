@@ -2,6 +2,23 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn checked_close_seals_admission_without_cancelling_unverified_work() {
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let model = Arc::new(AtomicBool::new(false));
+    controller.state.lock().unwrap().model_preparation = Some(model.clone());
+    assert_eq!(controller.close_activity().unwrap(), (false, true));
+    controller.seal_exit().unwrap();
+    assert!(controller.shutdown.load(Ordering::SeqCst));
+    assert!(!model.load(Ordering::SeqCst));
+    controller.abort_shutdown();
+    assert!(lease.validate_active().is_ok());
+    assert!(!model.load(Ordering::SeqCst));
+}
+
+#[test]
 fn deletion_lease_proof_requires_current_ownership_and_stays_cancelled_after_aborted_exit() {
     let controller = AnalysisController::default();
     let lease = controller

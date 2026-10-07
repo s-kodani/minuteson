@@ -18,12 +18,17 @@ import { RecoveryPanel } from "./recovery-panel";
 import { MeetingDeletionPanel, useMeetingDeletion } from "./meeting-deletion";
 import { ModelBodyDeletionPanel, useModelBodyDeletion } from "./model-body-deletion";
 import { AudioDeletionPanel, useAudioDeletion } from "./audio-deletion";
-import { assertDataSnapshot, type DataSnapshot } from "./data-operation-state";
+import type { DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
 import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
+import { confirmations, useActionConfirmation } from "./confirmation-service";
+import { withConfirmedEdits } from "./confirmed-action";
+import { assertRecordingDecision } from "./recording-confirmation-state";
+import { waitForDataStop } from "./data-stop";
+import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
 const isRecordingConfirmation = new URLSearchParams(window.location.search).get("window") === "recording-confirmation";
@@ -116,6 +121,8 @@ function MainWindow() {
   const [captureAvailable, setCaptureAvailable] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState("");
+  const [closingBusy, setClosingBusy] = useState(false);
+  const closing = useRef(false), starting = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings">("overview");
@@ -154,44 +161,79 @@ function MainWindow() {
       // their local buffers, including when recovery deliberately skipped writes.
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
-  const navigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const baseNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
   const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
-  const writeLocked = navigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
+  const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
+  const startConfirm = useActionConfirmation(baseWriteLocked || closingBusy);
+  const closeConfirm = useActionConfirmation(false);
+  const navigationLocked = baseNavigationLocked || captureBusy || closingBusy || startConfirm.pending;
+  const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
+  const root = useRef({ selectedMeeting, baseWriteLocked, captureAvailable, state });
+  root.current = { selectedMeeting, baseWriteLocked, captureAvailable, state };
+  const readCloseContext = async (): Promise<CloseContext> => {
+    const [recording, importing, data, activity] = await Promise.all([
+      invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),
+      invoke<DataSnapshot>("get_data_operation"), invoke<CloseActivity>("get_application_close_activity"),
+    ]);
+    const result = { recording, importing, data, activity }; assertCloseContext(result); return result;
+  };
+  const closeHandler = useRef<(request: { quit: boolean; afterRecording?: string }) => Promise<void>>(async () => {});
+  closeHandler.current = async ({ quit, afterRecording }) => {
+    if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
+    closing.current = true; setClosingBusy(true); setMeetingError("");
+    try {
+      const recording = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(recording);
+      if (!quit && recordingActive(recording)) {
+        await withConfirmedEdits(withSavedEdits, () => invoke("finish_main_close", { quit: false }));
+        return;
+      }
+      let coveredAnalysis = false;
+      if (afterRecording) {
+        const decision = await invoke<import("./recording-confirmation-state").RecordingDecision>("get_recording_confirmation");
+        assertRecordingDecision(decision);
+        if (decision.id !== afterRecording || decision.phase !== "completed" || !decision.quitAfterSave || recordingActive(recording)) throw Error("録音終了の対象が変更されています。アプリは終了していません。");
+        coveredAnalysis = true;
+      }
+      if (quit && ["preparing", "recording"].includes(recording.phase)) {
+        await withConfirmedEdits(withSavedEdits, async () => {
+          const current = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(current);
+          if (current.sessionId !== recording.sessionId || current.meetingId !== recording.meetingId || !["preparing", "recording"].includes(current.phase)) throw Error("録音の終了対象が変更されました。最新の状態を再確認してください。");
+          await recordingDecision.request(true);
+        });
+        return; // The native confirmation continues closing only after saved.
+      }
+      if (quit && recordingActive(recording)) {
+        const outcome = await closeConfirm({ title: "録音の保存完了後の終了を確認", target: recording.meetingId ?? "保存中の録音", confirmLabel: "保存完了を待って終了へ進む", message: "録音の停止・保存が進行中です。保存成功を確認してから終了へ進みます。同じ録音は継続できません。停止は再送せず、保存失敗・結果未確認では終了しません。", action: () => waitForRecordingSave(recording, () => invoke("get_recording_snapshot")) });
+        if (outcome !== "completed") return;
+      }
+      const expected = await readCloseContext();
+      const finish = () => withConfirmedEdits(withSavedEdits, async () => {
+        const current = await readCloseContext(); assertCloseTargets(expected, current);
+        let importing = current.importing, data = current.data;
+        if (importNeedsConsent(expected.importing) && importNeedsConsent(importing)) {
+          await invoke("cancel_audio_import", { token: importing.token });
+          importing = await waitForImportStop(importing.token!, () => invoke("get_audio_import"));
+        }
+        if (dataNeedsConsent(expected.data) && dataNeedsConsent(data)) {
+          await invoke("cancel_data_operation", { token: data.token });
+          data = await waitForDataStop(data.token!, data.kind!, () => invoke("get_data_operation"));
+        }
+        const final = await readCloseContext(); assertCloseTargets({ ...current, importing, data }, final);
+        await invoke("finish_main_close", { quit, expected: { importToken: final.importing.token, dataToken: final.data.token } });
+      });
+      if (importNeedsConsent(expected.importing) || dataNeedsConsent(expected.data) || !coveredAnalysis && (expected.activity.analysisBusy || expected.activity.modelPreparationBusy)) {
+        await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });
+      } else await finish();
+    } catch (cause) { setMeetingError(`終了できませんでした。アプリと保存結果は保持しています: ${String(cause)}`); }
+    finally { closing.current = false; setClosingBusy(false); }
+  };
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<{ quit: boolean }>("main-close-requested", (event) => {
+    void listen<{ quit: boolean; afterRecording?: string }>("main-close-requested", (event) => {
       if (disposed) return;
-      void withSavedEdits(async () => {
-        if (event.payload.quit) {
-          let recording = await invoke<RecordingSnapshot>("get_recording_snapshot");
-          const active = () => ["preparing", "recording", "stopping", "saving"].includes(recording.phase);
-          if (active()) {
-            if (!window.confirm("録音を停止・保存してアプリを終了しますか？")) return;
-            if (recording.phase === "preparing" || recording.phase === "recording") await invoke("stop_recording");
-            const deadline = Date.now() + 60_000;
-            while (active()) {
-              if (Date.now() > deadline) throw new Error("録音の保存処理が続いています。保存完了後にもう一度終了してください。");
-              await new Promise((resolve) => window.setTimeout(resolve, 200));
-              recording = await invoke<RecordingSnapshot>("get_recording_snapshot");
-            }
-            if (recording.phase === "error") throw new Error(recording.errorMessage ?? "録音の保存状況を確認してください。");
-          }
-        }
-        const importing=await invoke<ImportSnapshot>("get_audio_import");
-        if(importing.busy||importing.phase==="ready"){
-          if(!window.confirm(importing.busy?"進行中の音声取り込みを取り消して終了しますか？ 未確定の取り込み物だけを整理し、元ファイルと保存済み会議は保持します。":"音声取り込みの確認内容を破棄して終了しますか？ 元ファイルは変更しません。"))return;
-          if(importing.token)await invoke("cancel_audio_import",{token:importing.token});
-        }
-        const data = await invoke<DataSnapshot>("get_data_operation");
-        assertDataSnapshot(data);
-        if (data.busy || data.retryAllowed || data.deletionPreview?.pending || data.modelDeletionPreview?.pending || data.audioDeletionPreview?.pending) {
-          if (!window.confirm(data.kind === "audio_deletion" ? "音声削除の停止を待って終了しますか？ 未完了記録・残りの音声・文字起こし・議事録を保持します。既に消した音声は復元しません。" : data.kind === "model_deletion" ? "モデル本体削除の停止を待って終了しますか？ 未完了記録・残りの対象と履歴を保持します。既に消した本体は復元しません。" : data.kind === "deletion" ? "削除操作の停止を待って終了しますか？ 未完了記録と残りの対象を保持します。既に消したデータは復元しません。" : data.busy ? "バックアップ／追加復元を取り消して終了しますか？ 公開済みの結果と既存会議は保持します。" : "バックアップ／追加復元の確認内容を破棄して終了しますか？ 既存会議と元バックアップは保持します。")) return;
-          if (data.token) await invoke("cancel_data_operation", { token: data.token });
-        }
-        await invoke("finish_main_close", { quit: event.payload.quit });
-      });
+      void closeHandler.current(event.payload);
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((cause: unknown) => setMeetingError(String(cause)));
     return () => { disposed = true; unlisten?.(); };
   }, []);
@@ -230,16 +272,25 @@ function MainWindow() {
     priorPhase.current = phase;
   }, [state, selectedMeeting]);
   const startRecording = async () => {
-    if (!selectedMeeting || !window.confirm("選択した会議の録音を開始しますか？ マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。")) return;
-    setCaptureBusy(true);
-    setCaptureError("");
+    if (!selectedMeeting || starting.current || closing.current || root.current.baseWriteLocked) return;
+    starting.current = true; setCaptureBusy(true); setCaptureError("");
     try {
-      await invoke("start_recording", { meetingId: selectedMeeting.id });
-      setSelectedMeeting(await invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }));
-      setMeetings(await invoke<Meeting[]>("list_meetings"));
+      const expected = await invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id });
+      const importing = await invoke<ImportSnapshot>("get_audio_import"); assertCloseImport(importing);
+      if (!expected || expected.lifecycle !== "draft" || expected.sourceType === "audio_import") throw Error("録音対象の会議を再確認してください。");
+      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。" + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => root.current.selectedMeeting?.id === expected.id && root.current.captureAvailable && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
+        const [meeting, recording, currentImport] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import")]);
+        assertCloseRecording(recording);
+        assertCloseImport(currentImport);
+        if (!meeting || meeting.id !== expected.id || meeting.title !== expected.title || meeting.lockVersion !== expected.lockVersion || meeting.lifecycle !== "draft" || meeting.sourceType === "audio_import" || root.current.selectedMeeting?.id !== expected.id || recordingActive(recording) || currentImport.token !== importing.token || !importing.busy && currentImport.revision !== importing.revision) throw Error("録音対象が確認後に変更されました。録音は開始していません。");
+        await invoke("start_recording", { meetingId: expected.id });
+        setSelectedMeeting(await invoke<Meeting | null>("get_meeting", { id: expected.id }));
+        setMeetings(await invoke<Meeting[]>("list_meetings"));
+      }), onError: cause => setCaptureError(`録音の受付状態を確認してください。開始は自動再送していません: ${String(cause)}`) });
     } catch (error) {
       setCaptureError(String(error));
     } finally {
+      starting.current = false;
       setCaptureBusy(false);
     }
   };

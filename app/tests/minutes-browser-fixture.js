@@ -71,7 +71,7 @@ async (page) => {
         if (cmd === "plugin:event|listen") { const id=++sequence; listeners.set(id,args); return id; }
         if (cmd === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
         if (cmd === "get_recording_snapshot") return {revision:1,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};
-        if (cmd === "get_recording_confirmation") return {revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,errorMessage:null};
+        if (cmd === "get_recording_confirmation") return {revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null};
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;

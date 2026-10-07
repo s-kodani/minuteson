@@ -956,11 +956,21 @@ impl DataController {
     }
 
     fn stop(&self, timeout: Duration) -> Result<Option<Selection>, String> {
+        self.stop_checked(timeout, None)
+    }
+    fn stop_checked(
+        &self,
+        timeout: Duration,
+        expected: Option<&Option<String>>,
+    ) -> Result<Option<Selection>, String> {
         let started = Instant::now();
         let mut s = self
             .state
             .lock()
             .map_err(|_| "データ操作ロックを取得できません")?;
+        if let Some(expected) = expected {
+            crate::application_close::require_target(expected, &s.snapshot.token)?;
+        }
         s.closing = true;
         s.cancel.store(true, Ordering::Release);
         while s.snapshot.busy {
@@ -981,6 +991,16 @@ impl DataController {
 
     pub(crate) fn shutdown(app: &AppHandle) -> Result<(), String> {
         let selection = app.state::<Self>().stop(Duration::from_secs(15))?;
+        drop(selection);
+        Ok(())
+    }
+    pub(crate) fn shutdown_checked(
+        app: &AppHandle,
+        expected: &Option<String>,
+    ) -> Result<(), String> {
+        let selection = app
+            .state::<Self>()
+            .stop_checked(Duration::from_secs(15), Some(expected))?;
         drop(selection);
         Ok(())
     }

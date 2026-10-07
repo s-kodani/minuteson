@@ -1,5 +1,6 @@
 mod analysis_flow;
 mod analysis_worker;
+mod application_close;
 mod audio;
 mod audio_import;
 #[cfg(target_os = "macos")]
@@ -1518,7 +1519,11 @@ fn close_playback(
 }
 
 #[tauri::command]
-async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), String> {
+async fn finish_main_close(
+    window: WebviewWindow,
+    quit: bool,
+    expected: Option<application_close::CloseExpectations>,
+) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
@@ -1544,14 +1549,34 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
     tauri::async_runtime::spawn(async move {
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
-            app.state::<AnalysisController>().begin_exit()?;
-            let result = DataController::shutdown(&app)
-                .and_then(|_| ImportController::shutdown(&app))
-                .and_then(|_| AnalysisController::shutdown(&app));
+            if expected.is_some() {
+                app.state::<AnalysisController>().seal_exit()?;
+            } else {
+                app.state::<AnalysisController>().begin_exit()?;
+            }
+            let result = if let Some(target) = &expected {
+                DataController::shutdown_checked(&app, &target.data_token)
+                    .and_then(|_| ImportController::shutdown_checked(&app, &target.import_token))
+            } else {
+                DataController::shutdown(&app).and_then(|_| ImportController::shutdown(&app))
+            }
+            .and_then(|_| AnalysisController::shutdown(&app));
             if result.is_err() {
                 app.state::<AnalysisController>().abort_shutdown();
-                ImportController::abort_shutdown(&app);
-                DataController::abort_shutdown(&app);
+                if expected.as_ref().is_none_or(|e| {
+                    app.state::<ImportController>()
+                        .snapshot()
+                        .is_ok_and(|s| s.token == e.import_token)
+                }) {
+                    ImportController::abort_shutdown(&app);
+                }
+                if expected.as_ref().is_none_or(|e| {
+                    app.state::<DataController>()
+                        .snapshot()
+                        .is_ok_and(|s| s.token == e.data_token)
+                }) {
+                    DataController::abort_shutdown(&app);
+                }
                 let _ = AnalysisController::kick(&app);
             }
             result
@@ -1569,6 +1594,26 @@ async fn finish_main_close(window: WebviewWindow, quit: bool) -> Result<(), Stri
 #[tauri::command]
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
     store.snapshot()
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicationCloseActivity {
+    analysis_busy: bool,
+    model_preparation_busy: bool,
+}
+#[tauri::command]
+fn get_application_close_activity(
+    window: WebviewWindow,
+) -> Result<ApplicationCloseActivity, String> {
+    if window.label() != "main" {
+        return Err("終了状態はメイン画面から確認してください".into());
+    }
+    let (analysis_busy, model_preparation_busy) =
+        window.state::<AnalysisController>().close_activity()?;
+    Ok(ApplicationCloseActivity {
+        analysis_busy,
+        model_preparation_busy,
+    })
 }
 
 #[tauri::command]
@@ -1590,6 +1635,9 @@ async fn start_recording(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         RecorderController::with_transition(&app, || {
+            if app.state::<StopDecisionStore>().snapshot().visible() {
+                return Err("録音確認を完了してから開始してください".into());
+            }
             if app.state::<SessionStore>().snapshot().is_active() {
                 return Err("別の録音が進行中です".into());
             }
@@ -1870,6 +1918,7 @@ pub fn run() {
             start_data_operation,
             cancel_data_operation,
             get_recording_snapshot,
+            get_application_close_activity,
             capture_available,
             start_recording,
             stop_recording,

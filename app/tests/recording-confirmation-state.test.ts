@@ -1,9 +1,10 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {assertRecordingDecision,acceptRecordingDecision,recordingDecisionVisible,type RecordingDecision} from "../src/recording-confirmation-state.ts";
-const idle:RecordingDecision={revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,errorMessage:null};
+const idle:RecordingDecision={revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null};
 const confirming:RecordingDecision={...idle,revision:1,id:"decision-a",phase:"confirming",sessionId:"session-a",meetingId:"meeting-a",meetingTitle:"合成会議",origin:"recorder"};
 test("recording decision validates canonical identity and idle shape",()=>{assertRecordingDecision(idle);assertRecordingDecision(confirming);assert.throws(()=>assertRecordingDecision({...confirming,sessionId:null}),/対象/u);assert.throws(()=>assertRecordingDecision({...idle,id:"wrong"}),/対象/u);assert.throws(()=>assertRecordingDecision({...confirming,revision:NaN}),/状態/u);});
 test("old recording decisions are ignored but same-revision contradiction is rejected",()=>{assert.equal(acceptRecordingDecision(confirming,idle),confirming);assert.throws(()=>acceptRecordingDecision(confirming,{...confirming,id:"decision-b"}),/同じ版/u);});
 test("field order does not fabricate a contradictory recording decision",()=>{const next=Object.fromEntries(Object.entries(confirming).reverse()) as unknown as RecordingDecision;assert.equal(acceptRecordingDecision(confirming,next),next);});
+test("recording quit intent requires a main-window decision and cannot be silently upgraded",()=>{assert.throws(()=>assertRecordingDecision({...confirming,quitAfterSave:true}),/目的/u);assertRecordingDecision({...confirming,origin:"main",quitAfterSave:true});assert.throws(()=>acceptRecordingDecision({...confirming,origin:"main"},{...confirming,origin:"main",quitAfterSave:true}),/同じ版/u);});
 test("accepted stop and failed saving remain visible but completed and declined do not",()=>{for(const phase of ["confirming","stopping","failed"] as const)assert.equal(recordingDecisionVisible({...confirming,phase}),true);for(const phase of ["idle","completed","cancelled"] as const)assert.equal(recordingDecisionVisible({...confirming,phase}),false);});

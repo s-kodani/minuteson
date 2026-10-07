@@ -41,6 +41,16 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
             let _ = window.set_focus();
         }
     }
+    if let Some(id) = value.id.as_deref() {
+        if app.state::<StopDecisionStore>().take_completed_quit(id) {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.emit(
+                    "main-close-requested",
+                    serde_json::json!({ "quit": true, "afterRecording": id }),
+                );
+            }
+        }
+    }
 }
 pub fn session_changed(app: &AppHandle, recording: &RecordingSnapshot) -> StopDecision {
     let previous = app.state::<StopDecisionStore>().snapshot();
@@ -73,7 +83,10 @@ pub fn get_recording_confirmation(window: WebviewWindow) -> Result<StopDecision,
     ))
 }
 #[tauri::command]
-pub fn request_recording_confirmation(window: WebviewWindow) -> Result<StopDecision, String> {
+pub fn request_recording_confirmation(
+    window: WebviewWindow,
+    quit: Option<bool>,
+) -> Result<StopDecision, String> {
     if !matches!(window.label(), "main" | "recorder") {
         return Err("録音画面から確認してください".into());
     }
@@ -88,9 +101,12 @@ pub fn request_recording_confirmation(window: WebviewWindow) -> Result<StopDecis
         .flatten()
         .map(|meeting| meeting.title)
         .unwrap_or_else(|| "現在の録音".into());
-    let (value, created) =
-        app.state::<StopDecisionStore>()
-            .request(&recording, window.label(), title)?;
+    let store = app.state::<StopDecisionStore>();
+    let (value, created) = if quit.unwrap_or(false) {
+        store.request_for_exit(&recording, window.label(), title, true)?
+    } else {
+        store.request(&recording, window.label(), title)?
+    };
     let present = || -> Result<(), String> {
         let modal = app
             .get_webview_window(LABEL)

@@ -35,11 +35,11 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     if(!target.isConnected||target.matches(":disabled"))return;
     target.focus({preventScroll:true});opener.current=null;
   },[snapshot?.revision,requestBusy,origin]);
-  const request=async()=>{
+  const request=async(quit=false)=>{
     if(requesting.current)return;requesting.current=true;setRequestBusy(true);setError("");
     opener.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
-    try{accept(await invoke<RecordingDecision>("request_recording_confirmation"));}
-    catch(cause){if(mounted.current)setError(String(cause));}
+    try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit}));}
+    catch(cause){if(mounted.current)setError(String(cause));if(quit)throw cause;}
     finally{requesting.current=false;if(mounted.current)setRequestBusy(false);}
   };
   const decide=async(stop:boolean)=>{
@@ -55,18 +55,20 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
 export function RecordingConfirmationWindow() {
   const decision=useRecordingConfirmation(null), value=decision.snapshot;
   const stopping=value?.phase==="stopping", failed=value?.phase==="failed";
+  const quit=value?.quitAfterSave;
   const cancel=()=>decision.decide(false);
   return <main className="recording-confirmation-shell" aria-label="録音終了の確認ウィンドウ">
     {!decision.visible&&<p role="status">録音確認を読み込んでいます。</p>}
     {!decision.visible&&decision.error&&<><p role="alert">{decision.error}</p><button type="button" onClick={()=>void decision.refresh().catch(()=>{})}>状態を再確認</button></>}
     <CommonModal open={decision.visible} blocked={stopping||decision.decisionBusy||!decision.connected} dismissLabel={failed?"閉じる":"キャンセル"} dismissText={failed?undefined:"録音を続ける"} onDismiss={cancel} aria-labelledby="recording-decision-title">
-      <h2 id="recording-decision-title">{failed?"録音の保存状態を確認":value?.preparing?"録音準備を中止しますか？":"録音を終了しますか？"}</h2>
+      <h2 id="recording-decision-title">{failed?"録音の保存状態を確認":quit?"録音を終了してアプリを閉じますか？":value?.preparing?"録音準備を中止しますか？":"録音を終了しますか？"}</h2>
       <p>対象: {value?.meetingTitle}</p>
-      <p>{value?.preparing?"録音準備を中止します。音声は保存されない場合があります。元の会議は保持します。":"ここまでの音声を保存し、準備済みモデルで解析を開始します。終了後は同じ録音を継続できません。モデル未準備でも音声は保持し、解析結果は確認待ちの候補として保存します。"}</p>
+      <p>{value?.preparing?"録音準備を中止します。音声は保存されない場合があります。元の会議は保持します。":quit?"ここまでの音声を保存します。終了後は同じ録音を継続できません。保存済みの会議・音声・文書は保持します。":"ここまでの音声を保存し、準備済みモデルで解析を開始します。終了後は同じ録音を継続できません。モデル未準備でも音声は保持し、解析結果は確認待ちの候補として保存します。"}</p>
+      {quit&&<p>録音と未保存編集の保存成功後に終了します。解析・モデル準備は安全な区切りで停止し、再起動後に解析を再実行できます。</p>}
       {stopping&&<p role="status">録音を停止・保存しています。保存完了を確認するまでお待ちください。</p>}
       {(value?.errorMessage||decision.error)&&<p role="alert" className="action-error">{value?.errorMessage||decision.error}</p>}
       <ThemeReadNotice />
-      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{value?.preparing?"録音準備を中止する":"録音を終了する"}</button><button type="button" className="small-secondary" disabled={decision.decisionBusy} onClick={()=>void decision.refresh().catch(()=>{})}>状態を再確認</button></div>
+      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{quit?value?.preparing?"録音準備を中止して閉じる":"録音を終了して閉じる":value?.preparing?"録音準備を中止する":"録音を終了する"}</button><button type="button" className="small-secondary" disabled={decision.decisionBusy} onClick={()=>void decision.refresh().catch(()=>{})}>状態を再確認</button></div>
     </CommonModal>
   </main>;
 }

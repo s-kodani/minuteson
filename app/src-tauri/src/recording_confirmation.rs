@@ -25,6 +25,7 @@ pub struct StopDecision {
     pub meeting_title: Option<String>,
     pub origin: Option<String>,
     pub preparing: bool,
+    pub quit_after_save: bool,
     pub error_message: Option<String>,
 }
 impl Default for StopDecision {
@@ -38,6 +39,7 @@ impl Default for StopDecision {
             meeting_title: None,
             origin: None,
             preparing: false,
+            quit_after_save: false,
             error_message: None,
         }
     }
@@ -55,6 +57,7 @@ impl StopDecision {
 struct DecisionState {
     decision: StopDecision,
     recording_revision: u64,
+    quit_notified: bool,
 }
 #[derive(Default)]
 pub struct StopDecisionStore(Mutex<DecisionState>);
@@ -72,8 +75,20 @@ impl StopDecisionStore {
         origin: &str,
         title: String,
     ) -> Result<(StopDecision, bool), String> {
+        self.request_for_exit(recording, origin, title, false)
+    }
+    pub fn request_for_exit(
+        &self,
+        recording: &RecordingSnapshot,
+        origin: &str,
+        title: String,
+        quit_after_save: bool,
+    ) -> Result<(StopDecision, bool), String> {
         if !matches!(origin, "main" | "recorder") {
             return Err("録音画面から確認してください".into());
+        }
+        if quit_after_save && origin != "main" {
+            return Err("アプリ終了はメイン画面から確認してください".into());
         }
         let mut state = self
             .0
@@ -104,9 +119,26 @@ impl StopDecisionStore {
             meeting_title: Some(title),
             origin: Some(origin.into()),
             preparing: recording.phase == RecordingPhase::Preparing,
+            quit_after_save,
             error_message: None,
         };
-        Ok((value.clone(), true))
+        let result = value.clone();
+        state.quit_notified = false;
+        Ok((result, true))
+    }
+    // A completion notification continues closing, not stopping or saving.
+    // Repeated observations never replay that continuation or upgrade consent.
+    pub fn take_completed_quit(&self, id: &str) -> bool {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.decision.id.as_deref() != Some(id)
+            || state.decision.phase != DecisionPhase::Completed
+            || !state.decision.quit_after_save
+            || state.quit_notified
+        {
+            return false;
+        }
+        state.quit_notified = true;
+        true
     }
     pub fn claim(
         &self,
@@ -248,6 +280,53 @@ pub fn fitted_size(area: (u32, u32), scale: f64) -> Result<(u32, u32), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quit_requires_explicit_consent_and_only_continues_once_after_actual_save() {
+        let store = StopDecisionStore::default();
+        assert!(store
+            .request_for_exit(&recording(), "recorder", "A".into(), true)
+            .is_err());
+        let (stop, _) = store.request(&recording(), "recorder", "A".into()).unwrap();
+        let (unchanged, created) = store
+            .request_for_exit(&recording(), "main", "A".into(), true)
+            .unwrap();
+        assert!(!created && !unchanged.quit_after_save);
+        assert_eq!(stop.id, unchanged.id);
+        store.dismiss(stop.id.as_ref().unwrap()).unwrap();
+        let (quit, _) = store
+            .request_for_exit(&recording(), "main", "A".into(), true)
+            .unwrap();
+        let id = quit.id.as_ref().unwrap();
+        assert!(!store.take_completed_quit(id));
+        store.claim(id, false, &recording()).unwrap();
+        assert!(!store.take_completed_quit(id));
+        store.observe(&RecordingSnapshot {
+            phase: RecordingPhase::Saving,
+            ..recording()
+        });
+        assert!(!store.take_completed_quit(id));
+        store.observe(&RecordingSnapshot::default());
+        assert!(store.take_completed_quit(id));
+        assert!(!store.take_completed_quit(id));
+        assert!(!store.take_completed_quit(stop.id.as_ref().unwrap()));
+    }
+    #[test]
+    fn cancelled_and_failed_recording_quit_never_continue_closing() {
+        let store = StopDecisionStore::default();
+        let (quit, _) = store
+            .request_for_exit(&recording(), "main", "A".into(), true)
+            .unwrap();
+        let id = quit.id.as_ref().unwrap();
+        store.dismiss(id).unwrap();
+        assert!(!store.take_completed_quit(id));
+        let (quit, _) = store
+            .request_for_exit(&recording(), "main", "A".into(), true)
+            .unwrap();
+        let id = quit.id.as_ref().unwrap();
+        store.claim(id, false, &recording()).unwrap();
+        store.fail(id, "保存失敗".into());
+        assert!(!store.take_completed_quit(id));
+    }
     #[test]
     fn stale_recording_reads_cannot_revert_consent_or_complete_next_recording() {
         let store = StopDecisionStore::default();

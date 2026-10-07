@@ -2,8 +2,8 @@ async page=>{
  const context=page.context(), results=[], check=(ok,message)=>{if(!ok)throw Error(message);};
  let sequence=0;
  const id=()=>"00000000-0000-4000-8000-"+(++sequence).toString().padStart(12,"0");
- const empty=()=>({revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,errorMessage:null});
- const initial=()=>({recording:{revision:1,phase:"recording",elapsedMs:45000,microphoneConnected:true,systemAudioConnected:true,meetingId:"synthetic-meeting",sessionId:id(),errorMessage:null},decision:empty(),calls:[],presentations:0,lostStop:false,failStop:false,failRead:false,suppressEvents:false});
+ const empty=()=>({revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null});
+ const initial=()=>({recording:{revision:1,phase:"recording",elapsedMs:45000,microphoneConnected:true,systemAudioConnected:true,meetingId:"synthetic-meeting",sessionId:id(),errorMessage:null},decision:empty(),calls:[],presentations:0,quitNotified:false,lostStop:false,failStop:false,failRead:false,suppressEvents:false});
  let backend=initial();
  const command=(name,args,label)=>{
   const s=backend,d=s.decision;
@@ -15,7 +15,7 @@ async page=>{
   if(name==="get_recording_snapshot")return s.recording;
   if(name==="get_recording_confirmation"){if(s.failRead)throw Error("模擬確認読戻し失敗");return d;}
   s.calls.push({command:name,args,label});
-  if(name==="request_recording_confirmation"){if(["confirming","stopping","failed"].includes(d.phase))return d;check(["main","recorder"].includes(label)&&["preparing","recording"].includes(s.recording.phase),"invalid recording request");s.decision={...empty(),revision:d.revision+1,id:id(),phase:"confirming",sessionId:s.recording.sessionId,meetingId:s.recording.meetingId,meetingTitle:"合成会議",origin:label,preparing:s.recording.phase==="preparing"};s.presentations++;return s.decision;}
+  if(name==="request_recording_confirmation"){if(["confirming","stopping","failed"].includes(d.phase))return d;check(["main","recorder"].includes(label)&&["preparing","recording"].includes(s.recording.phase)&&(!args.quit||label==="main"),"invalid recording request");s.decision={...empty(),revision:d.revision+1,id:id(),phase:"confirming",sessionId:s.recording.sessionId,meetingId:s.recording.meetingId,meetingTitle:"合成会議",origin:label,preparing:s.recording.phase==="preparing",quitAfterSave:!!args.quit};s.presentations++;return s.decision;}
   if(name==="decide_recording_confirmation"){
    check(label==="recording-confirmation"&&args.id===d.id&&["confirming","failed"].includes(d.phase),"確認は既に確定しています");if(!args.stop){d.phase="cancelled";d.revision++;return d;}
    if(s.transitionAtStop){s.transitionAtStop=false;s.recording.phase="recording";s.recording.revision++;d.preparing=false;d.revision++;}
@@ -29,8 +29,11 @@ async page=>{
  await context.route("http://127.0.0.1:1420/__synthetic_recording_controller",async route=>{
   const {command:name,args={},label}=route.request().postDataJSON();let value,error;
   try{value=structuredClone(command(name,args,label));}catch(cause){error=String(cause);}
+  const notifyQuit=backend.decision.quitAfterSave&&backend.decision.phase==="completed"&&!backend.quitNotified;
+  if(notifyQuit)backend.quitNotified=true;
   const frozen=structuredClone(backend);
   if(!name.startsWith("get_")&&name!=="fixture-read"&&!frozen.suppressEvents){await Promise.all(context.pages().map(p=>p.evaluate(async s=>{if(!window.recordingFixture)return;await window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"recording-confirmation-changed",payload:s.decision});await window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"session-changed",payload:s.recording});},frozen).catch(()=>{})));}
+  if(notifyQuit)await page.evaluate(id=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"main-close-requested",payload:{quit:true,afterRecording:id}}),frozen.decision.id);
   await route.fulfill({contentType:"application/json",body:JSON.stringify(error?{error}:{value})});
  });
  await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{const response=await route.fetch();const body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/recording-confirmation-browser-fixture.js");</script>');await route.fulfill({response,body});});
@@ -88,6 +91,28 @@ async page=>{
   const box=await dialog().boundingBox();check(box.x>=23.9&&box.x+box.width<=336.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"small separate confirmation clipped");await modal.screenshot({path:"recording-stop-confirmation-360.png"});await modal.setViewportSize({width:560,height:460});await modal.screenshot({path:"recording-stop-confirmation-560.png"});
   await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"visual check stopped recording");
   results.push("separate confirmation fits 560px and 360px; visual check and Escape never stop recording");
+
+  stage="recording-quit";
+  const requestQuit=()=>page.evaluate(()=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"main-close-requested",payload:{quit:true}}));
+  const clearClose=()=>page.evaluate(()=>{window.dataFixture.calls=[];});
+  const closed=()=>page.evaluate(()=>window.dataFixture.calls.filter(c=>c.command==="finish_main_close").length);
+  const quitEnd=()=>modal.getByRole("button",{name:"録音を終了して閉じる",exact:true});
+  await reset();await clearClose();await requestQuit();await modal.getByRole("heading",{name:"録音を終了してアプリを閉じますか？",exact:true}).waitFor();
+  check((await state()).decision.quitAfterSave&&await page.getByRole("dialog").count()===0,"quit intent was missing or duplicated main confirmation");
+  const quitBox=await dialog().boundingBox();check(quitBox.y>=23.9&&quitBox.y+quitBox.height<=436.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"recording quit clipped the native-size confirmation");await modal.screenshot({path:"recording-quit-confirmation-560.png"});
+  await modal.keyboard.press("Enter");await dialog().waitFor({state:"hidden"});check(await closed()===0&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"declining quit stopped or closed recording");
+  results.push("recording quit shares the independent confirmation and declining never stops or closes the app");
+
+  await reset();await clearClose();await Promise.all([requestQuit(),requestQuit()]);await quitEnd().waitFor();await quitEnd().dblclick();
+  await modal.getByRole("status").filter({hasText:"停止・保存"}).waitFor();for(let i=0;i<3;i++)await modal.keyboard.press("Escape");
+  check(await closed()===0&&(await state()).calls.filter(c=>c.command==="synthetic-stop").length===1,"quit repeated stopping or exited before saved");
+  await page.evaluate(()=>window.recordingFixture.phase("saving"));check(await closed()===0,"quit exited during saving");await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});await page.waitForFunction(()=>window.dataFixture.calls.filter(c=>c.command==="finish_main_close").length===1);
+  await page.evaluate(()=>window.recordingFixture.finish(false));check(await closed()===1,"completion repeated application closing");
+  check(!await page.evaluate(()=>window.dataFixture.calls.some(c=>c.command==="stop_recording")),"quit bypassed shared recording stop");
+  results.push("recording quit stops once, waits for actual save and continues closing exactly once with the completed decision");
+
+  await reset();await clearClose();await requestQuit();await quitEnd().click();await page.evaluate(()=>window.recordingFixture.finish(true));await dialog().getByRole("alert").filter({hasText:"保存失敗"}).waitFor();check(await closed()===0,"failed recording save continued application closing");await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});check(await closed()===0&&(await state()).recording.phase==="error","closing failed confirmation erased save failure or quit");
+  results.push("recording quit retains saving failure and never continues closing after dismissal");
   return {passed:results.length,results};
  }catch(cause){throw Error(`${stage}: ${String(cause)}; modal=${await modal.locator("body").innerText()}; decision=${JSON.stringify((await page.evaluate(()=>window.recordingFixture.read())).decision)}`);}
  finally{await mini.close();await modal.close();await page.goto("about:blank");await context.unrouteAll();}

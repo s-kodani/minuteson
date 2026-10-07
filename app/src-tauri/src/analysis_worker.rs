@@ -313,6 +313,16 @@ impl AnalysisController {
     // Seal admission before waiting for imports/data cleanup. This also closes
     // the previous export/start-recording race between exit checks and shutdown.
     pub(crate) fn begin_exit(&self) -> Result<(), String> {
+        self.begin_exit_inner(true)
+    }
+    pub(crate) fn seal_exit(&self) -> Result<(), String> {
+        self.begin_exit_inner(false)
+    }
+    pub(crate) fn close_activity(&self) -> Result<(bool, bool), String> {
+        let state = self.state.lock().map_err(|_| "解析状態を取得できません")?;
+        Ok((state.busy, state.model_preparation.is_some()))
+    }
+    fn begin_exit_inner(&self, cancel_work: bool) -> Result<(), String> {
         let state = self
             .state
             .lock()
@@ -321,9 +331,11 @@ impl AnalysisController {
             return Err("書き出し・録音開始・終了処理が進行中です".into());
         }
         self.shutdown.store(true, Ordering::SeqCst);
-        state.cancel_model_preparation();
-        if let Some(cancel) = &state.data_maintenance {
-            cancel.store(true, Ordering::SeqCst);
+        if cancel_work {
+            state.cancel_model_preparation();
+            if let Some(cancel) = &state.data_maintenance {
+                cancel.store(true, Ordering::SeqCst);
+            }
         }
         Ok(())
     }

@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+fn checked_close_rejects_changed_data_before_any_cancellation_or_cleanup() {
+    let controller = DataController::default();
+    let (snapshot, cancel, _) = controller.begin(Kind::Backup).unwrap();
+    assert!(controller
+        .stop_checked(Duration::ZERO, Some(&None))
+        .is_err());
+    assert!(controller
+        .stop_checked(Duration::ZERO, Some(&Some("foreign".into())))
+        .is_err());
+    assert!(!cancel.load(Ordering::Acquire));
+    assert!(!controller.state.lock().unwrap().closing);
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap(),
+        serde_json::to_value(controller.snapshot().unwrap()).unwrap()
+    );
+}
+
 fn finish_work(
     controller: &DataController,
     snapshot: &Snapshot,
