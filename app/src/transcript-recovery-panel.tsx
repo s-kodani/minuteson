@@ -7,6 +7,7 @@ import type { TranscriptRecovery } from "./transcript-recovery-save";
 import type { DraftPayload } from "./transcript-state";
 
 type Record = TranscriptRecovery<DraftPayload>;
+const inputCount = (record: Record) => record.payload.buffers.length + (record.payload.nameBuffers?.length ?? 0);
 interface Summary {
   draftId: string; baseAnalysisId: string; operationId: string; contentHash: string;
   lockVersion: number; updatedAt: number; bufferCount: number; matchesDraft: boolean; currentContext: boolean;
@@ -57,7 +58,7 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
     if(!live.current) return;
     if(!result || result.meetingId !== meetingId || result.draftId !== item.draftId || result.baseAnalysisId !== item.baseAnalysisId
       || result.operationId !== item.operationId || result.lockVersion !== item.lockVersion || result.contentHash !== item.contentHash
-      || result.payload.buffers.length !== item.bufferCount) throw Error("一覧の確認後に回復記録が変わりました。一覧を再読込してください。");
+      || inputCount(result) !== item.bufferCount) throw Error("一覧の確認後に回復記録が変わりました。一覧を再読込してください。");
     setPreview(result); setPreviewPage(0); setMessage("");
   };
   const current = preview?.draftId === currentDraftId;
@@ -65,10 +66,14 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
     && preview.lockVersion === review.lockVersion && preview.contentHash === review.contentHash
     && preview.matchesDraft && preview.currentContext;
   const destructiveBlocked = blocked || busy || !!state.pending || state.busy || (current && !canChangeCurrent);
+  const previewInputs = preview ? [
+    ...preview.payload.buffers.map(buffer => ({ kind: "text" as const,buffer })),
+    ...(preview.payload.nameBuffers ?? []).map(buffer => ({ kind: "name" as const,buffer })),
+  ] : [];
   const requestDiscard = () => {
     const expected = preview;
-    if(!expected || destructiveBlocked || !expected.payload.buffers.length) return;
-    void confirm({ title: "未確定入力の破棄を確認", target: `解析版 ${expected.baseAnalysisId} · 未確定入力 ${expected.payload.buffers.length}件`,
+    if(!expected || destructiveBlocked || !inputCount(expected)) return;
+    void confirm({ title: "未確定入力の破棄を確認", target: `解析版 ${expected.baseAnalysisId} · 未確定入力 ${inputCount(expected)}件`,
       confirmLabel: "確認した未確定入力を破棄する",
       message: "表示した回復記録の未確定入力だけを破棄します。この入力は復元できません。確定本文・話者名・Undo・旧解析版は変更しません。",
       validate: () => preview === expected && !discard.snapshot().pending && (!current || latest.current.canChangeCurrent),
@@ -77,7 +82,7 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
     });
   };
   return <>
-    {review && <p className="hint" role="status">保存済みの未確定入力 {review.payload.buffers.length}件があります。確認してから編集を再開してください。{(!review.matchesDraft || !review.currentContext) && "現在の本文とは条件が異なるため、自動適用しません。"}
+    {review && <p className="hint" role="status">保存済みの未確定入力 {inputCount(review)}件があります。確認してから編集を再開してください。{(!review.matchesDraft || !review.currentContext) && "現在の本文とは条件が異なるため、自動適用しません。"}
       <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={() => { setPreview(review); setPreviewPage(0); setOpen(true); setError(""); }}>未確定入力を確認</button></p>}
     <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={() => { setOpen(true); void run(() => list(0,[null])); }}>旧下書きを含む回復記録</button>
     {state.pending && <div className="action-error" role="alert">
@@ -94,7 +99,7 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
     {!open && (error || state.error) && <p className="action-error" role="alert">{error || state.error}</p>}
     <CommonModal open={open} className="transcript-recovery-dialog" blocked={busy || state.busy || confirm.pending} onDismiss={() => setOpen(false)} aria-labelledby="transcript-recovery-title" dismissLabel="閉じる">
       <h3 id="transcript-recovery-title">未確定入力の回復記録</h3>
-      <p>編集確定前の入力です。閲覧や編集再開だけでは本文を確定せず、旧下書きや旧解析版も採用しません。</p>
+      <p>編集確定前の本文と話者名です。閲覧や編集再開だけでは確定せず、旧下書きや旧解析版も採用しません。</p>
       <button type="button" disabled={busy || state.busy || blocked} onClick={() => void run(() => list(0,[null]))}>回復一覧を再読込</button>
       {inventory && <div className="recovery-inventory" aria-label="回復記録の一覧">
         <p>一覧 {page + 1}ページ · {inventory.items.length}件（最大20件）</p>
@@ -105,14 +110,16 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
         <button type="button" disabled={!inventory.nextCursor || busy || blocked} onClick={() => void run(() => list(page + 1,[...cursors.slice(0,page + 1),inventory.nextCursor]))}>次の一覧</button>
       </div>}
       {preview && <div aria-label="回復入力のプレビュー">
-        <p>解析版 {preview.baseAnalysisId} · 回復版 {preview.lockVersion} · 入力 {preview.payload.buffers.length}件</p>
-        {(!preview.currentContext || !preview.matchesDraft) && <p className="hint">旧版または本文更新後の記録です。編集再開はできません。必要な本文を選択して手動でコピーできます。</p>}
-        {preview.payload.buffers.slice(previewPage * 10,(previewPage + 1) * 10).map(buffer => <div key={buffer.utteranceId}>
-          <p>発言 {buffer.utteranceId}</p><label>入力開始時の本文<textarea readOnly value={buffer.text} rows={2}/></label><label>未確定の本文<textarea readOnly value={buffer.value} rows={2}/></label>
+        <p>解析版 {preview.baseAnalysisId} · 回復版 {preview.lockVersion} · 入力 {previewInputs.length}件（本文 {preview.payload.buffers.length}件・話者名 {preview.payload.nameBuffers?.length ?? 0}件）</p>
+        {(!preview.currentContext || !preview.matchesDraft) && <p className="hint">旧版または本文更新後の記録です。編集再開はできません。必要な本文や話者名を選択して手動でコピーできます。</p>}
+        {previewInputs.slice(previewPage * 10,(previewPage + 1) * 10).map(item => item.kind === "text" ? <div key={`text:${item.buffer.utteranceId}`}>
+          <p>発言 {item.buffer.utteranceId}</p><label>入力開始時の本文<textarea readOnly value={item.buffer.text} rows={2}/></label><label>未確定の本文<textarea readOnly value={item.buffer.value} rows={2}/></label>
+        </div> : <div key={`name:${item.buffer.speakerId}`}>
+          <p>話者 {item.buffer.speakerId} · {item.buffer.hadOverride ? "開始時に手動名あり" : "開始時に手動名なし"}</p><label>入力開始時の話者名<textarea readOnly value={item.buffer.name ?? ""} rows={2}/></label><label>未確定の話者名<textarea readOnly value={item.buffer.value} rows={2}/></label>
         </div>)}
-        {preview.payload.buffers.length > 10 && <div><button type="button" disabled={previewPage === 0} onClick={() => setPreviewPage(n => n - 1)}>前の入力</button><span>{previewPage + 1} / {Math.ceil(preview.payload.buffers.length / 10)}</span><button type="button" disabled={(previewPage + 1) * 10 >= preview.payload.buffers.length} onClick={() => setPreviewPage(n => n + 1)}>次の入力</button></div>}
-        {!!preview.payload.buffers.length && <div className="recovery-actions">
-          <button type="button" disabled={!resumeAllowed || destructiveBlocked} onClick={() => void run(async () => { await onResume(); if(live.current) { setOpen(false); setMessage("未確定入力の編集を再開しました。本文はまだ確定していません。"); } })}>確認した入力の編集を再開</button>
+        {previewInputs.length > 10 && <div><button type="button" disabled={previewPage === 0} onClick={() => setPreviewPage(n => n - 1)}>前の入力</button><span>{previewPage + 1} / {Math.ceil(previewInputs.length / 10)}</span><button type="button" disabled={(previewPage + 1) * 10 >= previewInputs.length} onClick={() => setPreviewPage(n => n + 1)}>次の入力</button></div>}
+        {!!previewInputs.length && <div className="recovery-actions">
+          <button type="button" disabled={!resumeAllowed || destructiveBlocked} onClick={() => void run(async () => { await onResume(); if(live.current) { setOpen(false); setMessage("未確定入力の編集を再開しました。本文と話者名はまだ確定していません。"); } })}>確認した入力の編集を再開</button>
           <button type="button" className="stop-button" disabled={destructiveBlocked} onClick={requestDiscard}>この回復入力を破棄</button>
         </div>}
       </div>}

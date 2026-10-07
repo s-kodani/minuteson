@@ -9,6 +9,7 @@ const hash = (n: number) => n.toString(16).padStart(64,"0");
 const payload = (text?: string): DraftPayload => canonicalPayload({ schema_version: 1,speaker_names: [],utterances: text === undefined ? [] : [{ utterance_id: "u",effective_text: text,speaker_ids: [] }] });
 const draft: RecoverableDraft = { id: "draft",meetingId: "meeting",baseAnalysisId: "base",lockVersion: 0,contentHash: hash(100),payload: payload(),updatedAt: 1 };
 const buffer = (value = "入力") => ({ utteranceId: "u",text: "原文",speakerIds: [],hadOverride: false,value });
+const nameBuffer = (value = "未確定名") => ({ speakerId: "s",name: null,hadOverride: false,value });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise,resolve }; }
 function fixture() {
   let actual = structuredClone(draft), record: TranscriptRecovery<DraftPayload> | null = null;
@@ -25,7 +26,8 @@ function fixture() {
         operationId: req.operationId,lockVersion: req.expectedRecoveryLockVersion + 1,contentHash: hash(req.expectedRecoveryLockVersion + 1),updatedAt: 1,
         baseDraftLockVersion: actual.lockVersion,baseDraftContentHash: actual.contentHash,
         currentDraftLockVersion: actual.lockVersion,currentDraftContentHash: actual.contentHash,currentContext: true,matchesDraft: true,
-        payload: { schemaVersion: 1,basePayload: actual.payload,buffers: structuredClone(req.buffers) } };
+        payload: { schemaVersion: req.nameBuffers?.length ? 3 : 1,basePayload: actual.payload,buffers: structuredClone(req.buffers),
+          ...(req.nameBuffers?.length ? { nameBuffers: structuredClone(req.nameBuffers) } : {}) } };
       return record;
     },read: async () => { calls.push({ kind: "readJournal",req: null }); return record; },
   });
@@ -39,7 +41,8 @@ function fixture() {
     return structuredClone(actual);
   },async () => { calls.push({ kind: "readBody",req: null }); return structuredClone(actual); });
   editor.load(actual,null);
-  return { editor,journal,calls,state,get actual() { return actual; },set actual(value) { actual = value; } };
+  return { editor,journal,calls,state,get actual() { return actual; },set actual(value) { actual = value; },
+    get record() { return record; },set record(value) { record = value; } };
 }
 test("body save waits for recovery acknowledgement and rebases remaining input without clearing it", async () => {
   const f = fixture(), wait = deferred<void>(); f.state.journalWait = wait;
@@ -136,9 +139,9 @@ test("unsafe next body version is refused before any body request is frozen or s
   await assert.rejects(f.editor.saveDraft(draft.id,Number.MAX_SAFE_INTEGER,payload("保持")),/安全な範囲/);
   assert.equal(f.calls.length,0); assert.equal(f.editor.snapshot().bodyPending,false);
 });
-test("text-only production resume refuses named records until both input types are connected without replacing local input", () => {
+test("production load reviews named and mixed records, then explicit read-only resume restores both arrays", async () => {
   for(const mixed of [false,true]) {
-    const f = fixture(); f.journal.update([buffer("保持するローカル本文")]);
+    const f = fixture();
     const record: TranscriptRecovery<DraftPayload> = {
       meetingId: draft.meetingId,draftId: draft.id,baseAnalysisId: draft.baseAnalysisId,
       operationId: randomUUID(),lockVersion: 1,contentHash: hash(1),updatedAt: 1,
@@ -148,9 +151,40 @@ test("text-only production resume refuses named records until both input types a
       payload: { schemaVersion: 3,basePayload: draft.payload,buffers: mixed ? [buffer("保存済み本文")] : [],
         nameBuffers: [{ speakerId: "s",name: null,hadOverride: false,value: "保存済みの未確定名" }] },
     };
-    assert.throws(() => f.editor.load(draft,record),/本文だけを再開せず/);
-    assert.equal(f.editor.snapshot().buffers[0].value,"保持するローカル本文");
-    assert.equal(f.editor.snapshot().saved,null); assert.equal(f.editor.snapshot().review,null);
+    f.record = record; f.editor.load(draft,record);
+    assert.deepEqual(f.editor.snapshot().buffers,[]); assert.deepEqual(f.editor.snapshot().nameBuffers,[]);
+    assert.deepEqual(f.editor.snapshot().review,record);
     assert.equal(f.calls.length,0);
+    await f.editor.resume();
+    assert.deepEqual(f.calls.map(call => call.kind),["readJournal"]);
+    assert.deepEqual(f.editor.snapshot().buffers,record.payload.buffers);
+    assert.deepEqual(f.editor.snapshot().nameBuffers,record.payload.nameBuffers);
+    assert.equal(f.editor.snapshot().review,null); assert.equal(f.editor.snapshot().dirty,false);
+    assert.deepEqual(f.actual,draft);
   }
+});
+test("mixed recovery is acknowledged before publishing only the chosen name, then preserves text and a newer name", async () => {
+  const f = fixture(), wait = deferred<void>(); f.state.bodyWait = wait;
+  f.journal.update([buffer()],[nameBuffer("確定する名")]);
+  const selected = canonicalPayload({ ...draft.payload,speaker_names: [{ speaker_id: "s",display_name: "確定する名" }] });
+  const saving = f.editor.saveDraft(draft.id,0,selected);
+  for(let attempt = 0; attempt < 20 && !f.calls.some(call => call.kind === "body"); attempt++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.calls.map(call => call.kind),["journal","body"]);
+  assert.deepEqual((f.calls[0].req as RecoverySaveRequest).nameBuffers,[nameBuffer("確定する名")]);
+  f.journal.update([buffer("新本文")],[nameBuffer("さらに新しい名")]);
+  wait.resolve(); await saving; await f.editor.flushRecovery();
+  assert.deepEqual(f.actual.payload,selected);
+  assert.deepEqual(f.editor.snapshot().buffers,[buffer("新本文")]);
+  assert.deepEqual(f.editor.snapshot().nameBuffers,[nameBuffer("さらに新しい名")]);
+  assert.equal((f.calls.at(-1)!.req as RecoverySaveRequest).expectedDraftLockVersion,1);
+});
+test("clearing only a name retains text, and clearing both returns the legacy empty recovery format", async () => {
+  const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); await f.editor.flushRecovery();
+  assert.equal(f.record?.payload.schemaVersion,3);
+  f.journal.update([buffer()],[]); await f.editor.flushRecovery();
+  assert.equal(f.record?.payload.schemaVersion,1); assert.equal(f.record?.payload.nameBuffers,undefined);
+  assert.deepEqual(f.record?.payload.buffers,[buffer()]);
+  f.journal.update([],[]); await f.editor.flushRecovery();
+  assert.deepEqual(f.record?.payload.buffers,[]); assert.equal(f.record?.payload.nameBuffers,undefined);
+  assert.equal(f.calls.some(call => call.kind === "body"),false);
 });

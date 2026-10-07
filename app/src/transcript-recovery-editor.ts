@@ -40,10 +40,6 @@ export class TranscriptRecoveryEditor {
 
   load(draft: RecoverableDraft | null, record: TranscriptRecovery<DraftPayload> | null) {
     this.idleBody();
-    // The journal can retain names, but the production review/resume UI still
-    // handles only text. Fail closed until that UI can restore both arrays;
-    // otherwise resuming mixed input would silently clear its names.
-    if(record?.payload.nameBuffers?.length) throw Error("話者名を含む回復記録は画面接続待ちです。本文だけを再開せず、記録を保持しています");
     this.journal.load(draft ? recoveryContext(draft) : null,record);
     this.draft = draft ? structuredClone(draft) : null;
   }

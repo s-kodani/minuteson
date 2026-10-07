@@ -97,27 +97,44 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const focusNameAfterRemoval = useRef<{ id: string; input: HTMLInputElement } | null>(null);
   const nameOperations = useRef(new Map<string,{ kind: "commit" | "cancel" }>());
   const [namePending,setNamePending] = useState<Record<string,"commit" | "cancel">>({});
-  const updateNames = (update: (current: Record<string,SpeakerNameSession>) => Record<string,SpeakerNameSession>) => {
-    nameBuffers.current = update(nameBuffers.current); setNameSessions(nameBuffers.current);
-  };
   const focusAfterRemoval = useRef<{ id: string; row: HTMLElement | null } | null>(null);
   const undoPending = useRef(false);
   const removingBuffers = useRef(new Map<string,{ session: TextEditSession; kind: "commit" | "cancel" | "barrier" }>());
+  const removingNames = useRef(new Map<string,{ session: SpeakerNameSession; kind: "commit" | "cancel" | "barrier" }>());
   const durableBuffers = () => Object.values(textBuffers.current).filter(session => removingBuffers.current.get(session.utteranceId)?.session !== session);
-  const syncRecoveryBuffers = () => recovery.journal.update(durableBuffers());
+  const durableNames = () => Object.values(nameBuffers.current).filter(session => removingNames.current.get(session.speakerId)?.session !== session);
+  const syncRecoveryBuffers = () => recovery.journal.update(durableBuffers(),durableNames());
+  const updateNames = (update: (current: Record<string,SpeakerNameSession>) => Record<string,SpeakerNameSession>,sync = true) => {
+    nameBuffers.current = update(nameBuffers.current); setNameSessions(nameBuffers.current);
+    for(const [id,pending] of removingNames.current) if(nameBuffers.current[id] !== pending.session) removingNames.current.delete(id);
+    if(sync) syncRecoveryBuffers();
+  };
   const updateTextSessions = (update: (current: Record<string, TextEditSession>) => Record<string, TextEditSession>) => {
     textBuffers.current = update(textBuffers.current); setTextSessions(textBuffers.current);
     for(const [id,pending] of removingBuffers.current) if(textBuffers.current[id] !== pending.session) removingBuffers.current.delete(id);
     syncRecoveryBuffers();
   };
   const settleRemovedBuffers = () => {
-    if(!removingBuffers.current.size) return;
-    if(recovery.snapshot().saving || recovery.snapshot().pendingRequest || recovery.snapshot().error || recovery.snapshot().dirty) return;
-    const next = { ...textBuffers.current };
+    if(!removingBuffers.current.size && !removingNames.current.size) return;
+    const journal = recovery.snapshot();
+    if(journal.saving || journal.pendingRequest || journal.error) return;
+    const next = { ...textBuffers.current }, nextNames = { ...nameBuffers.current };
+    let textChanged = false, namesChanged = false;
     for(const [id,pending] of removingBuffers.current) if(pending.kind !== "barrier") {
-      if(next[id] === pending.session) delete next[id]; removingBuffers.current.delete(id);
+      // A read-back can prove this removal while newer input elsewhere still
+      // awaits explicit saving. Do not require that unrelated input to be clean.
+      if(journal.saved?.payload.buffers.some(session => session.utteranceId === id)) continue;
+      if(next[id] === pending.session) { delete next[id]; textChanged = true; } removingBuffers.current.delete(id);
     }
-    updateTextSessions(() => next);
+    for(const [id,pending] of removingNames.current) if(pending.kind !== "barrier") {
+      if(journal.saved?.payload.nameBuffers?.some(session => session.speakerId === id)) continue;
+      if(nextNames[id] === pending.session) { delete nextNames[id]; namesChanged = true; } removingNames.current.delete(id);
+    }
+    // Keep barrier-only maps identical: a navigation flush uses that identity
+    // to distinguish new typing from already acknowledged editing fields.
+    if(namesChanged) updateNames(() => nextNames,false);
+    if(textChanged) updateTextSessions(() => next);
+    else if(namesChanged) syncRecoveryBuffers();
   };
   const stageTextBuffers = () => {
     saveQueue.edit(current => durableBuffers().reduce(stageTextEdit, current));
@@ -128,16 +145,17 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     if(!saveQueue.snapshot().draft) return;
     if(recovery.snapshot().review && !saveQueue.snapshot().dirty && !Object.keys(textBuffers.current).length && !Object.keys(nameBuffers.current).length) return;
     for (;;) {
-      if(removingBuffers.current.size) { await recovery.flushRecovery(); settleRemovedBuffers(); }
+      if(removingBuffers.current.size || removingNames.current.size) { await recovery.flushRecovery(); settleRemovedBuffers(); }
       const expected = textBuffers.current;
       const expectedNames = nameBuffers.current;
-      saveQueue.edit(current => Object.values(expectedNames).reduce(stageName,current));
+      saveQueue.edit(current => durableNames().reduce(stageName,current));
       stageTextBuffers(); await saveQueue.flush();
       // A barrier can save while this editor remains mounted (e.g. a candidate
       // review). Keep its field/baseline so Esc can still record a restoration.
       for(const session of Object.values(expected)) if(textBuffers.current[session.utteranceId] === session) removingBuffers.current.set(session.utteranceId,{ session,kind: "barrier" });
+      for(const session of Object.values(expectedNames)) if(nameBuffers.current[session.speakerId] === session) removingNames.current.set(session.speakerId,{ session,kind: "barrier" });
       syncRecoveryBuffers(); await recovery.flushRecovery(); settleRemovedBuffers();
-      if(!durableBuffers().length && !saveQueue.snapshot().dirty && expectedNames === nameBuffers.current) return;
+      if(!durableBuffers().length && !durableNames().length && !saveQueue.snapshot().dirty && expectedNames === nameBuffers.current) return;
     }
   };
   const recoveryReadyRef = useRef(recoveryReady); recoveryReadyRef.current = recoveryReady;
@@ -198,7 +216,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       setAnalysis(current);
       saveQueue.load(working);
       textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null);
-      updateNames(() => ({}));
+      removingNames.current.clear(); updateNames(() => ({}),false);
       recoveryReadyRef.current = true; setRecoveryReady(true);
       setPage(0);
       setSelection([]); setMergeSource(""); setMergeTarget(""); setNotice(""); setNoticeVersion(null);
@@ -270,8 +288,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
       const previous = await invoke<Draft>("undo_transcript_edit", { draftId: current.id, expectedLockVersion: current.lockVersion });
       recovery.advance(previous);
       saveQueue.load(previous);
+      removingNames.current.clear(); updateNames(() => ({}),false);
       updateTextSessions(() => ({}));
-      updateNames(() => ({}));
       setNotice("直前の編集を取り消しました。"); setNoticeVersion(null); setMergeSource(""); setMergeTarget("");
     } catch (cause) {
       setError(String(cause));
@@ -341,14 +359,21 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         saveQueue.load(saved); if(failed.payload) saveQueue.edit(() => failed.payload!);
       }
       if(nameBuffers.current[id] !== session) return;
-      saveQueue.edit(current => kind === "commit" ? stageName(current,session) : cancelName(current,session));
-      await saveQueue.flush(); await recovery.flushRecovery();
+      const removal = removingNames.current.get(id);
+      if(removal?.session !== session || removal.kind !== kind) {
+        removingNames.current.delete(id); syncRecoveryBuffers();
+        saveQueue.edit(current => kind === "commit" ? stageName(current,session) : cancelName(current,session));
+      }
+      await saveQueue.flush();
       setBodyManual(false);
+      if(nameBuffers.current[id] !== session) { await recovery.flushRecovery(); return; }
+      removingNames.current.set(id,{ session,kind }); syncRecoveryBuffers();
+      await recovery.flushRecovery();
       if(nameBuffers.current[id] === session) {
         const input = nameInputs.current.get(id);
         if(input && (input.closest(".speaker-name-editor")?.contains(document.activeElement) || startedFocused && document.activeElement === document.body)) focusNameAfterRemoval.current = { id,input };
-        updateNames(current => { const next = { ...current }; delete next[id]; return next; });
       }
+      settleRemovedBuffers(); setRecoveryManual(false);
     } catch(cause) { setError(String(cause)); }
     finally {
       if(nameOperations.current.get(id) === operation) { nameOperations.current.delete(id); setNamePending(current => { const next = { ...current }; delete next[id]; return next; }); }
@@ -421,11 +446,12 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         || working.lockVersion !== acknowledged.lockVersion || working.contentHash !== acknowledged.contentHash
         || working.baseAnalysisId !== current?.id) throw Error("再読込前に本文が変わりました。入力を破棄せず保持しています。");
       for(const session of Object.values(textBuffers.current)) removingBuffers.current.set(session.utteranceId,{ session,kind: "cancel" });
+      for(const session of Object.values(nameBuffers.current)) removingNames.current.set(session.speakerId,{ session,kind: "cancel" });
       syncRecoveryBuffers(); await recovery.flushRecovery();
       recovery.load(working,recovery.snapshot().saved); saveQueue.load(working); setAnalysis(current);
       setRecoveryManual(false); setBodyManual(false);
       textBuffers.current = {}; setTextSessions({}); removingBuffers.current.clear(); setFocusedRow(null); setError("");
-      updateNames(() => ({}));
+      removingNames.current.clear(); updateNames(() => ({}),false);
       setNotice("未保存の編集と回復入力を破棄し、保存済み本文を再読込しました。"); setNoticeVersion(null);
     } });
   };
@@ -485,8 +511,14 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
           canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !Object.keys(nameSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
           onPending={pending => { discardPendingRef.current = pending; setDiscardPending(pending); }}
           onResume={async () => {
+            const pending = recovery.snapshot().review;
+            const active = new Set(speakers.map(speaker => speaker.id));
+            const rows = new Set(view?.utterances.map(utterance => utterance.id));
+            if(pending?.payload.nameBuffers?.some(session => !active.has(session.speakerId)) || pending?.payload.buffers.some(session => !rows.has(session.utteranceId))) throw Error("現在の編集画面にない発言・話者の入力を含みます。部分的に再開せず、回復記録を保持しています。プレビューから必要な入力をコピーしてください。");
             await recovery.resume();
+            removingBuffers.current.clear(); removingNames.current.clear();
             textBuffers.current = Object.fromEntries(recovery.snapshot().buffers.map(session => [session.utteranceId,session]));
+            updateNames(() => Object.fromEntries(recovery.snapshot().nameBuffers.map(session => [session.speakerId,session])),false);
             setTextSessions(textBuffers.current); setError(""); setRecoveryManual(false);
           }}
           onDiscarded={record => {
@@ -521,7 +553,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
             </div>;
           })}
         </div>
-        {!!Object.keys(nameSessions).length && <p className="hint">話者名の入力は画面内で保持しています。確定・通常の画面移動で保存します。未確定の名前の異常終了時回復は未対応です。</p>}
+        {!!Object.keys(nameSessions).length && <p className="hint">未確定の話者名は本文と一緒に回復記録へ保存します。編集再開だけでは確定せず、確定・通常の画面移動で反映します。最後の入力は回復保存の確認前に終了すると失われる可能性があります。</p>}
         <div className="transcript-actions" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
         <div className="transcript-actions" aria-label="話者統合">
           <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>

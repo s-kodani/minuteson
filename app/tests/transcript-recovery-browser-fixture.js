@@ -34,7 +34,7 @@ export function recoveryFixture({ drafts, current, blocked = () => false }) {
       const selected = drafts().filter(d => d?.meetingId === args.meetingId && f.records[d.id] && (!args.after || d.id > args.after)).sort((a,b) => a.id.localeCompare(b.id));
       const items = [];
       for(const draft of selected.slice(0,20)) { await stampFixtureDraft(draft); const r = await read(draft,f.records[draft.id]); items.push({ draftId: r.draftId,baseAnalysisId: r.baseAnalysisId,operationId: r.operationId,
-        contentHash: r.contentHash,lockVersion: r.lockVersion,updatedAt: r.updatedAt,bufferCount: r.payload.buffers.length,matchesDraft: r.matchesDraft,currentContext: r.currentContext }); }
+        contentHash: r.contentHash,lockVersion: r.lockVersion,updatedAt: r.updatedAt,bufferCount: r.payload.buffers.length + (r.payload.nameBuffers?.length ?? 0),matchesDraft: r.matchesDraft,currentContext: r.currentContext }); }
       return { items,nextCursor: selected.length > 20 ? items.at(-1).draftId : null };
     }
     const req = args.request ?? args, draft = await owner(req), old = f.records[draft.id];
@@ -46,20 +46,21 @@ export function recoveryFixture({ drafts, current, blocked = () => false }) {
       if(f.failSave) throw Error("模擬回復保存失敗");
       if(current()?.id !== draft.id) throw Error("模擬現在下書き不一致");
       const buffers = structuredClone(req.buffers).map(b => ({ ...b,speakerIds: [...b.speakerIds].sort() })).sort((a,b) => a.utteranceId.localeCompare(b.utteranceId));
+      const nameBuffers = structuredClone(req.nameBuffers ?? []).sort((a,b) => a.speakerId.localeCompare(b.speakerId));
       if(old?.operationId === req.operationId) {
-        if(old.payload.discardedFrom || old.lockVersion !== req.expectedRecoveryLockVersion + 1 || old.baseDraftLockVersion !== req.expectedDraftLockVersion || JSON.stringify(old.payload.buffers) !== JSON.stringify(buffers)) throw Error("模擬回復同一要求の変更");
+        if(old.payload.discardedFrom || old.lockVersion !== req.expectedRecoveryLockVersion + 1 || old.baseDraftLockVersion !== req.expectedDraftLockVersion || JSON.stringify(old.payload.buffers) !== JSON.stringify(buffers) || JSON.stringify(old.payload.nameBuffers ?? []) !== JSON.stringify(nameBuffers)) throw Error("模擬回復同一要求の変更");
         return read(draft,old);
       }
       if(draft.lockVersion !== req.expectedDraftLockVersion || (old?.lockVersion ?? 0) !== req.expectedRecoveryLockVersion) throw Error("模擬回復版競合");
-      const saved = await write(draft,req,{ schemaVersion: 1,basePayload: canonicalPayload(draft.payload),buffers });
-      if(f.lostSave || f.lostClear && !buffers.length) { f.lostSave = false; f.lostClear = false; throw Error("模擬回復保存応答喪失"); }
+      const saved = await write(draft,req,{ schemaVersion: nameBuffers.length ? 3 : 1,basePayload: canonicalPayload(draft.payload),buffers,...(nameBuffers.length ? { nameBuffers } : {}) });
+      if(f.lostSave || f.lostClear && !buffers.length && !nameBuffers.length) { f.lostSave = false; f.lostClear = false; throw Error("模擬回復保存応答喪失"); }
       return saved;
     }
     if(f.failDiscard) throw Error("模擬回復破棄失敗");
     const proof = { contentHash: req.expectedRecoveryContentHash,lockVersion: req.expectedRecoveryLockVersion };
     if(old?.operationId === req.operationId) {
       if(old.lockVersion !== req.expectedRecoveryLockVersion + 1 || JSON.stringify(old.payload.discardedFrom) !== JSON.stringify(proof)
-        || old.baseDraftLockVersion !== req.expectedDraftLockVersion || old.baseDraftContentHash !== req.expectedDraftContentHash || old.payload.buffers.length) throw Error("模擬破棄同一要求の変更");
+        || old.baseDraftLockVersion !== req.expectedDraftLockVersion || old.baseDraftContentHash !== req.expectedDraftContentHash || old.payload.buffers.length || old.payload.nameBuffers?.length) throw Error("模擬破棄同一要求の変更");
       return read(draft,old);
     }
     if(!old || old.lockVersion !== req.expectedRecoveryLockVersion || old.contentHash !== req.expectedRecoveryContentHash
