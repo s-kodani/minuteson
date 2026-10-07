@@ -1,6 +1,6 @@
 # 録音の時刻補正と欠損のDB確定
 
-2026-10-08に、録音停止後と起動時回復の確定処理へ、型付きの時刻補正区間と共通UTC原点の保存を追加した。物理CAFの全フレーム・形式・有限性・ハッシュを検証した上で、補正区間・正の欠損区間・音声資産・会議状態を同じトランザクションで確定する。macOS録音ヘルパーはまだ旧形式を出力しており、この受け入れ側の追加だけで新しい録音が補正済みになるわけではない。
+2026-10-08に、録音停止後と起動時回復の確定処理へ、型付きの時刻補正区間と共通UTC原点の保存を追加した。物理CAFの全フレーム・形式・有限性・ハッシュを検証した上で、補正区間・正の欠損区間・音声資産・会議状態を同じトランザクションで確定する。後続の[取得時刻と保存フレームの接続](capture-clock-producer-2026-10-08.md)で、時間上限なしのmacOS録音ヘルパーから形式版2を出力する処理を追加した。実録音の同期検証とは区別する。
 
 ## 新しい録音manifest
 
@@ -24,12 +24,10 @@
 
 同じ最終製品ソースの録音関連Rust60件も終了コード0で成功した。追加7件を含むため、重点7件と重複加算しない。旧録音の物理検証と回復、4時間を超える保存、開始・停止・録音優先・編集保護・バックアップ排他の回帰を含む。ログは `/private/tmp/mon-captured-clock-recording-regression.log` にある。
 
-通常の `make check` はPython65件、Swift24件、フロントエンド406件と型検査・ビルドを通過し、Rust全体を実行している。ログは `/private/tmp/mon-captured-clock-finalization-full-check.log` にある。今回の全体成功はまだ未確定であり、前段 `b16b2f1` の1382件の全体成功を今回へ置き換えない。
+製品ソース `4cdfd42` の通常の `make check` は終了コード0で完了した。Python65件、Swift24件、フロントエンド406件と型検査・ビルド、Rust通常1389件・失敗0件・既存36件ignored、CAF4800/4800フレームとAVFoundation製CAFの読出し1件が成功した。ログは `/private/tmp/mon-captured-clock-finalization-full-check.log` にある。後続のSwift取得時刻接続後の全体結果とは分けて扱う。
 
 ## 録音ヘルパーと実機の残対応
 
-マイクとCore Audio Tapsの有効なホスト取得時刻、ScreenCaptureKitの同期時計から変換した取得時刻を、共通のスリープを含む時計へ結び付ける必要がある。コールバック到着時刻や機器固有のサンプル番号を共通時刻として保存しない。ScreenCaptureKitの `synchronizationClock` はストリームの時計であり、`CMSyncConvertTime` によるホスト時計への変換と、スリープを含む時計への校正が残る。[ScreenCaptureKitの同期時計](https://developer.apple.com/documentation/screencapturekit/scstream/synchronizationclock)、[Core Mediaの時計変換](https://developer.apple.com/documentation/coremedia/cmsyncconverttime(_:from:to:))
-
-保存に成功したPCMと観測の対応、実際のmanifest出力、二系統の共通原点とUTCの固定、明示スリープ・機器切断・復帰、部分CAFの救出を接続する。取得時計の変更前に遅延していたバッファを、変更後の原点へ誤って割り当てないことも必要である。Mac実機での同期・4時間安定性・異常時・三画面連携、残る録音準備とUI、配布・先行試用は未完了とする。
+取得時計の変換・校正、保存に成功したPCMとの対応、形式版2出力、二系統の共通原点とUTC固定は後続のSwift実装へ接続した。時計変化は証拠を拒否して元音声を保持し、遅延バッファを新しい原点へ付け替えない。明示スリープ・機器切断・復帰、部分CAF救出、欠損を含む音声の既知区間の解析は残る。Mac実機での同期・4時間安定性・異常時・三画面連携、残る録音準備とUI、配布・先行試用は未完了とする。
 
 正式評価・10話者・Windows固有部分は保留し、Windows CI・アプリ起動・実録音は実行しない。計画全体は進行中である。

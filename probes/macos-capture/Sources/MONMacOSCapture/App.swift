@@ -137,7 +137,7 @@ enum ProbeError: Error, CustomStringConvertible {
   }
 }
 
-struct TrackStats: Codable {
+struct TrackStats: Encodable {
   var callbackCount = 0
   var frames: Int64 = 0
   var firstPresentationTimeSeconds: Double?
@@ -145,9 +145,39 @@ struct TrackStats: Codable {
   var appendFailures = 0
   var sampleRate: Double?
   var channels: UInt32?
+  var clockSegments: [CapturedClockSegment]?
+  var clockFailure: String?
+  var timing: CaptureTrackTiming?
+
+  enum CodingKeys: String, CodingKey {
+    case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
+    case appendFailures, sampleRate, channels, clockSegments, clockFailure
+  }
+
+  var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
+
+  mutating func recordSavedClock(
+    _ observation: CaptureClockObservation, frames: Int64, sourceFrame: Int64?
+  ) {
+    guard clockFailure == nil else { return }
+    do {
+      if timing == nil {
+        guard let sampleRate else { throw ProbeError.capture("capture sample rate is missing") }
+        timing = try CaptureTrackTiming(sampleRate: sampleRate)
+      }
+      try timing?.recordSaved(frames: frames, observation: observation, sourceFrame: sourceFrame)
+    } catch { clockFailure = String(describing: error) }
+  }
+
+  mutating func finishClock(originNanoseconds: Int64) throws {
+    guard clockFailure == nil, timing != nil else {
+      throw ProbeError.capture(clockFailure ?? "capture clock has no saved observations")
+    }
+    clockSegments = try timing?.finish(originNanoseconds: originNanoseconds, expectedFrames: frames)
+  }
 }
 
-private struct Manifest: Encodable {
+struct Manifest: Encodable {
   var schemaVersion = 1
   let scenario: String
   let captureMode: String
@@ -166,6 +196,28 @@ private struct Manifest: Encodable {
   var system: TrackStats
   var power = RecordingPowerStatus()
   var errors: [String]
+  var captureClock: CaptureClockMetadata?
+
+  mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
+    guard schemaVersion == 2,
+      let micStart = microphone.firstCaptureNanoseconds,
+      let systemStart = system.firstCaptureNanoseconds
+    else { throw ProbeError.capture("both capture clocks are required for schema 2") }
+    let origin = min(micStart, systemStart)
+    try microphone.finishClock(originNanoseconds: origin)
+    try system.finishClock(originNanoseconds: origin)
+    captureClock = try clock.metadata(originNanoseconds: origin)
+  }
+
+  func encodedData() throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(self)
+    guard data.count <= 256 * 1024 else {
+      throw ProbeError.capture("capture manifest exceeds the bounded reader capacity")
+    }
+    return data
+  }
 }
 
 private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
@@ -180,10 +232,14 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
   private var stopping = false
   private var lastSampleEnd: CMTime?
   private var stats = TrackStats()
+  private let clock: CaptureClockDomain?
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
-  init(outputURL: URL) { self.outputURL = outputURL }
+  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+    self.outputURL = outputURL
+    self.clock = clock
+  }
 
   func start(targetPID: pid_t?) async throws {
     let content: SCShareableContent
@@ -315,7 +371,7 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
         guard writer.startWriting() else {
           throw ProbeError.capture("cannot start system CAF writer")
         }
-        writer.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
+        writer.startSession(atSourceTime: .zero)
         self.writer = writer
         self.input = input
         stats.sampleRate = format.mSampleRate
@@ -323,23 +379,27 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
         stats.firstPresentationTimeSeconds = sampleBuffer.presentationTimeStamp.seconds
       }
       stats.callbackCount += 1
-      stats.frames += Int64(sampleBuffer.numSamples)
-      stats.lastPresentationTimeSeconds = sampleBuffer.presentationTimeStamp.seconds
-      if input?.isReadyForMoreMediaData == true {
-        if input?.append(sampleBuffer) == true {
-          guard let sampleRate = stats.sampleRate else {
-            throw ProbeError.capture("system audio sample rate is missing")
-          }
-          let frameDuration = CMTime(
-            seconds: Double(sampleBuffer.numSamples) / sampleRate,
-            preferredTimescale: 1_000_000_000)
-          lastSampleEnd = CMTimeAdd(sampleBuffer.presentationTimeStamp, frameDuration)
-        } else {
-          stats.appendFailures += 1
-        }
-      } else {
-        stats.appendFailures += 1
+      guard let sampleRate = stats.sampleRate, let input, input.isReadyForMoreMediaData else {
+        throw ProbeError.capture("system audio writer is not ready")
       }
+      guard let description = sampleBuffer.formatDescription,
+        let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
+        format.mSampleRate == sampleRate, format.mChannelsPerFrame == stats.channels
+      else { throw ProbeError.capture("system audio format changed during capture") }
+      let observation = clock?.observe(
+        presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
+      let contiguous = try continuousPCMSample(
+        sampleBuffer, frameOffset: stats.frames, sampleRate: sampleRate)
+      guard input.append(contiguous) else {
+        throw ProbeError.capture("system audio append failed")
+      }
+      let frames = Int64(sampleBuffer.numSamples)
+      stats.frames += frames
+      stats.lastPresentationTimeSeconds = sampleBuffer.presentationTimeStamp.seconds
+      if let observation {
+        stats.recordSavedClock(observation, frames: frames, sourceFrame: nil)
+      }
+      lastSampleEnd = CMTime(value: stats.frames, timescale: Int32(sampleRate))
     } catch {
       stats.appendFailures += 1
     }
@@ -354,8 +414,12 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private var file: AVAudioFile?
   private var tapInstalled = false
   private var stats = TrackStats()
+  private let clock: CaptureClockDomain?
 
-  init(outputURL: URL) { self.outputURL = outputURL }
+  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+    self.outputURL = outputURL
+    self.clock = clock
+  }
 
   func start() async throws {
     var permission = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -386,14 +450,29 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       self.lock.lock()
       defer { self.lock.unlock() }
       do {
-        try self.file?.write(from: buffer)
+        let observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
+        guard let file = self.file else {
+          throw ProbeError.capture("microphone CAF writer is closed")
+        }
+        guard buffer.format.sampleRate == self.stats.sampleRate,
+          buffer.format.channelCount == self.stats.channels,
+          !when.isSampleTimeValid || when.sampleRate == self.stats.sampleRate
+        else { throw ProbeError.capture("microphone format changed during capture") }
+        try file.write(from: buffer)
         self.stats.callbackCount += 1
         self.stats.frames += Int64(buffer.frameLength)
-        let seconds = Double(when.sampleTime) / when.sampleRate
-        if self.stats.firstPresentationTimeSeconds == nil {
-          self.stats.firstPresentationTimeSeconds = seconds
+        if when.isSampleTimeValid, when.sampleRate > 0 {
+          let seconds = Double(when.sampleTime) / when.sampleRate
+          if self.stats.firstPresentationTimeSeconds == nil {
+            self.stats.firstPresentationTimeSeconds = seconds
+          }
+          self.stats.lastPresentationTimeSeconds = seconds
         }
-        self.stats.lastPresentationTimeSeconds = seconds
+        if let observation {
+          self.stats.recordSavedClock(
+            observation, frames: Int64(buffer.frameLength),
+            sourceFrame: when.isSampleTimeValid ? when.sampleTime : nil)
+        }
       } catch {
         self.stats.appendFailures += 1
       }
@@ -445,13 +524,17 @@ private enum Main {
       }
       try FileManager.default.createDirectory(at: options.output, withIntermediateDirectories: true)
       let manifestURL = options.output.appendingPathComponent("manifest.json")
+      // Production recordings require capture-time proof. Bounded measurement
+      // probes retain schema 1 until their formal evaluation harness is updated.
+      let clock = options.duration == nil ? try CaptureClockDomain.live() : nil
       let mic = MicrophoneRecorder(
-        outputURL: options.output.appendingPathComponent("microphone.caf"))
+        outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock)
       let system = SystemAudioRecorder(
-        outputURL: options.output.appendingPathComponent("system.caf"))
+        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock)
       let tap = CoreAudioTapRecorder(
-        outputURL: options.output.appendingPathComponent("system.caf"))
+        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock)
       var manifest = Manifest(
+        schemaVersion: clock == nil ? 1 : 2,
         scenario: options.scenario,
         captureMode: options.mode,
         backend: options.backend,
@@ -515,6 +598,9 @@ private enum Main {
           options.output.appendingPathComponent("microphone.caf"), expected: micStats)
         try verifyRecordedCAF(
           options.output.appendingPathComponent("system.caf"), expected: systemStats)
+        manifest.microphone = micStats
+        manifest.system = systemStats
+        if let clock { try manifest.finalizeClock(clock) }
         manifest.state = "saved"
       } catch {
         mic.stop()
@@ -532,8 +618,10 @@ private enum Main {
         manifest.errors.append(String(describing: error))
       }
       manifest.endedAtUTC = ISO8601DateFormatter().string(from: Date())
-      manifest.microphone = mic.snapshot()
-      manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+      if manifest.state != "saved" {
+        manifest.microphone = mic.snapshot()
+        manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+      }
       try write(manifest, to: manifestURL)
       if manifest.state != "saved" {
         throw ProbeError.capture(manifest.errors.joined(separator: "; "))
@@ -604,9 +692,7 @@ private enum Main {
   }
 
   private static func write(_ manifest: Manifest, to url: URL) throws {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    try encoder.encode(manifest).write(to: url, options: .atomic)
+    try manifest.encodedData().write(to: url, options: .atomic)
   }
 
   private static func architecture() -> String {

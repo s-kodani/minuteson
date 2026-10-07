@@ -45,6 +45,10 @@ Tauriからの会議録音は`--until-stopped --stop-on-file --parent-pid <親PI
 
 既存の署名済みヘルパーを使う開発環境では、アプリとヘルパーを同じソースへ再ビルドする。古いヘルパーは新しい引数を拒否するため、以前のバイナリで制限撤廃を検証したことにはならない。
 
+時間上限なしの会議録音は形式版2のmanifestを出力する。マイク・Core Audioのホスト取得時刻とScreenCaptureKitの同期時計から、共通原点・UTC原点・保存した全フレームの補正区間を生成する。失敗した書込み、取得時刻の欠落・逆行、時計対応の変化、補正容量の超過では保存完了を報告せず、元音声を残す。明示スリープ後や機器再接続後の復帰はまだ未対応で、同期精度と実録音の長時間安定性は実機確認が必要である。時間指定の正式評価プローブは形式版1を維持し、同期確認済みにはしない。
+
+ScreenCaptureKitの保存用時刻は、受信したPCMを連続する物理フレームとして保存するよう置き換える。取得時刻の空白は補正区間に残し、ファイルへ正常な無音を追加しない。ヘルパーバンドルには取得時刻を扱う利用理由の `PrivacyInfo.xcprivacy` を同梱する。実装と検査の範囲は[取得時刻と保存フレームの接続](../../docs/verification/capture-clock-producer-2026-10-08.md)を参照。
+
 ```sh
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture --list-audio-processes
 .build/MONCaptureProbe.app/Contents/MacOS/mon-macos-capture \

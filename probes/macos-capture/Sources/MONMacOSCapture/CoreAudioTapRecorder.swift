@@ -44,6 +44,9 @@ enum TapAudioProcesses {
 final class CoreAudioTapRecorder: @unchecked Sendable {
   private struct SendableBuffer: @unchecked Sendable {
     let value: AVAudioPCMBuffer
+    let observation: CaptureClockObservation?
+    let sourceFrame: Int64?
+    let presentation: Double?
   }
 
   private let outputURL: URL
@@ -56,8 +59,12 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
   private var ioProcID: AudioDeviceIOProcID?
   private var started = false
   private var stats = TrackStats()
+  private let clock: CaptureClockDomain?
 
-  init(outputURL: URL) { self.outputURL = outputURL }
+  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+    self.outputURL = outputURL
+    self.clock = clock
+  }
 
   func start(targetPIDs: [pid_t]) throws {
     let objects = try TapAudioProcesses.list()
@@ -136,7 +143,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       self.ioProcID = nil
     }
     writeQueue.sync {}
-    file = nil
+    lock.withLock { file = nil }
     if aggregateID != AudioObjectID(kAudioObjectUnknown) {
       let status = AudioHardwareDestroyAggregateDevice(aggregateID)
       if status != noErr { failures.append("destroy aggregate device: \(status)") }
@@ -157,7 +164,10 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     let sources = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
     guard !sources.isEmpty, let first = sources.first, first.mData != nil else { return }
     let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
-    guard bytesPerFrame > 0 else { return }
+    guard bytesPerFrame > 0, Int(first.mDataByteSize) % bytesPerFrame == 0 else {
+      lock.withLock { stats.appendFailures += 1 }
+      return
+    }
     let frames = AVAudioFrameCount(Int(first.mDataByteSize) / bytesPerFrame)
     guard frames > 0, pendingBuffers.wait(timeout: .now()) == .success else {
       lock.withLock { stats.appendFailures += 1 }
@@ -177,7 +187,8 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     }
     for index in sources.indices {
       guard let source = sources[index].mData, let destination = destinations[index].mData,
-        sources[index].mDataByteSize <= destinations[index].mDataByteSize
+        sources[index].mDataByteSize == destinations[index].mDataByteSize,
+        sources[index].mNumberChannels == destinations[index].mNumberChannels
       else {
         pendingBuffers.signal()
         lock.withLock { stats.appendFailures += 1 }
@@ -188,21 +199,41 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     let presentation: Double? =
       inputTime.pointee.mFlags.contains(.sampleTimeValid)
       ? inputTime.pointee.mSampleTime / format.sampleRate : nil
-    lock.withLock {
-      stats.callbackCount += 1
-      stats.frames += Int64(frames)
-      if let presentation {
-        if stats.firstPresentationTimeSeconds == nil {
-          stats.firstPresentationTimeSeconds = presentation
-        }
-        stats.lastPresentationTimeSeconds = presentation
-      }
+    let rawFrame = inputTime.pointee.mSampleTime
+    let sourceFrame =
+      inputTime.pointee.mFlags.contains(.sampleTimeValid)
+      ? Int64(exactly: rawFrame) : nil
+    var observation = clock?.observe(
+      hostTicks: inputTime.pointee.mFlags.contains(.hostTimeValid)
+        ? inputTime.pointee.mHostTime : nil)
+    if clock != nil, inputTime.pointee.mFlags.contains(.sampleTimeValid), sourceFrame == nil {
+      observation = .invalid("tap source frame counter is not an exact integer")
     }
-    let queuedBuffer = SendableBuffer(value: buffer)
+    lock.withLock { stats.callbackCount += 1 }
+    let queuedBuffer = SendableBuffer(
+      value: buffer, observation: observation, sourceFrame: sourceFrame,
+      presentation: presentation)
     writeQueue.async {
       defer { self.pendingBuffers.signal() }
-      do { try self.file?.write(from: queuedBuffer.value) } catch {
-        self.lock.withLock { self.stats.appendFailures += 1 }
+      self.lock.withLock {
+        do {
+          guard let file = self.file else { throw ProbeError.capture("tap CAF writer is closed") }
+          try file.write(from: queuedBuffer.value)
+          self.stats.frames += Int64(queuedBuffer.value.frameLength)
+          if let presentation = queuedBuffer.presentation, presentation.isFinite {
+            if self.stats.firstPresentationTimeSeconds == nil {
+              self.stats.firstPresentationTimeSeconds = presentation
+            }
+            self.stats.lastPresentationTimeSeconds = presentation
+          }
+          if let observation = queuedBuffer.observation {
+            self.stats.recordSavedClock(
+              observation, frames: Int64(queuedBuffer.value.frameLength),
+              sourceFrame: queuedBuffer.sourceFrame)
+          }
+        } catch {
+          self.stats.appendFailures += 1
+        }
       }
     }
   }

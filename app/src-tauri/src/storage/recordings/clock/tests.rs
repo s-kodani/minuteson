@@ -55,6 +55,85 @@ fn unpublished(storage: &Storage, meeting: &str, session: &str) {
 }
 
 #[test]
+#[ignore = "requires actual Swift-generated capture manifest and CAF fixtures; make check-capture-clock"]
+fn swift_generated_capture_clock_manifest_finalizes_and_preserves_missing_pcm_time() {
+    let fixtures = PathBuf::from(
+        std::env::var_os("MON_CAPTURE_CLOCK_FIXTURE_DIR")
+            .expect("run through make check-capture-clock"),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, _) = saved_probe_fixture(&storage);
+    let names = ["manifest.json", "microphone.caf", "system.caf"];
+    let originals = names.map(|name| std::fs::read(fixtures.join(name)).unwrap());
+    for (name, bytes) in names.iter().zip(&originals) {
+        // Only replace this test's synthetic, unpublished session files.
+        std::fs::write(output.join(name), bytes).unwrap();
+    }
+    let saved = storage.finalize_recording(&session).unwrap();
+    assert_eq!(saved.state, "saved");
+    assert_eq!(saved.duration_us, 305000);
+    assert_eq!(saved.started_at_utc_ms, Some(1700000008999));
+    let db = storage.connection.lock().unwrap();
+    let (system_track, start, end, reason): (String, i64, i64, String) = db
+        .query_row(
+            "SELECT track_id,start_us,end_us,reason_code FROM audio_gaps",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (start, end, reason.as_str()),
+        (55000, 255000, "capture_timestamp_gap")
+    );
+    let microphone: String = db
+        .query_row("SELECT id FROM audio_tracks WHERE kind='mic'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let physical: Vec<i64> = db
+        .prepare("SELECT frame_count FROM audio_chunks ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(physical, vec![4800, 4800]);
+    drop(db);
+    for (track, first, last, value) in [
+        (&microphone, 0, 100000, 0.125_f32),
+        (&system_track, 5000, 55000, 0.25),
+        (&system_track, 255000, 305000, 0.5),
+    ] {
+        let mut audio = storage
+            .prepare_track_audio(&meeting, track, first, last)
+            .unwrap();
+        assert_eq!(audio.alignment, "unverified");
+        assert_eq!(
+            audio.total_frames(),
+            if track == &microphone { 4800 } else { 2400 }
+        );
+        let pcm = audio.read_pcm(0, audio.total_frames()).unwrap();
+        for (index, sample) in pcm.chunks_exact(4).enumerate() {
+            let actual = f32::from_le_bytes(sample.try_into().unwrap());
+            assert_eq!(actual, if index % 2 == 0 { value } else { -value });
+        }
+    }
+    assert!(storage
+        .prepare_track_audio(&meeting, &system_track, 5000, 305000)
+        .is_err());
+    assert!(storage.recorded_audio_plan(&meeting).is_err());
+    assert_eq!(
+        names.map(|name| std::fs::read(output.join(name)).unwrap()),
+        originals
+    );
+    assert_eq!(
+        names.map(|name| std::fs::read(fixtures.join(name)).unwrap()),
+        originals
+    );
+}
+
+#[test]
 fn corrected_capture_finalization_binds_physical_frames_clock_maps_utc_and_pcm_readers() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();

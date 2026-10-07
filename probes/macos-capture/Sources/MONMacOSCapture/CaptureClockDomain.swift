@@ -1,0 +1,222 @@
+import CoreMedia
+import Darwin
+import Foundation
+
+struct MachTimeUnits: Sendable {
+  let numerator: UInt32
+  let denominator: UInt32
+
+  func nanoseconds(_ ticks: UInt64) throws -> Int64 {
+    guard numerator > 0, denominator > 0 else {
+      throw ProbeError.capture("Mach timebase is invalid")
+    }
+    let product = ticks.multipliedFullWidth(by: UInt64(numerator))
+    let divisor = UInt64(denominator)
+    guard product.high < divisor else {
+      throw ProbeError.capture("Mach time conversion overflows")
+    }
+    let result = divisor.dividingFullWidth(product).quotient
+    guard result <= UInt64(Int64.max) else {
+      throw ProbeError.capture("Mach time is outside signed precision bounds")
+    }
+    return Int64(result)
+  }
+}
+
+struct CaptureClockReading: Sendable {
+  let hostBeforeNs: Int64
+  let continuousNs: Int64
+  let utcMs: Int64
+  let hostAfterNs: Int64
+
+  func offsetBounds() throws -> ClosedRange<Int64> {
+    guard hostBeforeNs >= 0, hostAfterNs >= hostBeforeNs, continuousNs >= 0,
+      (0...8_640_000_000_000_000).contains(utcMs),
+      hostAfterNs < Int64.max - 2, continuousNs < Int64.max - 2
+    else { throw ProbeError.capture("capture clock calibration is invalid") }
+    return (continuousNs - hostAfterNs - 2)...(continuousNs - hostBeforeNs + 2)
+  }
+}
+
+struct CaptureClockMetadata: Encodable {
+  let domain = "mach_continuous_time"
+  let originUtcMs: Int64
+  let uncertaintyNs: Int64
+}
+
+enum CaptureClockObservation: Sendable {
+  case timestamp(Int64)
+  case invalid(String)
+}
+
+/// Bridge hardware host time to a shared sleep-aware clock. A changed bridge
+/// is sticky-invalid until explicit resume/epoch handling is implemented;
+/// queued audio must never be silently remapped using a new offset.
+final class CaptureClockDomain: @unchecked Sendable {
+  private let units: MachTimeUnits
+  private let read: @Sendable () throws -> CaptureClockReading
+  private let reference: CaptureClockReading
+  private let initialBounds: ClosedRange<Int64>
+  private let offset: Int64
+  private let uncertaintyNs: Int64
+  private let lock = NSLock()
+  private var failure: String?
+
+  init(units: MachTimeUnits, read: @escaping @Sendable () throws -> CaptureClockReading) throws {
+    self.units = units
+    self.read = read
+    reference = try read()
+    initialBounds = try reference.offsetBounds()
+    let (width, overflow) = (reference.hostAfterNs - reference.hostBeforeNs)
+      .addingReportingOverflow(4)
+    guard !overflow, width <= 9_007_199_253_740_991 else {
+      throw ProbeError.capture("capture clock calibration uncertainty is too large")
+    }
+    offset = initialBounds.lowerBound + width / 2
+    // Includes the host bracket and millisecond wall-time quantization.
+    uncertaintyNs = width + 1_000_000
+  }
+
+  static func live() throws -> CaptureClockDomain {
+    var info = mach_timebase_info_data_t()
+    guard mach_timebase_info(&info) == KERN_SUCCESS else {
+      throw ProbeError.capture("cannot read Mach timebase")
+    }
+    let units = MachTimeUnits(numerator: info.numer, denominator: info.denom)
+    return try CaptureClockDomain(units: units) {
+      let before = try units.nanoseconds(mach_absolute_time())
+      let continuous = try units.nanoseconds(mach_continuous_time())
+      let milliseconds = (Date().timeIntervalSince1970 * 1000).rounded(.down)
+      let after = try units.nanoseconds(mach_absolute_time())
+      guard milliseconds.isFinite, milliseconds >= 0, milliseconds <= 8_640_000_000_000_000
+      else { throw ProbeError.capture("capture UTC reference is invalid") }
+      return CaptureClockReading(
+        hostBeforeNs: before, continuousNs: continuous, utcMs: Int64(milliseconds),
+        hostAfterNs: after)
+    }
+  }
+
+  private func checkedReading() throws -> CaptureClockReading {
+    if let failure { throw ProbeError.capture(failure) }
+    let current = try read()
+    let bounds = try current.offsetBounds()
+    guard bounds.overlaps(initialBounds), current.hostBeforeNs >= reference.hostBeforeNs else {
+      throw ProbeError.capture("capture clock bridge changed; explicit recovery is required")
+    }
+    return current
+  }
+
+  func observe(hostTicks: UInt64?) -> CaptureClockObservation {
+    lock.withLock {
+      do {
+        guard let hostTicks else { throw ProbeError.capture("capture host timestamp is missing") }
+        let current = try checkedReading()
+        let host = try units.nanoseconds(hostTicks)
+        guard host >= reference.hostBeforeNs, host <= current.hostAfterNs else {
+          throw ProbeError.capture("capture timestamp is outside the proven clock epoch")
+        }
+        let (capture, overflow) = host.addingReportingOverflow(offset)
+        guard !overflow, capture >= 0 else {
+          throw ProbeError.capture("capture timestamp conversion overflows")
+        }
+        return .timestamp(capture)
+      } catch {
+        let message = String(describing: error)
+        failure = failure ?? message
+        return .invalid(message)
+      }
+    }
+  }
+
+  func observe(presentation: CMTime, clock: CMClock?) -> CaptureClockObservation {
+    guard let clock else { return .invalid("ScreenCaptureKit synchronization clock is missing") }
+    let host = CMSyncConvertTime(presentation, from: clock, to: CMClockGetHostTimeClock())
+    guard host.isNumeric, host.epoch == 0, host.value >= 0 else {
+      return .invalid("ScreenCaptureKit host time conversion is invalid")
+    }
+    return observe(hostTicks: CMClockConvertHostTimeToSystemUnits(host))
+  }
+
+  func metadata(originNanoseconds origin: Int64) throws -> CaptureClockMetadata {
+    try lock.withLock {
+      do {
+        _ = try checkedReading()
+        guard origin >= 0 else { throw ProbeError.capture("capture origin is invalid") }
+        let delta = origin - reference.continuousNs
+        let milliseconds = delta / 1_000_000 - (delta < 0 && delta % 1_000_000 != 0 ? 1 : 0)
+        let (utc, overflow) = reference.utcMs.addingReportingOverflow(milliseconds)
+        guard !overflow, (0...8_640_000_000_000_000).contains(utc) else {
+          throw ProbeError.capture("capture origin UTC is outside supported bounds")
+        }
+        return CaptureClockMetadata(originUtcMs: utc, uncertaintyNs: uncertaintyNs)
+      } catch {
+        failure = failure ?? String(describing: error)
+        throw error
+      }
+    }
+  }
+}
+
+struct CaptureTrackTiming {
+  private var map: CapturedClockMap
+  private var previousSourceEnd: Int64?
+  private var previousCaptureEnd: Int64?
+  var firstCaptureNanoseconds: Int64? { map.firstCaptureNanoseconds }
+
+  init(sampleRate: Double) throws {
+    guard sampleRate.isFinite, sampleRate.rounded() == sampleRate,
+      (8000...384000).contains(sampleRate)
+    else { throw ProbeError.capture("capture clock sample rate is invalid") }
+    map = try CapturedClockMap(sampleRate: Int64(sampleRate))
+  }
+
+  mutating func recordSaved(
+    frames: Int64, observation: CaptureClockObservation, sourceFrame: Int64?
+  ) throws {
+    guard case .timestamp(let start) = observation else {
+      if case .invalid(let message) = observation { throw ProbeError.capture(message) }
+      throw ProbeError.capture("capture timestamp is missing")
+    }
+    guard frames > 0, frames <= Int64.max / 1_000_000_000 else {
+      throw ProbeError.capture("capture buffer length is invalid")
+    }
+    let duration = frames * 1_000_000_000 / map.sampleRate
+    let (end, overflow) = start.addingReportingOverflow(duration)
+    guard !overflow else { throw ProbeError.capture("capture buffer end overflows") }
+    var discontinuity = false
+    if let previousCaptureEnd {
+      if let previousSourceEnd, let sourceFrame {
+        guard sourceFrame >= previousSourceEnd else {
+          throw ProbeError.capture("source frame counter restarted; explicit recovery is required")
+        }
+        discontinuity = sourceFrame > previousSourceEnd
+      } else {
+        // Timestamp-only sources have no independent frame counter. Preserve
+        // measured holes larger than one source frame; do not use arrival time.
+        discontinuity =
+          start > previousCaptureEnd
+          && start - previousCaptureEnd > map.maximumErrorNanoseconds
+      }
+    }
+    var sourceEnd: Int64?
+    if let sourceFrame {
+      let (value, overflow) = sourceFrame.addingReportingOverflow(frames)
+      guard !overflow else { throw ProbeError.capture("source frame counter overflows") }
+      sourceEnd = value
+    }
+    try map.append(
+      frames: frames, captureStartNanoseconds: start, captureEndNanoseconds: end,
+      discontinuity: discontinuity)
+    previousSourceEnd = sourceEnd
+    previousCaptureEnd = end
+  }
+
+  mutating func finish(originNanoseconds: Int64, expectedFrames: Int64) throws
+    -> [CapturedClockSegment]
+  {
+    guard map.frames == expectedFrames else {
+      throw ProbeError.capture("capture clock does not cover every saved frame")
+    }
+    return try map.finish(originNanoseconds: originNanoseconds)
+  }
+}
