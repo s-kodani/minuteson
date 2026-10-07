@@ -8,9 +8,13 @@ async page => {
   const transcript = tabs.getByRole("tab", { name:"文字起こし", exact:true }), minutes = tabs.getByRole("tab", { name:"議事録", exact:true });
   await minutes.click();
   const body = page.getByRole("region", { name:"議事録本文", exact:true }); await body.waitFor();
+  // Resizing updates CSS immediately, then the media-query listener reparents
+  // the panel. Measure the settled application layout, not that event boundary.
+  const waitReferenceLayout = () => page.waitForFunction(() => { const panel=document.querySelector('.workspace-panel-shell[data-side="right"]'); return panel?.dataset.narrow===String(matchMedia("(max-width:1119px)").matches); });
   await body.evaluate(e => { window.minutesBody = e; });
   for (const width of [1280,1200,960]) for (const theme of ["light","dark"]) {
     await page.setViewportSize({ width,height:640 });
+    await waitReferenceLayout();
     await page.getByRole("banner").getByRole("combobox", { name:"表示テーマ", exact:true }).selectOption(theme);
     await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
     for (const end of [false,true]) {
@@ -31,6 +35,7 @@ async page => {
   await page.getByRole("button", { name:"議事録を編集", exact:true }).click();
   for (const width of [1280,1200,960]) for (const theme of ["light","dark"]) {
     await page.setViewportSize({ width,height:640 });
+    await waitReferenceLayout();
     await page.getByRole("banner").getByRole("combobox", { name:"表示テーマ", exact:true }).selectOption(theme);
     await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
     check(await body.evaluate(e => e.clientHeight >= 80), "rich editing leaves less than 80px of body height");

@@ -56,6 +56,7 @@ const suites = [
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
   ["detail-minutes", "minutes-init", "detail-minutes-browser-check.js"],
+  ["minutes-panel", "minutes-init", "minutes-panel-browser-check.js"],
   ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],
   ["minutes-toast", "minutes-init", "minutes-toast-browser-check.js"],
   ["minutes-publication-toast", "minutes-init", "minutes-publication-toast-browser-check.js"],

@@ -8,12 +8,13 @@ import { MinutesDocument } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
 import { documentAddress, documentPage, documentPageForAddress, firstDocumentAddress, inlineAddressKey } from "./minutes-pagination";
 import { MinutesPages } from "./minutes-pages";
+import { WorkspacePanel, type WorkspacePanelHandle } from "./workspace-panel";
 import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minutes-state";
 import { timeLabel } from "./transcript";
 
 export type EditorGuard = (nextId: string | null) => boolean;
-export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard }: {
-  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void;
+export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard, visible = true }: {
+  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean;
 }) {
   const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<MinutesContent, MinutesDraft>(
@@ -27,6 +28,9 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const [selection, setSelection] = useState<InlineSelection | null>(null);
   const [page, setPage] = useState(0);
   const [epoch, setEpoch] = useState(0);
+  const [full,setFull] = useState(false);
+  const [referenceMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body minutes-reference-body"; return node; });
+  const referenceHandle = useRef<WorkspacePanelHandle | null>(null);
   const busyRef = useRef(false);
   const failure = useRef("");
   const compositions = useRef(new Set<string>());
@@ -138,11 +142,25 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     focusAddress.current = firstDocumentAddress(doc.blocks, next);
     setPage(next); setSelection(null); setEpoch((value) => value + 1);
   };
+  const headingField = (index: number) => [...(editorRoot.current?.querySelectorAll<HTMLElement>(".minutes-rich-field") ?? [])].find(field => field.dataset.inlineAddress === inlineAddressKey({ block:index })) ?? null;
+  const headingNavigation = {
+    disabled: changingPageDisabled,
+    target: headingField,
+    go: (entry: { blockIndex: number; page: number }) => {
+      if (changingPageDisabled || busyRef.current || compositions.current.size || failure.current) return false;
+      setPage(entry.page); setSelection(null);
+      requestAnimationFrame(() => {
+        const target = headingField(entry.blockIndex);
+        if (target?.isConnected && !target.closest("[hidden]") && !document.querySelector("dialog[open]")) { target.focus({ preventScroll:true }); target.scrollIntoView({ block:"start" }); }
+      });
+      return true;
+    },
+  };
   const conversionAddress = selection ? { block: selection.address.block + (selectedBlock?.type === "list" && (selection.address.item ?? 0) > 0 ? 1 : 0) } : { block: 0 };
   const toolbarButton = (label: string, action: () => void, unavailable = false) => <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={action}>{label}</button>;
   const manualLabel = (id: string | null | undefined) => id && doc.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
   return <section ref={editorRoot} className="minutes-editor" aria-label="議事録文書と編集">
-    <div className="transcript-actions">
+    <div className="transcript-actions" hidden={full}>
       {!editing && <button type="button" className="small-secondary" disabled={locked || busy} onClick={() => void begin()}>議事録を編集</button>}
       {editing && <button type="button" className="small-secondary" disabled={locked || busy} onClick={() => void run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください"); await queue.flush(); setEditing(false); setSelection(null); })}>編集を終了</button>}
       {saved.draft && <span role="status">{saved.error ? "議事録の保存要確認" : saved.saving ? "議事録を保存中" : saved.dirty ? "議事録は未保存" : "議事録は保存済み"}</span>}
@@ -151,7 +169,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
       <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void reload()}>議事録編集を再読込</button>
     </div>
     {editing && <>
-      <details className="workspace-tools minutes-format-tools"><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
+      <details className="workspace-tools minutes-format-tools" hidden={full}><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>
       <div className="minutes-toolbar" role="toolbar" aria-label="議事録の書式と構造">
         {(["bold", "italic"] as const).map((mark) => <span key={mark}>{toolbarButton(mark === "bold" ? "太字" : "斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, mark))); }, !selection || selection.end <= selection.start)}</span>)}
@@ -171,9 +189,10 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
       </div>
       </div></details>
     </>}
+    <div className="minutes-split" data-full={full}>
     <div className="minutes-body-scroll" role="region" aria-label="議事録本文" tabIndex={0}>
     {editing && <>
-      <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト">
+      <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト" hidden={full}>
         {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {
           const b = doc.blocks[index];
           if (b.type === "heading" || b.type === "paragraph") return <section key={`${epoch}:${index}`} className={b.type === "heading" ? `rich-heading rich-heading-${b.level}` : "rich-paragraph"}>{manualLabel(b.itemId)}{field(b.content, { block: index }, `議事録ブロック${index + 1}`)}</section>;
@@ -181,12 +200,15 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
           return <div className="document-table" key={`${epoch}:${index}`}><table aria-rowcount={b.rows.length + 1}><caption>表{index + 1}: {b.rows.length ? `行${rowStart + 1}〜${rowEnd} / 全${b.rows.length}行` : "0行"}</caption><thead><tr aria-rowindex={1}>{b.headers.map((cell, column) => <th key={column}>{field(cell, { block: index, header: true, column }, `議事録表${index + 1}の見出し${column + 1}`)}</th>)}</tr></thead><tbody>{b.rows.slice(rowStart, rowEnd).map((row, offset) => { const r = rowStart + offset; return <tr key={r} aria-rowindex={r + 2}>{row.cells.map((cell, column) => <td key={column}>{column === 0 && manualLabel(row.itemId)}{field(cell, { block: index, row: r, column }, `議事録表${index + 1}の行${r + 1}列${column + 1}`, !!row.itemId && column === 3)}</td>)}</tr>; })}</tbody></table></div>;
         })}
       </div>
-      <MinutesPages plan={plan} mode="編集" disabled={changingPageDisabled} changePage={changePage} />
+      <div hidden={full}><MinutesPages plan={plan} mode="編集" disabled={changingPageDisabled} changePage={changePage} /></div>
     </>}
     {error && <p className="action-error" role="alert">{error}</p>}
     <IssueNotice scope={view.meetingId} type="minutes-save" label="議事録の保存に失敗" message={saved.error ? `入力はこの画面に保持しています。修正後に再試行してください: ${saved.error}` : ""} action={{ kind: "retry", label: "議事録保存を再試行", disabled: locked || busy || saved.saving || confirm.pending, run: () => run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); }) }} />
     <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"}
+      panelHost={referenceMount} panelHandle={referenceHandle} active={visible} onFullChange={setFull} navigateHeading={editing ? headingNavigation : undefined}
       verify={disabled || failure.current || compositions.current.size ? undefined : (id, verified) => { edit((d) => setEvidenceVerification(d, id, verified)); }} />
+    </div>
+    <WorkspacePanel content={referenceMount} label="議事録の目次・根拠" side="right" active={visible} handle={referenceHandle} />
     </div>
   </section>;
 }

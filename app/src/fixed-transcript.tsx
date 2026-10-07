@@ -6,8 +6,8 @@ import { timeLabel } from "./transcript";
 
 // A read-only workspace within the document, not another modal or editable
 // current transcript. The host document/editor stays mounted around this view.
-export function FixedTranscriptWorkspace({ view, evidence, locked, back }: {
-  view: MinutesView; evidence: Evidence; locked: boolean; back: () => void;
+export function FixedTranscriptWorkspace({ view, evidence, locked, back, active = true }: {
+  view: MinutesView; evidence: Evidence; locked: boolean; back: () => void; active?: boolean;
 }) {
   const [data, setData] = useState<MinutesTranscriptPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -21,6 +21,7 @@ export function FixedTranscriptWorkspace({ view, evidence, locked, back }: {
   const heading = useRef<HTMLHeadingElement>(null);
   const target = useRef<HTMLElement>(null);
   const audio = useTranscriptAudio(view.meetingId, locked);
+  useEffect(() => { if (!active) audio.clear(); }, [active]);
   const load = async (page: number | null) => {
     if (busy.current) return;
     busy.current = true; pendingPage.current = page; audio.clear();
@@ -45,13 +46,13 @@ export function FixedTranscriptWorkspace({ view, evidence, locked, back }: {
     // Keyed by document and evidence; never reuse a late result for another ref.
   }, []);
   useLayoutEffect(() => {
-    if (!data) return;
+    if (!data || !active) return;
     const destination = scrollToTarget.current ? target.current : heading.current;
     destination?.focus({ preventScroll: true });
     destination?.scrollIntoView({ block: scrollToTarget.current ? "center" : "start" });
   }, [data]);
   const play = (id: string) => {
-    if (!data) return;
+    if (!data || !active) return;
     try { void audio.start(data.analysisId, id, minutesTranscriptAudioRequest(view, evidence, data, id)); }
     catch (cause) { setError(String(cause)); }
   };

@@ -52,6 +52,18 @@ async (page) => {
       data.transcripts={};
     };
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
+    data.addOutlineDocument=()=>{
+      data.addLongDocument();
+      for(const v of Object.values(data.views)){
+        const tail=data.drafts[v.id]?.payload.blocks.slice(v.content.blocks.length)??[];
+        v.content.blocks.push(...Array.from({length:80},(_,i)=>[
+          {type:"heading",level:2+i%4,content:[text(`追加節${i+1}`)]},
+          {type:"paragraph",itemId:null,content:[text(`目次で移動する本文${i+1}。`)]},
+        ]).flat());
+        v.generatedContent=copy(v.content);
+        if(data.drafts[v.id]){data.drafts[v.id].payload=copy(v.content);data.drafts[v.id].payload.blocks.push(...tail);}
+      }
+    };
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
     const meeting = id => ({ id, title: id === "m1" ? "議事録UI確認" : "別会議", lifecycle: "recorded", createdAt: 0, updatedAt: 0, lockVersion: data.lock });
     const stamp = () => data.drafts[data.current] ? { id: data.drafts[data.current].id, lockVersion: data.drafts[data.current].lockVersion } : null;

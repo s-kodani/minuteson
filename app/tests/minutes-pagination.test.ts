@@ -1,12 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { documentAddress, documentPage, documentPageForAddress, firstDocumentAddress, inlineAddressKey, MINUTES_PAGE_SIZE } from "../src/minutes-pagination.ts";
+import { documentAddress, documentOutline, documentPage, documentPageForAddress, firstDocumentAddress, inlineAddressKey, MINUTES_PAGE_SIZE } from "../src/minutes-pagination.ts";
 import { changeList, changeTable, convertBlock, editInline, inlineAt, plain, textNode } from "../src/minutes-edit.ts";
 import type { Block, MinutesContent } from "../src/minutes-state.ts";
 
 const list = (length: number): Block => ({ type: "list", ordered: true, items: Array.from({ length }, (_, i) => ({ itemId: null, content: [textNode(`項目${i + 1}`)] })) });
 const table = (length: number): Block => ({ type: "table", headers: [[textNode("列1")], [textNode("列2")]], rows: Array.from({ length }, (_, i) => ({ itemId: null, cells: [[textNode(`行${i + 1}`)], [textNode("メモ")]] })) });
 const paragraph = (): Block => ({ type: "paragraph", itemId: null, content: [textNode("本文")] });
+
+test("outline covers canonical headings across long list/table pages without changing document nodes", () => {
+  const blocks: Block[] = [{ type:"heading",level:1,content:[textNode(" 会議\n概要 ")] },list(121),
+    { type:"heading",level:2,content:[textNode("決定事項")] },table(125),
+    { type:"heading",level:6,content:[textNode("決定事項")] }];
+  const before=structuredClone(blocks);
+  assert.deepEqual(documentOutline(blocks),[
+    { blockIndex:0,level:1,label:"会議 概要",page:0 },
+    { blockIndex:2,level:2,label:"決定事項",page:2 },
+    { blockIndex:4,level:6,label:"決定事項",page:4 },
+  ]);
+  for(const entry of documentOutline(blocks)) assert.equal(entry.page,documentPageForAddress(blocks,{block:entry.blockIndex}));
+  assert.deepEqual(blocks,before);
+});
+
+test("outline never invents words from evidence or interprets heading text as HTML", () => {
+  const blocks: Block[]=[{type:"heading",level:2,content:[{type:"evidence",minutesItemId:"item",evidenceLinkId:"e"}]},
+    {type:"heading",level:3,content:[textNode("<img src=x onerror=alert(1)>"),textNode("\n確認")]},list(0),table(0)];
+  assert.deepEqual(documentOutline(blocks),[
+    {blockIndex:0,level:2,label:"見出し1（本文なし）",page:0},
+    {blockIndex:1,level:3,label:"<img src=x onerror=alert(1)> 確認",page:0},
+  ]);
+  assert.deepEqual(documentOutline([paragraph(),list(1),table(1)]),[]);
+  assert.deepEqual(documentOutline([]),[]);
+});
+
+test("outline respects empty-block units and headings exactly at a pagination boundary", () => {
+  const blocks: Block[]=[list(0),table(0),list(48),{type:"heading",level:4,content:[textNode("境界の見出し")]}];
+  assert.deepEqual(documentOutline(blocks),[{blockIndex:3,level:4,label:"境界の見出し",page:1}]);
+});
 
 test("empty and boundary-sized documents consume body units, preserve empty blocks and clamp page requests", () => {
   assert.deepEqual(documentPage([], 9), { page: 0, pages: 1, units: 0, fragments: [] });

@@ -6,9 +6,24 @@ import type { InlineAddress } from "./minutes-edit";
 export const MINUTES_PAGE_SIZE = 50;
 export interface DocumentFragment { blockIndex: number; rowStart: number; rowEnd: number }
 export interface DocumentPage { page: number; pages: number; units: number; fragments: DocumentFragment[] }
+export interface DocumentOutlineEntry { blockIndex: number; level: number; label: string; page: number }
 const rows = (block: Block) => block.type === "list" ? block.items.length : block.type === "table" ? block.rows.length : 1;
 const count = (block: Block) => Math.max(1, rows(block));
 const clamp = (value: number, length: number) => Math.max(0, Math.min(Number.isFinite(value) ? Math.trunc(value) : 0, Math.max(0, length - 1)));
+
+// Derive navigation from the full canonical blocks, not just the current page.
+// Evidence chips carry no invented heading text; labels remain plain strings.
+export function documentOutline(blocks: Block[]): DocumentOutlineEntry[] {
+  let offset = 0;
+  const entries: DocumentOutlineEntry[] = [];
+  blocks.forEach((block, blockIndex) => {
+    if (block.type === "heading") entries.push({ blockIndex, level: block.level,
+      label: block.content.map(node => node.type === "text" ? node.text : "").join("").replace(/\s+/gu," ").trim() || `見出し${blockIndex + 1}（本文なし）`,
+      page: Math.floor(offset / MINUTES_PAGE_SIZE) });
+    offset += count(block);
+  });
+  return entries;
+}
 
 export function documentPage(blocks: Block[], requested: number): DocumentPage {
   const units = blocks.reduce((sum, block) => sum + count(block), 0);

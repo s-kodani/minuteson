@@ -18,10 +18,11 @@ type Preferences = VersionedDraft<MinutesPreferences>;
 type Job = AnalysisJob & { operationId: string; outputMinutesId: string | null };
 type Preview = { summary: MinutesVersion; original: MinutesVersions; view: MinutesView; draft: MinutesDraft | null; current: MinutesView | null; currentDraft: MinutesDraft | null; restoring: boolean };
 
-export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, withSavedEdits, onHeadChanged }: {
+export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, withSavedEdits, onHeadChanged, visible = true }: {
   meetingId: string; meetingTitle: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
+  visible?: boolean;
 }) {
   const profileSelectId = useId();
   const confirm = useActionConfirmation(locked);
@@ -254,7 +255,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     <details className="minutes-export-history workspace-tools"><summary>Markdown出力履歴（最新50件）</summary><div className="workspace-tools-body"><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</div></details>
     </div></details>
     {jobs.some(j => j.kind === "minutes_generation" && ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)) && <p className="minutes-generation-status" role="status">議事録生成：{jobs.filter(j => j.kind === "minutes_generation" && ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)).map(j => `${jobLabel(j.state)} · 保存済み ${j.completedUnits} / ${j.totalUnits ?? "?"} 単位`).join("、")}</p>}
-    {current && <><div className="minutes-document-status"><span>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</span>{currentSummary?.inputUpdated && <span className="heading-with-info data-updated"><span role="status">元データ更新あり</span><InfoPopover label="議事録の元データ更新">文字起こし・話者情報が生成後に変更されています。この議事録と根拠は生成時の版を保持し、自動では置き換えません。内容を確認して、必要なら「議事録を再生成」してください。</InfoPopover></span>}</div><MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
+    {current && <><div className="minutes-document-status"><span>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</span>{currentSummary?.inputUpdated && <span className="heading-with-info data-updated"><span role="status">元データ更新あり</span><InfoPopover label="議事録の元データ更新">文字起こし・話者情報が生成後に変更されています。この議事録と根拠は生成時の版を保持し、自動では置き換えません。内容を確認して、必要なら「議事録を再生成」してください。</InfoPopover></span>}</div><MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} visible={visible} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
     <ToastNotice scope={meetingId} type="minutes-source-updated" level="warning" eventId={sourceUpdateEvent ?? undefined} message={sourceUpdateEvent ? "議事録作成後に元データが変更されています。既存の議事録と根拠は保持しています" : ""} />
     {exportNoticeLevel(exportState) === "error" ? <IssueNotice scope={meetingId} type="minutes-export" label="議事録の書き出しを要確認" message={exportNotice} /> : <ToastNotice scope={meetingId} type="minutes-export" eventId={exportEvent} level={exportNoticeLevel(exportState)} message={exportNotice} onClose={() => setExportNotice("")} />}
     <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。状態を確認してください" />
