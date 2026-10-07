@@ -371,6 +371,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .utterance-playing { background:var(--selection); border-left:3px solid var(--accent); }
 .utterance-playing-label { display:inline-block; padding:3px 8px; border:1px solid var(--primary-border); border-radius:6px; color:var(--primary-strong); font-size:12px; font-weight:700; }
 .assigned-speakers { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; font-size:12px; }
+.fixed-transcript .assigned-speakers,.estimated-speakers { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0; vertical-align:middle; }
 .speaker-label { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px; max-width:100%; padding:3px 6px; border:1px solid currentColor; border-radius:6px; color:var(--speaker-light-fg); background:var(--speaker-light-bg); overflow-wrap:anywhere; font-size:12px; }
 .speaker-label .speaker-unset { display:inline; margin:0; color:inherit; font-size:10px; font-weight:400; }
 :root[data-theme="dark"] .speaker-label { color:var(--speaker-dark-fg); background:var(--speaker-dark-bg); }

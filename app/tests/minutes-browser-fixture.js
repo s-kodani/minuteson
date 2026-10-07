@@ -23,6 +23,8 @@ async (page) => {
     data.evidenceDelay=0;data.failEvidence=false;data.corruptEvidence=false;data.playbacks={};
     data.failMinutesRetry=false;data.lostMinutesRetryResponse=false;
     data.transcripts={};data.transcriptDelay=0;data.failTranscript=false;data.corruptTranscript=false;
+    data.analysis=analysis;data.fixedSpeakers={};
+    const frozenSpeakers=v=>copy(data.fixedSpeakers[v.inputAnalysisId]??[{id:`speaker-${v.inputAnalysisId}`,label:"話者1",displayName:`${v.inputAnalysisId}の話者`}]);
     data.failEvidenceId=null;data.corruptEvidenceId=null;
     // Configure before opening a meeting: multiple distinct fixed utterances
     // for the same item, plus an unrelated ToDo reference that must not mix in.
@@ -125,9 +127,9 @@ async (page) => {
           if(!v||r.meetingId!==v.meetingId||r.expectedContentHash!==v.contentHash||r.expectedInputContentHash!==v.inputContentHash)throw Error("stale fixed transcript base");
           const e=(data.drafts[v.id]?.payload??v.content).evidence.find(e=>e.id===r.expectedEvidence.id);
           if(!e||["minutesItemId","analysisRevisionId","utteranceId","quoteText","startUs","endUs"].some(k=>e[k]!==r.expectedEvidence[k]))throw Error("stale fixed transcript evidence");
-          const base=v.content.evidence[0],speakerId=`speaker-${v.inputAnalysisId}`;
+          const base=v.content.evidence[0],speakers=frozenSpeakers(v),speakerIds=speakers.map(s=>s.id);
           const utterances=data.transcripts[v.inputAnalysisId]??=(()=>{
-            const rows=Array.from({length:135},(_,i)=>({id:`fixed-${v.inputAnalysisId}-${i}`,trackId:"fixture-track",startUs:base.startUs+(i-67)*10000,endUs:base.startUs+(i-66)*10000,recognizedText:`固定認識原文${i+1}`,effectiveText:`固定本文${i+1}（${v.inputAnalysisId}）`,attributionState:"known",speakerIds:[speakerId]}));
+            const rows=Array.from({length:135},(_,i)=>({id:`fixed-${v.inputAnalysisId}-${i}`,trackId:"fixture-track",startUs:base.startUs+(i-67)*10000,endUs:base.startUs+(i-66)*10000,recognizedText:`固定認識原文${i+1}`,effectiveText:`固定本文${i+1}（${v.inputAnalysisId}）`,attributionState:"known",speakerIds:copy(speakerIds)}));
             const refs=[...new Map(v.content.evidence.map(e=>[e.utteranceId,e])).values()];
             refs.forEach((e,i)=>{rows[67+i]={...rows[67+i],id:e.utteranceId,startUs:e.startUs,endUs:e.endUs,effectiveText:e.quoteText};});return rows;
           })();
@@ -144,7 +146,7 @@ async (page) => {
           }
           const page=args.request.page??Math.floor(target/50),first=page*50;
           if(!Number.isInteger(page)||page<0||first>=utterances.length)throw Error("out of range page");
-          const result={evidence:copy(e),analysisId:v.inputAnalysisId,analysisContentHash:v.inputContentHash,speakers:[{id:speakerId,label:"話者1",displayName:`${v.inputAnalysisId}の話者`}],utterances:copy(utterances.slice(first,first+50)),firstSequence:first+1,totalUtterances:utterances.length,page,pageSize:50,targetSequence:target+1};
+          const result={evidence:copy(e),analysisId:v.inputAnalysisId,analysisContentHash:v.inputContentHash,speakers,utterances:copy(utterances.slice(first,first+50)),firstSequence:first+1,totalUtterances:utterances.length,page,pageSize:50,targetSequence:target+1};
           if(data.corruptTranscript)result.analysisId="wrong-current-analysis";
           return result;
         }
@@ -159,8 +161,8 @@ async (page) => {
             const token=`audio-${++sequence}`;data.playbacks[token]=true;
             return {token,sampleRate:8000,channels:1,totalFrames:16000,startUs:e.startUs,endUs:e.endUs,trackKind:"mic",alignment:"unverified"};
           }
-          const speakerId=`speaker-${v.inputAnalysisId}`;
-          const result={evidence:copy(e),analysisId:e.analysisRevisionId,analysisContentHash:v.inputContentHash,speakers:[{id:speakerId,label:"話者1",displayName:`${v.inputAnalysisId}の話者`}],utterances:[{id:e.utteranceId,trackId:"fixture-track",startUs:e.startUs,endUs:e.endUs,recognizedText:"固定認識原文",effectiveText:e.quoteText,attributionState:"known",speakerIds:[speakerId]}],firstSequence:1,totalUtterances:1};
+          const speakers=frozenSpeakers(v);
+          const result={evidence:copy(e),analysisId:e.analysisRevisionId,analysisContentHash:v.inputContentHash,speakers,utterances:[{id:e.utteranceId,trackId:"fixture-track",startUs:e.startUs,endUs:e.endUs,recognizedText:"固定認識原文",effectiveText:e.quoteText,attributionState:"known",speakerIds:speakers.map(s=>s.id)}],firstSequence:1,totalUtterances:1};
           if(data.corruptEvidence||data.corruptEvidenceId===e.id)result.analysisId="wrong-current-analysis";
           return result;
         }

@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { assertMinutesTranscriptPage, evidenceRequest, minutesTranscriptAudioRequest, type Evidence, type MinutesTranscriptPage, type MinutesTranscriptRequest, type MinutesView } from "./minutes-state";
 import { useTranscriptAudio } from "./transcript-audio";
 import { timeLabel } from "./transcript";
+import { SpeakerLabels } from "./speaker-label";
 
 // A read-only workspace within the document, not another modal or editable
 // current transcript. The host document/editor stays mounted around this view.
@@ -77,7 +78,7 @@ export function FixedTranscriptWorkspace({ view, evidence, locked, back, active 
       <p>{data.firstSequence}–{data.firstSequence + data.utterances.length - 1}番目の発言を表示。本文・話者・認識原文は生成時の固定版です。</p>
       <div className="fixed-transcript">
         {data.utterances.map((u, index) => <article key={u.id} ref={u.id === evidence.utteranceId ? target : undefined} tabIndex={-1} className={u.id === evidence.utteranceId ? "evidence-target" : ""} aria-label={`固定発言${data.firstSequence + index}${u.id === evidence.utteranceId ? "・根拠の参照先" : ""}`}>
-          <div className="utterance-meta"><span>#{data.firstSequence + index}</span><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time><span>{u.speakerIds.length ? u.speakerIds.map((id) => { const s = data.speakers.find((s) => s.id === id); return s?.displayName || s?.label || "話者不明"; }).join(" / ") : "話者不明"}</span><button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => play(u.id)}>固定発言{data.firstSequence + index}の音声を再生</button></div>
+          <div className="utterance-meta"><span>#{data.firstSequence + index}</span><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time><SpeakerLabels meetingId={view.meetingId} speakerIds={u.speakerIds} speakers={data.speakers}/><button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => play(u.id)}>固定発言{data.firstSequence + index}の音声を再生</button></div>
           <p className="document-text">{u.effectiveText}</p>
           {(u.recognitionIsSource||u.effectiveText !== u.recognizedText) && <small className="document-text">{u.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {u.recognizedText}</small>}
           {audio.selected === u.id && audio.controls}

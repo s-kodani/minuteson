@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { evidenceRequest, assertEvidenceSource, itemEvidencePage, type Evidence, type MinutesContent, type MinutesEvidenceSource, type MinutesView } from "./minutes-state";
 import { useTranscriptAudio } from "./transcript-audio";
 import { timeLabel } from "./transcript";
+import { SpeakerLabels } from "./speaker-label";
 
 export function MinutesEvidenceGroup({ view, content, selectedId, page, changePage, suspended, locked, close, showTranscript, verify, dockPlayback = false }: {
   view: MinutesView; content: MinutesContent; selectedId: string; page: number | null; changePage: (page: number) => void;
@@ -69,7 +70,7 @@ function MinutesEvidencePanel({ view, evidence, index, selected, suspended, lock
       <h5>固定した元発言と前後の文脈</h5>
       <p>全{source.totalUtterances}発言のうち{source.firstSequence}–{source.firstSequence + source.utterances.length - 1}。読取り専用です。</p>
       {source.utterances.map((u) => <article className={u.id === evidence.utteranceId ? "evidence-target" : ""} key={u.id} aria-label={u.id === evidence.utteranceId ? "参照先の固定発言" : "前後の固定発言"}>
-        <p><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time> · {u.speakerIds.length ? u.speakerIds.map((id) => { const s = source.speakers.find((s) => s.id === id); return s?.displayName || s?.label || "話者不明"; }).join(" / ") : "話者不明"}</p>
+        <p><time>{timeLabel(u.startUs)}–{timeLabel(u.endUs)}</time> · <SpeakerLabels meetingId={view.meetingId} speakerIds={u.speakerIds} speakers={source.speakers}/></p>
         <p className="document-text">{u.effectiveText}</p>
         {(u.recognitionIsSource||u.recognizedText !== u.effectiveText) && <small className="document-text">{u.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {u.recognizedText}</small>}
       </article>)}
