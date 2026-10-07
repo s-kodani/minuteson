@@ -20,7 +20,7 @@ Swift24件と厳密なフォーマット検査は成功した。追加5件は、
 
 追加Rust3件は終了コード0で成功した。実際に使う起動コマンドが停止ファイル・親PID・時間上限なしの引数を渡すこと、4時間を超える長さと数値表現の境界、不正な録音形式の拒否を検査した。4時間1分相当のマイク・PC音声は、正しいCAFヘッダーと疎ファイルの整数PCMを使い、再起動後の物理検証と保存確定を確認した。会議・セッション・両チャンクの長さとフレーム数・形式を照合し、同期未検証の状態を保持している。全音声をメモリーへ展開せず、実録音や4時間の待機は行わない。ログは `/private/tmp/mon-recording-until-stop-focused.log` と `/private/tmp/mon-recording-until-stop-command.log` にある。
 
-同じ製品ソースの通常の `make check` は継続中である。Python65件、Swift24件、フロントエンド406件と型検査・ビルドは成功し、Rust全体を実行している。今回の全体成功は未確定で、ログは `/private/tmp/mon-recording-until-stop-full-check.log` にある。前段の `5484876` の全体成功は別の検証結果であり、今回へ置き換えない。
+同じ製品ソース `b16b2f1` の通常の `make check` は終了コード0で成功した。Rust通常1382件・失敗0件・既存36件ignored、Python65件、Swift24件、フロントエンド406件と型検査・ビルド、CAF4800/4800フレームの読戻しとAVFoundation製CAFの読出し1件を確認した。ログは `/private/tmp/mon-recording-until-stop-full-check.log` にある。実録音の長時間安定性を証明する結果ではない。
 
 ## 残対応
 
