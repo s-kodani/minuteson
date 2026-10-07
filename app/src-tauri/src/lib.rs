@@ -21,6 +21,7 @@ mod playback;
 mod recorder;
 mod recording_confirmation;
 mod recording_confirmation_window;
+mod resampling;
 mod restored_processing;
 mod saved_artifact;
 mod session;
@@ -1476,6 +1477,23 @@ async fn prepare_minutes_evidence_playback(
 }
 
 #[tauri::command]
+async fn prepare_meeting_playback(
+    window: WebviewWindow,
+    request: storage::MeetingPlaybackRequest,
+) -> Result<PlaybackInfo, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can play audio".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let audio = app.state::<Storage>().prepare_meeting_audio(&request)?;
+        app.state::<PlaybackStore>().insert_meeting(audio)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_utterance_playback(
     window: WebviewWindow,
     meeting_id: String,
@@ -2022,6 +2040,7 @@ pub fn run() {
             save_transcript_draft,
             undo_transcript_edit,
             prepare_utterance_playback,
+            prepare_meeting_playback,
             prepare_draft_utterance_playback,
             get_minutes_evidence_source,
             get_minutes_transcript_page,

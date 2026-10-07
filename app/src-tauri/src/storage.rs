@@ -26,6 +26,7 @@ mod exports;
 mod generation_tests;
 pub(crate) mod imports;
 mod jobs;
+mod meeting_playback;
 mod minutes;
 mod minutes_drafts;
 mod minutes_evidence;
@@ -58,6 +59,7 @@ pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{
     retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
+pub(crate) use meeting_playback::MeetingPlaybackRequest;
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
 pub(crate) use minutes_evidence::{

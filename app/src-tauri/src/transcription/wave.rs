@@ -1,5 +1,7 @@
 use crate::audio::PREVIEW_FRAMES;
 use crate::playback::PreparedAudio;
+use crate::resampling::Filter;
+#[cfg(test)]
 use std::f64::consts::PI;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
@@ -7,7 +9,6 @@ use std::path::Path;
 
 pub const WHISPER_RATE: u32 = 16_000;
 const MAX_WINDOW_SECONDS: u64 = 124;
-const PHASES: usize = 256;
 
 // Bounded windows, not an entire meeting. Context is converted with the window
 // so the low-pass filter sees samples on both sides of ASR unit boundaries.
@@ -56,7 +57,7 @@ pub fn write_window(
     writer
         .write_all(&wav_header(output_frames as u32))
         .map_err(|e| e.to_string())?;
-    let filter = Filter::new(audio.sample_rate);
+    let filter = Filter::new(audio.sample_rate, WHISPER_RATE);
     for index in 0..output_frames {
         if index % 4096 == 0 {
             check_cancelled(cancelled)?;
@@ -112,7 +113,7 @@ pub(crate) fn write_track(
     writer
         .write_all(&wav_header(output_frames as u32))
         .map_err(|e| e.to_string())?;
-    let filter = Filter::new(audio.sample_rate);
+    let filter = Filter::new(audio.sample_rate, WHISPER_RATE);
     let mut first_output = 0;
     while first_output < output_frames {
         check_cancelled(cancelled)?;
@@ -184,70 +185,6 @@ fn wav_header(frames: u32) -> [u8; 44] {
     header[36..40].copy_from_slice(b"data");
     header[40..44].copy_from_slice(&(frames * 2).to_le_bytes());
     header
-}
-
-// Windowed-sinc anti-aliasing: a raw stride or linear interpolation would alias
-// speech-band-external content into the 16 kHz input. Normalize each fractional
-// phase for DC preservation. Edge extension avoids attenuation at file edges.
-struct Filter {
-    half: i64,
-    kernels: Vec<Vec<f64>>,
-}
-
-impl Filter {
-    fn new(rate: u32) -> Self {
-        let cutoff = (f64::from(WHISPER_RATE) / f64::from(rate)).min(1.0) * 0.95;
-        let half = (16.0 / cutoff).ceil() as i64;
-        let kernels = (0..=PHASES)
-            .map(|phase| {
-                let fraction = phase as f64 / PHASES as f64;
-                let mut kernel: Vec<f64> = (-half..=half)
-                    .map(|tap| {
-                        let distance = tap as f64 - fraction;
-                        let x = distance * cutoff;
-                        let sinc = if x.abs() < 1e-12 {
-                            1.0
-                        } else {
-                            (PI * x).sin() / (PI * x)
-                        };
-                        let window = if distance.abs() > half as f64 {
-                            0.0
-                        } else {
-                            0.42 + 0.5 * (PI * distance / half as f64).cos()
-                                + 0.08 * (2.0 * PI * distance / half as f64).cos()
-                        };
-                        cutoff * sinc * window
-                    })
-                    .collect();
-                let sum: f64 = kernel.iter().sum();
-                for value in &mut kernel {
-                    *value /= sum;
-                }
-                kernel
-            })
-            .collect();
-        Self { half, kernels }
-    }
-
-    fn sample(&self, input: &[f32], index: u64, rate: u32) -> f32 {
-        self.sample_from(input, index, rate, 0)
-    }
-
-    fn sample_from(&self, input: &[f32], index: u64, rate: u32, first_frame: u64) -> f32 {
-        let position = index * u64::from(rate);
-        let base = (position / u64::from(WHISPER_RATE)) as i64 - first_frame as i64;
-        let phase = ((position % u64::from(WHISPER_RATE)) as usize * PHASES
-            + WHISPER_RATE as usize / 2)
-            / WHISPER_RATE as usize;
-        self.kernels[phase]
-            .iter()
-            .enumerate()
-            .map(|(tap, weight)| {
-                let source = (base + tap as i64 - self.half).clamp(0, input.len() as i64 - 1);
-                f64::from(input[source as usize]) * weight
-            })
-            .sum::<f64>() as f32
-    }
 }
 
 #[cfg(test)]
@@ -326,7 +263,7 @@ mod tests {
     #[test]
     fn lowpass_preserves_speech_band_and_rejects_aliases() {
         for rate in [8_000, 44_100, 48_000, 96_000] {
-            let filter = Filter::new(rate);
+            let filter = Filter::new(rate, WHISPER_RATE);
             let frequency = if rate == 8_000 { 1_000.0 } else { 12_000.0 };
             let input: Vec<f32> = (0..rate)
                 .map(|i| (2.0 * PI * frequency * f64::from(i) / f64::from(rate)).sin() as f32)

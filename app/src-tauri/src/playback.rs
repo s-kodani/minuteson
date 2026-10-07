@@ -3,6 +3,9 @@ use serde::Serialize;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+mod meeting;
+pub(crate) use meeting::MeetingAudio;
+
 pub struct AudioSpan {
     pub audio: VerifiedAudio,
     pub first_frame: u64,
@@ -71,7 +74,21 @@ pub struct PlaybackInfo {
 
 struct Playback {
     info: PlaybackInfo,
-    audio: PreparedAudio,
+    audio: PreparedPlayback,
+}
+
+enum PreparedPlayback {
+    Track(PreparedAudio),
+    Meeting(MeetingAudio),
+}
+
+impl PreparedPlayback {
+    fn read_pcm(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Track(audio) => audio.read_pcm(offset, frames),
+            Self::Meeting(audio) => audio.read_pcm(offset, frames),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -89,6 +106,29 @@ impl PlaybackStore {
             track_kind: audio.track_kind.clone(),
             alignment: audio.alignment.clone(),
         };
+        self.insert_prepared(info, PreparedPlayback::Track(audio))
+    }
+
+    pub(crate) fn insert_meeting(&self, audio: MeetingAudio) -> Result<PlaybackInfo, String> {
+        let info = PlaybackInfo {
+            token: Uuid::new_v4().to_string(),
+            sample_rate: meeting::MEETING_RATE,
+            channels: 1,
+            total_frames: audio.total_frames,
+            start_us: 0,
+            end_us: audio.end_us,
+            track_kind: audio.track_kind.clone(),
+            // Mixing/resampling is not evidence of physically synchronized capture.
+            alignment: "unverified".into(),
+        };
+        self.insert_prepared(info, PreparedPlayback::Meeting(audio))
+    }
+
+    fn insert_prepared(
+        &self,
+        info: PlaybackInfo,
+        audio: PreparedPlayback,
+    ) -> Result<PlaybackInfo, String> {
         let mut sessions = self.0.lock().map_err(|_| "再生ロックを取得できません")?;
         // Bound retained file handles even if a frontend goes away mid-request.
         if sessions.len() >= 4 {
