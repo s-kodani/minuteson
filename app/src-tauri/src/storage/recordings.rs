@@ -54,6 +54,8 @@ struct CapturedFile {
     hash: String,
 }
 
+const MAX_CAPTURE_MANIFEST_BYTES: u64 = 256 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingConfig {
     pub mode: String,
@@ -307,14 +309,8 @@ impl Storage {
             .join(&session.meeting_id)
             .join("audio")
             .join(session_id);
-        let manifest_file = self.checked_capture_file(&base.join("manifest.json"), false)?;
-        if manifest_file.size_bytes > 256 * 1024 {
-            return Err("録音manifestが大きすぎます".into());
-        }
-        let manifest_bytes = std::fs::read(self.managed_path(&manifest_file.relative)?)
-            .map_err(|error| error.to_string())?;
-        let manifest: CaptureManifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|error| error.to_string())?;
+        let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
+        let manifest = self.read_capture_manifest(&manifest_file)?;
         if manifest.schema_version != 1 || manifest.state != "saved" || !manifest.errors.is_empty()
         {
             return Err("録音manifestは保存完了を示していません".into());
@@ -340,8 +336,10 @@ impl Storage {
         }
         let mic_format = manifest.microphone.validated_format()?;
         let system_format = manifest.system.validated_format()?;
-        let mic_file = self.checked_capture_file(&base.join("microphone.caf"), true)?;
-        let system_file = self.checked_capture_file(&base.join("system.caf"), true)?;
+        let mic_file =
+            self.checked_capture_file(&base.join("microphone.caf"), Some(&manifest.microphone))?;
+        let system_file =
+            self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?;
         let mut connection = self
             .connection
             .lock()
@@ -394,7 +392,29 @@ impl Storage {
         Ok(saved)
     }
 
-    fn checked_capture_file(&self, relative: &Path, caf: bool) -> Result<CapturedFile, String> {
+    fn read_capture_manifest(&self, proof: &CapturedFile) -> Result<CaptureManifest, String> {
+        let mut bytes = Vec::new();
+        File::open(self.managed_path(&proof.relative)?)
+            .map_err(|error| error.to_string())?
+            .take(MAX_CAPTURE_MANIFEST_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > MAX_CAPTURE_MANIFEST_BYTES {
+            return Err("録音manifestが大きすぎます".into());
+        }
+        if bytes.len() as i64 != proof.size_bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != proof.hash
+        {
+            return Err("録音manifestが検証中に変更されました".into());
+        }
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+    }
+
+    fn checked_capture_file(
+        &self,
+        relative: &Path,
+        caf: Option<&CaptureTrack>,
+    ) -> Result<CapturedFile, String> {
         let file = self.managed_path(relative)?;
         let root = self
             .root
@@ -404,24 +424,50 @@ impl Storage {
         if actual != root.join(relative) || !actual.is_file() {
             return Err("録音ファイルが管理領域外または通常ファイルではありません".into());
         }
-        if caf {
-            let mut header = [0_u8; 4];
-            File::open(&actual)
-                .map_err(|error| error.to_string())?
-                .read_exact(&mut header)
-                .map_err(|error| error.to_string())?;
-            if &header != b"caff" {
-                return Err("録音ファイルはCAF形式ではありません".into());
+        let handle = File::open(&actual).map_err(|error| error.to_string())?;
+        let (size_bytes, hash) = if let Some(track) = caf {
+            let (rate, channels, _) = track.validated_format()?;
+            let (format, size, hash) = crate::audio::inspect_recorded_caf(
+                handle.try_clone().map_err(|error| error.to_string())?,
+                &|| false,
+            )?;
+            if format.frames != track.frames as u64
+                || i64::from(format.sample_rate) != rate
+                || i64::from(format.channels) != channels
+            {
+                return Err("録音CAFの実フレーム数・形式とmanifestが一致しません".into());
             }
-        }
-        let (size_bytes, hash) = hash_file(&actual)?;
-        if size_bytes < if caf { 16 } else { 2 } {
+            (
+                i64::try_from(size).map_err(|_| "録音ファイルが大きすぎます")?,
+                hash,
+            )
+        } else {
+            let before = handle.metadata().map_err(|error| error.to_string())?;
+            if before.len() > MAX_CAPTURE_MANIFEST_BYTES {
+                return Err("録音manifestが大きすぎます".into());
+            }
+            let mut bytes = Vec::new();
+            (&handle)
+                .take(MAX_CAPTURE_MANIFEST_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            let after = handle.metadata().map_err(|error| error.to_string())?;
+            if bytes.len() as u64 > MAX_CAPTURE_MANIFEST_BYTES {
+                return Err("録音manifestが大きすぎます".into());
+            }
+            if bytes.len() as u64 != before.len()
+                || after.len() != before.len()
+                || after.modified().map_err(|error| error.to_string())?
+                    != before.modified().map_err(|error| error.to_string())?
+            {
+                return Err("録音manifestが検証中に変更されました".into());
+            }
+            (bytes.len() as i64, format!("{:x}", Sha256::digest(&bytes)))
+        };
+        if size_bytes < if caf.is_some() { 16 } else { 2 } {
             return Err("録音ファイルが短すぎます".into());
         }
-        File::open(&actual)
-            .map_err(|error| error.to_string())?
-            .sync_all()
-            .map_err(|error| error.to_string())?;
+        handle.sync_all().map_err(|error| error.to_string())?;
         Ok(CapturedFile {
             relative: relative.to_owned(),
             size_bytes,
@@ -474,12 +520,214 @@ fn load_session(connection: &Connection, id: &str) -> Result<Option<RecordingSes
 mod tests {
     use super::*;
 
+    fn caf(channels: u32) -> Vec<u8> {
+        crate::audio::tests::caf_fixture(
+            48000,
+            channels,
+            3,
+            32,
+            4,
+            &vec![0; 48000 * channels as usize * 4],
+        )
+    }
+
     fn config() -> RecordingConfig {
         RecordingConfig {
             mode: "system".into(),
             backend: "screencapturekit".into(),
             target_pids: vec![],
         }
+    }
+
+    fn saved_probe_fixture(storage: &Storage) -> (String, String, PathBuf, serde_json::Value) {
+        let meeting = storage.create_meeting("物理音声の確定").unwrap();
+        let session = storage
+            .prepare_recording(&meeting.id, &config(), &Uuid::new_v4().to_string())
+            .unwrap();
+        storage.mark_recording_started(&session.id).unwrap();
+        let output = storage
+            .root
+            .join("meetings")
+            .join(&meeting.id)
+            .join("audio")
+            .join(&session.id);
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("microphone.caf"), caf(1)).unwrap();
+        std::fs::write(output.join("system.caf"), caf(2)).unwrap();
+        let manifest = serde_json::json!({
+            "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
+            "targetPIDs": [], "state": "saved", "errors": [],
+            "microphone": {"frames": 48000, "sampleRate": 48000, "channels": 1, "appendFailures": 0},
+            "system": {"frames": 48000, "sampleRate": 48000, "channels": 2, "appendFailures": 0},
+        });
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        (meeting.id, session.id, output, manifest)
+    }
+
+    #[test]
+    fn physical_caf_mismatch_refuses_atomic_publication_and_preserves_retryable_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, _) = saved_probe_fixture(&storage);
+        let manifest = std::fs::read(output.join("manifest.json")).unwrap();
+        for (name, channels) in [("microphone.caf", 1), ("system.caf", 2)] {
+            let path = output.join(name);
+            let original = std::fs::read(&path).unwrap();
+            for (rate, count, frames) in [
+                (44100, channels, 48000),
+                (48000, 3 - channels, 48000),
+                (48000, channels, 47999),
+                (48000, channels, 48001),
+            ] {
+                let wrong = crate::audio::tests::caf_fixture(
+                    rate,
+                    count,
+                    3,
+                    32,
+                    4,
+                    &vec![0; frames * count as usize * 4],
+                );
+                std::fs::write(&path, &wrong).unwrap();
+                let error = storage.finalize_recording(&session).err().unwrap();
+                assert!(
+                    error.contains("実フレーム数・形式とmanifestが一致"),
+                    "{error}"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), wrong);
+                assert_eq!(
+                    std::fs::read(output.join("manifest.json")).unwrap(),
+                    manifest
+                );
+                assert_eq!(
+                    storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                    "recording"
+                );
+                let db = storage.connection.lock().unwrap();
+                assert_eq!(
+                    load_session(&db, &session).unwrap().unwrap().state,
+                    "recording"
+                );
+                for table in [
+                    "file_assets",
+                    "audio_tracks",
+                    "audio_chunks",
+                    "analysis_flows",
+                ] {
+                    let count: i64 = db
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                            row.get(0)
+                        })
+                        .unwrap();
+                    assert_eq!(count, 0, "{table}");
+                }
+                drop(db);
+                std::fs::write(&path, &original).unwrap();
+            }
+        }
+        assert_eq!(storage.finalize_recording(&session).unwrap().state, "saved");
+        let db = storage.connection.lock().unwrap();
+        let mut query = db.prepare("SELECT relative_path, size_bytes, content_hash FROM file_assets WHERE meeting_id=?1").unwrap();
+        let proofs = query
+            .query_map(params![meeting], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(proofs.len(), 3);
+        for (relative, size, hash) in proofs {
+            let bytes = std::fs::read(storage.root.join(relative)).unwrap();
+            assert_eq!(size, bytes.len() as i64);
+            assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+        }
+    }
+
+    #[test]
+    fn malformed_and_nonfinite_saved_audio_stays_interrupted_without_recovery_publication() {
+        for name in ["microphone.caf", "system.caf"] {
+            for invalid in 0..3 {
+                let temp = tempfile::tempdir().unwrap();
+                let storage = Storage::open(temp.path().into()).unwrap();
+                let (meeting, session, output, _) = saved_probe_fixture(&storage);
+                let path = output.join(name);
+                let channels = if name == "microphone.caf" { 1 } else { 2 };
+                let mut wrong = caf(channels);
+                match invalid {
+                    0 => wrong = b"caff000000000000".to_vec(),
+                    1 => {
+                        wrong.pop();
+                    }
+                    _ => {
+                        let end = wrong.len();
+                        wrong[end - 4..].copy_from_slice(&f32::NAN.to_le_bytes());
+                    }
+                }
+                std::fs::write(&path, &wrong).unwrap();
+                drop(storage);
+                let reopened = Storage::open(temp.path().into()).unwrap();
+                assert!(reopened.recover_completed_recordings().unwrap().is_empty());
+                let db = reopened.connection.lock().unwrap();
+                assert_eq!(
+                    load_session(&db, &session).unwrap().unwrap().state,
+                    "interrupted"
+                );
+                let count: i64 = db
+                    .query_row(
+                        "SELECT COUNT(*) FROM file_assets WHERE meeting_id=?1",
+                        params![meeting],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 0);
+                assert_eq!(std::fs::read(&path).unwrap(), wrong);
+            }
+        }
+    }
+
+    #[test]
+    fn parsed_capture_manifest_must_match_the_exact_registered_hash() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (_, _, output, mut manifest) = saved_probe_fixture(&storage);
+        let path = output.join("manifest.json");
+        let relative = path.strip_prefix(&storage.root).unwrap();
+        let proof = storage.checked_capture_file(relative, None).unwrap();
+        assert_eq!(
+            storage.read_capture_manifest(&proof).unwrap().state,
+            "saved"
+        );
+        manifest["state"] = serde_json::json!("ready");
+        let changed = serde_json::to_vec(&manifest).unwrap();
+        assert_eq!(changed.len() as i64, proof.size_bytes);
+        std::fs::write(&path, &changed).unwrap();
+        let error = storage.read_capture_manifest(&proof).err().unwrap();
+        assert!(error.contains("検証中に変更"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), changed);
+    }
+
+    #[test]
+    fn oversized_capture_manifest_is_rejected_before_hashing_and_after_a_prior_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (_, _, output, _) = saved_probe_fixture(&storage);
+        let path = output.join("manifest.json");
+        let relative = path.strip_prefix(&storage.root).unwrap();
+        let proof = storage.checked_capture_file(relative, None).unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(1024 * 1024 * 1024).unwrap();
+        let error = storage.checked_capture_file(relative, None).err().unwrap();
+        assert!(error.contains("大きすぎ"), "{error}");
+        let error = storage.read_capture_manifest(&proof).err().unwrap();
+        assert!(error.contains("大きすぎ"), "{error}");
+        assert_eq!(file.metadata().unwrap().len(), 1024 * 1024 * 1024);
     }
 
     #[test]
@@ -603,8 +851,8 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        std::fs::write(output.join("microphone.caf"), b"caff000000000000").unwrap();
-        std::fs::write(output.join("system.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
+        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
         drop(storage);
 
         let reopened = Storage::open(temp.path().to_owned()).unwrap();
@@ -646,7 +894,7 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        std::fs::write(pending_output.join("microphone.caf"), b"caff000000000000").unwrap();
+        std::fs::write(pending_output.join("microphone.caf"), &caf(1)).unwrap();
         std::fs::write(pending_output.join("system.caf"), b"bad!000000000000").unwrap();
         drop(reopened);
 
@@ -689,7 +937,7 @@ mod tests {
             .join("audio")
             .join(&session.id);
         std::fs::create_dir_all(&output).unwrap();
-        std::fs::write(output.join("microphone.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
         std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
         let manifest = serde_json::json!({
             "schemaVersion": 1, "captureMode": "system", "backend": "screencapturekit",
@@ -715,7 +963,7 @@ mod tests {
                 .state,
             "interrupted"
         );
-        std::fs::write(output.join("system.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
         assert_eq!(
             storage.recover_completed_recordings().unwrap(),
             vec![session.id]
@@ -776,8 +1024,8 @@ mod tests {
             .join("audio")
             .join(&session.id);
         std::fs::create_dir_all(&output).unwrap();
-        // This fixture tests DB atomicity and manifest checks, not CAF decoding.
-        std::fs::write(output.join("microphone.caf"), b"caff000000000000").unwrap();
+        // Physical CAF frames must also match before this transaction can publish.
+        std::fs::write(output.join("microphone.caf"), &caf(1)).unwrap();
         std::fs::write(output.join("system.caf"), b"bad!000000000000").unwrap();
         let manifest = serde_json::json!({
             "schemaVersion": 1, "captureMode": "application", "backend": "screencapturekit",
@@ -817,7 +1065,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(assets_before, 0);
-        std::fs::write(output.join("system.caf"), b"caff000000000000").unwrap();
+        std::fs::write(output.join("system.caf"), &caf(2)).unwrap();
         let saved = storage.finalize_recording(&session.id).unwrap();
         assert_eq!(saved.state, "saved");
         assert_eq!(saved.duration_us, 1_000_000);

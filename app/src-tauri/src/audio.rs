@@ -221,6 +221,69 @@ fn read_caf_format(file: &mut File, size: u64) -> Result<PcmFormat, String> {
     Ok(format)
 }
 
+// Newly captured audio has no committed hash yet. Bind the parsed CAF format,
+// every PCM sample and the new hash to one unchanged file descriptor. Hash the
+// payload once; keep only a hash block and a partial sample, not the whole file.
+pub(crate) fn inspect_recorded_caf(
+    mut file: File,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PcmFormat, u64, String), String> {
+    let before = file.metadata().map_err(|error| error.to_string())?;
+    if !before.is_file() {
+        return Err("録音音声が通常ファイルではありません".into());
+    }
+    let size = before.len();
+    let modified = before.modified().map_err(|error| error.to_string())?;
+    let format = read_caf_format(&mut file, size)?;
+    let data_end = format.data_offset + format.frames * u64::from(format.bytes_per_frame);
+    let sample_bytes = (format.bytes_per_frame / format.channels) as usize;
+    file.rewind().map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 65_536];
+    let mut pending = Vec::with_capacity(buffer.len() + 8);
+    let mut position = 0_u64;
+    loop {
+        if cancelled() {
+            return Err("録音音声の照合を中断しました".into());
+        }
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        let end = position
+            .checked_add(count as u64)
+            .filter(|end| *end <= size)
+            .ok_or("録音音声が検証中に変更されました")?;
+        hasher.update(&buffer[..count]);
+        // Every supported integer bit pattern is finite. Floating-point samples
+        // need a full check, including samples split by a hash block boundary.
+        if format.float {
+            let from = position.max(format.data_offset);
+            let to = end.min(data_end);
+            if from < to {
+                pending.extend_from_slice(
+                    &buffer[(from - position) as usize..(to - position) as usize],
+                );
+                let complete = pending.len() / sample_bytes * sample_bytes;
+                for sample in pending[..complete].chunks_exact(sample_bytes) {
+                    decode_sample(sample, &format)?;
+                }
+                pending.drain(..complete);
+            }
+        }
+        position = end;
+    }
+    let after = file.metadata().map_err(|error| error.to_string())?;
+    if position != size
+        || !pending.is_empty()
+        || after.len() != size
+        || after.modified().map_err(|error| error.to_string())? != modified
+    {
+        return Err("録音音声が検証中に変更されました".into());
+    }
+    Ok((format, size, format!("{:x}", hasher.finalize())))
+}
+
 fn decode_sample(bytes: &[u8], format: &PcmFormat) -> Result<f32, String> {
     let value = if format.float {
         match bytes.len() {
@@ -298,6 +361,96 @@ pub(crate) mod tests {
             bytes.len() as u64,
             &format!("{:x}", Sha256::digest(bytes)),
         )
+    }
+
+    #[test]
+    fn recorded_caf_proof_binds_physical_format_samples_and_hash_without_rewriting() {
+        for (channels, flags, bits, width, samples) in [
+            (
+                2,
+                3,
+                32,
+                4,
+                [0.25_f32.to_le_bytes(), (-0.5_f32).to_le_bytes()]
+                    .concat()
+                    .repeat(20000),
+            ),
+            (1, 1, 64, 8, f64::MAX.to_be_bytes().repeat(20000)),
+            (1, 2, 24, 3, vec![0, 0, 0x80].repeat(30000)),
+        ] {
+            let bytes = caf_fixture(48000, channels, flags, bits, width, &samples);
+            let mut file = tempfile::tempfile().unwrap();
+            file.write_all(&bytes).unwrap();
+            let (format, size, hash) =
+                inspect_recorded_caf(file.try_clone().unwrap(), &|| false).unwrap();
+            assert_eq!(
+                (format.sample_rate, format.channels, format.frames),
+                (
+                    48000,
+                    channels,
+                    samples.len() as u64 / u64::from(channels * width)
+                )
+            );
+            assert_eq!(size, bytes.len() as u64);
+            assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+            file.rewind().unwrap();
+            let mut after = Vec::new();
+            file.read_to_end(&mut after).unwrap();
+            assert_eq!(after, bytes);
+        }
+    }
+
+    #[test]
+    fn recorded_caf_checks_nonfinite_samples_at_hash_block_boundaries_and_tail() {
+        for (width, bits) in [(4_u32, 32), (8, 64)] {
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                for frame in [(65536 - 99) / width as usize, 39999] {
+                    let mut samples = vec![0; 40000 * width as usize];
+                    let bad = if width == 4 {
+                        (value as f32).to_le_bytes().to_vec()
+                    } else {
+                        value.to_le_bytes().to_vec()
+                    };
+                    samples[frame * width as usize..(frame + 1) * width as usize]
+                        .copy_from_slice(&bad);
+                    let bytes = caf_fixture(48000, 1, 3, bits, width, &samples);
+                    let mut file = tempfile::tempfile().unwrap();
+                    file.write_all(&bytes).unwrap();
+                    let error = inspect_recorded_caf(file, &|| false).err().unwrap();
+                    assert!(error.contains("非有限"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_caf_inspection_rejects_cancel_mutation_and_unfinished_container() {
+        let bytes = caf_fixture(48000, 1, 3, 32, 4, &vec![0; 200000]);
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let error = inspect_recorded_caf(file.try_clone().unwrap(), &|| {
+            checks.set(checks.get() + 1);
+            checks.get() == 3
+        })
+        .err()
+        .unwrap();
+        assert!(error.contains("中断"), "{error}");
+        assert_eq!(file.metadata().unwrap().len(), bytes.len() as u64);
+        checks.set(0);
+        let error = inspect_recorded_caf(file.try_clone().unwrap(), &|| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 2 {
+                file.set_len(bytes.len() as u64 - 1).unwrap();
+            }
+            false
+        })
+        .err()
+        .unwrap();
+        assert!(error.contains("検証中に変更"), "{error}");
+        let mut incomplete = tempfile::tempfile().unwrap();
+        incomplete.write_all(b"caff000000000000").unwrap();
+        assert!(inspect_recorded_caf(incomplete, &|| false).is_err());
     }
 
     #[test]
