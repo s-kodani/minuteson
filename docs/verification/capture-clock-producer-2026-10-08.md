@@ -34,7 +34,9 @@ Tauriの `--until-stopped` は形式版2を出力し、両トラックの全保�
 
 `make check-capture-clock` は、このSwift生成物をRustの実際の録音確定処理へ渡す独立の統合検査である。UTC原点、物理フレーム数、欠損登録、既知区間の補正付き再生、欠損を横断する入力の拒否、原本の保持を検査する。最終Swift変更とヘルパーバンドル再構築後の再確認も、Swift生成1件・Rust統合1件が終了コード0で成功した。ログは `/private/tmp/mon-swift-capture-clock-integration-final.log` にある。環境依存のRust検査を通常テストではignoredとし、通常の `make check` の専用工程から明示実行する。
 
-最終製品ソースの通常の `make check` はPython65件、Swift33件、フロントエンド406件と型検査・ビルドを通過し、Rust全体を継続中である。ログは `/private/tmp/mon-capture-clock-producer-full-check.log` にある。今回追加した実生成物の統合検査を専用工程で明示実行するため、通常Rustのignored区分は既存36件と追加1件となる。
+製品ソース `031f3e5` の通常の `make check` は終了コード0で完了した。Python65件、Swift33件、フロントエンド406件と型検査・ビルド、Rust通常1389件・失敗0件・37件ignoredが成功した。CAF4800/4800フレームとAVFoundation製CAF読出し1件、専用工程のSwift生成1件・Rust統合1件も成功した。通常Rustのignored区分は既存36件と専用統合検査1件で、成功した専用検査を通常件数へ重複加算しない。ログは `/private/tmp/mon-capture-clock-producer-full-check.log` にある。後続の話者色・トラック別発言表示のフロントエンド410件は別の最終検査であり、この406件へ読み替えない。
+
+検査終了後に専用Rustキャッシュ約2.1GiBを削除し、ソース・検証ログ・既存release成果物と `app/src-tauri/target` 約38MiBを保持した。Rustの既存のリンカー警告とSwiftPMのユーザー用キャッシュ書込警告は残り、検査の失敗とは区別する。
 
 前段の製品ソース `4cdfd42` の全体検査は終了コード0で完了した。Rust通常1389件・失敗0件・既存36件ignored、Python65件、Swift24件、フロントエンド406件と型検査・ビルド、CAF4800/4800フレームとAVFoundation製CAF読出し1件が成功した。この結果を今回のSwift接続後の全体成功と混同しない。
 
