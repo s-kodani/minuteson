@@ -40,6 +40,8 @@ const suites = [
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],
   ["import-toast", "import-browser-fixture.js", "import-toast-browser-check.js"],
   ["recovery-toast", "data-save-browser-fixture.js", "recovery-toast-browser-check.js"],
+  ["model-preparation-toast", "model-preparation-browser-fixture.js", "model-preparation-toast-browser-check.js"],
+  ["model-profile-toast", "model-profile-browser-fixture.js", "model-profile-toast-browser-check.js"],
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
   ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],

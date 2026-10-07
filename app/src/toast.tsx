@@ -8,18 +8,18 @@ const icons: Record<ToastLevel, string> = { success: "✓", info: "ⓘ", warning
 
 /** An event notification, not operation state. Clearing it never clears an error
  * or submits a command. Only the originating controller can resolve a problem. */
-export function ToastNotice({ scope, type, message, level = "success", onClose, action, eventId }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; onClose?: () => void; action?: ToastAction; eventId?: string }) {
+export function ToastNotice({ scope, type, message, level = "success", important, onClose, action, eventId }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; important?: boolean; onClose?: () => void; action?: ToastAction; eventId?: string }) {
   const key = toastKey(scope, type), latest = useRef({ onClose, action });
   const priorKey = useRef(key);
   latest.current = { onClose, action };
   useLayoutEffect(() => {
     let active = true;
     const run = async () => { const current = latest.current.action; if (active && current && !current.disabled) await current.run(); };
-    if (message) toasts.show({ key, message, level, eventId, onClose: () => { if (active) latest.current.onClose?.(); }, action: action ? { ...action, run } : undefined });
+    if (message) toasts.show({ key, message, level, important, eventId, onClose: () => { if (active) latest.current.onClose?.(); }, action: action ? { ...action, run } : undefined });
     else { toasts.resolve(key); if (priorKey.current !== key) toasts.resolve(priorKey.current); }
     priorKey.current = key;
     return () => { active = false; toasts.detachAction(key, run); };
-  }, [key, message, level, eventId, action?.kind, action?.label, action?.disabled]);
+  }, [key, message, level, important, eventId, action?.kind, action?.label, action?.disabled]);
   return null;
 }
 

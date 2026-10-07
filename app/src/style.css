@@ -133,6 +133,7 @@
 .info-popover::backdrop { background:transparent; }
 .data-path { overflow-wrap:anywhere; }
 .issue-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; color:var(--danger-text); font-size:12px; }
+.model-result-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; color:var(--muted); font-size:12px; }
 .toast-host { position:fixed; top:76px; right:16px; width:min(380px, calc(100vw - 96px)); max-height:min(420px, calc(100dvh - 220px)); overflow:auto; overscroll-behavior:contain; z-index:30; display:grid; gap:8px; pointer-events:none; }
 .toast-card { display:flex; align-items:flex-start; gap:10px; background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--info-text); border-radius:10px; padding:12px; box-shadow:0 6px 24px var(--backdrop); pointer-events:auto; }
 .toast-success { border-left-color:var(--success-text); }.toast-warning { border-left-color:var(--warning-text); }.toast-error { border-left-color:var(--danger-text); }

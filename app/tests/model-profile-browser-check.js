@@ -46,7 +46,7 @@ async (page) => {
   results.push("existing application: cancelled late preview remains suppressed");
   await boot(); await page.evaluate(() => window.modelProfileFixture.previewMode = "forged");
   await records().first().getByRole("button", { name: "標準への適用を確認", exact: true }).click();
-  await page.getByRole("region", { name: "AIモデルの事前検査", exact: true }).getByRole("alert").waitFor();
+  await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "モデル準備" }).waitFor();
   check(await modal().count() === 0 && await count("apply_model_profile_application") === 0, "forged application preview accepted");
   results.push("existing application: forged tuning rejected");
   await boot(); await review(); await page.evaluate(() => window.modelProfileFixture.mode = "lost");

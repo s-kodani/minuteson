@@ -2,6 +2,7 @@
 async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true });
+  const vocabularyNotice = host.locator(".toast-card").filter({ hasText: "用語の読込・保存" });
   const writes = () => page.evaluate(() => window.monBrowserFixture.calls.filter(c => c.command === "save_vocabulary_book"));
   for (const scope of ["global", "meeting-0"]) {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
@@ -19,7 +20,7 @@ async page => {
     const before = (await writes()).length;
     if (scope !== "global") await panel.getByText("会議別用語（任意）", { exact: true }).click();
     check(await panel.getByLabel("用語の読込・保存の要対応状態", { exact: true }).isVisible(), "collapsed optional editor hid failed save state");
-    await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
+    await vocabularyNotice.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
     check((await writes()).length === before, "closing failure notification wrote vocabulary");
     if (scope !== "global") await panel.getByText("会議別用語（任意）", { exact: true }).click();
     check(await term.inputValue() === "失敗した点検日" && await panel.getByRole("button", { name: "用語保存を再試行", exact: true }).isEnabled(), "dismissal lost failed input or explicit retry");

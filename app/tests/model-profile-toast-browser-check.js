@@ -1,0 +1,80 @@
+async page => {
+  const results = [], check = (value, message) => { if (!value) throw Error(message); };
+  const host = () => page.getByRole("complementary", { name: "通知", exact: true });
+  const panel = () => page.getByRole("region", { name: "AIモデルの事前検査", exact: true });
+  const record = () => page.getByRole("region", { name: "モデル配置記録", exact: true }).getByRole("listitem").first();
+  const modal = () => page.getByRole("dialog");
+  const count = command => page.evaluate(c => window.modelProfileFixture.calls.filter(x => x.command === c).length, command);
+  const boot = async () => { await page.evaluate(() => sessionStorage.removeItem("mon-model-profile-fixture")); await page.reload(); await page.getByRole("button", { name: "設定", exact: true }).click(); await record().getByRole("button", { name: "標準への適用を確認", exact: true }).waitFor(); };
+  const review = async () => { await record().getByRole("button", { name: "標準への適用を確認", exact: true }).click(); await modal().getByRole("button", { name: "確認した内容で適用", exact: true }).waitFor(); await page.waitForFunction(() => !document.body.textContent.includes("モデルとCPU試行証拠を再照合し、変更内容を準備しています。")); };
+  const apply = async () => { await modal().getByRole("button", { name: "確認した内容で適用", exact: true }).click(); };
+  const lost = async () => { await review(); await page.evaluate(() => window.modelProfileFixture.mode = "lost"); await apply(); await modal().getByRole("alert").filter({ hasText: "適用結果を確定できません" }).waitFor(); };
+  await boot(); await panel().getByRole("button", { name: "配置・構成記録を再読込", exact: true }).click();
+  check(await host().getByRole("status").count() === 0, "historical CPU/profile record emitted success"); await review();
+  check(await host().getByRole("status").count() === 0 && await count("apply_model_profile_application") === 0, "review announced saved selection");
+  await apply(); await modal().waitFor({ state: "hidden" }); await host().getByRole("status").filter({ hasText: "標準・whisper.cppのモデル選択を保存" }).waitFor();
+  await host().getByRole("button", { name: "成功通知を閉じる", exact: true }).click(); await panel().getByRole("button", { name: "配置・構成記録を再読込", exact: true }).click();
+  check(await count("apply_model_profile_application") === 1 && await host().getByRole("status").count() === 0 && await panel().locator('[aria-label="モデル準備の結果"]').count() === 1, "dismiss/read discarded result, repeated write or re-notified");
+  results.push("profile preview and historical reads stay silent; verified save is exact and dismiss keeps records");
+
+  await boot(); await review(); await page.evaluate(() => window.modelProfileFixture.failReadback = true); await apply(); await modal().waitFor({ state: "hidden" });
+  await host().getByRole("status").filter({ hasText: "モデル選択を保存" }).waitFor(); await host().getByRole("alert").filter({ hasText: "保存は成功しましたが" }).waitFor();
+  check(await page.evaluate(() => window.modelProfileFixture.profiles[0].profileVersion) === 1 && await count("apply_model_profile_application") === 1, "post-save read failure undid receipt or rewrote selection");
+  await host().getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
+  check(await panel().getByLabel("モデル準備の要対応状態", { exact: true }).count() === 1, "read failure lost retained cause");
+  results.push("confirmed profile save and subsequent preference read failure are separate outcomes");
+
+  await boot(); await lost();
+  check(await host().getByRole("status").count() === 0 && await host().getByRole("alert").count() === 0, "modal unknown result leaked success/error toast");
+  const original = await page.evaluate(() => window.modelProfileFixture.calls.find(c => c.command === "apply_model_profile_application").args.token);
+  await modal().getByRole("button", { name: "閉じて構成記録を確認", exact: true }).click(); await host().getByRole("alert").filter({ hasText: "モデル適用の結果確認" }).waitFor();
+  await host().getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
+  check(await record().getByRole("button", { name: "標準への適用を確認", exact: true }).isDisabled(), "unknown application permitted replacing its identity");
+  await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.getByRole("button", { name: "設定", exact: true }).click();
+  await panel().getByRole("button", { name: "未確定の適用結果を確認", exact: true }).click();
+  await modal().getByRole("button", { name: "同じ操作で適用結果を確認", exact: true }).click(); await modal().waitFor({ state: "hidden" });
+  await host().getByRole("status").filter({ hasText: "モデル選択を保存" }).waitFor();
+  const operations = await page.evaluate(() => window.modelProfileFixture.calls.filter(c => c.command === "apply_model_profile_application").map(c => c.args.token));
+  check(operations.length === 2 && operations.every(id => id === original) && await page.evaluate(() => window.modelProfileFixture.profiles[0].profileVersion) === 1 && await panel().getByLabel("モデル適用の結果確認の要対応状態", { exact: true }).count() === 0, "close/navigation lost exact operation, duplicated revision or kept false issue");
+  results.push("unknown application survives close, toast dismissal and settings navigation; same receipt resolves without duplicate revision");
+
+  await boot(); await review(); await page.evaluate(() => window.modelProfileFixture.mode = "delay"); await apply();
+  await modal().getByRole("button", { name: "適用を取り消す", exact: true }).click();
+  check(await host().getByRole("status").count() === 0 && await host().getByRole("alert").count() === 0, "stop request announced save/cancel completion");
+  await page.evaluate(() => window.modelProfileFixture.complete()); await modal().waitFor({ state: "hidden" });
+  await host().getByRole("alert").filter({ hasText: "注意：" }).filter({ hasText: "保存結果の確認が必要" }).waitFor();
+  check(await host().getByRole("status").count() === 0 && await page.evaluate(() => window.modelProfileFixture.profiles[0].profileVersion) === 1, "late committed application presented as rollback or success");
+  await page.waitForTimeout(4300);
+  check(await host().getByRole("alert").filter({ hasText: "注意：" }).count() === 1, "important uncertain warning expired automatically");
+  await host().getByRole("button", { name: "注意通知を閉じる", exact: true }).click();
+  await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.getByRole("button", { name: "設定", exact: true }).click();
+  check(await host().getByRole("alert").filter({ hasText: "注意：" }).count() === 0 && await panel().getByLabel("モデル適用の結果確認の要対応状態", { exact: true }).count() === 1, "dismissed warning replayed on navigation or erased uncertain state");
+  await panel().getByRole("button", { name: "未確定の適用結果を確認", exact: true }).click(); await modal().getByRole("button", { name: "同じ操作で適用結果を確認", exact: true }).click(); await modal().waitFor({ state: "hidden" });
+  await host().getByRole("status").filter({ hasText: "モデル選択を保存" }).waitFor();
+  check(await page.evaluate(() => window.modelProfileFixture.profiles[0].profileVersion) === 1, "post-cancel receipt check duplicated save");
+  results.push("cancelled UI waits for terminal work and warns about possible commit; explicit same-operation confirmation is idempotent");
+
+  await boot(); await page.evaluate(() => window.modelProfileFixture.failCatalog = true); await panel().getByRole("button", { name: "配置・構成記録を再読込", exact: true }).click();
+  await host().getByRole("alert").filter({ hasText: "模擬構成再読込失敗" }).waitFor(); await page.evaluate(() => window.modelProfileFixture.failCatalog = false);
+  await host().getByRole("button", { name: "配置・構成記録を再読込", exact: true }).click();
+  await page.waitForFunction(() => !document.body.textContent.includes("要対応：モデル配置・構成記録"));
+  check(await host().getByRole("alert").count() === 0 && await count("apply_model_profile_application") === 0, "catalog retry wrote settings or did not resolve error");
+  results.push("catalog toast retry is guarded read-only and resolves its issue without applying models");
+
+  await boot(); await lost(); await modal().getByRole("button", { name: "閉じて構成記録を確認", exact: true }).click();
+  await panel().getByRole("button", { name: "構成記録を確認して確認を終了", exact: true }).click();
+  check(await count("apply_model_profile_application") === 1, "release preview wrote application");
+  await page.keyboard.press("Escape"); await modal().waitFor({ state: "hidden" });
+  check(await panel().getByRole("button", { name: "未確定の適用結果を確認", exact: true }).count() === 1, "cancelled release dropped uncertain operation");
+  await panel().getByRole("button", { name: "構成記録を確認して確認を終了", exact: true }).click(); await page.evaluate(() => window.modelProfileFixture.failCatalog = true);
+  await modal().getByRole("button", { name: "記録を確認して確認を終了する", exact: true }).click(); await modal().getByRole("alert").waitFor();
+  await modal().getByRole("button", { name: "確認を閉じる", exact: true }).click();
+  check(await panel().getByRole("button", { name: "未確定の適用結果を確認", exact: true }).count() === 1, "failed authoritative read discarded uncertain identity");
+  await page.evaluate(() => window.modelProfileFixture.failCatalog = false); await panel().getByRole("button", { name: "構成記録を確認して確認を終了", exact: true }).click();
+  await modal().getByRole("button", { name: "記録を確認して確認を終了する", exact: true }).click(); await modal().waitFor({ state: "hidden" });
+  await host().getByRole("status").filter({ hasText: "情報：" }).filter({ hasText: "確認を終了しました" }).waitFor();
+  check(await count("apply_model_profile_application") === 1 && await record().getByRole("button", { name: "標準への適用を確認", exact: true }).isEnabled(), "acknowledged release applied again or blocked fresh review");
+  results.push("uncertain check can be released only by explicit acknowledgement and fresh catalog read; it never cancels, rolls back or claims saved success");
+  await page.screenshot({ path: "model-profile-toast-confirmation-released.png" });
+  return { passed: results.length, results };
+}

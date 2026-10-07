@@ -7,6 +7,13 @@ import { InspectionAttempt, inspectionLabel, placementLabel, assertPlacementRece
 import { applicationChanges, assertApplicationPreview, assertApplicationResult, assertAppliedPreferences, assertProfileCatalog, canReviewApplication, preferenceCommand, profileConfigurationLabel, profileName, type ModelApplicationPreview, type ModelProfileName, type ModelProfileView } from "./model-profile-state";
 import { assertModelDeletionPreview, modelDeletionEntryLabel, type ModelDeletionPreview } from "./model-deletion-state";
 import type { ModelBodyDeletionControl } from "./model-body-deletion";
+import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
+import { modelNotice, type ModelNotice } from "./model-notification-state";
+
+type PendingApplication = { preview: ModelApplicationPreview; entry: ModelPlacementEntry; operationId: string };
+// Preserve an uncertain write across settings navigation. Never substitute a
+// new operation ID merely because its modal or source component was closed.
+let unresolvedApplication: { application: PendingApplication; message: string; stopped: boolean } | null = null;
 
 export function ModelInspectionPanel({ locked, recordingActive, deletionControl, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; deletionControl?: ModelBodyDeletionControl; refreshEpoch?: number }) {
   const confirm = useActionConfirmation(locked || recordingActive);
@@ -19,14 +26,15 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const [checking, setChecking] = useState(false);
   const [placements, setPlacements] = useState<ModelPlacementEntry[]>([]);
   const [catalogError, setCatalogError] = useState("");
-  const [placementMessage, setPlacementMessage] = useState("");
+  const [notice, setNotice] = useState<ModelNotice | null>(() => unresolvedApplication?.stopped ? modelNotice("applicationStopped", unresolvedApplication.application.operationId) : null);
   const [profiles, setProfiles] = useState<ModelProfileView[] | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [application, setApplication] = useState<{ preview: ModelApplicationPreview; entry: ModelPlacementEntry; operationId: string } | null>(null);
-  const [applicationError, setApplicationError] = useState("");
-  const [applicationUnknown, setApplicationUnknown] = useState(false);
+  const [application, setApplication] = useState<PendingApplication | null>(() => unresolvedApplication ? structuredClone(unresolvedApplication.application) : null);
+  const [applicationError, setApplicationError] = useState(() => unresolvedApplication?.message ?? "");
+  const [applicationUnknown, setApplicationUnknown] = useState(() => !!unresolvedApplication);
+  const [applicationVisible, setApplicationVisible] = useState(() => !unresolvedApplication);
   const [deletionReviewing, setDeletionReviewing] = useState(false);
   const [deletionReview, setDeletionReview] = useState<ModelDeletionPreview | null>(null);
   const [deletionPage, setDeletionPage] = useState(0);
@@ -37,8 +45,8 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const opener = useRef<HTMLElement | null>(null);
   const attempt = useRef(new InspectionAttempt());
   const mounted = useRef(true);
-  const confirmedState = useRef({ report, directory, placements, busy });
-  confirmedState.current = { report, directory, placements, busy };
+  const confirmedState = useRef({ report, directory, placements, busy, application });
+  confirmedState.current = { report, directory, placements, busy, application };
   const loadPlacements = async () => {
     if (!isTauri()) return;
     const sequence = ++catalogSequence.current;
@@ -64,10 +72,11 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   useEffect(() => { if (refreshEpoch > 0) void loadPlacements(); }, [refreshEpoch]);
   useEffect(() => {
     if (recordingActive && application && !busy) {
-      setApplication(null);
+      if (applicationUnknown) setApplicationVisible(false);
+      else setApplication(null);
       setError("録音状態が変わったため適用の確認を閉じました。録音停止後に再確認してください。");
     }
-  }, [recordingActive, application, busy]);
+  }, [recordingActive, application, applicationUnknown, busy]);
   useEffect(() => {
     if ((recordingActive || locked) && deletionReview && !busy) {
       setDeletionReview(null);
@@ -78,7 +87,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     if (busy || locked || recordingActive || catalogLoading || catalogError || !isTauri()) return;
     deletionOpener.current = element;
     const token = crypto.randomUUID();
-    attempt.current.begin(token); setBusy(true); setDeletionReviewing(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage(""); setDeletionReview(null);
+    attempt.current.begin(token); setBusy(true); setDeletionReviewing(true); setCancelling(false); setError(""); setReport(null); setNotice(null); setDeletionReview(null);
     try {
       const result = await invoke<unknown>("preview_model_deletion", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
       if (mounted.current && attempt.current.accepts(token)) {
@@ -91,17 +100,18 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     }
   };
   const reviewApplication = async (entry: ModelPlacementEntry, name: ModelProfileName, element: HTMLElement) => {
-    if (busy || locked || recordingActive || catalogLoading || !profiles || !isTauri() || !canReviewApplication(entry)) return;
+    if (busy || locked || recordingActive || catalogLoading || !profiles || (application && applicationUnknown) || !isTauri() || !canReviewApplication(entry)) return;
     const current = profiles.find(p => p.name === name);
     if (!current) return;
     opener.current = element;
     const token = crypto.randomUUID();
-    attempt.current.begin(token); setBusy(true); setReviewing(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage("");
+    attempt.current.begin(token); setBusy(true); setReviewing(true); setCancelling(false); setError(""); setReport(null); setNotice(null);
     try {
       const preview = await invoke<ModelApplicationPreview>("preview_model_profile_application", { token, profile: name, packageId: entry.packageId, expectedReviewHash: entry.reviewHash, checkOperationId: entry.compatibility!.operationId });
       if (mounted.current && attempt.current.accepts(token)) {
         assertApplicationPreview(preview, entry, name, current);
         setApplicationError(""); setApplicationUnknown(false);
+        setApplicationVisible(true);
         setApplication({ preview: structuredClone(preview), entry: structuredClone(entry), operationId: crypto.randomUUID() });
       }
     } catch (cause) { if (mounted.current && attempt.current.accepts(token)) setError(String(cause)); }
@@ -115,24 +125,33 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const applyApplication = async () => {
     if (!application || busy || locked || recordingActive || !isTauri()) return;
     const { preview, operationId } = application;
-    attempt.current.begin(operationId); setBusy(true); setApplying(true); setCancelling(false); setApplicationError(""); setPlacementMessage("");
+    unresolvedApplication = { application: structuredClone(application), message: "モデル適用の応答を確認できていません。同じ操作の結果を確認してください。", stopped: false };
+    attempt.current.begin(operationId); setBusy(true); setApplying(true); setCancelling(false); setError(""); setApplicationError(""); setNotice(null);
     try {
       const result = await invoke<ModelProfileView>("apply_model_profile_application", { token: operationId, preview });
       if (mounted.current && attempt.current.accepts(operationId)) {
         assertApplicationResult(result, operationId, preview);
-        setApplication(null); setApplicationUnknown(false);
-        setPlacementMessage(`${profileName(preview.profile)}の${preview.after.engine}モデル選択を保存しました。既存ジョブは変更していません。次の新規解析から設定を使用します。品質・速度・通常条件での互換性は未評価です。`);
+        if (unresolvedApplication?.application.operationId === operationId) unresolvedApplication = null;
+        setApplication(null); setApplicationUnknown(false); setApplicationError("");
+        setNotice(modelNotice("applied", operationId, `${profileName(preview.profile)}・${preview.after.engine}`));
         try {
           const preferences = await invoke<Parameters<typeof assertAppliedPreferences>[0]>(preferenceCommand(preview.after.engine));
           assertAppliedPreferences(preferences, preview);
         } catch (cause) { if (mounted.current) setError(`構成の保存は成功しましたが、現在の解析設定を確認できません。記録と会議の解析設定を再読込してください: ${String(cause)}`); }
       }
     } catch (cause) {
-      if (mounted.current && attempt.current.accepts(operationId)) { setApplicationUnknown(true); setApplicationError(`適用結果を確定できません: ${String(cause)} 同じ操作で結果を確認するか、閉じて構成記録を確認してください。条件が変わった場合は再確認が必要です。`); }
+      const message = `適用結果を確定できません: ${String(cause)} 同じ操作で結果を確認するか、閉じて構成記録を確認してください。条件が変わった場合は再確認が必要です。`;
+      if (unresolvedApplication?.application.operationId === operationId) unresolvedApplication.message = message;
+      if (mounted.current && attempt.current.accepts(operationId)) { setApplicationUnknown(true); setApplicationError(message); }
     } finally {
       const accepted = attempt.current.accepts(operationId);
       if (attempt.current.finish(operationId) && mounted.current) {
-        if (!accepted) { setApplication(null); setPlacementMessage("取消要求後の処理が終了しました。保存が先に確定した可能性があるため、下の構成記録を確認してください。"); }
+        if (!accepted) {
+          setApplicationUnknown(true); setApplicationVisible(false);
+          const stopped = modelNotice("applicationStopped", operationId);
+          if (unresolvedApplication?.application.operationId === operationId) { unresolvedApplication.message = stopped.details; unresolvedApplication.stopped = true; }
+          setNotice(stopped); setApplicationError(stopped.details);
+        }
         await loadPlacements();
         if (mounted.current) { setBusy(false); setApplying(false); setCancelling(false); }
       }
@@ -143,12 +162,13 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     if (busy || locked || recordingActive || !isTauri()) return;
     const token = crypto.randomUUID();
     attempt.current.begin(token);
-    setBusy(true); setPlacing(false); setChecking(false); setCancelling(false); setError(""); setReport(null); setPlacementMessage("");
+    setBusy(true); setPlacing(false); setChecking(false); setCancelling(false); setError(""); setReport(null); setNotice(null);
     try {
       const result = await invoke<ModelInspectionReport>("inspect_model_package", { token, directory: directory.trim() });
       if (mounted.current && attempt.current.accepts(token)) {
         inspectionLabel(result);
         setReport(result);
+        setNotice(modelNotice("inspected", token));
       }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(String(cause));
@@ -161,10 +181,10 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     const review = report, source = directory.trim(), reviewHash = report.reviewHash;
     await confirm({ title: "モデルのコピー配置を確認", target: review.manifest.modelName, confirmLabel: "管理領域へコピーする", message: `「${review.manifest.modelName}」の検査済みファイル（${review.totalBytes.toLocaleString()} bytes）をアプリのモデル管理領域へコピーします。\n元ファイル・既存会議・ジョブ・設定は変更しません。実行ファイルは起動せず、配置後も互換性検証待ちです。\n中断時の途中配置は削除せず保全します。配布元・ライセンスの確認は利用者が行ってください。`, validate: () => !confirmedState.current.busy && confirmedState.current.report?.reviewHash === reviewHash && confirmedState.current.directory.trim() === source, progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
     const token = crypto.randomUUID();
-    attempt.current.begin(token); setBusy(true); setPlacing(true); setChecking(false); setCancelling(false); setError(""); setPlacementMessage("");
+    attempt.current.begin(token); setBusy(true); setPlacing(true); setChecking(false); setCancelling(false); setError(""); setNotice(null);
     try {
       const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, directory: source, expectedReviewHash: reviewHash });
-      if (mounted.current && attempt.current.accepts(token)) { assertPlacementReceipt(receipt, token, reviewHash); setPlacementMessage("管理領域への配置を記録しました。エンジン互換性は未検証で、AI準備完了ではありません。"); setReport(null); }
+      if (mounted.current && attempt.current.accepts(token)) { assertPlacementReceipt(receipt, token, reviewHash); setNotice(modelNotice("placed", token)); setReport(null); }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(`${String(cause)} 未完了の配置は保全されます。再検査後、新しい操作として配置し直せます。`);
       throw cause;
@@ -177,13 +197,18 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     if (!entry.placementRecorded || entry.bodyRemoved || busy || locked || recordingActive || !isTauri()) return;
     await confirm({ title: "モデル実行によるCPU互換性確認", target: `${entry.modelName} · ${entry.engine} / ${entry.engineVersion}`, confirmLabel: "実行ファイルを起動して確認する", message: `「${entry.modelName}」のCPU互換性を確認します。\n取り込んだ実行ファイル（${entry.engine} / 申告版 ${entry.engineVersion}）を利用者の権限で起動します。配布元・ライセンス・実行ファイルを信頼できることを確認してください。ネットワークや利用者のファイルへのアクセスを隔離する仕組みはありません。\nCPU・1スレッドで合成入力だけを使用します。会議音声は使いません。アプリは既存ジョブ・設定・プロファイルを変更しません。推論の待ち時間は最大120秒（ファイル照合は別）で、途中ログを保全します。\n成功しても精度・速度・話者数の正式評価や、解析への適用済みにはなりません。`, validate: () => !confirmedState.current.busy && confirmedState.current.placements.some(item => item.packageId === entry.packageId && item.reviewHash === entry.reviewHash && item.placementRecorded && !item.bodyRemoved), progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
     const token = crypto.randomUUID();
-    attempt.current.begin(token); setBusy(true); setPlacing(false); setChecking(true); setCancelling(false); setError(""); setReport(null); setPlacementMessage("");
+    attempt.current.begin(token); setBusy(true); setPlacing(false); setChecking(true); setCancelling(false); setError(""); setReport(null); setNotice(null);
     try {
       const summary = await invoke<ModelCompatibilitySummary>("check_model_compatibility", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
       if (mounted.current && attempt.current.accepts(token)) {
         assertCompatibilitySummary(summary, token, entry);
         if (summary.state === "failed") throw Error(`今回のCPU互換性確認は失敗しました: ${summary.errorMessage} モデルの恒久的な不適合を示すものではありません。ログを確認し、新しい操作として再確認できます。`);
-        else setPlacementMessage(summary.state === "succeeded" ? "固定した合成入力でCPU互換性を確認しました。プロファイルは変更していません。適用状態は構成記録を確認してください。精度・速度・実データの互換性は未評価です。" : "互換性確認を取り消しました。ログを保全しました。自動再実行はしません。");
+        else setNotice(modelNotice(summary.state === "succeeded" ? "cpuSucceeded" : "cpuCancelled", token));
+      } else if (mounted.current && summary.state === "cancelled") {
+        // Only the terminal same-operation receipt, not the stop request,
+        // can announce a cancelled CPU trial.
+        assertCompatibilitySummary(summary, token, entry);
+        setNotice(modelNotice("cpuCancelled", token));
       }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(String(cause));
@@ -200,6 +225,28 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     try { await invoke("cancel_model_inspection", { token }); }
     catch (cause) { if (mounted.current) setError(`取消要求を送信できませんでした。処理終了を待ってください: ${String(cause)}`); if (propagateFailure) throw cause; }
   };
+  const releaseUnknownApplication = async () => {
+    if (!application || !applicationUnknown || busy || locked || recordingActive || catalogLoading || catalogError || !profiles) return;
+    const operationId = application.operationId;
+    await confirm({ title: "未確定のモデル適用の確認を終了", target: application.entry.modelName, confirmLabel: "記録を確認して確認を終了する",
+      message: `適用操作ID: ${operationId}\n保存結果は未確定です。下の配置・構成記録を確認してください。確認を終了しても、保存の取消や巻き戻しは行いません。元の操作記録・現在の設定は保持します。\n同じ操作の結果確認へ戻る手段を終了します。条件が変わった場合など、新しい適用の確認を行うには現在の設定・構成版から別途確認が必要です。`,
+      validate: () => !confirmedState.current.busy && confirmedState.current.application?.operationId === operationId,
+      action: async () => {
+        // Read again before releasing the uncertain UI state. A read failure
+        // keeps the original operation and all result-check controls intact.
+        const [entries, views] = await Promise.all([invoke<ModelPlacementEntry[]>("get_model_placements"), invoke<ModelProfileView[]>("get_model_profiles")]);
+        entries.forEach(placementLabel); assertProfileCatalog(views);
+        if (!mounted.current || confirmedState.current.application?.operationId !== operationId) throw Error("確認対象が変わりました。同じ操作の結果を再確認してください。");
+        setPlacements(entries); setProfiles(views); setCatalogError("");
+        if (unresolvedApplication?.application.operationId === operationId) unresolvedApplication = null;
+        setApplication(null); setApplicationUnknown(false); setApplicationError("");
+        setNotice(modelNotice("applicationReleased", operationId));
+      },
+    });
+  };
+  const stoppedApplication = !!(application && applicationUnknown && unresolvedApplication?.stopped && unresolvedApplication.application.operationId === application.operationId);
+  const stoppedNotice = stoppedApplication ? modelNotice("applicationStopped", application!.operationId) : null;
+  const unknownMessage = application && applicationUnknown && !applicationVisible ? applicationError : "";
   return <section className="analysis-card model-inspection" aria-label="AIモデルの事前検査">
     <div className="heading-with-info"><h2>AIモデル</h2><InfoPopover label="AIモデル" details={<p>手動取り込みの事前検査・管理領域へのコピー・CPU互換性確認と、標準／高精度へのモデル選択を利用できます。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・コピー・適用では起動しません。ダウンロードは開発中です。</p>}>モデルを手動取り込みし、互換性確認後に標準／高精度へ選択できます。検査・コピー・適用では実行ファイルを起動しません。ダウンロードは開発中です。</InfoPopover></div>
     <p>AI処理・録音・取り込みを止めてから準備を開始してください。</p>
@@ -216,8 +263,15 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     {busy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
     {!isTauri() && <p>デスクトップアプリで利用できます。</p>}
     {recordingActive && <p>録音停止後に検査・配置・互換性確認・適用できます。録音開始要求があった場合は処理を取り消し、停止完了を待ちます。</p>}
-    {error && <p className="action-error" role="alert">{error}</p>}
-    {placementMessage && <p role="status">{placementMessage}</p>}
+    <IssueNotice scope="models" type="operation-error" label="モデル準備" message={(!applicationVisible || !application) && !confirm.pending ? error : ""} />
+    <ToastNotice scope="models" type="application-unknown" level="error" message={!stoppedApplication && unknownMessage ? `モデル適用の結果確認: ${unknownMessage}` : ""} action={{ kind: "open", label: "同じ操作の結果を確認", disabled: busy || locked || recordingActive, run: () => setApplicationVisible(true) }} />
+    <IssueStatus label="モデル適用の結果確認" message={unknownMessage}>
+      <button type="button" className="small-secondary" disabled={busy || locked || recordingActive} onClick={() => setApplicationVisible(true)}>未確定の適用結果を確認</button>
+      <button type="button" className="small-secondary" disabled={busy || locked || recordingActive || catalogLoading || !!catalogError || !profiles} onClick={() => void releaseUnknownApplication()}>構成記録を確認して確認を終了</button>
+    </IssueStatus>
+    <ToastNotice scope="models" type="application-stopped" message={stoppedNotice?.message} level="warning" important eventId={stoppedNotice?.eventId} action={{ kind: "open", label: "同じ操作の結果を確認", disabled: busy || locked || recordingActive, run: () => setApplicationVisible(true) }} />
+    <ToastNotice scope="models" type="preparation-result" message={notice?.outcome === "applicationStopped" ? "" : notice?.message} level={notice?.level} eventId={notice?.eventId} />
+    {notice && <div className="model-result-status" aria-label="モデル準備の結果"><span>{notice.message}</span><InfoPopover label="モデル準備の結果">{notice.details}</InfoPopover></div>}
     {report && <div aria-label="モデル検査結果"><h3>{inspectionLabel(report)}</h3>
       <p>{report.manifest.modelName} / {report.manifest.modelVersion} · {report.manifest.engine} / {report.manifest.engineVersion} · {report.manifest.target}</p>
       <p>ファイル {report.files.length} 件・合計 {report.totalBytes.toLocaleString()} bytes。実行ファイルは起動していません。モデルの読み込み・推論互換性・精度・速度は未検証です。</p>
@@ -227,14 +281,14 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     </div>}
     <section aria-label="モデル配置記録"><div className="heading-with-info"><h3>モデル配置記録</h3><InfoPopover label="モデル配置記録" details={<p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>}>コピーと最後のCPU互換性試行の記録です。合成入力の成功は実会議の精度・速度を保証しません。バックアップにモデル本体は含まず、復元後は再準備が必要です。</InfoPopover></div><button type="button" className="small-secondary" disabled={busy || locked || catalogLoading || !isTauri()} onClick={() => void loadPlacements()}>配置・構成記録を再読込</button>
       {catalogLoading && <p role="status">配置とプロファイル構成を再読込しています。</p>}
-      {catalogError && <p className="action-error" role="alert">{catalogError}</p>}
+      <IssueNotice scope="models" type="catalog-error" label="モデル配置・構成記録" message={catalogError} action={{ kind: "retry", label: "配置・構成記録を再読込", disabled: busy || locked || catalogLoading || !isTauri(), run: loadPlacements }} />
       {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}>
         <strong>{entry.modelName}</strong> / {entry.modelVersion} · {entry.engine} / {entry.engineVersion}
         <p>{placementLabel(entry)} · {entry.totalBytes.toLocaleString()} bytes<br />配置ID: <code>{entry.packageId}</code></p>
         {entry.compatibility && <p>確認操作ID: <code>{entry.compatibility.operationId}</code>{entry.compatibility.errorMessage && <><br />{entry.compatibility.errorMessage}</>}</p>}
         <div className="analysis-actions">
           <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>
-          {(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}
+          {(["standard", "high_accuracy"] as const).map(name => <button key={name} type="button" className="small-secondary" disabled={!canReviewApplication(entry) || !profiles || !!(application && applicationUnknown) || catalogLoading || busy || locked || recordingActive || !isTauri()} onClick={event => void reviewApplication(entry, name, event.currentTarget)}>{profileName(name)}への適用を確認</button>)}
           <button type="button" className="small-secondary" disabled={busy || locked || recordingActive || catalogLoading || !!catalogError || !isTauri()} onClick={event => void reviewDeletion(entry, event.currentTarget)}>削除対象を確認（まだ削除しません）</button>
           {deletionControl && <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || !deletionControl.canReviewNew || busy || locked || recordingActive || catalogLoading || !!catalogError} onClick={() => void deletionControl.reviewNew(entry.packageId, entry.reviewHash)}>本体削除の実行確認へ</button>}
         </div>
@@ -256,7 +310,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <div className="analysis-actions"><button type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)}>前の50件</button><button type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)}>次の50件</button><button type="button" data-dialog-cancel onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
       <details><summary>検査結果の識別子（削除許可ではありません）</summary><p>配置ID: <code>{deletionReview.packageId}</code><br />検査操作ID: <code>{deletionReview.inspectionId}</code><br />配置確認SHA: <code>{deletionReview.reviewHash}</code><br />今回の観測SHA: <code>{deletionReview.censusHash}</code></p></details>
     </CommonModal>}
-    {application && <CommonModal ref={dialog} open blocked={busy} onDismiss={() => setApplication(null)} restoreTarget={() => opener.current} className="model-application-dialog" aria-labelledby="model-application-title">
+    {application && applicationVisible && <CommonModal ref={dialog} open blocked={busy} onDismiss={() => { if (applicationUnknown) setApplicationVisible(false); else setApplication(null); }} restoreTarget={() => opener.current} className="model-application-dialog" aria-labelledby="model-application-title">
       <h2 id="model-application-title" tabIndex={-1}>{profileName(application.preview.profile)}へのモデル適用を確認</h2>
       <p>{application.entry.modelName} / {application.entry.modelVersion} · {application.preview.after.engine}</p>
       <p>構成版 #{application.preview.expectedProfileVersion} → #{application.preview.expectedProfileVersion + 1} · 解析設定版 #{application.preview.expectedPreferencesVersion}</p>
@@ -267,7 +321,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       {applicationError && <p className="action-error" role="alert">{applicationError}</p>}
       {error && <p className="action-error" role="alert">{error}</p>}
       {busy && <p role="status">{cancelling ? "取消要求済み。保存が先に確定する場合があります。処理終了後に構成記録を確認してください。" : applying ? "モデルと試行証拠を再照合して保存しています。" : "記録を確認しています。"}</p>}
-      <div className="analysis-actions"><button type="button" disabled={busy || locked || recordingActive} onClick={() => void applyApplication()}>{applicationUnknown ? "同じ操作で適用結果を確認" : "確認した内容で適用"}</button><button type="button" className="secondary" disabled={busy} data-dialog-cancel onClick={() => setApplication(null)}>{applicationUnknown ? "閉じて構成記録を確認" : "適用せず閉じる"}</button>{applying && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>適用を取り消す</button>}</div>
+      <div className="analysis-actions"><button type="button" disabled={busy || locked || recordingActive} onClick={() => void applyApplication()}>{applicationUnknown ? "同じ操作で適用結果を確認" : "確認した内容で適用"}</button><button type="button" className="secondary" disabled={busy} data-dialog-cancel onClick={() => { if (applicationUnknown) setApplicationVisible(false); else setApplication(null); }}>{applicationUnknown ? "閉じて構成記録を確認" : "適用せず閉じる"}</button>{applying && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>適用を取り消す</button>}</div>
     </CommonModal>}
   </section>;
 }

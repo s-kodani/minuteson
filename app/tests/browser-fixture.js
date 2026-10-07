@@ -47,6 +47,8 @@ mockIPC(async (command, args) => {
       return structuredClone(fixture.uiPreferences);
     }
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
+    case "get_model_placements": return [];
+    case "get_model_profiles": return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
     case "get_analysis_flow": return null;
     case "get_diarization_tracks": return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
     case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
