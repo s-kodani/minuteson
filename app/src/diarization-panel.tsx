@@ -1,16 +1,18 @@
 import { invoke,isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { useActionConfirmation } from "./confirmation-service";
 import { useEffect,useId,useRef,useState } from "react";
 import { DraftSaveQueue,registerPendingEdits,type VersionedDraft } from "./draft-save";
 import { canRetryJob,jobLabel,type AnalysisJob,type VersionState } from "./analysis-state";
 import { JobModelRebinding } from "./model-rebinding";
 import { diarizationConfigured,fixedDiarizationInput,fixedTracks,trackLabel,type DiarizationEngine,type DiarizationPreferences,type DiarizationTrack } from "./diarization-state";
 type Preferences = VersionedDraft<DiarizationPreferences>;
-export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs,versions,withSavedEdits,refresh}: {
-  meetingId:string;recorded:boolean;recordingActive:boolean;locked:boolean;jobs:AnalysisJob[];versions:VersionState|null;
+export function DiarizationPanel({meetingId,meetingTitle,recorded,recordingActive,locked,jobs,versions,withSavedEdits,refresh}: {
+  meetingId:string;meetingTitle:string;recorded:boolean;recordingActive:boolean;locked:boolean;jobs:AnalysisJob[];versions:VersionState|null;
   withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;refresh:()=>Promise<void>;
 }) {
   const profileSelectId = useId();
+  const confirm = useActionConfirmation(locked);
   const [queue] = useState(()=>new DraftSaveQueue<DiarizationPreferences,Preferences>(
     (_id,expectedLockVersion,payload)=>invoke("save_diarization_preferences",{expectedLockVersion,payload}),payload=>structuredClone(payload)));
   const [settings,setSettings]=useState(()=>queue.snapshot());
@@ -28,9 +30,9 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
     return()=>{mounted.current=false;unsub();unregister();};
   },[queue]);
   useEffect(()=>{
-    if(!settings.dirty||settings.saving||settings.error)return;
+    if(!settings.dirty||settings.saving||settings.error||confirm.pending)return;
     const timer=window.setTimeout(()=>{void queue.flush().catch(()=>{});},700);return()=>window.clearTimeout(timer);
-  },[queue,settings]);
+  },[queue,settings,confirm.pending]);
   useEffect(()=>{
     let disposed=false;setTracks([]);setTrackError("");
     if(recorded&&isTauri()) void invoke<{tracks:DiarizationTrack[]}>("get_diarization_tracks",{meetingId}).then(p=>{if(!disposed)setTracks(p.tracks);}).catch(e=>{if(!disposed)setTrackError(String(e));});
@@ -46,8 +48,9 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
   };
   const reloadSettings=()=>{
     if(disabled||queue.snapshot().saving)return;
-    if(queue.snapshot().dirty&&!window.confirm("未保存の話者分離設定を破棄して、保存された設定を再読込しますか？ ジョブの固定条件は変更しません。"))return;
-    void run(async()=>{queue.load(await invoke<Preferences>("get_diarization_preferences"));});
+    const expected = JSON.stringify(queue.snapshot().payload);
+    const read = async () => { queue.load(await invoke<Preferences>("get_diarization_preferences")); };
+    void run(async()=>{ if (!queue.snapshot().dirty) await read(); else await confirm({ title: "話者分離設定の入力破棄を確認", target: "端末内の話者分離設定", confirmLabel: "入力を破棄して再読込する", message: "未保存の話者分離設定を破棄して、保存された設定を再読込します。この入力は復元できません。ジョブの固定条件は変更しません。", validate: () => JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: read }); });
   };
   const start=()=>run(()=>withSavedEdits(async()=>{
     const engine=queue.snapshot().payload?.[profile];
@@ -60,12 +63,14 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
     try {await invoke("start_diarization",{request});startOperations.current.delete(key);} finally {await refresh();}
   }));
   const retry=(job:AnalysisJob)=>{
-    if(!window.confirm(`同じ固定入力・モデル・人数で話者分離を再試行しますか？ 保存済み ${job.completedUnits} トラックを再照合して引き継ぎます。今の設定画面は使用せず、現在版と編集を上書きしません。`))return;
     void run(async()=>{
+      await confirm({ title: "話者分離の再試行を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "同じ条件で再試行する", message: `同じ固定入力・モデル・人数で話者分離を再試行します。保存済み ${job.completedUnits} トラックを再照合して引き継ぎます。今の設定画面は使用せず、現在版と編集を上書きしません。`, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => {
       const operationId=retryOperations.current.get(job.id)??crypto.randomUUID();retryOperations.current.set(job.id,operationId);
       try {await invoke("retry_diarization",{request:{meetingId,jobId:job.id,operationId,expectedSpecHash:job.specHash}});retryOperations.current.delete(job.id);} finally {await refresh();}
+      } });
     });
   };
+  const cancelJob = (job: AnalysisJob) => run(async () => { await confirm({ title: "話者分離の取消を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "話者分離を取り消す", message: "話者分離を取り消します。録音・現在版・編集は削除しません。", onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refresh(); } }); });
   const jobAction=(command:string,jobId:string)=>run(async()=>{await invoke(command,{jobId});await refresh();});
   const current=versions?.versions.find(v=>v.id===versions.currentId);
   return <section className="diarization-panel" aria-label="話者分離操作">
@@ -95,7 +100,7 @@ export function DiarizationPanel({meetingId,recorded,recordingActive,locked,jobs
     <ul className="analysis-jobs" aria-label="話者分離ジョブ">{jobs.filter(j=>j.kind==="diarization").map(j=><li key={j.id}><div><strong>{jobLabel(j.state)}{j.attempt>1?` · 試行 ${j.attempt}`:""}</strong><span>保存済み {j.completedUnits} / {j.totalUnits??"?"} トラック{j.pauseReason==="recording"?" · 録音・取り込み優先で停止":""}</span><small>ジョブ {j.id.slice(0,8)}{j.retryOfJobId?` · 再試行元 ${j.retryOfJobId.slice(0,8)}`:""}</small>{j.errorCode&&<span className="action-error">{j.errorCode}</span>}</div><div className="analysis-actions">
       {["queued","running"].includes(j.state)&&<button type="button" disabled={disabled} onClick={()=>void jobAction("pause_analysis_job",j.id)}>話者分離を一時停止</button>}
       {["paused","interrupted"].includes(j.state)&&<button type="button" disabled={disabled||recordingActive||pending} onClick={()=>void jobAction("resume_analysis_job",j.id)}>話者分離を再開</button>}
-      {["queued","running","paused","interrupted"].includes(j.state)&&<button type="button" disabled={disabled} onClick={()=>{if(window.confirm("話者分離を取り消しますか？ 録音・現在版・編集は削除しません。"))void jobAction("cancel_analysis_job",j.id);}}>話者分離を取消</button>}
+      {["queued","running","paused","interrupted"].includes(j.state)&&<button type="button" disabled={disabled} onClick={()=>void cancelJob(j)}>話者分離を取消</button>}
       {canRetryJob(j,jobs,"diarization")&&<button type="button" disabled={disabled||recordingActive||pending} onClick={()=>retry(j)}>話者分離を同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={j} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={refresh} />
     </div></li>)}</ul>

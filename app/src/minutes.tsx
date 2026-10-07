@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { InfoPopover } from "./info-popover";
+import { useActionConfirmation } from "./confirmation-service";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useId, useRef, useState } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
@@ -14,12 +15,13 @@ type Preferences = VersionedDraft<MinutesPreferences>;
 type Job = AnalysisJob & { operationId: string; outputMinutesId: string | null };
 type Preview = { summary: MinutesVersion; original: MinutesVersions; view: MinutesView; draft: MinutesDraft | null; current: MinutesView | null; currentDraft: MinutesDraft | null; restoring: boolean };
 
-export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, withSavedEdits, onHeadChanged }: {
-  meetingId: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
+export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, withSavedEdits, onHeadChanged }: {
+  meetingId: string; meetingTitle: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
 }) {
   const profileSelectId = useId();
+  const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<MinutesPreferences, Preferences>(
     (_id, expectedLockVersion, payload) => invoke("save_minutes_preferences", { expectedLockVersion, payload }),
     (value) => structuredClone(value),
@@ -137,16 +139,18 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
   }));
   const jobAction = (command: string, jobId: string) => run(async () => { await invoke(command, { jobId }); await refreshRef.current(); });
   const retryJob = (job: Job) => {
-    if (!window.confirm(`この議事録生成を同じ固定条件で再試行しますか？ 保存済み ${job.completedUnits} 単位を再照合して引き継ぎます。現在の文字起こし・モデル設定の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`)) return;
     return run(async () => {
+      await confirm({ title: "議事録生成の再試行を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "同じ条件で再試行する", message: `この議事録生成を同じ固定条件で再試行します。保存済み ${job.completedUnits} 単位を再照合して引き継ぎます。現在の文字起こし・モデル設定の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => {
       const operationId = retryOperations.current.get(job.id) ?? crypto.randomUUID();
       retryOperations.current.set(job.id, operationId);
       try {
         await invoke("retry_minutes_generation", { request: { meetingId, jobId: job.id, operationId, expectedSpecHash: job.specHash } });
         retryOperations.current.delete(job.id);
       } finally { await refreshRef.current(); }
+      } });
     });
   };
+  const cancelJob = (job: Job) => run(async () => { await confirm({ title: "議事録生成の取消を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "生成を取り消す", message: "この議事録生成を取り消します。現在版と編集は保持します。", onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshRef.current(); } }); });
   const writeMarkdown = () => run(() => saved(async () => {
     setExportNotice("");
     // Inspect an unknown response before allowing a new dialog or file write.
@@ -182,7 +186,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
       setPreview({ summary: checked, original: state, view, draft, current: present, currentDraft: presentDraft, restoring });
     }));
   };
-  const apply = () => run(() => saved(async () => {
+  const apply = (confirmationOpener: HTMLElement) => run(async () => {
     if (!preview) return;
     const state = await invoke<MinutesVersions>("get_minutes_versions", { meetingId });
     assertMinutesReview(state, preview.original, preview.summary, preview.restoring);
@@ -190,12 +194,13 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     const previous = state.versions.find((v) => v.id === state.previousId);
     const message = preview.restoring ? `直前版 #${preview.summary.revisionNo} に戻しますか？ 現在版 #${present?.revisionNo} は新しい直前版になり、両方の保存済み編集を保持します。`
       : `候補 #${preview.summary.revisionNo} を採用しますか？ ${present ? `現在版 #${present.revisionNo} とその編集は新しい直前版へ移します。` : "初めての現在版になります。"}${previous ? `今の直前版 #${previous.revisionNo} はこの画面から復元できなくなります。保存済み編集と参照中のデータは削除しません。` : ""}`;
-    if (!window.confirm(message)) return;
+    await confirm({ opener: confirmationOpener, title: preview.restoring ? "議事録の直前版復元を確認" : "議事録候補の採用を確認", target: `会議「${meetingTitle}」 · 議事録 #${preview.summary.revisionNo}`, confirmLabel: preview.restoring ? "直前版へ戻す" : "候補を採用する", message, onError: cause => { if (mounted.current) setError(String(cause)); }, action: () => saved(async () => {
     if (preview.restoring) await invoke("restore_minutes_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedDraft: state.draft });
     else await invoke("adopt_minutes_candidate", { request: { meetingId, revisionId: preview.view.id, expectedContentHash: preview.view.contentHash, expectedMeetingLockVersion: state.meetingLockVersion, expectedDraft: state.draft, confirmReplacingPrevious: !!state.previousId } });
     setPreview(null); loadedCurrent.current = "";
     await onHeadChanged(); await refreshRef.current();
-  }));
+    }) });
+  });
   const engine = settings.payload?.[profile];
   const disabled = busy || locked;
   const pending = jobs.some((j) => ["queued", "running", "pausing"].includes(j.state));
@@ -220,7 +225,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
     {jobs.filter((j) => j.kind === "minutes_generation").length > 0 && <ul className="analysis-jobs" aria-label="議事録生成ジョブ">{jobs.filter((j) => j.kind === "minutes_generation").map((j) => <li key={j.id}><div><strong>{jobLabel(j.state)}{j.attempt > 1 ? ` · 試行 ${j.attempt}` : ""}</strong><span>保存済み {j.completedUnits} / {j.totalUnits ?? "?"} 単位{j.pauseReason === "recording" ? " · 録音・取り込み優先で停止" : ""}</span><small>ジョブ {j.id.slice(0, 8)}{j.retryOfJobId ? ` · 再試行元 ${j.retryOfJobId.slice(0, 8)}` : ""}</small>{j.errorCode && <span className="action-error">{j.errorCode}</span>}</div><div className="analysis-actions">
       {["queued", "running"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", j.id)}>生成を一時停止</button>}
       {["paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", j.id)}>生成を再開</button>}
-      {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("この議事録生成を取り消しますか？ 現在版と編集は保持します。")) void jobAction("cancel_analysis_job", j.id); }}>生成を取消</button>}
+      {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void cancelJob(j)}>生成を取消</button>}
       {canRetryJob(j, jobs, "minutes_generation") && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(j)}>議事録を同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={j} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
@@ -235,7 +240,7 @@ export function MinutesPanel({ meetingId, sourceEpoch, recordingActive, locked, 
       <details><summary>固定された議事録処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, inputAnalysisId: preview.view.inputAnalysisId, inputContentHash: preview.view.inputContentHash }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <MinutesDocument key={`current-${preview.current.id}`} view={preview.current} locked={disabled} content={preview.currentDraft?.payload ?? preview.current.content} title="比較する現在の議事録" /> : <section><h3>現在の議事録</h3><p>まだありません。</p></section>}<MinutesDocument key={preview.view.id} view={preview.view} locked={disabled} content={preview.draft?.payload ?? preview.view.content} title={preview.restoring ? "復元する議事録（保存済み編集を含む）" : "採用する議事録候補"} /></div>
       {error && <p className="action-error" role="alert">{error}</p>}
-      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={() => void apply()}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={event => void apply(event.currentTarget)}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
     </>}</CommonModal>
   </section>;
 }

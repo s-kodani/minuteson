@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { useActionConfirmation } from "./confirmation-service";
 import { useEffect, useState, type MutableRefObject } from "react";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { effectiveVocabulary, validVocabulary, type VocabularyEntry, type VocabularyStamp } from "./vocabulary-state";
@@ -7,9 +8,10 @@ import { effectiveVocabulary, validVocabulary, type VocabularyEntry, type Vocabu
 type Book = VersionedDraft<VocabularyEntry[]>;
 type View = { global: Book; meeting: Book };
 
-export function VocabularyEditor({ meetingId, locked, stampRef }: {
-  meetingId?: string; locked: boolean; stampRef?: MutableRefObject<(() => VocabularyStamp) | null>;
+export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef }: {
+  meetingId?: string; meetingTitle?: string; locked: boolean; stampRef?: MutableRefObject<(() => VocabularyStamp) | null>;
 }) {
+  const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<VocabularyEntry[], Book>(
     (_id, expectedLockVersion, payload) => invoke("save_vocabulary_book", { meetingId: meetingId ?? null, expectedLockVersion, payload }),
     (payload) => structuredClone(payload),
@@ -48,19 +50,27 @@ export function VocabularyEditor({ meetingId, locked, stampRef }: {
     return () => { stampRef.current = null; };
   }, [queue, common, stampRef]);
   useEffect(() => {
-    if (loading || !state.dirty || state.saving || state.error || !state.payload || !validVocabulary(state.payload)) return;
+    if (loading || confirm.pending || !state.dirty || state.saving || state.error || !state.payload || !validVocabulary(state.payload)) return;
     const timer = window.setTimeout(() => { void queue.flush().catch(() => {}); }, 700);
     return () => window.clearTimeout(timer);
-  }, [queue, state, loading]);
+  }, [queue, state, loading, confirm.pending]);
   const reload = async () => {
-    if (queue.snapshot().dirty && !window.confirm("未保存の用語入力を破棄して再読込しますか？ この入力は復元できません。過去の解析条件は変更しません。")) return;
+    const expected = JSON.stringify(queue.snapshot().payload);
+    const read = async () => {
     setLoading(true); setError("");
     try { const value = await load(); queue.load(value.book); setCommon(value.common); }
-    catch (cause) { setError(String(cause)); }
+    catch (cause) { setError(String(cause)); throw cause; }
     finally { setLoading(false); }
+    };
+    if (queue.snapshot().dirty) await confirm({ title: "用語入力の破棄を確認", target: meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語", confirmLabel: "入力を破棄して再読込する", message: "未保存の用語入力を破棄して再読込します。この入力は復元できません。過去の解析条件は変更しません。", validate: () => JSON.stringify(queue.snapshot().payload) === expected, action: read });
+    else try { await read(); } catch { /* error is displayed above */ }
+  };
+  const remove = (entry: VocabularyEntry) => {
+    const expected = JSON.stringify(queue.snapshot().payload);
+    void confirm({ title: "用語の削除を確認", target: `${meetingId ? `会議「${meetingTitle ?? meetingId}」の用語` : "共通用語"} · ${entry.term || "空欄の用語"}`, confirmLabel: "用語を削除する", message: `用語「${entry.term || "空欄"}」を削除します。登録は復元できません。過去の解析の固定コピーと結果は保持します。`, validate: () => JSON.stringify(queue.snapshot().payload) === expected, onError: cause => setError(String(cause)), action: async () => { queue.edit(value => value.filter(item => item.id !== entry.id)); if (validVocabulary(queue.snapshot().payload ?? [])) await queue.flush(); } });
   };
   const update = (id: string, patch: Partial<VocabularyEntry>) => queue.edit((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
-  const disabled = locked || loading || !state.payload;
+  const disabled = locked || loading || confirm.pending || !state.payload;
   const items = state.payload ?? [];
   const currentPage = Math.min(page, Math.max(0, Math.ceil(items.length / 50) - 1));
   const count = effectiveVocabulary(common?.payload ?? [], items).length;
@@ -73,7 +83,7 @@ export function VocabularyEditor({ meetingId, locked, stampRef }: {
       <label>用語（必須）<input value={entry.term} maxLength={200} onChange={(event) => update(entry.id, { term: event.target.value })} /></label>
       <label>読み（任意）<input value={entry.reading ?? ""} maxLength={200} onChange={(event) => update(entry.id, { reading: event.target.value || null })} /></label>
       <label>補足（任意）<textarea value={entry.note ?? ""} maxLength={1000} onChange={(event) => update(entry.id, { note: event.target.value || null })} /></label>
-      <div className="analysis-actions"><label><input type="checkbox" checked={entry.enabled} onChange={(event) => update(entry.id, { enabled: event.target.checked })} />有効</label><button type="button" className="small-secondary" onClick={() => { if (window.confirm(`用語「${entry.term || "空欄"}」を削除しますか？ 登録は復元できません。過去の解析の固定コピーと結果は保持します。`)) queue.edit((value) => value.filter((e) => e.id !== entry.id)); }}>用語を削除</button></div>
+      <div className="analysis-actions"><label><input type="checkbox" checked={entry.enabled} onChange={(event) => update(entry.id, { enabled: event.target.checked })} />有効</label><button type="button" className="small-secondary" onClick={() => remove(entry)}>用語を削除</button></div>
     </article>)}</fieldset>
     {items.length > 50 && <nav aria-label="用語のページ" className="transcript-pages"><button type="button" disabled={currentPage === 0 || locked} onClick={() => setPage(currentPage - 1)}>前へ</button><span>{currentPage + 1} / {Math.ceil(items.length / 50)}</span><button type="button" disabled={(currentPage + 1) * 50 >= items.length || locked} onClick={() => setPage(currentPage + 1)}>次へ</button></nav>}
     {(state.error || error) && <p className="action-error" role="alert">{state.error || error} 入力は保持しています。空欄・重複を修正して保存を再試行してください。競合時は入力を控えてから再読込してください。</p>}

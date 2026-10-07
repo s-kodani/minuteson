@@ -10,7 +10,10 @@ const analysis = { id: "analysis", meetingId: meetings[0].id, contentHash: "a".r
 ] };
 const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: "b".repeat(64), utterances: analysis.utterances.map((item) => ({ ...item, id: `${item.id}-new`, effectiveText: `${item.effectiveText}（候補）` })) };
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
+const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
+  lostRetryResponse: false,
+  diarizationPreferences: { id: "sherpa_profiles", lockVersion: 0, payload: { standard: structuredClone(diarEngine), highAccuracy: structuredClone(diarEngine) } },
   vocabulary: { global: { id: "global", payload: [], lockVersion: 0 } }, failVocabulary: false,
   preferences: { id: "whisper_profiles", payload: { standard: structuredClone(engine), highAccuracy: structuredClone(engine) }, lockVersion: 0 },
   jobs: [{ id: "job-existing", kind: "transcription", state: "paused", completedUnits: 1, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: "user", specHash: "a".repeat(64), retryOfJobId: null, attempt: 1 },
@@ -36,10 +39,12 @@ mockIPC(async (command, args) => {
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
     case "get_analysis_flow": return null;
     case "get_diarization_tracks": return { tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
-    case "get_diarization_preferences": {
-      const value = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
-      return { id: "sherpa_profiles", lockVersion: 0, payload: { standard: value, highAccuracy: value } };
-    }
+    case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
+    case "save_diarization_preferences":
+      await new Promise(resolve => setTimeout(resolve, fixture.persistenceDelayMs));
+      if (args.expectedLockVersion !== fixture.diarizationPreferences.lockVersion) throw Error("模擬話者分離設定競合");
+      fixture.diarizationPreferences = { ...fixture.diarizationPreferences, payload: structuredClone(args.payload), lockVersion: fixture.diarizationPreferences.lockVersion + 1 };
+      return structuredClone(fixture.diarizationPreferences);
     case "get_speaker_reviews": return { analysisId: args.request.analysisId, contentHash: args.request.expectedContentHash, reviews: args.request.utteranceIds.map(utteranceId => ({ utteranceId, trackId: "microphone", estimatedState: "unknown", manualAssignment: false, segmentCount: 0, overlapCount: 0, page: args.request.page, pageCount: 1, segments: [], overlaps: [] })) };
     case "list_meetings": return meetings;
     case "get_meeting": return meetings.find((meeting) => meeting.id === args.id) ?? null;
@@ -83,15 +88,17 @@ mockIPC(async (command, args) => {
       fixture.jobs.unshift({ id: "job-started", kind: "transcription", state: "queued", completedUnits: 0, totalUnits: 3, errorCode: null, outputAnalysisId: null, pauseReason: null, specHash: "c".repeat(64), retryOfJobId: null, attempt: 1 });
       return structuredClone(fixture.jobs[0]);
     }
-    case "retry_transcription": {
+    case "retry_transcription":
+    case "retry_diarization": {
       if (fixture.failRetry) throw new Error("模擬再試行エラー");
       const request = args.request;
       const source = fixture.jobs.find((job) => job.id === request.jobId);
-      if (!source || request.meetingId !== meetings[0].id || request.expectedSpecHash !== source.specHash || !["failed", "cancelled"].includes(source.state)) throw new Error("再試行条件不一致");
+      if (!source || request.meetingId !== meetings[0].id || request.expectedSpecHash !== source.specHash || source.kind !== (command === "retry_diarization" ? "diarization" : "transcription") || !["failed", "cancelled"].includes(source.state)) throw new Error("再試行条件不一致");
       const existing = fixture.jobs.find((job) => job.operationId === request.operationId);
       if (existing) return structuredClone(existing);
       const next = { ...source, id: `retry-${request.operationId}`, state: "queued", retryOfJobId: source.id, attempt: source.attempt + 1, operationId: request.operationId, errorCode: null };
       fixture.jobs.unshift(next);
+      if (fixture.lostRetryResponse) { fixture.lostRetryResponse = false; throw Error("模擬再試行応答喪失"); }
       return structuredClone(next);
     }
     case "pause_analysis_job":

@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
+import { useActionConfirmation } from "./confirmation-service";
 import { CommonModal } from "./common-modal";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useId, useRef, useState } from "react";
@@ -47,12 +48,13 @@ function PreviewText({ analysis, draft, title,locked }: { analysis: Analysis; dr
   </section>;
 }
 
-export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, withSavedEdits, onHeadChanged }: {
-  meetingId: string; recorded: boolean; recordingActive: boolean; locked: boolean;
+export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActive, locked, withSavedEdits, onHeadChanged }: {
+  meetingId: string; meetingTitle: string; recorded: boolean; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
 }) {
   const profileSelectId = useId();
+  const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<AnalysisPreferences, Preferences>(
     (_id, expectedLockVersion, payload) => invoke("save_analysis_preferences", { expectedLockVersion, payload }),
     (payload) => structuredClone(payload),
@@ -149,16 +151,18 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     await invoke(command, { jobId }); await refreshRef.current();
   });
   const retryJob = (job: AnalysisJob) => {
-    if (!window.confirm(`この文字起こしを同じ固定条件で再試行しますか？ 保存済み ${job.completedUnits} 区間を再照合して引き継ぎます。現在の設定画面の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`)) return;
     return run(async () => {
+      await confirm({ title: "文字起こしの再試行を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "同じ条件で再試行する", message: `この文字起こしを同じ固定条件で再試行します。保存済み ${job.completedUnits} 区間を再照合して引き継ぎます。現在の設定画面の変更は使用しません。結果は候補として保存し、現在版と編集は変更しません。`, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => {
       const operationId = retryOperations.current.get(job.id) ?? crypto.randomUUID();
       retryOperations.current.set(job.id, operationId);
       try {
         await invoke("retry_transcription", { request: { meetingId, jobId: job.id, operationId, expectedSpecHash: job.specHash } });
         retryOperations.current.delete(job.id);
       } finally { await refreshRef.current(); }
+      } });
     });
   };
+  const cancelJob = (job: AnalysisJob) => run(async () => { await confirm({ title: "文字起こし処理の取消を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "処理を取り消す", message: "解析ジョブを取り消します。録音と現在版は削除しません。", onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshRef.current(); } }); });
   const openPreview = (summary: VersionSummary, restoring: boolean, opener: HTMLElement) => {
     returnFocus.current = opener;
     return run(() => saved(async () => {
@@ -174,7 +178,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       setVersions(state); setPreview({ summary, analysis, draft, current, currentDraft, restoring });
     }));
   };
-  const applyPreview = () => run(() => saved(async () => {
+  const applyPreview = (confirmationOpener: HTMLElement) => run(async () => {
     if (!preview) return;
     const state = await invoke<VersionState>("get_analysis_versions", { meetingId });
     assertReviewedVersion(state, preview.analysis, preview.restoring);
@@ -183,7 +187,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     const message = preview.restoring
       ? `直前版 #${preview.summary.revisionNo} へ戻しますか？ 現在版 #${currentNo} は新しい直前版となり、それぞれの保存済み編集を保持します。`
       : `候補 #${preview.summary.revisionNo} を採用しますか？ ${state.currentId ? `現在版 #${currentNo} とその編集は新しい直前版へ移します。` : "初めての現在版になります。"}${state.previousId ? `今の直前版 #${previousNo} はこの画面から復元できなくなります。参照中のデータと保存済み編集は削除しません。` : ""}`;
-    if (!window.confirm(message)) return;
+    await confirm({ opener: confirmationOpener, title: preview.restoring ? "文字起こしの直前版復元を確認" : "文字起こし候補の採用を確認", target: `会議「${meetingTitle}」 · 文字起こし #${preview.summary.revisionNo}`, confirmLabel: preview.restoring ? "直前版へ戻す" : "候補を採用する", message, onError: cause => { if (mounted.current) setError(String(cause)); }, action: () => saved(async () => {
     if (preview.restoring) {
       await invoke("restore_analysis_version", { meetingId, expectedMeetingLockVersion: state.meetingLockVersion, expectedPreviousId: preview.analysis.id, expectedContentHash: preview.analysis.contentHash, expectedDraft: state.draft });
     } else {
@@ -191,7 +195,8 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
     }
     setPreview(null);
     await onHeadChanged(); await refreshRef.current();
-  }));
+    }) });
+  });
   const engine = settings.payload?.[profile];
   const disabled = busy || locked;
   const pending = jobs.some((job) => ["queued", "running", "pausing"].includes(job.state));
@@ -213,18 +218,18 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       <div className="analysis-actions"><span role="status">{settings.error ? "設定の保存に失敗" : settings.saving ? "設定を保存中" : settings.dirty ? "設定は未保存" : "設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "設定保存を再試行" : "設定を保存"}</button></div>
       {settings.error && <p className="action-error" role="alert">{settings.error} 入力は保持しています。修正後に保存を再試行してください。</p>}
     </details>
-    <VocabularyEditor meetingId={meetingId} locked={disabled} stampRef={vocabularyStamp} />
+    <VocabularyEditor meetingId={meetingId} meetingTitle={meetingTitle} locked={disabled} stampRef={vocabularyStamp} />
     <label className="prompt-label">今回の用語ヒント（認識効果は未検証）<textarea value={prompt} maxLength={8000} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="例：点検日。自動置換ではなくエンジンへのヒントです。" /></label>
     <div className="analysis-actions"><button type="button" disabled={disabled || !recorded || recordingActive || pending || !engine || !engineConfigured(engine)} onClick={() => void start()}>文字起こしを開始</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先して解析を停止します" : "端末内で処理"}</span></div>
     {!recorded && <p>保存済み録音が必要です。音声ファイルの取り込みは今後接続します。</p>}
     {jobs.some((job) => job.kind === "transcription") && <ul className="analysis-jobs" aria-label="解析ジョブ">{jobs.filter((job) => job.kind === "transcription").map((job) => <li key={job.id}><div><strong>{jobLabel(job.state)}{job.attempt > 1 ? ` · 試行 ${job.attempt}` : ""}</strong><span>{job.kind} · 保存済み {job.completedUnits}{job.totalUnits === null ? "" : ` / ${job.totalUnits}`} 区間{job.pauseReason === "recording" ? " · 録音・取り込み優先で停止" : ""}</span><small>ジョブ {job.id.slice(0, 8)}{job.retryOfJobId ? ` · 再試行元 ${job.retryOfJobId.slice(0, 8)}` : ""}</small>{job.errorCode && <span className="action-error">{job.errorCode}</span>}</div><div className="analysis-actions">
       {["queued", "running"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", job.id)}>一時停止</button>}
       {["paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", job.id)}>再開</button>}
-      {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => { if (window.confirm("解析ジョブを取り消しますか？ 録音と現在版は削除しません。")) void jobAction("cancel_analysis_job", job.id); }}>取消</button>}
+      {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void cancelJob(job)}>取消</button>}
       {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={job} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
-    <DiarizationPanel meetingId={meetingId} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
+    <DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     {error && <p className="action-error" role="alert">{error}</p>}
     <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => returnFocus.current} className="analysis-dialog" aria-labelledby="analysis-preview-title">{preview && <>
@@ -233,7 +238,7 @@ export function AnalysisPanel({ meetingId, recorded, recordingActive, locked, wi
       <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
       <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
       {error && <p className="action-error" role="alert">{error}</p>}
-      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={() => void applyPreview()}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+      <div className="analysis-actions"><button type="button" disabled={disabled} onClick={event => void applyPreview(event.currentTarget)}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
     </>}</CommonModal>
   </section>;
 }

@@ -29,10 +29,18 @@ async (page) => {
   results.push("production minutes documents and evidence controls fit 360px modal margins");
 
   await page.setViewportSize({ width: 1200, height: 900 }); await restore().click();
-  await page.evaluate(() => { window.__mon.confirmations = []; window.confirm = message => { window.__mon.confirmations.push(message); return true; }; });
   await modal(previous).getByRole("button", { name: "この議事録直前版へ戻す", exact: true }).click();
+  const restoreChoice = "議事録の直前版復元を確認";
+  await modal(restoreChoice).waitFor();
+  check(await page.locator("dialog[open]").count() === 1 && await count("restore_minutes_version") === 0, "restore stacked dialogs or ran before acceptance");
+  await page.keyboard.press("Escape"); await modal(previous).waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent === "この議事録直前版へ戻す");
+  check(await count("restore_minutes_version") === 0 && await page.evaluate(() => JSON.stringify(window.__mon.drafts.a)) === originalDraft, "nested cancellation lost draft or restored minutes");
+  results.push("nested restore cancellation preserves comparison, saved draft and exact action focus");
+  await modal(previous).getByRole("button", { name: "この議事録直前版へ戻す", exact: true }).click();
+  await modal(restoreChoice).getByRole("button", { name: "直前版へ戻す", exact: true }).click();
   await close(previous, restore());
-  check(await count("restore_minutes_version") === 1 && await page.evaluate(() => window.__mon.current === "p" && window.__mon.previous === "a" && window.__mon.confirmations.length === 1), "restore changed head identity or confirmation count");
+  check(await count("restore_minutes_version") === 1 && await page.evaluate(() => window.__mon.current === "p" && window.__mon.previous === "a"), "restore changed head identity or confirmation count");
   check(await page.evaluate(() => JSON.stringify(window.__mon.drafts.a)) === originalDraft, "restore discarded old draft");
   results.push("explicit previous-version restore is single and retains saved current draft and focus");
 
@@ -43,11 +51,35 @@ async (page) => {
   const candidate = "議事録候補の採用確認 #3";
   await modal(candidate).waitFor(); await page.keyboard.press("Escape"); await close(candidate, review);
   check(await count("adopt_minutes_candidate") === 0, "candidate Escape adopted minutes");
-  await review.click(); await page.evaluate(() => { window.__mon.confirmations = []; window.confirm = message => { window.__mon.confirmations.push(message); return true; }; });
+  await review.click();
   await modal(candidate).getByRole("button", { name: "この議事録候補を採用", exact: true }).click();
+  const adoptChoice = "議事録候補の採用を確認";
+  await modal(adoptChoice).waitFor();
+  check(await page.locator("dialog[open]").count() === 1 && await count("adopt_minutes_candidate") === 0, "candidate stacked dialogs or ran before acceptance");
+  await modal(adoptChoice).getByRole("button", { name: "候補を採用する", exact: true }).click();
   await modal(candidate).waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.textContent === "議事録");
-  check(await count("adopt_minutes_candidate") === 1 && await page.evaluate(() => window.__mon.current === "b" && window.__mon.previous === "a" && !!window.__mon.drafts.a && window.__mon.confirmations.length === 1), "adoption lost preserved edit or generated duplicate");
+  check(await count("adopt_minutes_candidate") === 1 && await page.evaluate(() => window.__mon.current === "b" && window.__mon.previous === "a" && !!window.__mon.drafts.a), "adoption lost preserved edit or generated duplicate");
   results.push("candidate cancellation is read-only; single explicit adoption retains prior draft and restores panel focus");
+  await boot(); await panel().getByRole("button", { name: "議事録を再生成", exact: true }).click();
+  await page.waitForFunction(() => window.__mon.jobs.length === 1);
+  await page.evaluate(() => { window.__mon.jobs[0].state = "failed"; window.__mon.jobs[0].completedUnits = 2; });
+  await panel().getByRole("button", { name: "議事録を再読込", exact: true }).click();
+  const retry = panel().getByRole("button", { name: "議事録を同じ条件で再試行", exact: true });
+  const fixed = await page.evaluate(() => ({ id: window.__mon.jobs[0].id, hash: window.__mon.jobs[0].specHash }));
+  await retry.click(); const retryChoice = "議事録生成の再試行を確認"; await modal(retryChoice).waitFor();
+  check(await count("retry_minutes_generation") === 0 && (await modal(retryChoice).innerText()).includes(fixed.id), "minutes retry omitted target or started early");
+  await page.keyboard.press("Escape"); await modal(retryChoice).waitFor({ state: "hidden" });
+  check(await count("retry_minutes_generation") === 0, "minutes retry cancel executed");
+  await retry.click(); await modal(retryChoice).getByRole("button", { name: "同じ条件で再試行する", exact: true }).click(); await modal(retryChoice).waitFor({ state: "hidden" });
+  check(await count("retry_minutes_generation") === 1 && await page.evaluate(f => { const r = window.__mon.calls.find(c => c.cmd === "retry_minutes_generation").args.request; return r.jobId === f.id && r.expectedSpecHash === f.hash && r.meetingId === "m1" && !!r.operationId && window.__mon.current === "a"; }, fixed), "minutes retry replaced fixed identity or current head");
+  results.push("minutes retry: no command on cancellation; explicit acceptance preserves job, hash, operation and current version");
+  const cancel = panel().getByRole("button", { name: "生成を取消", exact: true });
+  await cancel.click(); const cancelChoice = "議事録生成の取消を確認"; await modal(cancelChoice).waitFor();
+  await page.keyboard.press("Escape"); await modal(cancelChoice).waitFor({ state: "hidden" });
+  check(await count("cancel_analysis_job") === 0, "minutes cancel choice already cancelled native work");
+  await cancel.click(); await modal(cancelChoice).getByRole("button", { name: "生成を取り消す", exact: true }).click(); await modal(cancelChoice).waitFor({ state: "hidden" });
+  check(await count("cancel_analysis_job") === 1 && await page.evaluate(() => { const r = window.__mon.calls.find(c => c.cmd === "cancel_analysis_job").args; return window.__mon.jobs.find(j => j.id === r.jobId).state === "cancelled" && window.__mon.current === "a"; }), "minutes cancel changed wrong job or current head");
+  results.push("minutes cancellation: one explicit command, current version and saved edit retained");
   return { passed: results.length, results };
 }

@@ -112,6 +112,10 @@
 .import-dialog { width:min(780px,calc(100vw - 48px)); max-height:calc(100vh - 64px); overflow:auto; padding:28px; border:1px solid var(--border); border-radius:14px; }
 .import-dialog::backdrop { background:var(--backdrop); }
 .heading-with-info { display:flex; align-items:center; gap:6px; min-width:0; }
+.common-modal-body[hidden] { display:none; }
+.action-confirmation .confirmation-impact { white-space:pre-wrap; overflow-wrap:anywhere; }
+.confirmation-target { overflow-wrap:anywhere; }
+.split-dialog .common-modal-body > label, .speaker-add-dialog .common-modal-body > label { display:grid; gap:8px; margin:12px 0; font-size:12px; }
 .heading-with-info > h2, .heading-with-info > h3 { margin:0; }
 .data-save > .heading-with-info > h2, .deletion-panel > .heading-with-info > h2, .recovery-panel > .heading-with-info > h2 { font-size:17px; }
 .info-field { margin:12px 0; }

@@ -1,6 +1,8 @@
-import { useLayoutEffect, useRef, type ComponentPropsWithoutRef, type RefObject } from "react";
+import { useLayoutEffect, useRef, useSyncExternalStore, type ComponentPropsWithoutRef, type RefObject } from "react";
 import { outsideDialog } from "./modal-state";
 import { closeInfoPopovers } from "./info-popover";
+import { confirmations } from "./confirmation-service";
+import { ConfirmationBody } from "./confirmation-body";
 
 type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel" | "onClose" | "onClick" | "onPointerDown" | "onKeyDown"> & {
   ref?: RefObject<HTMLDialogElement | null>;
@@ -9,16 +11,24 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
   onDismiss: () => void | Promise<void>;
   restoreTarget?: () => HTMLElement | null;
   restoreReady?: boolean;
+  dismissLabel?: "キャンセル" | "閉じる";
 };
 
 // Native top-layer dialogs supply an inert background. Explicit Tab wrapping
 // keeps focus inside even when a browser would cycle through its own chrome.
 // Controllers retain all command, identity, consent and unknown-result guards.
-export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, className = "", children, ...attributes }: Props) {
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
   const ref = suppliedRef ?? ownRef;
+  const confirmation = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
+  const owned = confirmation?.parent && confirmation.parent === ref.current ? confirmation : null;
+  const effectiveBlocked = owned ? owned.phase === "running" : blocked;
+  const label = owned?.phase === "failed" ? "閉じる" : dismissLabel;
+  const suspendedOpener = useRef<HTMLElement | null>(null);
+  const suspended = useRef(false);
+  const suspendedScroll = useRef(0);
   const latest = useRef({ open, blocked, onDismiss, restoreTarget, restoreReady });
-  latest.current = { open, blocked, onDismiss, restoreTarget, restoreReady };
+  latest.current = { open, blocked: effectiveBlocked, onDismiss, restoreTarget, restoreReady };
   const opener = useRef<HTMLElement | null>(null);
   const fallback = useRef<HTMLElement | null>(null);
   const restorePending = useRef(false);
@@ -39,6 +49,15 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
         target.focus({ preventScroll: true }); restorePending.current = false;
       }
     });
+  };
+  const restoreSuspended = () => {
+    const element = ref.current;
+    if (!suspended.current || !element?.open || latest.current.blocked || confirmations.getSnapshot()?.parent === element || document.querySelector("dialog[open]") !== element) return;
+    const target = suspendedOpener.current;
+    if (target?.isConnected && target.matches(":disabled")) return;
+    suspended.current = false;
+    element.scrollTop = suspendedScroll.current;
+    (target?.isConnected && target.getClientRects().length ? target : element.querySelector<HTMLElement>("[data-dialog-cancel]"))?.focus({ preventScroll: true });
   };
   useLayoutEffect(() => {
     const element = ref.current;
@@ -62,6 +81,10 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     attempt();
     return () => {
       document.removeEventListener("close", attempt, true);
+      if (confirmations.getSnapshot()?.parent === element) {
+        const target = latest.current.restoreTarget?.() ?? opener.current;
+        confirmations.detachParent(element, target?.isConnected ? target : fallback.current);
+      }
       if (element.open) { restorePending.current = true; element.close(); }
       // Conditional reviews can still restore a surviving target on unmount.
       queueMicrotask(() => {
@@ -80,8 +103,20 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     initialFocusPending.current = false;
   }, [open, blocked, ref]);
   useLayoutEffect(restore, [open, restoreReady]);
-  const dismiss = () => { if (!latest.current.blocked) void latest.current.onDismiss(); };
-  return <dialog {...attributes} ref={ref} className={`common-modal ${className}`} aria-modal="true"
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element?.open) { if (!open) suspended.current = false; return; }
+    if (owned) {
+      if (!suspended.current) { suspended.current = true; suspendedOpener.current = owned.opener; suspendedScroll.current = owned.scrollTop; closeInfoPopovers(); element.scrollTop = 0; element.querySelector<HTMLElement>("[data-dialog-cancel]")?.focus({ preventScroll: true }); }
+    } else if (suspended.current) {
+      const observer = new MutationObserver(restoreSuspended);
+      observer.observe(element, { subtree: true, attributes: true, attributeFilter: ["disabled"], childList: true });
+      queueMicrotask(restoreSuspended);
+      return () => observer.disconnect();
+    }
+  }, [owned?.id, blocked, ref, open]);
+  const dismiss = () => { if (!latest.current.blocked) { if (owned) confirmations.cancel(owned.id); else void latest.current.onDismiss(); } };
+  return <dialog {...attributes} ref={ref} data-common-modal aria-labelledby={owned ? `${owned.id}-title` : attributes["aria-labelledby"]} className={`common-modal ${className}`} aria-modal="true"
     onCancel={event => { event.preventDefault(); dismiss(); }}
     onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}
     onClick={event => {
@@ -101,7 +136,8 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       else if (event.shiftKey && (document.activeElement === first || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && (document.activeElement === last || !fields.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
     }}>
-    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label="確認をキャンセル" data-dialog-cancel disabled={blocked} onClick={dismiss}>キャンセル</button></div>
-    {children}
+    <div className="common-modal-dismiss-row"><button type="button" className="small-secondary" aria-label={`確認を${label}`} data-dialog-cancel disabled={effectiveBlocked} onClick={dismiss}>{label}</button></div>
+    {owned && <ConfirmationBody value={owned} />}
+    <div className="common-modal-body" hidden={!!owned}>{children}</div>
   </dialog>;
 }
