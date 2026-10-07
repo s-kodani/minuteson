@@ -7,6 +7,9 @@ import { confirmations } from "./confirmation-service";
 import { TranscriptRecoverySaveQueue, type TranscriptRecovery } from "./transcript-recovery-save";
 import { TranscriptRecoveryEditor } from "./transcript-recovery-editor";
 import { TranscriptRecoveryPanel } from "./transcript-recovery-panel";
+import { TranscriptConflictPanel, type ConflictPreview } from "./transcript-conflict-panel";
+import { planConflictInput, resolveConflictInput, type InputChoice } from "./transcript-conflict-input";
+import type { ConflictChoice } from "./transcript-conflict";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { useTranscriptAudio } from "./transcript-audio";
 import { SpeakerReviewBadge,SpeakerReviewDetails,useSpeakerReviews } from "./speaker-review";
@@ -52,6 +55,10 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const [recoveryReady,setRecoveryReady] = useState(false);
   const [recoveryManual,setRecoveryManual] = useState(false);
   const [bodyManual,setBodyManual] = useState(false);
+  const [conflictPreview,setConflictPreview] = useState<ConflictPreview | null>(null);
+  const conflictRef = useRef<ConflictPreview | null>(null);
+  const conflictBusy = useRef(false), conflictGeneration = useRef(0), mounted = useRef(true);
+  const conflictEnvironment = useRef({ locked,analysis }); conflictEnvironment.current = { locked,analysis };
   const [discardPending,setDiscardPending] = useState(false);
   const discardPendingRef = useRef(false);
   const [saveQueue] = useState(() => new DraftSaveQueue<DraftPayload, Draft>(
@@ -140,6 +147,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     saveQueue.edit(current => durableBuffers().reduce(stageTextEdit, current));
   };
   const flushTextBuffers = async () => {
+    if(conflictRef.current || conflictBusy.current) throw Error("保存競合の比較を閉じるか、選択した編集の再開を完了してから移動してください");
     if(discardPendingRef.current) throw Error("回復入力の破棄結果を確認してから移動してください");
     if(!recoveryReadyRef.current) { if(saveQueue.snapshot().draft) throw Error("未確定入力の回復記録を先に読み込んでください"); return; }
     if(!saveQueue.snapshot().draft) return;
@@ -160,6 +168,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   };
   const recoveryReadyRef = useRef(recoveryReady); recoveryReadyRef.current = recoveryReady;
   const retryTextBuffers = async () => {
+    if(conflictRef.current || conflictBusy.current) throw Error("保存競合の比較中は古い保存要求を再送しません。比較を閉じるか編集再開を完了してください");
     // Resolve only already-confirmed payload. New names and text typed after
     // a failure must not be published just because another operation is retried.
     await saveQueue.retry(); await recovery.flushRecovery(); settleRemovedBuffers(); setBodyManual(false);
@@ -169,7 +178,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     const unsubscribe = saveQueue.subscribe(() => setSaveSnapshot(saveQueue.snapshot()));
     const unsubscribeRecovery = recovery.subscribe(() => setRecoverySnapshot(recovery.snapshot()));
     const unregister = registerPendingEdits(flushTextBuffers);
-    return () => { unsubscribe(); unsubscribeRecovery(); unregister(); recovery.dispose(); };
+    return () => { mounted.current = false; unsubscribe(); unsubscribeRecovery(); unregister(); recovery.dispose(); };
   }, [saveQueue,recovery]);
 
   useEffect(() => {
@@ -235,25 +244,26 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   }, [meetingId]);
 
   useEffect(() => {
-    if (activeConfirmation || locked || loading || busy || discardPending || bodyManual || !recoveryReady || recoverySnapshot.review || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || !draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
+    if (conflictPreview || activeConfirmation || locked || loading || busy || discardPending || bodyManual || !recoveryReady || recoverySnapshot.review || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || !draft || !payload || !dirty || saving || saveError || draft.baseAnalysisId !== analysis?.id) return;
     const timer = window.setTimeout(() => {
+      if(conflictRef.current || conflictBusy.current) return;
       void saveQueue.flush().catch(() => { /* The queue retains the error and local edit. */ });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue, activeConfirmation,locked,loading,busy,discardPending,bodyManual,recoveryReady,recoverySnapshot.review,recoverySnapshot.bodyBusy,recoverySnapshot.bodyPending]);
+  }, [analysis?.id, draft, payload, dirty, saving, saveError, saveQueue, activeConfirmation,locked,loading,busy,discardPending,bodyManual,recoveryReady,recoverySnapshot.review,recoverySnapshot.bodyBusy,recoverySnapshot.bodyPending,conflictPreview]);
 
   useEffect(() => {
     if(recoverySnapshot.error) setRecoveryManual(true);
   },[recoverySnapshot.error]);
   useEffect(() => { if(saveError) setBodyManual(true); },[saveError]);
   useEffect(() => {
-    if(!recoveryReady || recoveryManual || !draft || locked || loading || busy || discardPending || activeConfirmation || saving || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || recoverySnapshot.review || recoverySnapshot.saving || recoverySnapshot.error || !recoverySnapshot.dirty) return;
+    if(conflictPreview || !recoveryReady || recoveryManual || !draft || locked || loading || busy || discardPending || activeConfirmation || saving || recoverySnapshot.bodyBusy || recoverySnapshot.bodyPending || recoverySnapshot.review || recoverySnapshot.saving || recoverySnapshot.error || !recoverySnapshot.dirty) return;
     const timer = window.setTimeout(() => {
-      if(discardPendingRef.current || saveQueue.snapshot().saving || confirmations.getSnapshot() || recovery.snapshot().bodyBusy || recovery.snapshot().bodyPending) return;
+      if(conflictRef.current || conflictBusy.current || discardPendingRef.current || saveQueue.snapshot().saving || confirmations.getSnapshot() || recovery.snapshot().bodyBusy || recovery.snapshot().bodyPending) return;
       void recovery.flushRecovery().catch(() => { /* Keep the exact request and all local input. */ });
     },300);
     return () => window.clearTimeout(timer);
-  },[recovery,recoveryReady,recoveryManual,draft,locked,loading,busy,discardPending,activeConfirmation,saving,recoverySnapshot]);
+  },[recovery,recoveryReady,recoveryManual,draft,locked,loading,busy,discardPending,activeConfirmation,saving,recoverySnapshot,conflictPreview]);
 
   const begin = async () => {
     if (!analysis) return;
@@ -342,7 +352,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
   const nameDirty = namesDirty(nameSessions,view?.speakers ?? []);
   const review = useSpeakerReviews(analysis,[...new Set(shown.map(u=>u.sourceUtteranceId??u.id))]);
   const speakerLabels = new Map(view?.speakers.map(s=>[s.id,(s.displayName||s.label)+(payload?.speaker_merges?.some(m=>m.source_id===s.id)?"（統合前の推定ラベル）":"")])??[]);
-  const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation);
+  const editable = Boolean(matchingBase && payload && recoveryReady && !recoverySnapshot.review && !discardPending && !locked && !loading && !busy && !activeConfirmation && !conflictPreview);
   const finishName = async (id: string,kind: "commit" | "cancel") => {
     const session = nameBuffers.current[id];
     if(!editable || !session || nameOperations.current.has(id)) return;
@@ -466,6 +476,46 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
     saveQueue.load(result.draft); if(local) saveQueue.edit(() => local);
     setNotice(result.status === "saved" ? "先行する本文保存を確認しました。新しい入力と確定前の本文は保持しています。" : "本文は確認した版のままです。入力を保持しています。"); setNoticeVersion(null);
   };
+  const conflictStamp = () => JSON.stringify([saveQueue.snapshot().draft,saveQueue.snapshot().payload,textBuffers.current,nameBuffers.current,[...removingBuffers.current],[...removingNames.current]]);
+  const inspectConflict = async () => {
+    if(conflictBusy.current || locked || busy || loading || saving || discardPendingRef.current || recovery.snapshot().saving || recovery.snapshot().bodyBusy || textOperations.current.size || nameOperations.current.size || confirmations.getSnapshot()) return;
+    conflictBusy.current = true; setBusy(true); setError(""); setBodyManual(true); setRecoveryManual(true);
+    audio.clear();
+    try {
+      const expected = conflictStamp(), local = saveQueue.snapshot(), base = conflictEnvironment.current.analysis;
+      if(!base || !local.draft || !local.payload || local.draft.baseAnalysisId !== base.id) throw Error("同じ解析版の下書きを確認してから比較してください");
+      const current = await invoke<Analysis | null>("get_current_analysis",{ meetingId });
+      if(!current || current.id !== base.id || current.contentHash !== base.contentHash) throw Error("解析版が変わりました。旧解析版を採用せず入力を保持しています");
+      const proof = await recovery.inspectAdvancedDraft();
+      if(!mounted.current || conflictEnvironment.current.locked || conflictStamp() !== expected) throw Error("比較中に操作条件または入力が変わりました。入力を保持しています");
+      if(proof.base.id !== local.draft.id || proof.base.lockVersion !== local.draft.lockVersion || proof.base.contentHash !== local.draft.contentHash) throw Error("本文の比較基底が編集画面と一致しません");
+      const plan = planConflictInput(base,proof.base.payload,local.payload,proof.latest.payload,Object.values(textBuffers.current),Object.values(nameBuffers.current),proof.recovery.record);
+      const preview = { proof,plan,stamp: expected }; conflictGeneration.current++;
+      conflictRef.current = preview; setConflictPreview(preview);
+    } catch(cause) { if(mounted.current) setError(String(cause)); throw cause; }
+    finally { conflictBusy.current = false; if(mounted.current) setBusy(false); }
+  };
+  const acceptConflict = async (choices: Record<string,ConflictChoice>,inputs: Record<string,InputChoice>) => {
+    const preview = conflictRef.current, base = conflictEnvironment.current.analysis;
+    if(!preview || !base || conflictBusy.current) throw Error("比較をやり直してください");
+    const unchanged = () => mounted.current && !conflictEnvironment.current.locked && conflictRef.current === preview && conflictStamp() === preview.stamp && conflictEnvironment.current.analysis?.id === base.id && conflictEnvironment.current.analysis.contentHash === base.contentHash;
+    if(!unchanged()) throw Error("比較後に入力または操作条件が変わりました。元の入力と要求を保持しています");
+    const selected = resolveConflictInput(base,preview.plan,choices,inputs);
+    conflictBusy.current = true; setBusy(true);
+    try {
+      const current = await invoke<Analysis | null>("get_current_analysis",{ meetingId });
+      if(!current || current.id !== base.id || current.contentHash !== base.contentHash || !unchanged()) throw Error("解析版または手元の入力が変わりました。比較をやり直してください");
+      const latest = await recovery.acceptAdvancedDraftReview(preview.proof,selected.texts,selected.names,unchanged);
+      saveQueue.load(latest); saveQueue.edit(() => selected.payload);
+      removingBuffers.current.clear(); removingNames.current.clear();
+      textBuffers.current = Object.fromEntries(selected.texts.map(session => [session.utteranceId,session])); setTextSessions(textBuffers.current);
+      updateNames(() => Object.fromEntries(selected.names.map(session => [session.speakerId,session])),false);
+      setBodyManual(true); setRecoveryManual(true); setSelection([]); setFocusedRow(null); setMergeSource(""); setMergeTarget("");
+      setSplitting(null); setAdding(null); setPendingSplit(false); setPendingAdd(false);
+      conflictRef.current = null; setConflictPreview(null); setError(""); setNoticeVersion(null);
+      setNotice("選択した内容で編集を再開しました。本文と回復記録は保存していません。自動保存は停止中です。確定・保存再試行・通常の画面移動で保存します。");
+    } finally { conflictBusy.current = false; if(mounted.current) setBusy(false); }
+  };
   useEffect(()=>{setPage(0);},[speakerFilter,query]);
   useEffect(()=>{const valid=new Set(view?.utterances.map(u=>u.id));setSelection(ids=>ids.every(id=>valid.has(id))?ids:ids.filter(id=>valid.has(id)));setPage(p=>Math.min(p,Math.max(0,Math.ceil(filtered.length/PAGE_SIZE)-1)));},[view,filtered.length]);
   useEffect(()=>{if(speakerFilter&&speakerFilter!=="unknown"&&!speakers.some(s=>s.id===speakerFilter))setSpeakerFilter("");},[speakerFilter,speakers]);
@@ -503,11 +553,12 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
           {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty || nameDirty ? "未保存" : "保存済み"}</span>}
           {(saveError || bodyManual && dirty) && <button type="button" className="small-secondary" onClick={() => void runRecoveryAction(retryTextBuffers)} disabled={saving || busy || locked || discardPending || !!activeConfirmation}>保存を再試行</button>}
+          {matchingBase && <button type="button" className="small-secondary" disabled={saving || busy || loading || locked || discardPending || !!activeConfirmation || recoverySnapshot.saving || recoverySnapshot.bodyBusy} onClick={() => void inspectConflict().catch(() => {})}>最新保存版と入力を比較</button>}
           {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || nameDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
           <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
         </div>
         <TranscriptRecoveryPanel meetingId={meetingId} review={recoverySnapshot.review} currentDraftId={draft?.id}
-          blocked={locked || loading || busy || saving}
+          blocked={locked || loading || busy || saving || !!conflictPreview}
           canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !Object.keys(nameSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
           onPending={pending => { discardPendingRef.current = pending; setDiscardPending(pending); }}
           onResume={async () => {
@@ -611,7 +662,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         {filtered.length > PAGE_SIZE && <div className="transcript-pages"><button type="button" className="small-secondary" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0}>前へ</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button type="button" className="small-secondary" onClick={() => setPage((value) => value + 1)} disabled={(page + 1) * PAGE_SIZE >= filtered.length}>次へ</button></div>}
       </>}
       {error && <p className="action-error" role="alert">{error}</p>}
-      <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存に失敗" message={saveError ? `編集は画面に保持しています。内容を確認して保存を再試行してください: ${saveError}` : ""} action={{ kind: "retry", label: "文字起こし保存を再試行", disabled: saving || locked || busy || confirm.pending, run: () => retryTextBuffers().catch(() => { /* The queue publishes the retained failure. */ }) }} />
+      <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存に失敗" message={saveError ? `編集は画面に保持しています。内容を確認して保存を再試行してください: ${saveError}` : ""} action={{ kind: "retry", label: "文字起こし保存を再試行", disabled: saving || locked || busy || confirm.pending || !!conflictPreview, run: () => retryTextBuffers().catch(() => { /* The queue publishes the retained failure. */ }) }} />
       <CommonModal ref={splitDialog} open={!!splitting} blocked={busy} onDismiss={()=>{audio.clear();setSplitting(null);}} restoreReady={!busy} className="analysis-dialog split-dialog" aria-label="発言の手動分割">
         <h3>発言の手動分割</h3><p>音声を聞き、時刻と本文の切れ目をそれぞれ指定してください。単語時刻を自動推定していません。分割した部分の連結は元の本文と完全一致します。保存後は部分ごとに本文・話者を編集できます。</p>
         {splitting&&<><button type="button" disabled={busy||locked||audio.preparing} onClick={()=>void play(splitting)}>分割対象の音声を聞く</button><label>分割位置（発言先頭からの秒）<input type="text" inputMode="decimal" value={splitSeconds} disabled={busy||pendingSplit} onChange={e=>setSplitSeconds(e.target.value)}/></label><label>本文の切れ目（文字数）<input type="number" min={1} max={splitPieces.length-1} value={splitOffset} disabled={busy||pendingSplit} onChange={e=>setSplitOffset(Number(e.target.value))}/></label><div className="split-preview"><section><h4>前半</h4><p>{splitPieces.slice(0,splitOffset).join("")}</p></section><section><h4>後半</h4><p>{splitPieces.slice(splitOffset).join("")}</p></section></div>
@@ -634,6 +685,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false }: { 
         setBusy(true);setError("");
         void saveQueue.retry().then(()=>{if(pendingAdd){setAdding(null);setNotice("新しい話者を保存しました。取り消しが可能です。");setNoticeVersion(saveQueue.snapshot().draft?.lockVersion ?? null);}else{setError("");setNoticeVersion(null);setNotice("先行する編集を保存しました。作成内容を確認して保存してください。");}}).catch(cause=>setError(String(cause))).finally(()=>setBusy(false));
       }}>追加話者の保存を再試行</button>}</CommonModal>
+      {conflictPreview && <TranscriptConflictPanel key={conflictGeneration.current} preview={conflictPreview} blocked={busy || locked || !!activeConfirmation}
+        onClose={() => { if(conflictBusy.current) return; conflictRef.current = null; setConflictPreview(null); }} onRefresh={inspectConflict} onAccept={acceptConflict}/>}
     </section>
   );
 }

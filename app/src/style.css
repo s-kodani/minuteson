@@ -238,6 +238,15 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .transcript-recovery-dialog textarea { width:100%; min-width:0; min-height:80px; resize:vertical; padding:10px; font:inherit; font-size:15px; line-height:1.7; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
 .transcript-recovery-dialog textarea:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .transcript-recovery-dialog button { max-width:100%; white-space:normal; }
+.transcript-conflict-dialog { width:min(980px, calc(100vw - 32px)); max-width:980px; }
+.transcript-conflict-dialog p { font-size:14px; line-height:1.7; }
+.conflict-item { min-width:0; border:1px solid var(--input-border); border-radius:8px; padding:12px; margin:16px 0; }
+.conflict-item legend { overflow-wrap:anywhere; font-size:14px; }
+.conflict-values { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr)); gap:12px; }
+.transcript-conflict-dialog label { display:grid; gap:8px; min-width:0; margin:12px 0; font-size:13px; color:var(--secondary-text); }
+.transcript-conflict-dialog textarea { width:100%; min-width:0; resize:vertical; padding:10px; font:inherit; line-height:1.6; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
+.transcript-conflict-dialog pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+.transcript-conflict-dialog button { max-width:100%; white-space:normal; }
 .recovery-actions { display:flex; flex-wrap:wrap; gap:12px; margin:18px 0; }
 .recovery-inventory p { display:grid; gap:8px; padding-block:12px; border-bottom:1px solid var(--border); }
 .recovery-inventory p button { justify-self:start; }

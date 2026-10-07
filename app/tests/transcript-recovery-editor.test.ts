@@ -54,6 +54,19 @@ function advanceExternally(f: ReturnType<typeof fixture>) {
   f.actual = { ...f.actual,lockVersion: 2,contentHash: hash(102),payload: payload("別操作の本文") };
   if(f.record) f.record = { ...f.record,currentDraftLockVersion: f.actual.lockVersion,currentDraftContentHash: f.actual.contentHash,matchesDraft: false };
 }
+test("reloaded latest body and a stale stored mixed review can resume only selected buffers without writes", async () => {
+  const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); await f.editor.flushRecovery(); advanceExternally(f);
+  f.editor.load(f.actual,f.record); const review = await f.editor.inspectAdvancedDraft(), count = f.calls.length;
+  await f.editor.acceptAdvancedDraftReview(review,[buffer("選んだ入力")],[nameBuffer("選んだ名")]);
+  assert.deepEqual(f.calls.slice(count).map(c => c.kind),["readBody","readJournal"]);
+  assert.equal(f.editor.snapshot().review,null); assert.equal(f.editor.snapshot().buffers[0].value,"選んだ入力");
+});
+test("changed external local-payload proof during the final body read does not retire a pending request", async () => {
+  const f = fixture(); f.state.failBody = true; await assert.rejects(f.editor.saveDraft(draft.id,0,payload("元要求"))); advanceExternally(f);
+  const review = await f.editor.inspectAdvancedDraft(), wait = deferred<void>(); f.state.readBodyWait = wait; let valid = true;
+  const accepting = f.editor.acceptAdvancedDraftReview(review,[],[],() => valid); valid = false; wait.resolve();
+  await assert.rejects(accepting); assert.equal(f.editor.snapshot().bodyPending,true); assert.equal(f.editor.snapshot().context?.lockVersion,0);
+});
 test("advanced draft comparison exposes latest body and the frozen unresolved request without writing or clearing input", async () => {
   const f = fixture(); f.journal.update([buffer()],[nameBuffer()]); f.state.failBody = true;
   await assert.rejects(f.editor.saveDraft(draft.id,0,payload("先行する手元要求"))); advanceExternally(f);

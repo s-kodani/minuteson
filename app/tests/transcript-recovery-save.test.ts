@@ -40,6 +40,20 @@ function fixture(options: { persist?: (req: RecoverySaveRequest) => Promise<Tran
 }
 
 const newerContext: RecoveryContext<Payload> = { ...context,lockVersion: 2,contentHash: hash(102),payload: { text: "別操作の保存本文" } };
+test("a reloaded current body can explicitly review older durable input without relaxing unchanged-base pending CAS", async () => {
+  const f = fixture(), record = oldRecordOnNewBase(); f.setRecord(record); f.queue.load(newerContext,record);
+  const review = await f.queue.inspectRebase(newerContext);
+  await f.queue.acceptRebase(review,[buffer("選択")],[]);
+  assert.equal(f.calls.length,0); assert.equal(f.queue.snapshot().review,null); assert.equal(f.queue.snapshot().context?.lockVersion,2);
+  const fresh = fixture(); await assert.rejects(fresh.queue.inspectRebase(context));
+});
+test("external local-payload proof is checked again after the final recovery read", async () => {
+  let wait: ReturnType<typeof deferred<TranscriptRecovery<Payload> | null>> | null = null, valid = true;
+  const f = fixture({ read: async () => wait ? wait.promise : null }), review = await f.queue.inspectRebase(newerContext);
+  wait = deferred(); const accepting = f.queue.acceptRebase(review,[],[],() => valid);
+  valid = false; wait.resolve(null); await assert.rejects(accepting,/比較後/);
+  assert.equal(f.queue.snapshot().context?.lockVersion,0); assert.equal(f.calls.length,0);
+});
 function oldRecordOnNewBase() {
   const record = result({ meetingId: context.meetingId,draftId: context.draftId,baseAnalysisId: context.baseAnalysisId,
     operationId: randomUUID(),expectedDraftLockVersion: 0,expectedRecoveryLockVersion: 0,buffers: [buffer("別操作の回復本文")],nameBuffers: [name("別操作の回復名")] });

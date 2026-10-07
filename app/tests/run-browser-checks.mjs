@@ -40,6 +40,7 @@ const suites = [
   ["transcript-recovery", "browser-fixture.js", "transcript-recovery-browser-check.js"],
   ["speaker-name", "browser-fixture.js", "speaker-name-browser-check.js"],
   ["speaker-name-recovery", "browser-fixture.js", "speaker-name-recovery-browser-check.js"],
+  ["transcript-conflict", "browser-fixture.js", "transcript-conflict-browser-check.js"],
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   ["vocabulary-toast", "browser-fixture.js", "vocabulary-toast-browser-check.js"],
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],

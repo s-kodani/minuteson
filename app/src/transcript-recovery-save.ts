@@ -200,8 +200,11 @@ export class TranscriptRecoverySaveQueue<P> {
   }
   private advancedContext(context: RecoveryContext<P>) {
     return !!this.context && validVersion(context.lockVersion) && validHash(context.contentHash)
-      && context.lockVersion > this.context.lockVersion && context.meetingId === this.context.meetingId
-      && context.draftId === this.context.draftId && context.baseAnalysisId === this.context.baseAnalysisId;
+      && context.meetingId === this.context.meetingId && context.draftId === this.context.draftId && context.baseAnalysisId === this.context.baseAnalysisId
+      && (context.lockVersion > this.context.lockVersion
+        || !this.pending && !!this.review && this.review.baseDraftLockVersion < context.lockVersion
+          && context.lockVersion === this.context.lockVersion && context.contentHash === this.context.contentHash
+          && same(this.normalizePayload(context.payload),this.normalizePayload(this.context.payload)));
   }
   private rebaseRecord(record: TranscriptRecovery<P> | null,context: RecoveryContext<P>) {
     return !record || this.validRecord(record,context) && record.currentContext === true
@@ -216,15 +219,15 @@ export class TranscriptRecoverySaveQueue<P> {
     const token = frozen({ context: expected,record,buffers: this.desired,nameBuffers: this.desiredNames });
     this.rebaseReview = { token,stamp }; return token;
   }
-  async acceptRebase(token: RecoveryRebaseReview<P>,values: TextEditSession[],nameValues: SpeakerNameSession[]) {
+  async acceptRebase(token: RecoveryRebaseReview<P>,values: TextEditSession[],nameValues: SpeakerNameSession[],validateLocal = () => true) {
     this.live();
     const review = this.rebaseReview;
-    if(this.inFlight || !review || token !== review.token || this.rebaseStamp() !== review.stamp || !this.advancedContext(token.context)) throw Error("比較した入力または元の要求が変わりました。基底を切り替えず保持しています");
+    if(this.inFlight || !review || token !== review.token || this.rebaseStamp() !== review.stamp || !this.advancedContext(token.context) || !validateLocal()) throw Error("比較した入力または元の要求が変わりました。基底を切り替えず保持しています");
     const next = buffers(values), nextNames = names(nameValues);
     this.validateInputs(token.context,next,nextNames);
     const record = await this.read(token.context); this.live();
     if(this.inFlight || this.rebaseReview !== review || this.rebaseStamp() !== review.stamp
-      || !this.rebaseRecord(record,token.context) || !same(record,token.record)) throw Error("比較後に回復記録または本文が変わりました。入力と元の要求を保持しています");
+      || !this.rebaseRecord(record,token.context) || !same(record,token.record) || !validateLocal()) throw Error("比較後に回復記録または本文が変わりました。入力と元の要求を保持しています");
     // The native draft CAS is now strictly beyond every old local request.
     // A delayed old write cannot overwrite this base; an exact old nonce can
     // only read its already saved result. This explicit action makes no write.

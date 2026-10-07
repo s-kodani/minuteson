@@ -74,17 +74,20 @@ export class TranscriptRecoveryEditor {
     this.bodyBusy = true; this.notify();
     try {
       const latest = await this.readBody(base.meetingId); this.live();
+      const staleReview = this.journal.snapshot().review;
+      const sameLatestWithOldInput = latest && latest.lockVersion === base.lockVersion && latest.contentHash === base.contentHash
+        && samePayload(latest.payload,base.payload) && !pending && staleReview && staleReview.baseDraftLockVersion < base.lockVersion;
       if(this.draft !== base || this.bodyPending !== pending || !latest || !sameOwner(latest,base)
-        || !Number.isSafeInteger(latest.lockVersion) || latest.lockVersion <= base.lockVersion || !validHash(latest.contentHash)) throw Error("同じ下書きの新しい保存版を確認できません。元の入力と要求を保持しています");
+        || !Number.isSafeInteger(latest.lockVersion) || !(latest.lockVersion > base.lockVersion || sameLatestWithOldInput) || !validHash(latest.contentHash)) throw Error("同じ下書きの新しい保存版を確認できません。元の入力と要求を保持しています");
       const journal = await this.journal.inspectRebase(recoveryContext(latest)); this.live();
       const token = freezeReview({ base,latest,pendingPayload: pending?.payload ?? null,recovery: journal });
       this.advancedReview = { token,base,pending,recovery: journal }; return token;
     } finally { this.bodyBusy = false; this.notify(); }
   }
-  async acceptAdvancedDraftReview(token: AdvancedDraftReview,texts: TextEditSession[],names: SpeakerNameSession[]) {
+  async acceptAdvancedDraftReview(token: AdvancedDraftReview,texts: TextEditSession[],names: SpeakerNameSession[],validateLocal = () => true) {
     this.live();
     const review = this.advancedReview;
-    if(this.bodyBusy || !review || token !== review.token || this.draft !== review.base || this.bodyPending !== review.pending) throw Error("比較した本文の条件が変わりました。入力と元の要求を保持しています");
+    if(this.bodyBusy || !review || token !== review.token || this.draft !== review.base || this.bodyPending !== review.pending || !validateLocal()) throw Error("比較した本文の条件が変わりました。入力と元の要求を保持しています");
     // Freeze the explicitly selected input before asynchronous reads. This is
     // only a local rebase, not permission to publish body or rewrite the journal.
     const selected = freezeReview({ texts,names });
@@ -93,7 +96,7 @@ export class TranscriptRecoveryEditor {
       const latest = await this.readBody(review.base.meetingId); this.live();
       if(!latest || !sameOwner(latest,token.latest) || latest.lockVersion !== token.latest.lockVersion
         || latest.contentHash !== token.latest.contentHash || !samePayload(latest.payload,token.latest.payload)) throw Error("比較後に本文が変わりました。再送・上書きせず、入力と元の要求を保持しています");
-      await this.journal.acceptRebase(review.recovery,selected.texts,selected.names); this.live();
+      await this.journal.acceptRebase(review.recovery,selected.texts,selected.names,validateLocal); this.live();
       this.draft = structuredClone(latest); this.bodyPending = null; this.advancedReview = null;
       return freezeReview(latest);
     } finally { this.bodyBusy = false; this.notify(); }
