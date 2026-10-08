@@ -424,6 +424,8 @@ pub(super) fn portable_json_with_metadata(
             "endedAtUTC",
             "requestedDurationSeconds",
             "captureClock",
+            "captureEnd",
+            "recordingOwnerId",
             "osVersion",
             "architecture",
             "state",

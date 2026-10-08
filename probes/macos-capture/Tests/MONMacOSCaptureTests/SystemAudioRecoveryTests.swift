@@ -28,9 +28,11 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
   private var detachments = 0
   private var stopAction: (@Sendable () -> Void)?
   private let startFailure: Bool
-  init(held: Bool = false, startFailure: Bool = false) {
+  private let stopFailure: Bool
+  init(held: Bool = false, startFailure: Bool = false, stopFailure: Bool = false) {
     self.held = held
     self.startFailure = startFailure
+    self.stopFailure = stopFailure
   }
   var counts: (Int, Int, Int) { lock.withLock { (starts, stops, detachments) } }
   func start() async throws {
@@ -71,7 +73,7 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
       return action
     }
     action?()
-    completion(nil)
+    completion(stopFailure ? ProbeError.capture("synthetic stop failure") : nil)
   }
   func onStop(_ action: @escaping @Sendable () -> Void) { lock.withLock { stopAction = action } }
   func detach() throws { lock.withLock { detachments += 1 } }
@@ -110,6 +112,184 @@ private final class SilentSystemFactory: @unchecked Sendable {
 }
 
 final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  func testInterruptedStopRecordingExportsOwnerBoundEndAndUnchangedPhysicalCAF() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let read = { (host: Int64) in
+      CaptureClockReading(
+        hostBeforeNs: host, continuousNs: host + 10,
+        utcMs: 1_700_000_000_000, hostAfterNs: host + 20)
+    }
+    let box = ReadingBox(read(1_000_000_000))
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      box.read()
+    }
+    let source = SilentSystemSource()
+    let recorder = SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"),
+      clock: clock, retries: true, factory: { _, _ in source })
+    try await recorder.start(targetPID: nil)
+    box.set(read(1_020_000_000))
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: clock.observe(hostTicks: 1_005_000_000)
+    )
+    let fixture = CaptureClockFixtureTests()
+    var mic = try await fixture.writeCAF(
+      [
+        fixture.sample(
+          frames: 480, value: 0.125,
+          presentation: CMTime(value: 1, timescale: 1))
+      ], to: directory.appendingPathComponent("microphone.caf"))
+    mic.recordSavedClock(clock.observe(hostTicks: 1_000_000_000), frames: 480, sourceFrame: 0)
+    recorder.sourceEnded(source)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "disconnected")
+    let micClosure = try clock.close(.microphone)
+    box.set(read(1_050_000_000))
+    let pcClosure = try await recorder.stopRecording()
+    let replay = try await recorder.stopRecording()
+    XCTAssertEqual(replay, pcClosure)
+    let system = recorder.snapshot()
+    XCTAssertEqual(system.frames, 480)
+    try verifyRecordedCAF(directory.appendingPathComponent("system.caf"), expected: system)
+    let owner =
+      ProcessInfo.processInfo.environment["MON_CAPTURE_END_FIXTURE_OWNER"]
+      ?? "539640c5-f04c-4d91-96f2-36e37008fe1d"
+    var manifest = Manifest(
+      schemaVersion: 2, scenario: "synthetic-acquisition-end", captureMode: "system",
+      backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
+      requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: mic, system: system, errors: [], recordingOwnerId: owner)
+    let originals = try ["microphone.caf", "system.caf"].map {
+      try Data(contentsOf: directory.appendingPathComponent($0))
+    }
+    for badOwner in [nil, "foreign-owner"] as [String?] {
+      var rejected = manifest
+      rejected.recordingOwnerId = badOwner
+      XCTAssertThrowsError(
+        try rejected.finalizeStoppedClock(
+          clock, microphoneClosure: micClosure, systemClosure: pcClosure))
+      XCTAssertNil(rejected.captureEnd)
+      XCTAssertEqual(rejected.schemaVersion, 2)
+    }
+    for (micProof, systemProof) in [(nil, pcClosure), (micClosure, nil), (pcClosure, micClosure)]
+      as [(CaptureClosure?, CaptureClosure?)]
+    {
+      var rejected = manifest
+      XCTAssertThrowsError(
+        try rejected.finalizeStoppedClock(
+          clock, microphoneClosure: micProof, systemClosure: systemProof))
+      XCTAssertNil(rejected.captureEnd)
+      XCTAssertEqual(rejected.schemaVersion, 2)
+    }
+    let foreignClock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      box.read()
+    }
+    var foreign = manifest
+    XCTAssertThrowsError(
+      try foreign.finalizeStoppedClock(
+        clock, microphoneClosure: micClosure, systemClosure: foreignClock.close(.system)))
+    var beyond = manifest
+    beyond.microphone.recordSavedClock(
+      .timestamp(1_100_000_010), frames: 480, sourceFrame: 480)
+    beyond.microphone.frames += 480
+    XCTAssertThrowsError(
+      try beyond.finalizeStoppedClock(
+        clock, microphoneClosure: micClosure, systemClosure: pcClosure))
+    XCTAssertNil(beyond.captureEnd)
+    box.set(
+      CaptureClockReading(
+        hostBeforeNs: 30_000_000_000, continuousNs: 40_000_000_010,
+        utcMs: 1_900_000_000_000, hostAfterNs: 30_000_000_020))
+    try manifest.finalizeStoppedClock(
+      clock, microphoneClosure: micClosure, systemClosure: pcClosure)
+    XCTAssertEqual(manifest.schemaVersion, 3)
+    XCTAssertEqual(manifest.captureEnd?.microphoneClosedUs, 20000)
+    XCTAssertEqual(manifest.captureEnd?.systemClosedUs, 50000)
+    XCTAssertEqual(manifest.captureEnd?.endUs, 50000)
+    XCTAssertEqual(manifest.microphone.clockSegments?.last?.timelineEndUs, 10000)
+    XCTAssertEqual(manifest.system.clockSegments?.first?.timelineStartUs, 5000)
+    XCTAssertEqual(manifest.system.clockSegments?.last?.timelineEndUs, 15000)
+    let bytes = try manifest.encodedData()
+    try bytes.write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
+    XCTAssertEqual(
+      try ["microphone.caf", "system.caf"].map {
+        try Data(contentsOf: directory.appendingPathComponent($0))
+      }, originals)
+    if let path = ProcessInfo.processInfo.environment["MON_CAPTURE_END_FIXTURE_DIR"] {
+      let destination = URL(fileURLWithPath: path, isDirectory: true)
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: path).isEmpty)
+      for name in ["manifest.json", "microphone.caf", "system.caf"] {
+        try FileManager.default.copyItem(
+          at: directory.appendingPathComponent(name), to: destination.appendingPathComponent(name))
+      }
+    }
+  }
+
+  func testFailedStreamStopCannotProduceRecordingClosureEvenOnReplay() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource(stopFailure: true)
+    let clock = try clock()
+    let recorder = SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"),
+      clock: clock, retries: true, factory: { _, _ in source })
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: source, sampleBuffer: try sample(), observation: .timestamp(999_000_000))
+    for _ in 0..<2 {
+      do {
+        _ = try await recorder.stopRecording()
+        XCTFail("failed stream stop minted closure")
+      } catch {}
+    }
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testConcurrentRecordingStopsShareOneCompletedCAFAndClosure() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource()
+    let clock = try clock()
+    let recorder = SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"),
+      clock: clock, retries: true, factory: { _, _ in source })
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: source, sampleBuffer: try sample(), observation: .timestamp(999_000_000))
+    async let first = recorder.stopRecording()
+    async let second = recorder.stopRecording()
+    let (a, b) = try await (first, second)
+    XCTAssertEqual(a, b)
+    XCTAssertEqual(source.counts.1, 1)
+    try verifyRecordedCAF(
+      directory.appendingPathComponent("system.caf"), expected: recorder.snapshot())
+  }
+
+  func testLegacyStopCannotMintAClosureAfterCAFWasAlreadyFinalized() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource()
+    let recorder = try recorder(directory, SilentSystemFactory([source]), SystemTestTime())
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: source, sampleBuffer: try sample(), observation: .timestamp(999_000_000))
+    try await recorder.stop()
+    do {
+      _ = try await recorder.stopRecording()
+      XCTFail("legacy stop was upgraded from a later timestamp")
+    } catch {}
+  }
+
+  func testNeverStartedTapCannotMintClosureBeforeOrAfterCleanupWithoutTouchingDevices() throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let tap = CoreAudioTapRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"), clock: try clock())
+    XCTAssertThrowsError(try tap.stopRecording())
+    try tap.stop()
+    XCTAssertThrowsError(try tap.stopRecording())
+    XCTAssertThrowsError(try tap.start(targetPIDs: []))
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+  }
   private let identity = CaptureApplicationIdentity(
     pid: 321, bundleIdentifier: "com.example.confirmed", launchTimeUs: 1_700_000_000_000_000)
 

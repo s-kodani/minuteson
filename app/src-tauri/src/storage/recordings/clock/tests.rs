@@ -8,7 +8,7 @@ fn segment(first: i64, last: i64, start: i64, end: i64) -> Value {
     json!({"sourceFrameStart":first,"sourceFrameEnd":last,"timelineStartUs":start,"timelineEndUs":end,"mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"})
 }
 
-fn corrected(storage: &Storage) -> (String, String, PathBuf, Value) {
+pub(super) fn corrected(storage: &Storage) -> (String, String, PathBuf, Value) {
     let (meeting, session, output, mut value) = saved_probe_fixture(storage);
     value["schemaVersion"] = json!(2);
     value["captureClock"] = json!({"domain":"mach_continuous_time","originUtcMs":1234567890000_i64,"uncertaintyNs":1000000});
@@ -21,7 +21,7 @@ fn corrected(storage: &Storage) -> (String, String, PathBuf, Value) {
     (meeting, session, output, value)
 }
 
-fn write(output: &Path, value: &Value) {
+pub(super) fn write(output: &Path, value: &Value) {
     std::fs::write(
         output.join("manifest.json"),
         serde_json::to_vec(value).unwrap(),
@@ -29,7 +29,7 @@ fn write(output: &Path, value: &Value) {
     .unwrap();
 }
 
-fn unpublished(storage: &Storage, meeting: &str, session: &str) {
+pub(super) fn unpublished(storage: &Storage, meeting: &str, session: &str) {
     assert_eq!(
         storage.get_meeting(meeting).unwrap().unwrap().lifecycle,
         "recording"

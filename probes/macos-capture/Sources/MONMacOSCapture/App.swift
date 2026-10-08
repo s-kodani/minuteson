@@ -288,6 +288,7 @@ struct Manifest: Encodable {
   var targetApplicationIdentity: CaptureApplicationIdentity?
   var captureTest: CaptureTestMetadata? = nil
   var recordingOwnerId: String? = nil
+  var captureEnd: CaptureEndMetadata? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -298,6 +299,29 @@ struct Manifest: Encodable {
     try microphone.finishClock(originNanoseconds: origin)
     try system.finishClock(originNanoseconds: origin)
     captureClock = try clock.metadata(originNanoseconds: origin)
+  }
+
+  mutating func finalizeStoppedClock(
+    _ clock: CaptureClockDomain, microphoneClosure: CaptureClosure?, systemClosure: CaptureClosure?
+  ) throws {
+    guard schemaVersion == 2, captureTest == nil,
+      let owner = recordingOwnerId, InputLevelReport.validOwner(owner),
+      let micStart = microphone.firstCaptureNanoseconds,
+      let pcStart = system.firstCaptureNanoseconds,
+      let microphoneClosure, let systemClosure
+    else { throw ProbeError.capture("recording owner and both acquisition closures are required") }
+    let origin = min(micStart, pcStart)
+    try microphone.finishClock(originNanoseconds: origin)
+    try system.finishClock(originNanoseconds: origin)
+    let (metadata, ending) = try clock.ending(
+      originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
+    guard let micEnd = microphone.clockSegments?.last?.timelineEndUs,
+      let pcEnd = system.clockSegments?.last?.timelineEndUs,
+      micEnd <= ending.microphoneClosedUs, pcEnd <= ending.systemClosedUs
+    else { throw ProbeError.capture("saved PCM extends beyond its acquisition closure") }
+    captureClock = metadata
+    captureEnd = ending
+    schemaVersion = 3
   }
 
   func encodedData() throws -> Data {
@@ -329,6 +353,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private var captureStarted = false
   private var finished = false
   private var stopping = false
+  private var stopFailure: String?
+  private var captureClosure: CaptureClosure?
   private let retries: Bool
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
@@ -605,17 +631,31 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     func read() -> (Bool, String?) { lock.withLock { value } }
   }
 
-  func stop() async throws {
-    let previous = lock.withLock { () -> SystemAudioRecovery.Status? in
-      guard !finished else { return nil }
+  func stop() async throws { _ = try await finishStop(proveEnding: false) }
+
+  func stopRecording() async throws -> CaptureClosure {
+    guard let receipt = try await finishStop(proveEnding: true) else {
+      throw ProbeError.capture("system acquisition has no proven closure")
+    }
+    return receipt
+  }
+
+  private func finishStop(proveEnding: Bool) async throws -> CaptureClosure? {
+    let (ownsStop, previous) = lock.withLock { () -> (Bool, SystemAudioRecovery.Status?) in
+      guard !stopping else { return (false, nil) }
       stopping = true
       let status = recovery?.status
       if let token = streamToken, recovery?.accepts(token) == true { drainingToken = token }
       recovery?.stop()
       operationTask?.cancel()
-      return status
+      return (true, status)
     }
-    if lock.withLock({ finished }) { return }
+    if !ownsStop {
+      while !lock.withLock({ finished }) { try await Task.sleep(for: .milliseconds(10)) }
+      if let failure = lock.withLock({ stopFailure }) { throw ProbeError.capture(failure) }
+      return lock.withLock { captureClosure }
+    }
+    defer { lock.withLock { finished = true } }
     var streamStopError: String?
     let deadline = ContinuousClock.now.advanced(by: .seconds(5))
     while lock.withLock({ recovery?.operation != nil }), ContinuousClock.now < deadline {
@@ -635,23 +675,35 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       streamStopError = result.0 ? result.1 : "system stream stop timed out"
     }
     queue.sync {}
+    if streamStopError == nil, proveEnding {
+      do {
+        guard let clock else { throw ProbeError.capture("system capture clock is missing") }
+        let receipt = try clock.close(.system)
+        lock.withLock { captureClosure = receipt }
+      } catch { streamStopError = String(describing: error) }
+    }
     lock.withLock {
       drainingToken = nil
       captureStarted = false
       pcm.invalidateLevels()
-      finished = true
     }
     if let source = lock.withLock({ stream }), lock.withLock({ recovery?.operation == nil }) {
       try? source.detach()
     }
-    try await pcm.finish()
+    do { try await pcm.finish() } catch {
+      lock.withLock { stopFailure = String(describing: error) }
+      throw error
+    }
     if let streamStopError {
+      lock.withLock { stopFailure = streamStopError }
       throw ProbeError.capture("system stop failed after CAF finalization: \(streamStopError)")
     }
-    if retries, previous?.state != "connected" {
-      throw ProbeError.capture(
-        "system input did not recover before stop; trailing missing time is unresolved")
+    if !proveEnding, retries, previous?.state != "connected" {
+      let failure = "system input did not recover before stop; trailing missing time is unresolved"
+      lock.withLock { stopFailure = failure }
+      throw ProbeError.capture(failure)
     }
+    return lock.withLock { captureClosure }
   }
 
   func snapshot() -> TrackStats {
@@ -740,6 +792,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
 }
 
 private final class MicrophoneRecorder: @unchecked Sendable {
+  private(set) var captureClosure: CaptureClosure?
   private enum RebindError: Error { case formatChanged }
   private var engine: AVAudioEngine?
   private var configurationObserver: NSObjectProtocol?
@@ -1008,7 +1061,14 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       stats.inputLevel.invalidate()
     }
     releaseEngine()
-    lock.withLock { file = nil }
+    lock.withLock {
+      if captureClosure == nil {
+        do { captureClosure = try clock?.close(.microphone) } catch {
+          stats.clockFailure = stats.clockFailure ?? String(describing: error)
+        }
+      }
+      file = nil
+    }
   }
 
   func snapshot() -> TrackStats {
@@ -1208,7 +1268,14 @@ private enum Main {
         }
         testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
-        if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
+        var systemClosure: CaptureClosure?
+        if options.publishesInputStatus {
+          systemClosure =
+            options.backend == "coreaudio"
+            ? try tap.stopRecording() : try await system.stopRecording()
+        } else {
+          if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
+        }
         let micStats = mic.snapshot()
         let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
         if let testWindow, !testWindow.metadata().completed {
@@ -1225,7 +1292,14 @@ private enum Main {
           options.output.appendingPathComponent("system.caf"), expected: systemStats)
         manifest.microphone = micStats
         manifest.system = systemStats
-        if let clock { try manifest.finalizeClock(clock) }
+        if let clock {
+          if options.publishesInputStatus {
+            try manifest.finalizeStoppedClock(
+              clock, microphoneClosure: mic.captureClosure, systemClosure: systemClosure)
+          } else {
+            try manifest.finalizeClock(clock)
+          }
+        }
         manifest.state = "saved"
       } catch {
         testWindow?.finish(at: PCMInputLevel.nowNanoseconds())

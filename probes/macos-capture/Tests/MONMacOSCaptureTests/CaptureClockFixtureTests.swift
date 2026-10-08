@@ -6,7 +6,7 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
-  private func sample(frames: Int, value: Float, presentation: CMTime) throws -> CMSampleBuffer {
+  func sample(frames: Int, value: Float, presentation: CMTime) throws -> CMSampleBuffer {
     var format = AudioStreamBasicDescription(
       mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
       mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
@@ -42,7 +42,7 @@ final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
     return try XCTUnwrap(sample)
   }
 
-  private func writeCAF(_ samples: [CMSampleBuffer], to url: URL) async throws -> TrackStats {
+  func writeCAF(_ samples: [CMSampleBuffer], to url: URL) async throws -> TrackStats {
     let writer = try AVAssetWriter(outputURL: url, fileType: .caf)
     let settings: [String: Any] = [
       AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000,

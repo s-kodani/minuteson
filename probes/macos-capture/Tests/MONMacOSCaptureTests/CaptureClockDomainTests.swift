@@ -14,6 +14,58 @@ final class ReadingBox: @unchecked Sendable {
 }
 
 final class CaptureClockDomainTests: XCTestCase {
+  func testAcquisitionClosuresFreezeEndBeforeDiskAndWallClockChanges() throws {
+    let box = ReadingBox(reading(1_000_000))
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      box.read()
+    }
+    box.set(reading(2_000_000))
+    let mic = try clock.close(.microphone)
+    box.set(reading(3_000_000))
+    let pc = try clock.close(.system)
+    box.set(reading(40_000_000, offset: 99_000_000, utc: 1_900_000_000_000))
+    XCTAssertEqual(try clock.close(.microphone), mic)
+    let (metadata, end) = try clock.ending(
+      originNanoseconds: 1_000_000, microphone: mic, system: pc)
+    XCTAssertEqual(end.microphoneClosedUs, 1000)
+    XCTAssertEqual(end.systemClosedUs, 2000)
+    XCTAssertEqual(end.endUs, 2000)
+    XCTAssertEqual(metadata.originUtcMs, 1_699_999_999_999)
+    let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(end)) as! [String: Any]
+    XCTAssertEqual(Set(json.keys), ["method", "microphoneClosedUs", "systemClosedUs", "endUs"])
+    guard case .invalid = clock.observe(hostTicks: 2_000_000) else {
+      return XCTFail("closed domain admitted PCM")
+    }
+    XCTAssertThrowsError(
+      try clock.ending(originNanoseconds: 1_000_000, microphone: mic, system: pc))
+  }
+
+  func testClosureCannotCrossClocksSwapInputsReverseTimeOrAcceptSleepBridge() throws {
+    let box = ReadingBox(reading(1_000_000))
+    let make = {
+      try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) { box.read() }
+    }
+    let first = try make()
+    let second = try make()
+    box.set(reading(3_000_000))
+    let mic = try first.close(.microphone)
+    let pc = try first.close(.system)
+    let other = try second.close(.system)
+    XCTAssertThrowsError(
+      try first.ending(originNanoseconds: 1_000_000, microphone: mic, system: other))
+    XCTAssertThrowsError(
+      try first.ending(originNanoseconds: 1_000_000, microphone: pc, system: mic))
+    XCTAssertThrowsError(
+      try first.ending(originNanoseconds: 4_000_000, microphone: mic, system: pc))
+    let reverse = try make()
+    box.set(reading(2_000_000))
+    XCTAssertThrowsError(try reverse.close(.microphone))
+    box.set(reading(4_000_000))
+    XCTAssertThrowsError(try reverse.close(.microphone))
+    let sleep = try make()
+    box.set(reading(5_000_000, offset: 1_000_500))
+    XCTAssertThrowsError(try sleep.close(.system))
+  }
   private func reading(_ host: Int64, offset: Int64 = 500, utc: Int64 = 1_700_000_000_000)
     -> CaptureClockReading
   {

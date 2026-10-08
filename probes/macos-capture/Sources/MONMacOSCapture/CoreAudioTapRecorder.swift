@@ -58,6 +58,9 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
   private var aggregateID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
   private var ioProcID: AudioDeviceIOProcID?
   private var started = false
+  private var everStarted = false
+  private var tornDown = false
+  private var shutdownFailures: [String] = []
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
@@ -69,6 +72,9 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
   }
 
   func start(targetPIDs: [pid_t]) throws {
+    guard !everStarted, !tornDown else {
+      throw ProbeError.capture("tap recorder cannot restart after acquisition or teardown")
+    }
     let objects = try TapAudioProcesses.list()
     let selected = targetPIDs.compactMap { pid in
       objects.first(where: { $0.pid == pid })?.objectID
@@ -117,6 +123,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
         }, "create aggregate device IO callback")
       try check(AudioDeviceStart(aggregateID, ioProcID), "start tap aggregate device")
       started = true
+      everStarted = true
     } catch {
       cleanup()
       throw error
@@ -130,9 +137,24 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     }
   }
 
+  func stopRecording() throws -> CaptureClosure {
+    guard everStarted else { throw ProbeError.capture("tap acquisition never started") }
+    let failures = tearDown(proveEnding: true)
+    guard failures.isEmpty, let captureClosure else {
+      throw ProbeError.capture(
+        failures.isEmpty
+          ? "tap acquisition has no proven closure" : failures.joined(separator: "; "))
+    }
+    return captureClosure
+  }
+
   func snapshot() -> TrackStats { lock.withLock { stats } }
 
-  private func tearDown() -> [String] {
+  private var captureClosure: CaptureClosure?
+
+  private func tearDown(proveEnding: Bool = false) -> [String] {
+    if tornDown { return shutdownFailures }
+    tornDown = true
     var failures: [String] = []
     if started {
       let status = AudioDeviceStop(aggregateID, ioProcID)
@@ -145,6 +167,12 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       self.ioProcID = nil
     }
     writeQueue.sync {}
+    if proveEnding, failures.isEmpty, captureClosure == nil {
+      do {
+        guard let clock else { throw ProbeError.capture("tap capture clock is missing") }
+        captureClosure = try clock.close(.system)
+      } catch { failures.append(String(describing: error)) }
+    }
     lock.withLock { file = nil }
     if aggregateID != AudioObjectID(kAudioObjectUnknown) {
       let status = AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -156,6 +184,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       if status != noErr { failures.append("destroy process tap: \(status)") }
       tapID = AudioObjectID(kAudioObjectUnknown)
     }
+    shutdownFailures = failures
     return failures
   }
 

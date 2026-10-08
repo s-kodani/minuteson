@@ -44,6 +44,21 @@ struct CaptureClockMetadata: Encodable {
   let uncertaintyNs: Int64
 }
 
+enum CaptureInput: String { case microphone, system }
+
+struct CaptureClosure: Equatable {
+  fileprivate let clockID: UUID
+  fileprivate let input: CaptureInput
+  fileprivate let nanoseconds: Int64
+}
+
+struct CaptureEndMetadata: Encodable {
+  let method = "acquisition_closed"
+  let microphoneClosedUs: Int64
+  let systemClosedUs: Int64
+  let endUs: Int64
+}
+
 enum CaptureClockObservation: Sendable {
   case timestamp(Int64)
   case invalid(String)
@@ -61,11 +76,15 @@ final class CaptureClockDomain: @unchecked Sendable {
   private let uncertaintyNs: Int64
   private let lock = NSLock()
   private var failure: String?
+  private let clockID = UUID()
+  private var closures: [String: CaptureClosure] = [:]
+  private var lastReading: CaptureClockReading
 
   init(units: MachTimeUnits, read: @escaping @Sendable () throws -> CaptureClockReading) throws {
     self.units = units
     self.read = read
     reference = try read()
+    lastReading = reference
     initialBounds = try reference.offsetBounds()
     let (width, overflow) = (reference.hostAfterNs - reference.hostBeforeNs)
       .addingReportingOverflow(4)
@@ -100,15 +119,74 @@ final class CaptureClockDomain: @unchecked Sendable {
     if let failure { throw ProbeError.capture(failure) }
     let current = try read()
     let bounds = try current.offsetBounds()
-    guard bounds.overlaps(initialBounds), current.hostBeforeNs >= reference.hostBeforeNs else {
+    guard bounds.overlaps(initialBounds), current.hostBeforeNs >= lastReading.hostBeforeNs,
+      current.continuousNs >= lastReading.continuousNs
+    else {
       throw ProbeError.capture("capture clock bridge changed; explicit recovery is required")
     }
+    lastReading = current
     return current
+  }
+
+  // Call after this acquisition has stopped and callbacks have drained, before
+  // CAF finalization. A caller cannot construct or refresh this clock-bound proof.
+  func close(_ input: CaptureInput) throws -> CaptureClosure {
+    try lock.withLock {
+      do {
+        if let failure { throw ProbeError.capture(failure) }
+        if let existing = closures[input.rawValue] { return existing }
+        let reading = try checkedReading()
+        let closure = CaptureClosure(
+          clockID: clockID, input: input, nanoseconds: reading.continuousNs)
+        closures[input.rawValue] = closure
+        return closure
+      } catch {
+        failure = failure ?? String(describing: error)
+        throw error
+      }
+    }
+  }
+
+  func ending(
+    originNanoseconds origin: Int64, microphone: CaptureClosure, system: CaptureClosure
+  ) throws -> (CaptureClockMetadata, CaptureEndMetadata) {
+    try lock.withLock {
+      guard failure == nil, microphone.clockID == clockID, system.clockID == clockID,
+        microphone.input == .microphone, system.input == .system,
+        closures[CaptureInput.microphone.rawValue] == microphone,
+        closures[CaptureInput.system.rawValue] == system,
+        origin >= 0, origin < microphone.nanoseconds, origin < system.nanoseconds
+      else { throw ProbeError.capture("both acquisitions must close in the same proven clock") }
+      let mic = (microphone.nanoseconds - origin) / 1000
+      let pc = (system.nanoseconds - origin) / 1000
+      guard mic > 0, pc > 0, max(mic, pc) <= 9_007_199_254_740_991 else {
+        throw ProbeError.capture("capture ending is outside supported bounds")
+      }
+      // Freeze acquisition time, excluding disk flush, verification and later sleep.
+      return (
+        try originMetadata(origin),
+        CaptureEndMetadata(microphoneClosedUs: mic, systemClosedUs: pc, endUs: max(mic, pc))
+      )
+    }
+  }
+
+  private func originMetadata(_ origin: Int64) throws -> CaptureClockMetadata {
+    guard origin >= 0 else { throw ProbeError.capture("capture origin is invalid") }
+    let delta = origin - reference.continuousNs
+    let milliseconds = delta / 1_000_000 - (delta < 0 && delta % 1_000_000 != 0 ? 1 : 0)
+    let (utc, overflow) = reference.utcMs.addingReportingOverflow(milliseconds)
+    guard !overflow, (0...8_640_000_000_000_000).contains(utc) else {
+      throw ProbeError.capture("capture origin UTC is outside supported bounds")
+    }
+    return CaptureClockMetadata(originUtcMs: utc, uncertaintyNs: uncertaintyNs)
   }
 
   func observe(hostTicks: UInt64?) -> CaptureClockObservation {
     lock.withLock {
       do {
+        guard closures.count < 2 else {
+          throw ProbeError.capture("capture observation arrived after both acquisitions closed")
+        }
         guard let hostTicks else { throw ProbeError.capture("capture host timestamp is missing") }
         let current = try checkedReading()
         let host = try units.nanoseconds(hostTicks)
@@ -141,14 +219,7 @@ final class CaptureClockDomain: @unchecked Sendable {
     try lock.withLock {
       do {
         _ = try checkedReading()
-        guard origin >= 0 else { throw ProbeError.capture("capture origin is invalid") }
-        let delta = origin - reference.continuousNs
-        let milliseconds = delta / 1_000_000 - (delta < 0 && delta % 1_000_000 != 0 ? 1 : 0)
-        let (utc, overflow) = reference.utcMs.addingReportingOverflow(milliseconds)
-        guard !overflow, (0...8_640_000_000_000_000).contains(utc) else {
-          throw ProbeError.capture("capture origin UTC is outside supported bounds")
-        }
-        return CaptureClockMetadata(originUtcMs: utc, uncertaintyNs: uncertaintyNs)
+        return try originMetadata(origin)
       } catch {
         failure = failure ?? String(describing: error)
         throw error

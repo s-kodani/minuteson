@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[cfg(test)]
+mod ending_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Deserialize, Serialize)]
@@ -15,11 +17,20 @@ pub(super) struct CaptureClock {
     uncertainty_ns: i64,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct CaptureEnd {
+    method: String,
+    microphone_closed_us: i64,
+    system_closed_us: i64,
+    pub(super) end_us: i64,
+}
+
 impl CaptureManifest {
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
         match (self.schema_version, &self.capture_clock) {
             (1, None) => Ok(None),
-            (2, Some(clock))
+            (2 | 3, Some(clock))
                 if clock.domain == "mach_continuous_time"
                     && (0..=8_640_000_000_000_000).contains(&clock.origin_utc_ms)
                     && (0..=9_007_199_254_740_991).contains(&clock.uncertainty_ns) =>
@@ -27,6 +38,29 @@ impl CaptureManifest {
                 Ok(Some(clock))
             }
             _ => Err("録音の共通時計・UTC原点または形式版が不正です".into()),
+        }
+    }
+
+    pub(super) fn validated_capture_end(
+        &self,
+        owner: &str,
+        mic: &CaptureTimeline<'_>,
+        system: &CaptureTimeline<'_>,
+    ) -> Result<Option<&CaptureEnd>, String> {
+        match (self.schema_version, &self.capture_end) {
+            (1 | 2, None) => Ok(None),
+            (3, Some(end))
+                if self.recording_owner_id.as_deref() == Some(owner)
+                    && crate::input_levels::valid_owner(owner)
+                    && end.method == "acquisition_closed"
+                    && (1..=9_007_199_254_740_991).contains(&end.end_us)
+                    && end.microphone_closed_us >= mic.end_us
+                    && end.system_closed_us >= system.end_us
+                    && end.end_us == end.microphone_closed_us.max(end.system_closed_us) =>
+            {
+                Ok(Some(end))
+            }
+            _ => Err("録音終了の所有・両入力の終了証拠または時刻が不正です".into()),
         }
     }
 }
@@ -87,6 +121,23 @@ impl CaptureTrack {
 }
 
 impl CaptureTimeline<'_> {
+    pub(super) fn insert_boundary_gaps(
+        &self,
+        db: &Transaction<'_>,
+        track: &str,
+        recording_end: i64,
+    ) -> Result<(), String> {
+        for (start, end, reason) in [
+            (0, self.start_us, "capture_start_gap"),
+            (self.end_us, recording_end, "capture_stop_gap"),
+        ] {
+            if start < end {
+                db.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES (?1,?2,?3,?4,?5)",
+                    params![Uuid::new_v4().to_string(), track, start, end, reason]).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn insert(
         &self,
         db: &Transaction<'_>,

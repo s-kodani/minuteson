@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::fs::File;
 
 mod clock;
-use clock::CaptureClock;
+use clock::{CaptureClock, CaptureEnd};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,10 @@ struct CaptureManifest {
     system: CaptureTrack,
     #[serde(default)]
     capture_clock: Option<CaptureClock>,
+    #[serde(default)]
+    capture_end: Option<CaptureEnd>,
+    #[serde(default)]
+    recording_owner_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -351,7 +355,7 @@ impl Storage {
             .join(session_id);
         let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
         let manifest = self.read_capture_manifest(&manifest_file)?;
-        if !matches!(manifest.schema_version, 1 | 2)
+        if !matches!(manifest.schema_version, 1 | 2 | 3)
             || manifest.state != "saved"
             || !manifest.errors.is_empty()
         {
@@ -399,6 +403,22 @@ impl Storage {
         if capture_clock.is_some() && mic_timeline.start_us.min(system_timeline.start_us) != 0 {
             return Err("録音の共通原点が最初の保存音声と一致しません".into());
         }
+        let ending = manifest.validated_capture_end(session_id, &mic_timeline, &system_timeline)?;
+        let duration_us = ending.map_or_else(
+            || mic_timeline.end_us.max(system_timeline.end_us),
+            |end| end.end_us,
+        );
+        let ended_at = if let (Some(clock), Some(end)) = (capture_clock, ending) {
+            Some(
+                clock
+                    .origin_utc_ms
+                    .checked_add(end.end_us / 1000)
+                    .filter(|v| (0..=8_640_000_000_000_000).contains(v))
+                    .ok_or("録音終了UTCが範囲外です")?,
+            )
+        } else {
+            None
+        };
         let started_at = capture_clock
             .map(|clock| clock.origin_utc_ms)
             .or(session.started_at_utc_ms);
@@ -460,11 +480,13 @@ impl Storage {
                 params![chunk_id, session.meeting_id, track_id, asset_id, timeline.start_us, timeline.end_us, frames, format.0, format.1, now],
             ).map_err(|error| error.to_string())?;
             timeline.insert(&transaction, &track_id, &chunk_id)?;
+            if ending.is_some() {
+                timeline.insert_boundary_gaps(&transaction, &track_id, duration_us)?;
+            }
         }
-        let duration_us = mic_timeline.end_us.max(system_timeline.end_us);
         transaction.execute(
-            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?3, started_at_utc_ms = ?5 WHERE id = ?4 AND state IN ('recording', 'stopping', 'interrupted')",
-            params![duration_us, manifest_file.hash, now, session_id, started_at],
+            "UPDATE recording_sessions SET state = 'saved', duration_us = ?1, audio_manifest_hash = ?2, ended_at_utc_ms = ?3, last_committed_us = ?1, updated_at = ?6, started_at_utc_ms = ?5 WHERE id = ?4 AND state IN ('recording', 'stopping', 'interrupted')",
+            params![duration_us, manifest_file.hash, ended_at.unwrap_or(now), session_id, started_at, now],
         ).map_err(|error| error.to_string())?;
         transaction.execute(
             "UPDATE meetings SET lifecycle = 'recorded', duration_us = ?1, started_at_utc_ms = ?2, lock_version = lock_version + 1, updated_at = ?3 WHERE id = ?4 AND lifecycle = 'recording'",
