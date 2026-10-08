@@ -232,7 +232,8 @@ fn step(
                         expected_draft: None,
                     };
                     let tracks = storage
-                        .recorded_audio_plan(&flow.meeting_id)?
+                        .recorded_analysis_input(&flow.meeting_id)?
+                        .0
                         .tracks
                         .iter()
                         .map(|t| crate::diarization::TrackSettings {

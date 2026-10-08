@@ -13,6 +13,18 @@ pub(crate) fn restore_saved_results(
     assets: &mut impl RestoreAssets,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    if old.parameters["schemaVersion"] == 2 {
+        return known::restore_saved_results(
+            job,
+            old,
+            new,
+            value,
+            old_initial,
+            new_initial,
+            assets,
+            cancelled,
+        );
+    }
     let before: Envelope =
         serde_json::from_value(old.parameters.clone()).map_err(|e| e.to_string())?;
     let after: Envelope =

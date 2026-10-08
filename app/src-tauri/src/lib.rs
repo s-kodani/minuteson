@@ -1289,7 +1289,9 @@ async fn get_diarization_tracks(
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().recorded_audio_plan(&meeting_id)
+        app.state::<Storage>()
+            .recorded_analysis_input(&meeting_id)
+            .map(|(source, _)| source)
     })
     .await
     .map_err(|e| e.to_string())?

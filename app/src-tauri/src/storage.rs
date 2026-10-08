@@ -45,7 +45,9 @@ mod recordings;
 mod revisions;
 mod speaker_review;
 mod transcription;
-pub(crate) use transcription::known::KnownInput;
+pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
+#[cfg(all(test, unix))]
+pub(crate) use transcription::tests::known_tests::split_fixture as split_audio_fixture;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub use analysis::AnalysisView;
@@ -148,6 +150,11 @@ pub struct Storage {
     managed_anchor: deletion::fs::RootAnchor,
     #[cfg(unix)]
     native_models_root: PathBuf,
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_database<T>(storage: &Storage, action: impl FnOnce(&Connection) -> T) -> T {
+    action(&storage.connection.lock().unwrap())
 }
 
 impl Storage {

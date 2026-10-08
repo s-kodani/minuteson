@@ -80,6 +80,24 @@ impl Storage {
             return Err("確認した解析版・会議・内容ハッシュが一致しません".into());
         }
         let mut reviews = Vec::new();
+        // Use the verified immutable producing job, never mutable live gaps or
+        // a candidate's self-reported audioCoverage. A gap is not evidence that
+        // one voice continued across it even when both sides matched.
+        let producer: Option<String> = tx.query_row(
+            "SELECT id FROM processing_jobs WHERE output_analysis_id=?1 AND meeting_id=?2 AND kind='diarization' AND state='succeeded'",
+            params![request.analysis_id, request.meeting_id], |r| r.get(0),
+        ).optional().map_err(|e|e.to_string())?;
+        let coverage = producer
+            .map(|id| {
+                let spec = super::jobs::read_fixed_input(&tx, &id)?.0;
+                if spec.parameters["schemaVersion"] == 2 {
+                    crate::diarization::known::fixed_coverage(&spec).map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+            .transpose()?
+            .flatten();
         for utterance in &request.utterance_ids {
             let (track,start,end,lineage):(String,i64,i64,String)=tx.query_row("SELECT track_id,start_us,end_us,lineage_id FROM utterances WHERE id=?1 AND analysis_revision_id=?2 AND meeting_id=?3",params![utterance,request.analysis_id,request.meeting_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|e|e.to_string())?.ok_or("発言と解析版が一致しません")?;
             let mut query=tx.prepare("SELECT start_us,end_us,speaker_id,confidence FROM speaker_segments WHERE analysis_revision_id=?1 AND track_id=?2 AND start_us<?3 AND end_us>?4 ORDER BY start_us,end_us,id LIMIT 100001").map_err(|e|e.to_string())?;
@@ -123,11 +141,21 @@ impl Storage {
                 })
                 .collect();
             let timeline = Timeline::build(&segments, end - start)?;
-            let state = match timeline.attribute(0, end - start)? {
-                Attribution::Unknown => "unknown",
-                Attribution::Assigned { .. } => "assigned",
-                Attribution::Overlap { .. } => "overlap",
-                Attribution::NeedsSplit { .. } => "needsSplit",
+            let state = if coverage.as_ref().is_some_and(|(source, known)| {
+                !known.runs.iter().any(|run| {
+                    source.tracks[run.track_index].id == track
+                        && start >= run.start_us
+                        && end <= run.end_us
+                })
+            }) {
+                "needsSplit"
+            } else {
+                match timeline.attribute(0, end - start)? {
+                    Attribution::Unknown => "unknown",
+                    Attribution::Assigned { .. } => "assigned",
+                    Attribution::Overlap { .. } => "overlap",
+                    Attribution::NeedsSplit { .. } => "needsSplit",
+                }
             };
             let overlaps: Vec<_> = timeline
                 .intervals

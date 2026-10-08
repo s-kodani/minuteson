@@ -271,6 +271,36 @@ impl Storage {
         if let Some((job_id, completed_units)) = job {
             let (spec, _) = super::jobs::read_fixed_input(&transaction, job_id)?;
             if spec.kind == JobKind::Diarization {
+                if spec.parameters["schemaVersion"] == 2 {
+                    let known: super::transcription::known::KnownInput = serde_json::from_value(
+                        spec.parameters["diarization"]["knownInput"].clone(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let source = super::transcription::read_analysis_audio_plan(
+                        &transaction,
+                        meeting_id,
+                        None,
+                    )?;
+                    known.validate(&source)?;
+                    if spec.parameters["diarization"]["source"]
+                        != serde_json::to_value(&source).map_err(|e| e.to_string())?
+                        || known
+                            != super::transcription::known::read(&transaction, meeting_id, &source)?
+                        || input.config["audioCoverage"]
+                            != serde_json::json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"})
+                    {
+                        return Err("話者候補公開前に保存区間・欠損が変更されています".into());
+                    }
+                    for segment in &input.segments {
+                        if !known.runs.iter().any(|run| {
+                            source.tracks[run.track_index].id == segment.track_id
+                                && segment.start_us >= run.start_us
+                                && segment.end_us <= run.end_us
+                        }) {
+                            return Err("話者候補が固定した保存区間の外側へ出ています".into());
+                        }
+                    }
+                }
                 let source = super::diarization::read_input(&transaction, &spec)?;
                 if input.audio_manifest_hash != source.audio_manifest_hash
                     || input.config["jobId"] != job_id

@@ -39,10 +39,22 @@ impl Storage {
         transcription_job: Option<&str>,
         configure: impl FnOnce(&DiarizationInput) -> Result<(Value, i64), String>,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_diarization_source_version(request, profile, transcription_job, 1, configure)
+    }
+
+    pub(crate) fn enqueue_diarization_source_version(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        transcription_job: Option<&str>,
+        schema_version: u32,
+        configure: impl FnOnce(&DiarizationInput) -> Result<(Value, i64), String>,
+    ) -> Result<JobSnapshot, String> {
         if request.operation_id.trim().is_empty()
             || request.operation_id.len() > 128
             || request.expected_meeting_lock_version < 0
             || !profile.is_object()
+            || !matches!(schema_version, 1 | 2)
         {
             return Err("話者分離の操作・固定入力指定が不正です".into());
         }
@@ -70,7 +82,7 @@ impl Storage {
             if spec.meeting_id != request.meeting_id
                 || spec.profile_snapshot != profile
                 || spec.parameters
-                    != json!({"schemaVersion":1,"request":request,"diarization":parameters})
+                    != json!({"schemaVersion":schema_version,"request":request,"diarization":parameters})
                 || spec.total_units != Some(units)
             {
                 return Err("同じ操作IDで異なる話者分離が指定されました".into());
@@ -201,7 +213,7 @@ impl Storage {
             input_analysis_id: Some(id),
             input_hash: hash,
             profile_snapshot: profile,
-            parameters: json!({"schemaVersion":1,"request":request}),
+            parameters: json!({"schemaVersion":schema_version,"request":request}),
             total_units: None,
         };
         let input = read_input(&tx, &spec)?;
@@ -213,6 +225,16 @@ impl Storage {
         }
         spec.parameters["diarization"] = parameters;
         spec.total_units = Some(total);
+        if schema_version == 2 {
+            let (fixed_source, known) = crate::diarization::known::fixed_coverage(&spec)?;
+            let source =
+                super::transcription::read_analysis_audio_plan(&tx, &spec.meeting_id, None)?;
+            if source != fixed_source
+                || super::transcription::known::read(&tx, &spec.meeting_id, &source)? != known
+            {
+                return Err("開始前に保存音声・欠損・取得時計が変更されています".into());
+            }
+        }
         let job = super::jobs::enqueue_in_transaction(&tx, &spec)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(job)

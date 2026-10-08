@@ -170,6 +170,14 @@ pub unsafe extern "C" fn SherpaOnnxSpeakerEmbeddingExtractorComputeEmbedding(
         return std::ptr::null();
     }
     let values = match stream.mode.as_str() {
+        "voice_fixture" => {
+            if stream.samples[0] > 0.0 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            }
+        }
+        "same_voice_fixture" => [1.0, 0.0, 0.0],
         "zero" => [0.0; 3],
         "nan" => [f32::NAN; 3],
         _ => [

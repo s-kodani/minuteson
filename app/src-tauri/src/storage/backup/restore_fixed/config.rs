@@ -50,7 +50,14 @@ impl FixedData<'_, '_> {
             let source = diarization
                 .get("source")
                 .ok_or("話者分離の固定音声がありません")?;
-            value["diarization"]["source"] = self.audio_plan(meeting, source)?;
+            let known: Option<crate::storage::KnownInput> = diarization
+                .get("knownInput")
+                .filter(|value| !value.is_null())
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            value["diarization"]["source"] =
+                self.analysis_audio_plan(meeting, source, known.as_ref())?;
             let mut tracks: Vec<crate::diarization::TrackSettings> =
                 serde_json::from_value(diarization["tracks"].clone()).map_err(|e| e.to_string())?;
             for track in &mut tracks {

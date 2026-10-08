@@ -1,14 +1,12 @@
-//! Whole-track native diarization. Cluster IDs are local to one track/run;
-//! they are never treated as voice identities or shared across meetings.
+//! Whole-track and independent saved-run native diarization. Local numeric
+//! labels alone never identify a person across runs, tracks or meetings.
 mod restore;
-// The gap-aware worker will consume this pure, track-local feature reducer.
-// It does not change the legacy whole-track worker's immutable conditions.
-#[allow(dead_code)]
+// Feature matching is limited to one track; legacy conditions remain unchanged.
 mod clustering;
 // Separate helper identity, without changing legacy managed SherpaConfig files.
-// The saved-run worker will persist these additional immutable conditions.
-#[allow(dead_code)]
+// The saved-run worker persists these additional immutable conditions.
 mod embedding;
+pub(crate) mod known;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 pub(crate) mod sherpa;
 pub(crate) mod timeline;
@@ -132,6 +130,12 @@ struct Parameters {
     engine: SherpaConfig,
     tracks: Vec<TrackSettings>,
     manual_assignment_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_input: Option<crate::storage::KnownInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extractor: Option<embedding::ExtractorConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    matching: Option<known::Policy>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -157,7 +161,7 @@ struct UnitOutput {
     result_asset_id: String,
     result_hash: String,
 }
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ResultFile {
     schema_version: u32,
@@ -171,6 +175,14 @@ struct ResultFile {
     engine: SherpaConfig,
     num_speakers: Option<u32>,
     segments: Vec<Segment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run: Option<crate::storage::KnownRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extractor: Option<embedding::ExtractorConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    features: Option<Vec<known::SavedFeature>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    matching: Option<known::Policy>,
 }
 
 pub(crate) fn restore_checkpoint_references(
@@ -209,6 +221,9 @@ pub(crate) fn restore_result(
     old: &JobSpec,
     new: &JobSpec,
 ) -> Result<Vec<u8>, String> {
+    if old.parameters["schemaVersion"] == 2 {
+        return known::restore_result(bytes, old, new);
+    }
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("話者分離結果が容量上限を超えています".into());
     }
@@ -237,6 +252,10 @@ pub(crate) fn restore_result(
         || old_envelope.schema_version != 1
         || new_envelope.schema_version != 1
         || result.schema_version != 1
+        || result.run.is_some()
+        || result.extractor.is_some()
+        || result.features.is_some()
+        || result.matching.is_some()
         || result.origin_operation_id != old_envelope.request.operation_id
         || Some(result.input_analysis_id.as_str()) != old.input_analysis_id.as_deref()
         || result.input_hash != old.input_hash
@@ -341,6 +360,20 @@ pub(crate) fn enqueue_source(
     tracks: Vec<TrackSettings>,
     transcription_job: Option<&str>,
 ) -> Result<JobSnapshot, String> {
+    let (source, known) = storage.recorded_analysis_input(&request.meeting_id)?;
+    if let Some(known_input) = known {
+        return known::enqueue(
+            storage,
+            request,
+            engine,
+            profile,
+            tracks,
+            transcription_job,
+            source,
+            known_input,
+            None,
+        );
+    }
     if !matches!(profile, "standard" | "high_accuracy") {
         return Err("話者分離のプロファイルが不正です".into());
     }
@@ -380,6 +413,9 @@ pub(crate) fn enqueue_source(
             engine,
             tracks,
             manual_assignment_hash: input.manual_assignment_hash.clone(),
+            known_input: None,
+            extractor: None,
+            matching: None,
         };
         let total = parameters.tracks.len() as i64;
         Ok((
@@ -394,6 +430,9 @@ pub(crate) fn enqueue_source(
     }
 }
 fn checked_parameters(storage: &Storage, spec: &JobSpec, job: &str) -> Result<Parameters, String> {
+    if spec.parameters["schemaVersion"] == 2 {
+        return known::checked_parameters(storage, spec, job);
+    }
     let envelope: Envelope =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let input = storage.load_diarization_input(job)?;
@@ -405,6 +444,9 @@ fn checked_parameters(storage: &Storage, spec: &JobSpec, job: &str) -> Result<Pa
         || parameters.source.manifest_hash != input.audio_manifest_hash
         || parameters.manual_assignment_hash != input.manual_assignment_hash
         || spec.total_units != Some(parameters.tracks.len() as i64)
+        || parameters.known_input.is_some()
+        || parameters.extractor.is_some()
+        || parameters.matching.is_some()
     {
         return Err("話者分離の固定入力計画が不正です".into());
     }
@@ -441,6 +483,9 @@ fn preflight(
     parameters: &Parameters,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<crate::playback::PreparedAudio>, String> {
+    if parameters.known_input.is_some() {
+        return known::preflight(storage, spec, parameters, cancelled);
+    }
     managed::rebinding::sherpa(&spec.profile_snapshot, &parameters.engine)?.verify(cancelled)?;
     managed::verify(
         &spec.profile_snapshot,
@@ -484,6 +529,10 @@ fn load_output(
     output: &UnitOutput,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Vec<Segment>, String> {
+    if parameters.known_input.is_some() {
+        return known::load_output(storage, spec, parameters, output, cancelled)
+            .map(|result| result.segments);
+    }
     if cancelled() {
         return Err("話者分離の照合を中断しました".into());
     }
@@ -517,6 +566,10 @@ fn load_output(
     let result: ResultFile = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let native_duration = duration(&parameters.source, output.index)?;
     if result.schema_version != 1
+        || result.run.is_some()
+        || result.extractor.is_some()
+        || result.features.is_some()
+        || result.matching.is_some()
         || result.origin_operation_id != spec.parameters["request"]["operationId"]
         || Some(result.input_analysis_id.as_str()) != spec.input_analysis_id.as_deref()
         || result.input_hash != spec.input_hash
@@ -570,6 +623,9 @@ pub(crate) fn process(
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
     let (spec, raw) = storage.fixed_job_input(job_id)?;
+    if spec.parameters["schemaVersion"] == 2 {
+        return known::process(storage, job_id, stopping, progress);
+    }
     let parameters = checked_parameters(storage, &spec, job_id)?;
     let job = storage.get_job(job_id)?;
     let mut checkpoint = checked_checkpoint(&job, raw)?;
@@ -651,6 +707,10 @@ pub(crate) fn process(
                 engine: parameters.engine.clone(),
                 num_speakers: parameters.tracks[index].num_speakers,
                 segments: parsed,
+                run: None,
+                extractor: None,
+                features: None,
+                matching: None,
             };
             let bytes = serde_json::to_vec(&result).map_err(|e| e.to_string())?;
             if bytes.len() > 8 * 1024 * 1024 {
