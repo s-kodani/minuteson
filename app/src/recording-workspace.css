@@ -10,4 +10,7 @@
 .recording-track-status div{border:1px solid var(--border);border-radius:10px;padding:12px;}
 .recording-track-status dt{font-weight:600;}
 .recording-track-status dd{margin:8px 0 0;}
+.input-level{display:grid;gap:6px;margin-top:10px;font-size:.85rem;overflow-wrap:anywhere;}
+.input-level meter{width:100%;height:18px;accent-color:var(--accent);}
+.input-level-clipping{color:var(--text);font-weight:600;}
 @media(max-width:600px){.recording-workspace{padding:16px;margin:12px auto;}.recording-track-status{grid-template-columns:1fr;}}

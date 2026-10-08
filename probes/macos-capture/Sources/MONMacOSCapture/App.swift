@@ -17,6 +17,7 @@ struct Options {
   let parentPID: pid_t?
   var microphoneUID: String? = nil
   var applicationIdentity: CaptureApplicationIdentity? = nil
+  var inputLevelOwner: String? = nil
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -31,6 +32,7 @@ struct Options {
     var parentPID: pid_t?
     var microphoneUID: String?
     var applicationIdentity: CaptureApplicationIdentity?
+    var inputLevelOwner: String?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -90,6 +92,12 @@ struct Options {
         applicationIdentity = parsed
       case "--stop-on-file":
         stopOnFile = true
+      case "--input-level-owner":
+        index += 1
+        guard index < arguments.count, inputLevelOwner == nil,
+          InputLevelReport.validOwner(arguments[index])
+        else { throw ProbeError.usage("--input-level-owner requires one canonical UUID v4") }
+        inputLevelOwner = arguments[index]
       case "--until-stopped":
         untilStopped = true
       case "--parent-pid":
@@ -135,11 +143,15 @@ struct Options {
       throw ProbeError.usage(
         "--until-stopped requires --stop-on-file and --parent-pid, without --duration")
     }
+    if inputLevelOwner != nil && (!stopOnFile || parentPID == nil) {
+      throw ProbeError.usage("input levels require stop control and a parent PID")
+    }
     return Self(
       output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
-      parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity)
+      parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity,
+      inputLevelOwner: inputLevelOwner)
   }
 
   func shouldContinueRecording(
@@ -176,6 +188,7 @@ struct TrackStats: Encodable {
   var clockSegments: [CapturedClockSegment]?
   var clockFailure: String?
   var timing: CaptureTrackTiming?
+  var inputLevel = PCMInputLevel()
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
@@ -263,12 +276,14 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
   private var lastSampleEnd: CMTime?
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
+  private let levelsEnabled: Bool
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+  init(outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false) {
     self.outputURL = outputURL
     self.clock = clock
+    self.levelsEnabled = levelsEnabled
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
@@ -381,6 +396,7 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     of outputType: SCStreamOutputType
   ) {
     guard outputType == .audio, sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
+    let receivedAt = levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
     lock.lock()
     defer { lock.unlock() }
     if stopping { return }
@@ -435,6 +451,7 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
         let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
         format.mSampleRate == sampleRate, format.mChannelsPerFrame == stats.channels
       else { throw ProbeError.capture("system audio format changed during capture") }
+      if levelsEnabled { stats.inputLevel.receive(sampleBuffer, at: receivedAt) }
       let observation = clock?.observe(
         presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
       let contiguous = try continuousPCMSample(
@@ -464,16 +481,21 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private var tapInstalled = false
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
+  private let levelsEnabled: Bool
 
   private let requestedUID: String?
   private var inputUnit: AudioUnit?
   private var selectedDeviceID: AudioObjectID?
   private(set) var deviceUID: String?
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil) {
+  init(
+    outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
+    levelsEnabled: Bool = false
+  ) {
     self.outputURL = outputURL
     self.clock = clock
     self.requestedUID = microphoneUID
+    self.levelsEnabled = levelsEnabled
   }
 
   func start() async throws {
@@ -517,6 +539,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     }
     node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, when in
       guard let self else { return }
+      let receivedAt = self.levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
       self.lock.lock()
       defer { self.lock.unlock() }
       do {
@@ -532,6 +555,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
           buffer.format.channelCount == self.stats.channels,
           !when.isSampleTimeValid || when.sampleRate == self.stats.sampleRate
         else { throw ProbeError.capture("microphone format changed during capture") }
+        if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
         try file.write(from: buffer)
         self.stats.callbackCount += 1
         self.stats.frames += Int64(buffer.frameLength)
@@ -615,17 +639,25 @@ private enum Main {
         }
       }
       try FileManager.default.createDirectory(at: options.output, withIntermediateDirectories: true)
+      defer {
+        if options.inputLevelOwner != nil {
+          try? FileManager.default.removeItem(
+            at: options.output.appendingPathComponent("input-levels.json"))
+        }
+      }
       let manifestURL = options.output.appendingPathComponent("manifest.json")
       // Production recordings require capture-time proof. Bounded measurement
       // probes retain schema 1 until their formal evaluation harness is updated.
       let clock = options.duration == nil ? try CaptureClockDomain.live() : nil
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
-        microphoneUID: options.microphoneUID)
+        microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil)
       let system = SystemAudioRecorder(
-        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock)
+        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
+        levelsEnabled: options.inputLevelOwner != nil)
       let tap = CoreAudioTapRecorder(
-        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock)
+        outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
+        levelsEnabled: options.inputLevelOwner != nil)
       var manifest = Manifest(
         schemaVersion: clock == nil ? 1 : 2,
         scenario: options.scenario,
@@ -668,12 +700,26 @@ private enum Main {
         if options.stopOnFile {
           let stopRequest = options.output.appendingPathComponent("stop.request")
           let startedAt = ContinuousClock.now
+          var levelRevision: Int64 = 0
           while options.shouldContinueRecording(
             startedAt: startedAt, now: .now,
             stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
             parentExited: parentHasExited(options.parentPID))
           {
-            try await Task.sleep(for: .milliseconds(200))
+            if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
+              levelRevision += 1
+              let microphone = mic.snapshot().inputLevel
+              let systemLevel =
+                (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
+                .inputLevel
+              let now = PCMInputLevel.nowNanoseconds()
+              // Failure to publish telemetry must not stop or declare a saved recording.
+              try? InputLevelReport(
+                ownerId: owner, revision: levelRevision, microphone: microphone.snapshot(at: now),
+                system: systemLevel.snapshot(at: now)
+              ).publish(to: options.output)
+            }
+            try await Task.sleep(for: .milliseconds(options.inputLevelOwner == nil ? 200 : 100))
           }
         } else {
           guard let duration = options.duration else {
@@ -741,6 +787,7 @@ private enum Main {
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
              [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
              [--until-stopped] [--microphone-uid <stable-device-uid>] [--application-identity <json>]
+             [--input-level-owner <session-uuid>]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """

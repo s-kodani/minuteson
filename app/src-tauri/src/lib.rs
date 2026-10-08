@@ -13,6 +13,7 @@ mod diarization;
 mod exports;
 mod generation;
 mod import_controller;
+mod input_levels;
 mod local_engine;
 mod minutes_document;
 mod model_application;
@@ -1703,6 +1704,16 @@ async fn finish_main_close(
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
     store.snapshot()
 }
+#[tauri::command]
+fn get_recording_levels(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<input_levels::InputLevels, String> {
+    if window.label() != "main" && window.label() != "recorder" {
+        return Err("入力レベルは録音画面から確認してください".into());
+    }
+    RecorderController::levels(window.app_handle(), &session_id)
+}
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplicationCloseActivity {
@@ -2113,6 +2124,7 @@ pub fn run() {
             start_data_operation,
             cancel_data_operation,
             get_recording_snapshot,
+            get_recording_levels,
             get_application_close_activity,
             capture_available,
             get_capture_inputs,

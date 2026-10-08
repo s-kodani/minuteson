@@ -13,10 +13,30 @@ struct ActiveCapture {
     output: PathBuf,
     child: Arc<Mutex<Child>>,
     stop_operation_id: Option<String>,
+    level_directory: PathBuf,
+    levels: crate::input_levels::LevelReader,
 }
 
 #[derive(Default)]
 pub struct RecorderController(Mutex<Option<ActiveCapture>>, Mutex<()>);
+
+fn require_level_session(
+    current: &str,
+    snapshot: &RecordingSnapshot,
+    requested: &str,
+) -> Result<(), String> {
+    if !crate::input_levels::valid_owner(requested)
+        || current != requested
+        || snapshot.session_id.as_deref() != Some(requested)
+        || !matches!(
+            snapshot.phase,
+            RecordingPhase::Preparing | RecordingPhase::Recording
+        )
+    {
+        return Err("入力確認する録音が変更されたか、停止しました".into());
+    }
+    Ok(())
+}
 
 fn recording_command(
     binary: &Path,
@@ -24,8 +44,12 @@ fn recording_command(
     parent_pid: u32,
     microphone_uid: &str,
     scope: &crate::capture_scope::CaptureScope,
+    session_id: &str,
 ) -> Result<Command, String> {
     scope.validate()?;
+    if !crate::input_levels::valid_owner(session_id) {
+        return Err("入力確認の録音IDが不正です".into());
+    }
     let mut command = Command::new(binary);
     command
         .arg("--output")
@@ -42,6 +66,8 @@ fn recording_command(
         .arg("--until-stopped")
         .arg("--microphone-uid")
         .arg(microphone_uid)
+        .arg("--input-level-owner")
+        .arg(session_id)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Some(identity) = &scope.application {
@@ -55,6 +81,36 @@ fn recording_command(
 }
 
 impl RecorderController {
+    pub(crate) fn levels(
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<crate::input_levels::InputLevels, String> {
+        let controller = app.state::<Self>();
+        let mut active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_mut().ok_or("入力確認できる録音がありません")?;
+        let snapshot = app.state::<SessionStore>().snapshot();
+        require_level_session(&current.session_id, &snapshot, session_id)?;
+        let mut child = current
+            .child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("入力確認の録音プロセスは終了しました".into());
+        }
+        let levels = current.levels.read(&current.level_directory, session_id)?;
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("入力確認中に録音プロセスが終了しました".into());
+        }
+        Ok(levels)
+    }
     // Starting includes analysis/import admission; ending includes releasing
     // those intents. Neither may publish over the other session's transition.
     pub fn with_transition<T>(
@@ -144,7 +200,7 @@ impl RecorderController {
             .join("audio")
             .join(&session.id);
         let output = storage.managed_path(&relative)?;
-        let launch = (|| -> Result<Child, String> {
+        let launch = (|| -> Result<(Child, PathBuf), String> {
             std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
             let root = storage
                 .managed_path(Path::new("meetings"))?
@@ -162,11 +218,19 @@ impl RecorderController {
             {
                 return Err("録音先に既存ファイルがあります".into());
             }
-            recording_command(&binary, &output, std::process::id(), microphone_uid, scope)?
-                .spawn()
-                .map_err(|error| error.to_string())
+            let child = recording_command(
+                &binary,
+                &output,
+                std::process::id(),
+                microphone_uid,
+                scope,
+                &session.id,
+            )?
+            .spawn()
+            .map_err(|error| error.to_string())?;
+            Ok((child, root.join(&relative)))
         })();
-        let child = match launch {
+        let (child, level_directory) = match launch {
             Ok(child) => child,
             Err(error) => {
                 let _ = storage.fail_recording(&session.id);
@@ -179,6 +243,8 @@ impl RecorderController {
             output: output.clone(),
             child: child.clone(),
             stop_operation_id: None,
+            level_directory,
+            levels: Default::default(),
         });
         let snapshot = publish(app, |state| {
             state.phase = RecordingPhase::Preparing;
@@ -247,6 +313,61 @@ impl RecorderController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const SESSION: &str = "735027d4-a03e-43d3-830a-21e767dfaf88";
+
+    #[test]
+    fn levels_require_current_canonical_active_session_not_connection() {
+        let mut snapshot = RecordingSnapshot {
+            session_id: Some(SESSION.into()),
+            phase: RecordingPhase::Preparing,
+            ..Default::default()
+        };
+        assert!(require_level_session(SESSION, &snapshot, SESSION).is_ok());
+        snapshot.phase = RecordingPhase::Recording;
+        assert!(require_level_session(SESSION, &snapshot, SESSION).is_ok());
+        assert!(
+            require_level_session(SESSION, &snapshot, "735027d4-a03e-43d3-830a-21e767dfaf89")
+                .is_err()
+        );
+        assert!(require_level_session("other-capture", &snapshot, SESSION).is_err());
+        snapshot.session_id = None;
+        assert!(require_level_session(SESSION, &snapshot, SESSION).is_err());
+        snapshot.session_id = Some(SESSION.into());
+        snapshot.microphone_connected = true;
+        snapshot.system_audio_connected = true;
+        for phase in [
+            RecordingPhase::Idle,
+            RecordingPhase::Stopping,
+            RecordingPhase::Saving,
+            RecordingPhase::Error,
+        ] {
+            snapshot.phase = phase;
+            assert!(require_level_session(SESSION, &snapshot, SESSION).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_level_owner_never_becomes_a_capture_command() {
+        let scope = crate::capture_scope::CaptureScope {
+            mode: "system".into(),
+            application: None,
+        };
+        for id in [
+            "../outside",
+            "735027d4-a03e-13d3-830a-21e767dfaf88",
+            "735027d4-a03e-43d3-030a-21e767dfaf88",
+        ] {
+            assert!(recording_command(
+                Path::new("/tmp/probe"),
+                Path::new("/tmp/output"),
+                1234,
+                "usb",
+                &scope,
+                id
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn product_recording_waits_for_stop_or_parent_exit_without_a_duration_deadline() {
@@ -256,8 +377,15 @@ mod tests {
             mode: "system".into(),
             application: None,
         };
-        let command =
-            recording_command(binary, output, 1234, "USB input/名前 with spaces", &scope).unwrap();
+        let command = recording_command(
+            binary,
+            output,
+            1234,
+            "USB input/名前 with spaces",
+            &scope,
+            SESSION,
+        )
+        .unwrap();
         assert_eq!(command.get_program(), binary.as_os_str());
         let arguments: Vec<_> = command.get_args().collect();
         let expected = [
@@ -275,6 +403,8 @@ mod tests {
             "--until-stopped",
             "--microphone-uid",
             "USB input/名前 with spaces",
+            "--input-level-owner",
+            SESSION,
         ];
         assert_eq!(
             arguments,
@@ -303,6 +433,7 @@ mod tests {
             1234,
             "usb",
             &scope,
+            SESSION,
         )
         .unwrap();
         let args: Vec<_> = command.get_args().map(|a| a.to_str().unwrap()).collect();
@@ -334,7 +465,8 @@ mod tests {
             Path::new("/tmp/output"),
             1234,
             "usb",
-            &malformed
+            &malformed,
+            SESSION
         )
         .is_err());
     }

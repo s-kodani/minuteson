@@ -26,7 +26,7 @@ Rust重点6件が終了コード0で成功した。再起動後の同じIDと初
 
 1280pxライトの上部と360pxダークの上部・開始操作を目視確認し、両テーマの1280・960・360pxで最大幅と横方向の収まりを照合した。ログは `/private/tmp/mon-recording-preparation-unit-final.log`、`/private/tmp/mon-recording-preparation-build-final.log`、`/private/tmp/mon-recording-preparation-native-final.log`、`/private/tmp/mon-recording-preparation-focused-proof.log` と `output/playwright/recording-preparation-visual-final-2026-10-08/` にある。
 
-この変更後の通常の全体検査は `/private/tmp/mon-recording-preparation-full-check.log` で実行中で、まだ全体合格とは扱わない。全画面回帰もこの変更後の結果を別に確認する。先行するアプリ指定録音の全60組747ケースとRust通常1406件の結果は[先行検証](application-capture-scope-2026-10-08.md)を参照し、今回の変更へ流用しない。
+製品ソース `6233ffa` の通常の全体検査は `/private/tmp/mon-recording-preparation-full-check.log` で終了コード0となった。Python65件、Swift42件、フロントエンド420件と型検査・ビルド、Rust通常1412件・失敗0件・既存37件ignored、CAF全4800フレーム・AVFoundation製CAF読出し1件・Swift生成1件・Rust時計情報統合1件が成功した。同じ製品ソースの合成IPC全61組758ケースも終了コード0で、各結果JSONの件数を照合した。関連97ケースと新規準備11ケースの再実行分は重複加算しない。ログは `/private/tmp/mon-recording-preparation-ui-full-final.log` と `output/playwright/recording-preparation-full-final-2026-10-08/` にある。後続の[録音中のPCM入力レベル](recording-input-levels-2026-10-08.md)とは検査時点を区別する。
 
 ## 残対応
 

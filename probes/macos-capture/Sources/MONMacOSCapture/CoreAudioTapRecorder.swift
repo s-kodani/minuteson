@@ -60,10 +60,12 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
   private var started = false
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
+  private let levelsEnabled: Bool
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+  init(outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false) {
     self.outputURL = outputURL
     self.clock = clock
+    self.levelsEnabled = levelsEnabled
   }
 
   func start(targetPIDs: [pid_t]) throws {
@@ -161,6 +163,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     inputData: UnsafePointer<AudioBufferList>, inputTime: UnsafePointer<AudioTimeStamp>,
     format: AVAudioFormat
   ) {
+    let receivedAt = levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
     let sources = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
     guard !sources.isEmpty, let first = sources.first, first.mData != nil else { return }
     let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
@@ -209,7 +212,10 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     if clock != nil, inputTime.pointee.mFlags.contains(.sampleTimeValid), sourceFrame == nil {
       observation = .invalid("tap source frame counter is not an exact integer")
     }
-    lock.withLock { stats.callbackCount += 1 }
+    lock.withLock {
+      stats.callbackCount += 1
+      if levelsEnabled { stats.inputLevel.receive(buffer, at: receivedAt) }
+    }
     let queuedBuffer = SendableBuffer(
       value: buffer, observation: observation, sourceFrame: sourceFrame,
       presentation: presentation)

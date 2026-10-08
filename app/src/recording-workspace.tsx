@@ -3,6 +3,7 @@ import {formatElapsed,type BridgeState} from "./session";
 import type {RecordingPreparation} from "./recording-preparation-state";
 import {InfoPopover} from "./info-popover";
 import "./recording-workspace.css";
+import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 
 export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
@@ -14,6 +15,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
   const phase=owns?snapshot.phase:"idle";
   const phaseText=state.kind!=="ready"?"録音状態を確認できていません":{idle:"録音準備",preparing:"録音を準備しています",recording:"録音中",stopping:"録音を停止しています",saving:"録音を保存しています",error:"録音の状態を確認してください"}[phase];
   const active=owns&&!["idle","error"].includes(phase);
+  const levels=useRecordingLevels(owns&&["preparing","recording"].includes(phase)?snapshot.sessionId:null);
   return <section className="recording-workspace" aria-label="録音状態" tabIndex={-1}>
     <div className="recording-workspace-heading"><button type="button" className="small-secondary" disabled={locked} onClick={onBack}>会議一覧へ戻る</button><span className="state-pill" role="status">{phaseText}</span></div>
     <h1>{active?"録音":"新しい録音"}</h1>
@@ -21,8 +23,8 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     {preparation&&!preparation.submitted&&<p>日時から仮の会議名を入れています。変更せずに開始できます。開始の確認前には会議や音声を保存しません。</p>}
     {active?<>
       <div className="clock" aria-label="録音経過時間">{formatElapsed(snapshot.elapsedMs)}</div>
-      <dl className="recording-track-status"><div><dt>マイク</dt><dd>{snapshot.microphoneConnected?"接続状態: 接続済み":"接続状態: 未接続"}</dd></div><div><dt>PCの音声</dt><dd>{snapshot.systemAudioConnected?"接続状態: 接続済み":"接続状態: 未接続"}</dd></div></dl>
-      <p>接続状態は録音処理の報告です。入力レベルと最新の書き込み確認はまだ表示できません。音声取得や保存の成功を示すものではありません。</p>
+      <dl className="recording-track-status"><div><dt>マイク</dt><dd>{snapshot.microphoneConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="マイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd>{snapshot.systemAudioConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="PCの音声" level={levels.system}/></dd></div></dl>
+      <p>接続状態は録音処理の報告です。入力レベルは受信した音声の測定値で、更新が1秒を超えて止まると値を表示しません。最新の書き込み確認は未対応です。接続や入力レベルは保存の成功を示すものではありません。</p>
       <InfoPopover label="録音後の解析" details={<p>音声の保存が完了してから文字起こしと話者分離を進めます。準備済みモデルがない場合も音声を保持し、モデル準備後に解析できます。</p>}>解析は録音の保存完了後に行います。</InfoPopover>
     </>:<>
       {inputs}

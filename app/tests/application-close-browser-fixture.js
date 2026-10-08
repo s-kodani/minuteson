@@ -17,6 +17,7 @@ const f = window.closeFixture = {
   failCaptureInputs:false,captureInputsDelay:0,holdCaptureInputs:false,pendingInputs:[],
   captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
   failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
+  inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
   request: quit => emit("main-close-requested", { quit }),
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
@@ -41,6 +42,13 @@ mockIPC(async (command, args) => {
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
   if (command === "get_recording_snapshot") return clone(f.recording);
+  if(command==="get_recording_levels"){
+    if(f.refreshInputLevels&&f.inputLevels)f.inputLevels.revision++;
+    const value=clone(f.inputLevels);
+    if(f.holdInputLevels)await new Promise(resolve=>f.pendingInputLevels.push(resolve));
+    if(f.failInputLevels||!value)throw Error("模擬入力レベル未確認");
+    return value;
+  }
   if (command === "capture_available") return true;
   if (command === "get_capture_inputs") {
     const snapshot=clone(f.captureInputs);
