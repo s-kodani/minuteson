@@ -238,6 +238,27 @@ impl RecorderController {
         app.state::<SessionStore>()
             .with_active_owner(session_id, || Ok(result))
     }
+    pub(crate) fn input_history_status(
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<crate::input_status::persistence::Snapshot, String> {
+        app.state::<Storage>().require_data_writable()?;
+        let lease = app
+            .state::<crate::analysis_worker::AnalysisController>()
+            .begin_notice_storage()?;
+        let (reader, child) = Self::input_owner(app, session_id)?;
+        let mut input = reader
+            .lock()
+            .map_err(|_| "入力履歴診断のロックを取得できません")?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
+        lease.validate_active()?;
+        let result = input.persistence(session_id)?;
+        lease.validate_active()?;
+        app.state::<Storage>().require_data_writable()?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
+        app.state::<SessionStore>()
+            .with_active_owner(session_id, || Ok(result))
+    }
     pub(crate) fn writes(
         app: &AppHandle,
         session_id: &str,

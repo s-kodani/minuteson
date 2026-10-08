@@ -59,8 +59,10 @@ pub(crate) fn open_capture_file_at_optional(
         name,
         "input-levels.json"
             | "input-status.json"
+            | "input-journal-status.json"
             | "input-events.json"
             | "input-notices.json"
+            | "manifest.json"
             | "microphone.caf"
             | "system.caf"
     ) {

@@ -6,13 +6,24 @@ import Foundation
 /// The pin never follows a later replacement of an ancestor directory.
 final class InputEventJournalFile {
   static let name = "input-events.json"
+  enum Leaf: String {
+    case journal = "input-events.json"
+    case status = "input-journal-status.json"
+  }
   private let directory: Int32
+  private let leaf: Leaf
+  private let synchronizes: Bool
   private var expected: stat
 
-  init(output: URL, initial: Data) throws {
+  init(output: URL, initial: Data, leaf: Leaf = .journal, synchronizes: Bool = true) throws {
+    guard leaf != .journal || synchronizes else {
+      throw ProbeError.capture("retained input history requires synced writes")
+    }
+    self.leaf = leaf
+    self.synchronizes = synchronizes
     directory = try Self.pin(output)
     let descriptor = openat(
-      directory, Self.name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+      directory, leaf.rawValue, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else {
       close(directory)
       throw ProbeError.capture("input event journal already exists or cannot be created")
@@ -24,7 +35,7 @@ final class InputEventJournalFile {
         throw ProbeError.capture("input event journal file is invalid")
       }
       try Self.write(initial, to: descriptor)
-      guard fsync(descriptor) == 0, fsync(directory) == 0 else {
+      guard !synchronizes || (fsync(descriptor) == 0 && fsync(directory) == 0) else {
         throw ProbeError.capture("input event journal initial sync failed")
       }
       guard fstat(descriptor, &expected) == 0, Self.regular(expected) else {
@@ -38,9 +49,18 @@ final class InputEventJournalFile {
 
   deinit { close(directory) }
 
+  /// Only the ephemeral diagnostic leaf may be removed. Pinning also keeps a
+  /// replacement ancestor outside this cleanup; an altered leaf is retained.
+  @discardableResult
+  func removeEphemeralIfOwned() -> Bool {
+    guard leaf == .status else { return false }
+    do { try requireExpected() } catch { return false }
+    return unlinkat(directory, leaf.rawValue, 0) == 0
+  }
+
   func replace(_ data: Data) throws {
     try requireExpected()
-    let temporary = ".input-events-\(UUID().uuidString.lowercased()).tmp"
+    let temporary = ".\(leaf.rawValue)-\(UUID().uuidString.lowercased()).tmp"
     let descriptor = openat(
       directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else { throw ProbeError.capture("input event journal staging failed") }
@@ -60,7 +80,7 @@ final class InputEventJournalFile {
       throw ProbeError.capture("input event journal staging identity is invalid")
     }
     try Self.write(data, to: descriptor)
-    guard fsync(descriptor) == 0 else {
+    guard !synchronizes || fsync(descriptor) == 0 else {
       throw ProbeError.capture("input event journal sync failed")
     }
     try requireExpected()
@@ -69,7 +89,7 @@ final class InputEventJournalFile {
     guard fstat(descriptor, &staged) == 0, Self.same(staged, owned), Self.regular(staged),
       fstatat(directory, temporary, &current, AT_SYMLINK_NOFOLLOW) == 0,
       Self.same(staged, current), Self.regular(current),
-      renameat(directory, temporary, directory, Self.name) == 0
+      renameat(directory, temporary, directory, leaf.rawValue) == 0
     else { throw ProbeError.capture("input event journal atomic replacement failed") }
     renamed = true
     // Keep the identity even if directory sync fails after rename. A subsequent
@@ -78,7 +98,7 @@ final class InputEventJournalFile {
     else {
       throw ProbeError.capture("input event journal committed identity is unavailable")
     }
-    guard fsync(directory) == 0 else {
+    guard !synchronizes || fsync(directory) == 0 else {
       throw ProbeError.capture("input event journal directory sync is unconfirmed")
     }
     try requireExpected()
@@ -86,7 +106,7 @@ final class InputEventJournalFile {
 
   private func requireExpected() throws {
     var actual = stat()
-    guard fstatat(directory, Self.name, &actual, AT_SYMLINK_NOFOLLOW) == 0,
+    guard fstatat(directory, leaf.rawValue, &actual, AT_SYMLINK_NOFOLLOW) == 0,
       Self.regular(actual), Self.same(expected, actual), actual.st_size == expected.st_size,
       actual.st_mtimespec.tv_sec == expected.st_mtimespec.tv_sec,
       actual.st_mtimespec.tv_nsec == expected.st_mtimespec.tv_nsec,

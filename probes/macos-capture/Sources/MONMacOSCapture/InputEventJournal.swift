@@ -95,6 +95,21 @@ final class InputEventJournal: @unchecked Sendable {
     { [weak self] status, history in self?.observe(lane, status: status, history: history) }
   }
 
+  /// Never waits for the writer or reads its file. In particular, pending sync
+  /// must not block a policy/PCM callback or become a fabricated success.
+  func persistence() -> InputJournalPersistence {
+    condition.lock()
+    defer { condition.unlock() }
+    return InputJournalPersistence(
+      requestedRevision: revision, committedRevision: committed,
+      state: invalid != nil
+        ? "invalid"
+        : failure != nil
+          ? "failed"
+          : scheduled || committed != revision ? "pending" : "confirmed",
+      closed: closed)
+  }
+
   private func observe(
     _ lane: Lane, status: MicrophoneRecovery.Status, history: InputEventHistory
   ) {

@@ -26,6 +26,7 @@ const f = window.closeFixture = {
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
   writes:null,holdWrites:false,pendingWrites:[],failWrites:false,refreshWrites:false,
   inputStatus:null,holdInputStatus:false,pendingInputStatus:[],failInputStatus:false,refreshInputStatus:false,
+  journalStatus:null,journalRevision:0,holdJournal:false,pendingJournal:[],failJournal:false,refreshJournal:true,
   inputReceipts:{},receiptBeforeFailure:false,receiptLost:false,receiptHoldBefore:false,receiptHoldAfter:false,receiptPending:[],
   queueState:null,queueHold:{receive:false,render:false,close:false},queueLost:{receive:false,render:false,close:false},queueReplies:[],
   queuedAction:(command,args)=>queuedAction(f,command,args),
@@ -148,6 +149,13 @@ mockIPC(async (command, args) => {
     if(f.failWrites||!value)throw Error("模擬書込み未確認");return value;
   }
   if (command === "capture_available") return true;
+  if(command==="get_recording_input_history_status"){
+    if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬履歴診断の所有変更");
+    if(f.refreshJournal)f.journalRevision++;
+    const value={schemaVersion:1,ownerId:args.sessionId,revision:f.journalRevision,reportAgeMs:0,persistence:clone(f.journalStatus??{requestedRevision:1,committedRevision:1,state:"confirmed",closed:false})};
+    if(f.holdJournal)await new Promise(resolve=>f.pendingJournal.push(resolve));
+    if(f.failJournal)throw Error("模擬履歴診断読込失敗");return value;
+  }
   if(command==="get_recording_input_status"){
     if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬マイク状態所有変更／停止済み");
     if(f.refreshInputStatus&&f.inputStatus)f.inputStatus.revision++;

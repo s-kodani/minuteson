@@ -1,8 +1,9 @@
 import {checkedHistoricalInputNotice,validInputOwner,type InputKind,type InputNotice,type NoticeLoss} from "./recording-input-state.ts";
 
 export type ArchivedInputBatch={schemaVersion:1;ownerId:string;revision:number;notices:InputNotice[];noticeLoss:NoticeLoss;historyIssue:null|"missing"|"invalid"};
-export type ArchivedInputRow={meetingId:string;sessionId:string;title:string;batch:ArchivedInputBatch|null;issue:null|"unavailable"};
-export type ArchivedInputPage={schemaVersion:1;recordings:ArchivedInputRow[];nextCursor:string|null};
+export type HistorySaveIssue=null|"failed"|"invalid"|"unconfirmed"|"unavailable";
+export type ArchivedInputRow={meetingId:string;sessionId:string;title:string;batch:ArchivedInputBatch|null;issue:null|"unavailable";historySaveIssue?:HistorySaveIssue};
+export type ArchivedInputPage={schemaVersion:1|2;recordings:ArchivedInputRow[];nextCursor:string|null};
 const integer=(v:unknown,min=0):v is number=>typeof v==="number"&&Number.isSafeInteger(v)&&v>=min;
 const time=(v:number)=>Number.isFinite(v)&&v>=0&&v<=Number.MAX_SAFE_INTEGER;
 function object(v:unknown,keys:string[]):Record<string,unknown>{
@@ -23,18 +24,19 @@ export function checkedArchivedInputBatch(value:unknown,owner:string):ArchivedIn
 }
 export function checkedArchivedInputPage(value:unknown,after:string|null):ArchivedInputPage {
   const p=object(value,["schemaVersion","recordings","nextCursor"]);
-  if(p.schemaVersion!==1||after!==null&&!validInputOwner(after)||!Array.isArray(p.recordings)||p.recordings.length>32||
+  if((p.schemaVersion!==1&&p.schemaVersion!==2)||after!==null&&!validInputOwner(after)||!Array.isArray(p.recordings)||p.recordings.length>32||
     p.nextCursor!==null&&!validInputOwner(p.nextCursor))throw Error("保存後通知一覧の版または続き位置が不正です。");
   let prior=after;
   const recordings=p.recordings.map(value=>{
-    const r=object(value,["meetingId","sessionId","title","batch","issue"]);
+    const r=object(value,["meetingId","sessionId","title","batch","issue",...(p.schemaVersion===2?["historySaveIssue"]:[])]);
+    if(p.schemaVersion===2&&![null,"failed","invalid","unconfirmed","unavailable"].includes(r.historySaveIssue as null))throw Error("停止時の履歴保存診断が不正です。");
     if(!validInputOwner(r.meetingId)||!validInputOwner(r.sessionId)||prior!==null&&String(r.sessionId)<=prior||
       typeof r.title!=="string"||Array.from(r.title).length>120||![null,"unavailable"].includes(r.issue as null)||r.batch!==null&&r.issue!==null)throw Error("保存後通知一覧の会議・録音または診断が不正です。");
     prior=r.sessionId as string;
-    return {meetingId:r.meetingId as string,sessionId:r.sessionId as string,title:r.title,batch:r.batch===null?null:checkedArchivedInputBatch(r.batch,r.sessionId as string),issue:r.issue as ArchivedInputRow["issue"]};
+    return {meetingId:r.meetingId as string,sessionId:r.sessionId as string,title:r.title,batch:r.batch===null?null:checkedArchivedInputBatch(r.batch,r.sessionId as string),issue:r.issue as ArchivedInputRow["issue"],...(p.schemaVersion===2?{historySaveIssue:r.historySaveIssue as HistorySaveIssue}:{})};
   });
   if(p.nextCursor!==null&&(recordings.length!==32||p.nextCursor!==recordings.at(-1)?.sessionId))throw Error("保存後通知一覧の末尾と続き位置が一致しません。");
-  return {schemaVersion:1,recordings,nextCursor:p.nextCursor as string|null};
+  return {schemaVersion:p.schemaVersion as 1|2,recordings,nextCursor:p.nextCursor as string|null};
 }
 
 /** Independent native delivery revision; never infer live connection from this.

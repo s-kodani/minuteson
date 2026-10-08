@@ -1852,6 +1852,21 @@ fn get_recording_input_status(
     RecorderController::input_status(window.app_handle(), &session_id)
 }
 #[tauri::command]
+async fn get_recording_input_history_status(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<input_status::persistence::Snapshot, String> {
+    if window.label() != "main" && window.label() != "recorder" {
+        return Err("入力履歴の保存状態は録音画面から確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::input_history_status(&app, &session_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn get_recording_input_history(
     window: WebviewWindow,
     meeting_id: String,
@@ -2401,6 +2416,7 @@ pub fn run() {
             get_recording_levels,
             get_recording_writes,
             get_recording_input_status,
+            get_recording_input_history_status,
             get_recording_input_history,
             get_archived_recording_input_notices,
             acknowledge_archived_recording_input_notice,

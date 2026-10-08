@@ -4,6 +4,10 @@
 .mini-bottom { margin-top:8px; }
 .mini-input-status { font-size:10px; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mini-inputs { display:flex; flex:1; min-width:0; gap:4px; }
+.mini-save-diagnostics { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.mini-save-diagnostics .mini-note,.mini-journal-status { display:block; margin-right:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mini-journal-status { font-size:10px; line-height:12px; color:var(--danger-text); }
+.recording-journal-diagnostic { flex:none; max-height:12dvh; overflow:auto; }
 .mini-input-notice { display:flex; align-items:center; gap:4px; margin-top:4px; font-size:10px; line-height:16px; }
 .mini-input-notice span { min-width:0; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mini-input-notice button { flex:none; width:24px; height:24px; padding:0; font-size:14px; background:var(--raised); color:var(--text); }

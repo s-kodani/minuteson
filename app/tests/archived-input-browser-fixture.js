@@ -2,14 +2,14 @@
 const clone=value=>structuredClone(value);
 const valid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
 export const archivedFixture=()=>({rows:[],failRead:false,holdRead:false,reads:[],hold:{receive:false,render:false,close:false},lost:{receive:false,render:false,close:false},replies:[]});
-export function newArchivedRow(data,{sessionId=crypto.randomUUID(),title="保存済み会議",count=1,both=false,legacy=false,issue=null,loss=0}={}){
+export function newArchivedRow(data,{sessionId=crypto.randomUUID(),title="保存済み会議",count=1,both=false,legacy=false,issue=null,loss=0,historySaveIssue=null}={}){
   const meetingId=crypto.randomUUID();data.meetings.push({id:meetingId,title,lifecycle:"recorded",createdAt:Date.now(),updatedAt:Date.now(),lockVersion:0});
   const events=input=>Array.from({length:count*2},(_,i)=>{
     const sequence=i+1,interruptions=Math.ceil(sequence/2),kind=sequence%2?"interrupted":"recovered";
     return {id:`${sessionId}:${input}:${interruptions}:${kind}`,input,target:"main",kind,interruptions,recipientId:null,claimedAt:null,
       delivery:{sequence,generation:1,leaseAgeMs:null,rendered:false,receiveId:null,status:{state:sequence%2?"disconnected":"connected",sourceEpoch:Math.floor(sequence/2)+1,interruptions,reason:sequence%2?(input==="microphone"?"device_disconnected":"stream_stopped"):null}}};
   });
-  return {meetingId,sessionId,title,revision:1,lanes:{microphone:events("microphone"),system:both?events("system"):[]},closed:{},loss:{microphone:loss,system:both?loss:0},historyIssue:issue,unavailable:false,legacy};
+  return {meetingId,sessionId,title,revision:1,lanes:{microphone:events("microphone"),system:both?events("system"):[]},closed:{},loss:{microphone:loss,system:both?loss:0},historyIssue:issue,unavailable:false,legacy,historySaveIssue};
 }
 function project(head){const {claimedAt,...n}=head;return {...clone(n),delivery:{...clone(n.delivery),leaseAgeMs:claimedAt===null?null:Math.max(0,Date.now()-claimedAt)}};}
 function expire(row){for(const lane of Object.values(row.lanes))while(lane.length){const h=lane[0];if(h.claimedAt===null||Date.now()-h.claimedAt<5000)break;
@@ -23,8 +23,8 @@ export async function archivedPage(f,{afterSessionId}){
   if(state.failRead)throw Error("模擬保存後通知読込み失敗");
   const rows=state.rows.filter(r=>afterSessionId===null||r.sessionId>afterSessionId).sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
   const recordings=rows.slice(0,32).map(row=>{expire(row);return {meetingId:row.meetingId,sessionId:row.sessionId,title:row.title,
-    batch:row.legacy||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":null};});
-  const result={schemaVersion:1,recordings,nextCursor:rows.length>32?recordings.at(-1).sessionId:null};
+    batch:row.legacy||row.unavailable?null:{schemaVersion:1,ownerId:row.sessionId,revision:row.revision,notices:Object.values(row.lanes).filter(l=>l.length).map(l=>project(l[0])),noticeLoss:clone(row.loss),historyIssue:row.historyIssue},issue:row.unavailable?"unavailable":null,historySaveIssue:row.historySaveIssue??null};});
+  const result={schemaVersion:2,recordings,nextCursor:rows.length>32?recordings.at(-1).sessionId:null};
   if(state.holdRead)await new Promise(resolve=>state.reads.push(resolve));return clone(result);
 }
 export async function archivedAction(f,args){

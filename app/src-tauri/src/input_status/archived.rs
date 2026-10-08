@@ -38,6 +38,7 @@ struct Row {
     title: String,
     batch: Option<ArchivedBatch>,
     issue: Option<String>,
+    history_save_issue: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -178,6 +179,21 @@ impl ArchivedInputs {
         let mut recordings = Vec::with_capacity(rows.len());
         let mut batch_times = Vec::with_capacity(rows.len());
         for row in rows {
+            // Independent from the delivery ledger and its revision. A readable
+            // retained suffix does not prove that the final writer committed.
+            let history_save_issue = Self::entry(
+                &mut entries,
+                storage,
+                lease,
+                &row.meeting_id,
+                &row.session_id,
+            )
+            .and_then(|entry| {
+                let issue = super::persistence::archived_issue(&entry.directory, &row.session_id);
+                Self::verify(storage, lease, entry, &row.session_id)?;
+                Ok(issue.map(str::to_owned))
+            })
+            .unwrap_or(Some("unavailable".into()));
             let batch = (|| {
                 let entry = Self::entry(
                     &mut entries,
@@ -215,6 +231,7 @@ impl ArchivedInputs {
                 title: row.title,
                 batch,
                 issue,
+                history_save_issue,
             });
             lease.validate_active()?;
         }
@@ -230,7 +247,7 @@ impl ArchivedInputs {
             }
         }
         Ok(Page {
-            schema_version: 1,
+            schema_version: 2,
             recordings,
             next_cursor,
         })

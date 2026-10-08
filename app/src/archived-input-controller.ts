@@ -5,7 +5,7 @@ import type {NoticeReception} from "./recording-input-receipts.ts";
 
 type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
-export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean};
+export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"]};
 
 /** Main WebView lifetime, independent of the selected meeting. One paginated
  * traversal, bounded owners and identity-fenced asynchronous acknowledgements. */
@@ -28,7 +28,7 @@ export class ArchivedInputController {
     if(after===null)for(const entry of this.entries.values())entry.seen=false;
     for(const row of page.recordings){
       let entry=this.entries.get(row.sessionId);
-      if(!entry&&row.batch===null&&row.issue===null)continue; // Legacy: no new local/disk ledger.
+      if(!entry&&row.batch===null&&row.issue===null&&!row.historySaveIssue)continue; // Legacy: no new local/disk ledger.
       if(!entry){
         if(this.entries.size===128)this.entries.delete(this.entries.keys().next().value!);
         entry={row,session:new ArchivedInputSession(row.sessionId),queue:new RecordingInputQueue(row.sessionId,this.recipientId,"main"),fresh:false,seen:true,error:false};
@@ -36,7 +36,9 @@ export class ArchivedInputController {
       // LRU order follows actual page use, never the UUID's magnitude.
       this.entries.delete(row.sessionId);this.entries.set(row.sessionId,entry);entry.seen=true;
       if(entry.row.meetingId!==row.meetingId){entry.fresh=false;entry.error=true;continue;}
-      entry.row=row;
+      // An old API's absent field is unknown, not evidence that a previously
+      // reported final writer failure has been resolved.
+      entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
       try{entry.fresh=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.error=row.issue!==null;}
       catch{entry.fresh=false;entry.error=true;}
     }
@@ -52,7 +54,7 @@ export class ArchivedInputController {
       for(const attempt of entry.queue.observe(raw,at))attempts.push({entry,meetingId:entry.row.meetingId,attempt});
       const queued=entry.queue.read(at),diagnostic=entry.session.diagnostics();
       views.push({meetingId:entry.row.meetingId,sessionId:entry.row.sessionId,title:entry.row.title,...queued,
-        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error});
+        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,historySaveIssue:entry.row.historySaveIssue??null});
     }
     return {views,attempts};
   }

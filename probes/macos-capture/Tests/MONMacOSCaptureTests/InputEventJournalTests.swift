@@ -119,6 +119,10 @@ final class InputEventJournalTests: XCTestCase {
       try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
         ofItemAtPath: target.appendingPathComponent("input-events.json").path)
+      try InputJournalStatusReport(
+        ownerId: owner, revision: 123, persistence: journal.persistence()
+      )
+      .publish(to: target)
     }
   }
 
@@ -216,6 +220,7 @@ final class InputEventJournalTests: XCTestCase {
     try journal.flush()
     let committed = try Data(contentsOf: output.appendingPathComponent("input-events.json"))
     journal.observer(.microphone)(old, InputEventHistory())
+    XCTAssertEqual(journal.persistence().state, "invalid")
     XCTAssertThrowsError(try journal.finish())
     XCTAssertEqual(
       try Data(contentsOf: output.appendingPathComponent("input-events.json")), committed)
@@ -230,14 +235,115 @@ final class InputEventJournalTests: XCTestCase {
     var policy = try mic(journal)
     XCTAssertThrowsError(try journal.flush())
     XCTAssertEqual(policy.status.state, "connected")
+    XCTAssertEqual(journal.persistence().state, "failed")
+    XCTAssertLessThan(
+      journal.persistence().committedRevision, journal.persistence().requestedRevision)
     let before = try XCTUnwrap(try read(output)["report"] as? [String: Any])
     XCTAssertEqual((before["microphoneHistory"] as? [String: Any])?["lastSequence"] as? Int, 0)
     failure.recover()
     try cycle(&policy)
     try journal.finish()
     let after = try XCTUnwrap(try read(output)["report"] as? [String: Any])
+    XCTAssertEqual(journal.persistence().state, "confirmed")
+    XCTAssertTrue(journal.persistence().closed)
     XCTAssertEqual((after["microphoneHistory"] as? [String: Any])?["lastSequence"] as? Int, 2)
     XCTAssertEqual(policy.status.state, "connected")  // sealing never changes the audio policy
+  }
+
+  func testPersistenceDiagnosticsNeverWaitForIOOrTurnStopTimeoutIntoConfirmation() throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let gate = JournalGate()
+    gate.hold()
+    let journal = try InputEventJournal(
+      output: output, owner: owner, supportsSystem: false, beforeWrite: { gate.write() })
+    XCTAssertEqual(journal.persistence().state, "confirmed")
+    var policy = try mic(journal)
+    XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
+    try cycle(&policy)
+    XCTAssertEqual(journal.persistence().state, "pending")
+    XCTAssertEqual(journal.persistence().committedRevision, 1)
+    XCTAssertFalse(journal.persistence().closed)
+    XCTAssertThrowsError(try journal.finish(timeout: 0.01))
+    XCTAssertEqual(journal.persistence().state, "pending")
+    XCTAssertTrue(journal.persistence().closed)
+    XCTAssertEqual(policy.status.state, "connected")
+    for _ in 0..<3 { gate.released.signal() }
+    try journal.flush()
+    let confirmed = journal.persistence()
+    XCTAssertEqual(confirmed.state, "confirmed")
+    XCTAssertEqual(confirmed.requestedRevision, confirmed.committedRevision)
+    XCTAssertTrue(confirmed.closed)
+  }
+
+  func testJournalStatusReportIsBoundedAndCannotClaimAudioOrFutureCommit() throws {
+    let valid = InputJournalPersistence(
+      requestedRevision: 1000, committedRevision: 999, state: "pending", closed: false)
+    let value = try XCTUnwrap(
+      JSONSerialization.jsonObject(
+        with:
+          InputJournalStatusReport(ownerId: owner, revision: 2, persistence: valid).encodedData())
+        as? [String: Any])
+    XCTAssertEqual(Set(value.keys), ["schemaVersion", "ownerId", "revision", "persistence"])
+    for bad in [
+      InputJournalPersistence(
+        requestedRevision: 0, committedRevision: 0, state: "confirmed", closed: false),
+      InputJournalPersistence(
+        requestedRevision: 2, committedRevision: 3, state: "confirmed", closed: false),
+      InputJournalPersistence(
+        requestedRevision: 2, committedRevision: 1, state: "confirmed", closed: false),
+      InputJournalPersistence(
+        requestedRevision: 2, committedRevision: 1, state: "saved", closed: false),
+    ] {
+      XCTAssertThrowsError(
+        try InputJournalStatusReport(ownerId: owner, revision: 2, persistence: bad).encodedData())
+    }
+    XCTAssertThrowsError(
+      try InputJournalStatusReport(ownerId: "foreign", revision: 2, persistence: valid)
+        .encodedData())
+  }
+
+  func testDiagnosticPublisherPinsAncestorAndNeverUpdatesOrRemovesForeignReplacement() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let output = root.appendingPathComponent("recording", isDirectory: true)
+    let moved = root.appendingPathComponent("retained", isDirectory: true)
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+    let value = InputJournalPersistence(
+      requestedRevision: 2, committedRevision: 1, state: "failed", closed: false)
+    let publisher = try InputJournalStatusPublisher(output: output, owner: owner, initial: value)
+    XCTAssertThrowsError(
+      try InputJournalStatusPublisher(output: output, owner: owner, initial: value))
+    try FileManager.default.moveItem(at: output, to: moved)
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+    let leaf = "input-journal-status.json"
+    let marker = Data("foreign diagnostic must survive".utf8)
+    try marker.write(to: output.appendingPathComponent(leaf))
+    try publisher.publish(value)
+    let published = try XCTUnwrap(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: moved.appendingPathComponent(leaf))) as? [String: Any])
+    XCTAssertEqual(published["revision"] as? Int, 2)
+    publisher.removeIfOwned()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: moved.appendingPathComponent(leaf).path))
+    XCTAssertEqual(try Data(contentsOf: output.appendingPathComponent(leaf)), marker)
+    let another = try InputJournalStatusPublisher(output: moved, owner: owner, initial: value)
+    try marker.write(to: moved.appendingPathComponent(leaf))
+    XCTAssertThrowsError(try another.publish(value))
+    another.removeIfOwned()
+    XCTAssertEqual(try Data(contentsOf: moved.appendingPathComponent(leaf)), marker)
+  }
+
+  func testRetainedJournalCannotOptOutOfSyncOrUseEphemeralCleanup() throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    XCTAssertThrowsError(
+      try InputEventJournalFile(output: output, initial: Data("{}".utf8), synchronizes: false))
+    let file = try InputEventJournalFile(output: output, initial: Data("{}".utf8))
+    XCTAssertFalse(file.removeEphemeralIfOwned())
+    XCTAssertTrue(
+      FileManager.default.fileExists(
+        atPath: output.appendingPathComponent("input-events.json").path))
   }
 
   func testSIGKILLRetainsCommittedSuffixButDoesNotInventUncommittedTransitionOrSeal() throws {

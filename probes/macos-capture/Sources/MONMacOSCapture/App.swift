@@ -301,6 +301,7 @@ struct Manifest: Encodable {
   // Keep audio finalization possible and retain a bounded diagnostic for the
   // native recovery UI; it must not claim all notifications were committed.
   var inputEventJournalError: String? = nil
+  var inputEventJournalPersistence: InputJournalPersistence? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -1172,6 +1173,11 @@ private enum Main {
         ? try InputEventJournal(
           output: options.output, owner: options.inputLevelOwner!,
           supportsSystem: options.backend == "screencapturekit") : nil
+      let journalStatus = try inputEvents.map {
+        try InputJournalStatusPublisher(
+          output: options.output, owner: options.inputLevelOwner!, initial: $0.persistence())
+      }
+      defer { journalStatus?.removeIfOwned() }
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
@@ -1275,6 +1281,9 @@ private enum Main {
                 )
                 .publish(to: options.output)
               }
+              if let inputEvents {
+                try? journalStatus?.publish(inputEvents.persistence())
+              }
               let microphone = microphone.inputLevel
               let systemLevel =
                 (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
@@ -1349,6 +1358,7 @@ private enum Main {
       do { try inputEvents?.finish() } catch {
         manifest.inputEventJournalError = String(describing: error)
       }
+      manifest.inputEventJournalPersistence = inputEvents?.persistence()
       manifest.captureTest = testWindow?.metadata()
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()

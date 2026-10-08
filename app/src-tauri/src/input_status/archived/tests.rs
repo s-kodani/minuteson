@@ -152,6 +152,27 @@ fn database_owned_delivery_is_historical_and_rendered_receipt_survives_process_r
 }
 
 #[test]
+fn final_writer_failure_survives_archive_restart_without_a_queue_or_an_audio_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().into()).unwrap();
+    let (_, owner, output) = fixture(&storage, true);
+    let manifest = serde_json::to_vec(&json!({"state":"saved","recordingOwnerId":owner,
+        "inputEventJournalPersistence":{"requestedRevision":3,"committedRevision":2,"state":"failed","closed":true}})).unwrap();
+    fs::write(output.join("manifest.json"), &manifest).unwrap();
+    let admission = AnalysisController::default();
+    let lease = admission.begin_notice_storage().unwrap();
+    for _ in 0..2 {
+        let controller = ArchivedInputs::default();
+        let result = page(&controller, &storage, &lease, true);
+        assert_eq!(result["schemaVersion"], 2);
+        assert_eq!(result["recordings"][0]["historySaveIssue"], "failed");
+        assert!(result["recordings"][0]["batch"].is_null());
+        assert!(!output.join("input-notices.json").exists());
+    }
+    assert_eq!(fs::read(output.join("manifest.json")).unwrap(), manifest);
+}
+
+#[test]
 fn live_sessions_foreign_pairs_hidden_windows_and_retired_storage_cannot_adopt_writer() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().into()).unwrap();

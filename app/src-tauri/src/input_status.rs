@@ -11,6 +11,7 @@ mod history;
 #[cfg(test)]
 mod history_tests;
 pub(crate) mod journal;
+pub(crate) mod persistence;
 pub(crate) mod queue;
 use history::History;
 const LIMIT: u64 = 64 * 1024;
@@ -272,6 +273,7 @@ pub(crate) struct StatusReader {
     notices: [Notices; 2],
     queue: queue::Queue,
     ledger: Option<queue::Ledger>,
+    persistence: persistence::Reader,
 }
 impl StatusReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
@@ -281,7 +283,11 @@ impl StatusReader {
             notices: Default::default(),
             queue: Default::default(),
             ledger: None,
+            persistence: Default::default(),
         })
+    }
+    pub(crate) fn persistence(&mut self, owner: &str) -> Result<persistence::Snapshot, String> {
+        self.persistence.read(&self.directory, owner)
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
         let started = Instant::now();
