@@ -21,8 +21,8 @@ async (page, capturePath, detailUI) => {
   await boot();
   for (const modifier of ["Control", "Meta"]) {
     await nav.getByRole("button", { name: "設定", exact: true }).click(); await page.keyboard.press(`${modifier}+n`);
-    await page.waitForFunction(() => document.activeElement?.id === "meeting-title");
-    check(await page.locator("#meeting-title").inputValue() === "", "recording shortcut created or renamed a meeting");
+    await page.waitForFunction(() => document.activeElement?.id === "recording-title");
+    check(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}の会議$/u.test(await page.locator("#recording-title").inputValue()), "recording shortcut omitted default title");
   }
   check((await calls("create_meeting")).length === 0 && (await calls("start_recording")).length === 0, "preparation started recording");
   results.push("Ctrl/Cmd N opens recording preparation from settings without creating a meeting or starting recording");
@@ -149,7 +149,7 @@ async (page, capturePath, detailUI) => {
   await page.evaluate(async snapshot => { window.monBrowserFixture.recording = snapshot; await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "session-changed", payload: snapshot }); }, session);
   await page.getByRole("button", { name: "録音画面へ", exact: true }).waitFor(); await nav.getByRole("button", { name: "設定", exact: true }).click(); await page.keyboard.press("Meta+n");
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "録音状態");
-  check(await page.locator("#rename-title").inputValue() === "会議B", "recording shortcut opened another meeting"); await page.keyboard.press("Escape");
+  check(await page.locator(".recording-workspace-title").textContent() === "会議B", "recording shortcut opened another meeting"); await page.keyboard.press("Escape");
   check((await page.evaluate(() => window.monBrowserFixture.recording.phase)) === "recording" && (await page.evaluate(() => window.monBrowserFixture.calls.filter(c => /^(start_recording|stop_recording|request_recording_confirmation|decide_recording_confirmation)$/u.test(c.command)).length)) === 0, "shortcuts changed recording");
   results.push("Cmd N during recording returns to its exact meeting; Escape never issues recording start/stop/confirmation");
   await boot(true);

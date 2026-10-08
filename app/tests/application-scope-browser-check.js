@@ -18,6 +18,7 @@ async (page, capturePath, detailUI) => {
     await page.waitForFunction(()=>!!window.closeFixture&&!!document.querySelector(".meeting-list li"));
     await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();
     await detailUI.openMeetingTools();
+    await page.getByRole("button",{name:"録音準備を開く",exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
     await section().getByText("録音の詳細設定",{exact:true}).click();
   };
@@ -88,7 +89,7 @@ async (page, capturePath, detailUI) => {
     stage="late-navigation";await boot();await choose();await page.evaluate(()=>{window.closeFixture.holdCaptureApplications=true;});await refresh().click();
     await page.waitForFunction(()=>window.closeFixture.pendingApplications.length===1);await page.getByRole("button",{name:"会議一覧",exact:true}).click();
     await page.evaluate(()=>{const f=window.closeFixture;f.holdCaptureApplications=false;f.captureApplications.applications=[];f.pendingApplications.splice(0).forEach(resolve=>resolve());});
-    await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();await detailUI.openMeetingTools();
+    await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();await detailUI.openMeetingTools();await page.getByRole("button",{name:"録音準備を開く",exact:true}).click();
     if(!await section().locator(".capture-scope-details").evaluate(e=>e.open))await section().getByText("録音の詳細設定",{exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
     check(await app().locator("option").count()===1&&await start().isDisabled()&&await mode().inputValue()==="application","late old catalog replaced new meeting catalog");

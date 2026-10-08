@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
   const boot = async (select = false) => {
     await page.goto("http://127.0.0.1:1420/");
     await page.waitForFunction(() => !!window.closeFixture && !!document.querySelector(".meeting-list li"));
-    if (select) { await page.locator(".meeting-list li").first().getByRole("button", { name: "開く", exact: true }).click(); await detailUI.openMeetingTools(); await page.waitForFunction(() => document.querySelector('[aria-label="録音状態"] button')?.disabled === false); }
+    if (select) { await page.locator(".meeting-list li").first().getByRole("button", { name: "開く", exact: true }).click(); await detailUI.openMeetingTools(); await page.getByRole("button",{name:"録音準備を開く",exact:true}).click(); await page.waitForFunction(() => document.querySelector('.recording-workspace button')?.disabled === false); }
   };
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
@@ -39,7 +39,7 @@ async (page, capturePath, detailUI) => {
       results.push(`recording start rejects a changed ${change} target after saving without sending start`);
     }
     stage = "start-save-failure"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().waitFor(); await page.evaluate(() => { window.closeFixture.failFlush = true; }); await start().click(); await dismissFailed(startTitle);
-    check(await count("start_recording") === 0 && await page.getByRole("textbox", { name: "会議名を変更", exact: true }).inputValue() === "既存会議", "save failure started or erased original meeting context");
+    check(await count("start_recording") === 0 && await page.locator(".recording-workspace-title").textContent() === "既存会議", "save failure started or erased original meeting context");
     results.push("failed edit flush retains meeting context and does not call recording start");
 
     stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await modal(startTitle).getByRole("alert").waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);

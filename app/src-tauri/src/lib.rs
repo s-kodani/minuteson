@@ -1738,6 +1738,7 @@ async fn start_recording(
     meeting_id: String,
     microphone_uid: String,
     capture_scope: capture_scope::CaptureScope,
+    new_title: Option<String>,
 ) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
@@ -1754,6 +1755,10 @@ async fn start_recording(
             app.state::<Storage>().require_data_writable()?;
             RecorderController::inputs(&app)?.require_microphone(&microphone_uid)?;
             RecorderController::require_scope(&app, &capture_scope)?;
+            if let Some(title) = new_title {
+                app.state::<Storage>()
+                    .create_recording_draft(&meeting_id, &title)?;
+            }
             ImportController::prepare_recording(&app)?;
             let result = AnalysisController::prepare_recording(&app).and_then(|_| {
                 RecorderController::start(&app, &meeting_id, &microphone_uid, &capture_scope)

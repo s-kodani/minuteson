@@ -37,6 +37,7 @@ const suites = [
   ["microphone-input", null, "microphone-input-browser-check.js"],
   ["capture-scope", "capture-scope-browser-fixture.tsx", "capture-scope-browser-check.js"],
   ["application-scope", null, "application-scope-browser-check.js"],
+  ["recording-preparation", null, "recording-preparation-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],

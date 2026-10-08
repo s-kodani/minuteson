@@ -1,0 +1,13 @@
+.recording-workspace{width:min(100%,760px);margin:24px auto;padding:24px;border:1px solid var(--border);border-radius:18px;background:var(--surface);box-sizing:border-box;}
+.recording-workspace-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.recording-workspace h1{margin:24px 0 16px;}
+.recording-workspace label{display:grid;gap:8px;}
+.recording-workspace input{width:100%;min-width:0;box-sizing:border-box;font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--input-border);border-radius:8px;padding:10px;}
+.recording-workspace-title{overflow-wrap:anywhere;}
+.recording-workspace .capture-input-selection{margin-top:24px;}
+.recording-workspace .clock{text-align:center;margin:24px 0;}
+.recording-track-status{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.recording-track-status div{border:1px solid var(--border);border-radius:10px;padding:12px;}
+.recording-track-status dt{font-weight:600;}
+.recording-track-status dd{margin:8px 0 0;}
+@media(max-width:600px){.recording-workspace{padding:16px;margin:12px auto;}.recording-track-status{grid-template-columns:1fr;}}

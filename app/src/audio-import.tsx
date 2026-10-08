@@ -16,7 +16,7 @@ import { diarizationConfigured,type DiarizationPreferences } from "./diarization
 type Book={payload:VocabularyEntry[];lockVersion:number};
 export function AudioImportPanel({locked,recordingActive,visible,withSavedEdits,onSaved,onNewRecording}: {
   locked:boolean;recordingActive:boolean;visible:boolean;
-  withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void;
+  withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void|Promise<void>;
 }) {
   const confirm = useActionConfirmation(locked || recordingActive);
   const [snapshot,setSnapshot]=useState<ImportSnapshot|null>(null);

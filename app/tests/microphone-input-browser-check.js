@@ -18,6 +18,7 @@ async (page, capturePath, detailUI) => {
     if(patch)await page.evaluate(p=>Object.assign(window.closeFixture.captureInputs,p),patch);
     await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();
     await detailUI.openMeetingTools();
+    await page.getByRole("button",{name:"録音準備を開く",exact:true}).click();
     await input().waitFor();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
   };
@@ -90,7 +91,7 @@ async (page, capturePath, detailUI) => {
     await page.waitForFunction(()=>window.closeFixture.pendingInputs.length===1);
     await page.getByRole("button",{name:"会議一覧",exact:true}).click();
     await page.evaluate(()=>{window.closeFixture.holdCaptureInputs=false;window.closeFixture.captureInputs.devices=[{uid:"new",name:"新しいマイク",isDefault:true}];window.closeFixture.pendingInputs.splice(0).forEach(resolve=>resolve());});
-    await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();await detailUI.openMeetingTools();
+    await page.locator(".meeting-list li").first().getByRole("button",{name:"開く",exact:true}).click();await detailUI.openMeetingTools();await page.getByRole("button",{name:"録音準備を開く",exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
     check(await input().inputValue()==="built-in"&&await start().isDisabled()&&await input().locator('option[value="new"]').count()===1,"late response replaced new catalog or silently selected replacement");
     results.push("late catalog response after leaving a meeting is discarded; new catalog retains missing previous choice");

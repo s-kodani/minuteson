@@ -40,6 +40,7 @@ mod model_placements;
 pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
+mod recording_preparation;
 mod recordings;
 mod revisions;
 mod speaker_review;

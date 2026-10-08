@@ -38,8 +38,8 @@ async page => {
     check((await recording.innerText()).includes("録音中") && (await recording.innerText()).includes("02:19:01") && await open().isVisible(), `${screen} lost shared recording state`);
   }
   await nav.getByRole("button", { name: "設定", exact: true }).click(); await open().click();
-  await page.getByRole("textbox", { name: "会議名を変更", exact: true }).waitFor();
-  check(await page.locator("#rename-title").inputValue() === "会議B", "recording link did not select its meeting");
+  await page.locator(".recording-workspace-title").waitFor();
+  check(await page.locator(".recording-workspace-title").textContent() === "会議B", "recording link did not select its meeting");
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "録音状態");
   results.push("every screen shows the same canonical recording time; the link returns to the recording meeting and focuses its status without stopping");
   for (const phase of ["preparing", "stopping", "saving"]) {
@@ -52,6 +52,7 @@ async page => {
   results.push("preparation/stopping/saving retain their exact phases and idle removes the recording link");
 
   await update({ ...session, revision: ++session.revision });
+  await nav.getByRole("button",{name:"会議一覧",exact:true}).click();
   await page.getByRole("button", { name: "開く", exact: true }).first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await editor.getByRole("button", { name: "編集を開始", exact: true }).click();

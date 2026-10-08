@@ -10,8 +10,9 @@ const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnecte
 const importing = { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
 const f = window.closeFixture = {
   recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
+  uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
   failFlush: false, flushDelay: 0, flushes: 0, mutateDuringFlush: null,
-  startLost: false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
+  startLost: false, startBeforeCommitFailure:false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
   captureInputs:{schemaVersion:1,microphonePermission:"notDetermined",selectedMicrophoneUID:null,devices:[{uid:"built-in",name:"内蔵マイク",isDefault:true},{uid:"usb-123",name:"ヘッドセットのマイク",isDefault:false}]},
   failCaptureInputs:false,captureInputsDelay:0,holdCaptureInputs:false,pendingInputs:[],
   captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
@@ -33,6 +34,12 @@ registerPendingEdits(async () => {
 });
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: clone(args) });
+  if(command==="get_ui_preferences")return clone(f.uiPreferences);
+  if(command==="save_ui_preferences"){
+    if(args.expectedLockVersion!==f.uiPreferences.lockVersion||data.snapshot.busy||data.snapshot.restartRequired)throw Error("模擬表示設定競合／書込停止");
+    f.uiPreferences={...f.uiPreferences,lockVersion:f.uiPreferences.lockVersion+1,payload:clone(args.payload)};
+    await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
+  }
   if (command === "get_recording_snapshot") return clone(f.recording);
   if (command === "capture_available") return true;
   if (command === "get_capture_inputs") {
@@ -63,11 +70,17 @@ mockIPC(async (command, args) => {
     return clone(data.snapshot);
   }
   if (command === "start_recording") {
-    if (args.meetingId !== data.meetings[0].id || !["idle", "error"].includes(f.recording.phase)) throw Error("模擬録音対象変更");
+    if (!["idle", "error"].includes(f.recording.phase)||f.startBeforeCommitFailure) throw Error("模擬録音対象変更・受付前失敗");
     if(!f.captureInputs.devices.some(d=>d.uid===args.microphoneUid)||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
     if(f.mutateApplicationAtStart){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationAtStart=false;}
     const scope=args.captureScope;
     if(!scope||!(scope.mode==="system"&&scope.application===null||scope.mode==="application"&&scope.application&&f.captureApplications.applications.some(a=>a.pid===scope.application.pid&&a.bundleIdentifier===scope.application.bundleIdentifier&&a.launchTimeUs===scope.application.launchTimeUs)))throw Error("模擬アプリ対象変更・全体へ切り替えていません");
+    if(args.newTitle!=null){
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(args.meetingId)||typeof args.newTitle!=="string"||!args.newTitle.trim()||Array.from(args.newTitle.trim()).length>200||data.meetings.some(m=>m.id===args.meetingId))throw Error("模擬新規会議受付拒否");
+      const now=Date.now();data.meetings.push({id:args.meetingId,title:args.newTitle.trim(),lifecycle:"draft",sourceType:null,createdAt:now,updatedAt:now,lockVersion:0});
+    }
+    const meeting=data.meetings.find(m=>m.id===args.meetingId);
+    if(!meeting||meeting.lifecycle!=="draft"||meeting.sourceType!=null)throw Error("模擬録音対象変更");
     f.recording = { ...f.recording, revision: f.recording.revision + 1, phase: "preparing", meetingId: args.meetingId, sessionId: crypto.randomUUID() };
     await emit("session-changed", clone(f.recording));
     if (f.startLost) throw Error("模擬録音開始受付の応答喪失");
