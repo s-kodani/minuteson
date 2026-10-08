@@ -35,6 +35,7 @@ const suites = [
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["microphone-input", null, "microphone-input-browser-check.js"],
+  ["capture-scope", "capture-scope-browser-fixture.tsx", "capture-scope-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],
@@ -85,6 +86,7 @@ const readiness = {
   "model-rebinding-browser-fixture.js": "rebindingFixture", "model-preparation-browser-fixture.js": "modelPreparationFixture",
   "audio-deletion-browser-fixture.js": "audioDeletionFixture", "theme-browser-fixture.js": "themeFixture",
   "toast-browser-fixture.tsx": "toastFixture",
+  "capture-scope-browser-fixture.tsx": "scopeFixture",
 };
 for (const [name, fixture, source] of suites) {
   const check = readFileSync(resolve(tests, source), "utf8");
