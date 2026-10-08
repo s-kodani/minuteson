@@ -3,7 +3,7 @@ import Foundation
 // A heartbeat of the actual binding policy, not evidence of received or saved PCM.
 // Only ordinary recording publishes this leaf; private five-second tests keep
 // their existing fixed-file ownership and cleanup contract.
-struct InputStatusReport: Encodable {
+struct InputStatusReport: Encodable, Sendable {
   static func validStatus(_ status: MicrophoneRecovery.Status, input: String) -> Bool {
     let reasons =
       input == "microphone"
@@ -59,7 +59,7 @@ struct InputStatusReport: Encodable {
     }
   }
 
-  func publish(to output: URL) throws {
+  func encodedData() throws -> Data {
     guard InputLevelReport.validOwner(ownerId), revision > 0,
       revision <= 9_007_199_254_740_991,
       microphone.sourceEpoch <= 9_007_199_254_740_991,
@@ -80,6 +80,11 @@ struct InputStatusReport: Encodable {
     guard data.count <= (schemaVersion == 2 ? 16 : 64) * 1024 else {
       throw ProbeError.capture("input status report exceeds limit")
     }
+    return data
+  }
+
+  func publish(to output: URL) throws {
+    let data = try encodedData()
     try data.write(to: output.appendingPathComponent("input-status.json"), options: .atomic)
   }
 }

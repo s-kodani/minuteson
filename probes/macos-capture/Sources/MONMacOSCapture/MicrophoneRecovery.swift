@@ -11,7 +11,7 @@ struct MicrophoneRecovery {
     let epoch: UInt64
   }
 
-  struct Status: Encodable, Equatable {
+  struct Status: Encodable, Equatable, Sendable {
     let state: String
     let sourceEpoch: UInt64
     let interruptions: UInt64
@@ -40,10 +40,12 @@ struct MicrophoneRecovery {
   private var interrupted = false
   private var stopped = false
   private(set) var history = InputEventHistory()
+  private let observe: InputEventJournal.Observer?
 
-  init(uid: String) throws {
+  init(uid: String, observe: InputEventJournal.Observer? = nil) throws {
     guard InputDevices.validUID(uid) else { throw ProbeError.capture("recovery UID is invalid") }
     self.uid = uid
+    self.observe = observe
   }
 
   var status: Status {
@@ -67,6 +69,7 @@ struct MicrophoneRecovery {
     let token = Binding(uid: uid, objectID: device.objectID, epoch: epoch)
     binding = token
     state = "reconnecting"
+    observe?(status, history)
     return token
   }
 
@@ -78,6 +81,7 @@ struct MicrophoneRecovery {
     reason = nil
     interrupted = false
     if interruptions > 0 { history.append("recovered", status: status) }
+    observe?(status, history)
   }
 
   func accepts(_ token: Binding) -> Bool {
@@ -97,11 +101,13 @@ struct MicrophoneRecovery {
     self.reason = reason
     binding = nil
     if first { history.append("interrupted", status: status) }
+    observe?(status, history)
   }
 
   mutating func stop() {
     stopped = true
     binding = nil
     state = "stopped"
+    observe?(status, history)
   }
 }

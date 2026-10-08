@@ -337,6 +337,11 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
     }
     f.file(&format!("audio/{}/system.caf", f.session), None);
     f.file(&format!("audio/{}/manifest.json", f.session), None);
+    f.file(&format!("audio/{}/input-events.json", f.session), None);
+    f.file(
+        &format!("audio/{}/.input-events-unowned.tmp", f.session),
+        None,
+    );
     f.file("audio/unknown-speaker.wav", None);
     let preview = f.preview();
     assert_eq!(preview.audio_files, 4);
@@ -357,6 +362,14 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
         entry(&preview, "manifest.json").disposition,
         Disposition::Retain
     );
+    assert_eq!(
+        entry(&preview, "input-events.json").disposition,
+        Disposition::Retain
+    );
+    assert_eq!(
+        entry(&preview, ".input-events-unowned.tmp").disposition,
+        Disposition::Unclassified
+    );
     for e in &preview.entries {
         if e.relative_path.ends_with("result.json") || e.relative_path.ends_with(".log") {
             assert_eq!(e.disposition, Disposition::Retain);
@@ -366,7 +379,7 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
         entry(&preview, "unknown-speaker.wav").disposition,
         Disposition::Unclassified
     );
-    assert_eq!(preview.unclassified_files, 1);
+    assert_eq!(preview.unclassified_files, 2);
 }
 
 #[test]

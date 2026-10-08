@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 mod history;
 #[cfg(test)]
 mod history_tests;
+pub(crate) mod journal;
 pub(crate) mod queue;
 use history::History;
 const LIMIT: u64 = 64 * 1024;
@@ -36,7 +37,7 @@ pub(crate) struct Input {
     interruptions: u64,
     reason: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Publication {
     schema_version: u8,

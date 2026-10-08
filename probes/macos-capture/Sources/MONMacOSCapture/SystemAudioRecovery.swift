@@ -21,14 +21,19 @@ struct SystemAudioRecovery {
   private var startedAt: Int64?
   private var lastAttempt: Int64?
   private(set) var history = InputEventHistory()
+  private let observe: InputEventJournal.Observer?
 
-  init(targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity?, retries: Bool) throws {
+  init(
+    targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity?, retries: Bool,
+    observe: InputEventJournal.Observer? = nil
+  ) throws {
     guard targetPID.map({ $0 > 0 }) ?? true,
       applicationIdentity.map({ $0.valid && $0.pid == targetPID }) ?? true,
       !retries || targetPID == nil || applicationIdentity != nil
     else { throw ProbeError.capture("system recovery requires the exact confirmed scope") }
     self.targetPID = targetPID
     self.applicationIdentity = applicationIdentity
+    self.observe = observe
   }
 
   var status: Status {
@@ -53,6 +58,7 @@ struct SystemAudioRecovery {
     startedAt = now
     lastAttempt = now
     state = "reconnecting"
+    observe?(status, history)
     return token
   }
 
@@ -80,6 +86,7 @@ struct SystemAudioRecovery {
     reason = nil
     interrupted = false
     if interruptions > 0 { history.append("recovered", status: status) }
+    observe?(status, history)
   }
 
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
@@ -94,6 +101,7 @@ struct SystemAudioRecovery {
     state = unavailable ? "unavailable" : "disconnected"
     self.reason = reason
     if first { history.append("interrupted", status: status) }
+    observe?(status, history)
   }
 
   mutating func expire(at now: Int64) -> Bool {
@@ -116,5 +124,6 @@ struct SystemAudioRecovery {
     stopped = true
     binding = nil
     state = "stopped"
+    observe?(status, history)
   }
 }

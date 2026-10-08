@@ -238,7 +238,10 @@ impl Records {
         if p.len() == 5 && uuid(p[3]) {
             if p[2] == "audio"
                 && self.sessions.contains(p[3])
-                && matches!(p[4], "microphone.caf" | "system.caf" | "manifest.json")
+                && matches!(
+                    p[4],
+                    "microphone.caf" | "system.caf" | "manifest.json" | "input-events.json"
+                )
             {
                 return Some("recording".into());
             }

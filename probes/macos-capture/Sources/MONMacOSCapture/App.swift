@@ -186,7 +186,12 @@ struct Options {
       throw ProbeError.usage("an inherited test lease is only valid for a five-second test")
     }
     return Self(
-      output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
+      // Foundation rewrites /private/tmp and /private/var into symlink aliases
+      // even when the native owner supplied a canonical path. Ordinary owned
+      // recordings retain that path for descriptor-relative journal pinning.
+      // Bounded probes/private tests keep their existing path contract.
+      output: untilStopped && captureTestOwner == nil && inputLevelOwner != nil
+        ? output : output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
       parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity,
@@ -292,6 +297,10 @@ struct Manifest: Encodable {
   var captureTest: CaptureTestMetadata? = nil
   var recordingOwnerId: String? = nil
   var captureEnd: CaptureEndMetadata? = nil
+  // Notification retention failure is separate from saved PCM/clock failure.
+  // Keep audio finalization possible and retain a bounded diagnostic for the
+  // native recovery UI; it must not claim all notifications were committed.
+  var inputEventJournalError: String? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -366,6 +375,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private let now: @Sendable () -> Int64?
   private let requireIdentity: @Sendable (CaptureApplicationIdentity) throws -> Void
   private let mayContinue: @Sendable () -> Bool
+  private let inputEventObserver: InputEventJournal.Observer?
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
@@ -375,7 +385,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     factory: Factory? = nil, now: @escaping @Sendable () -> Int64? = PCMInputLevel.nowNanoseconds,
     requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void =
       CaptureApplications.current,
-    mayContinue: @escaping @Sendable () -> Bool = { true }
+    mayContinue: @escaping @Sendable () -> Bool = { true },
+    inputEventObserver: InputEventJournal.Observer? = nil
   ) {
     self.outputURL = outputURL
     self.pcm = SystemPCMWriter(outputURL: outputURL)
@@ -387,6 +398,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     self.now = now
     self.requireIdentity = requireIdentity
     self.mayContinue = mayContinue
+    self.inputEventObserver = inputEventObserver
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
@@ -394,7 +406,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   func start(targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity? = nil) async throws
   {
     let policy = try SystemAudioRecovery(
-      targetPID: targetPID, applicationIdentity: applicationIdentity, retries: retries)
+      targetPID: targetPID, applicationIdentity: applicationIdentity, retries: retries,
+      observe: inputEventObserver)
     let token = try lock.withLock {
       guard recovery == nil, !stopping else {
         throw ProbeError.capture("system start is already owned")
@@ -813,19 +826,22 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private let testWindow: CaptureTestWindow?
 
   private let requestedUID: String?
+  private let inputEventObserver: InputEventJournal.Observer?
   private var inputUnit: AudioUnit?
   private var selectedDeviceID: AudioObjectID?
   private(set) var deviceUID: String?
 
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
-    levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil
+    levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil,
+    inputEventObserver: InputEventJournal.Observer? = nil
   ) {
     self.outputURL = outputURL
     self.clock = clock
     self.requestedUID = microphoneUID
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
+    self.inputEventObserver = inputEventObserver
   }
 
   func start() async throws {
@@ -840,7 +856,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         "microphone permission is \(String(describing: permission)); grant it in System Settings and retry"
       )
     }
-    recovery = try MicrophoneRecovery(uid: selected.uid)
+    recovery = try MicrophoneRecovery(uid: selected.uid, observe: inputEventObserver)
     deviceUID = selected.uid
     try configure(selected)
   }
@@ -1151,10 +1167,15 @@ private enum Main {
         options.duration == nil || options.captureTestOwner != nil
         ? try CaptureClockDomain.live() : nil
       let testWindow = try options.captureTestOwner.map { try CaptureTestWindow(ownerId: $0) }
+      let inputEvents =
+        options.publishesInputStatus
+        ? try InputEventJournal(
+          output: options.output, owner: options.inputLevelOwner!,
+          supportsSystem: options.backend == "screencapturekit") : nil
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
-        testWindow: testWindow)
+        testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone))
       let systemStopRequest = options.output.appendingPathComponent("stop.request")
       let systemParentPID = options.parentPID
       let systemControlled = options.stopOnFile
@@ -1166,7 +1187,7 @@ private enum Main {
           !systemControlled
             || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
               && !parentHasExited(systemParentPID))
-        })
+        }, inputEventObserver: inputEvents?.observer(.system))
       let tap = CoreAudioTapRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil)
@@ -1325,6 +1346,9 @@ private enum Main {
         manifest.errors.append(String(describing: error))
       }
       manifest.endedAtUTC = ISO8601DateFormatter().string(from: Date())
+      do { try inputEvents?.finish() } catch {
+        manifest.inputEventJournalError = String(describing: error)
+      }
       manifest.captureTest = testWindow?.metadata()
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()

@@ -4,11 +4,11 @@ import Foundation
 /// the UI/heartbeat sampling rate. No PCM callback arrival is a recovery event.
 /// The bounded suffix explicitly names the evicted prefix; it is not a claim
 /// that every event has been displayed or retained through process termination.
-struct InputEventHistory: Encodable, Equatable {
+struct InputEventHistory: Encodable, Equatable, Sendable {
   static let capacity = 64
   static let safe: UInt64 = 9_007_199_254_740_991
 
-  struct Event: Encodable, Equatable {
+  struct Event: Encodable, Equatable, Sendable {
     let sequence: UInt64
     let kind: String
     let status: MicrophoneRecovery.Status

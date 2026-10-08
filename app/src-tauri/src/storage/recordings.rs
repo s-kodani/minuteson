@@ -142,6 +142,46 @@ pub struct RecordingSession {
 }
 
 impl Storage {
+    /// Read one DB-owned recording's retained producer suffix. No discovery,
+    /// mutation, receipt adoption, telemetry freshening or audio replay.
+    pub(crate) fn recording_input_history(
+        &self,
+        meeting_id: &str,
+        session_id: &str,
+    ) -> Result<crate::input_status::journal::Retained, String> {
+        if !crate::input_levels::valid_owner(meeting_id)
+            || !crate::input_levels::valid_owner(session_id)
+        {
+            return Err("録音入力履歴の会議または録音IDが不正です".into());
+        }
+        #[cfg(unix)]
+        self.managed_anchor.verify()?;
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let session = load_session(&db, session_id)?.ok_or("録音セッションが見つかりません")?;
+        if session.meeting_id != meeting_id
+            || !matches!(session.state.as_str(), "saved" | "interrupted" | "failed")
+        {
+            return Err("録音入力履歴の対象が変更されたか、録音が終了していません".into());
+        }
+        let relative = PathBuf::from("meetings")
+            .join(meeting_id)
+            .join("audio")
+            .join(session_id);
+        let root = self.root.canonicalize().map_err(|e| e.to_string())?;
+        // Check the configured root itself; do not silently adopt a symlink.
+        if root != self.root {
+            return Err("録音入力履歴の管理領域が変更されています".into());
+        }
+        let result =
+            crate::input_status::journal::Reader::pin(&root.join(relative))?.read(session_id)?;
+        #[cfg(unix)]
+        self.managed_anchor.verify()?;
+        Ok(result)
+    }
+
     pub(crate) fn recover_completed_recordings(&self) -> Result<Vec<String>, String> {
         if self.data_write_blocked() {
             return Ok(vec![]);
@@ -636,6 +676,63 @@ fn load_session(connection: &Connection, id: &str) -> Result<Option<RecordingSes
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn retained_input_history_is_bound_to_closed_database_session_and_survives_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, _) = saved_probe_fixture(&storage);
+        let current =
+            serde_json::json!({"state":"stopped","sourceEpoch":2,"interruptions":1,"reason":null});
+        let history = serde_json::json!({"lastSequence":2,"droppedThrough":0,"events":[
+            {"sequence":1,"kind":"interrupted","status":{"state":"disconnected","sourceEpoch":1,"interruptions":1,"reason":"device_disconnected"}},
+            {"sequence":2,"kind":"recovered","status":{"state":"connected","sourceEpoch":2,"interruptions":1,"reason":null}}
+        ]});
+        let value = serde_json::json!({"schemaVersion":1,"sealed":true,"report":{
+            "schemaVersion":3,"ownerId":session,"revision":7,"microphone":current,"system":null,
+            "microphoneHistory":history,"systemHistory":null}});
+        let leaf = output.join("input-events.json");
+        let bytes = serde_json::to_vec(&value).unwrap();
+        std::fs::write(&leaf, &bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Preparing/recording/stopping are not an archived session. No history
+        // read may convert a still-active owner into an offline delivery claim.
+        assert!(storage.recording_input_history(&meeting, &session).is_err());
+        storage.finalize_recording(&session).unwrap();
+        let dto =
+            serde_json::to_value(storage.recording_input_history(&meeting, &session).unwrap())
+                .unwrap();
+        assert_eq!(dto["ownerId"], session);
+        assert_eq!(dto["microphoneHistory"]["lastSequence"], 2);
+        assert!(storage
+            .recording_input_history(&Uuid::new_v4().to_string(), &session)
+            .is_err());
+        assert!(storage
+            .recording_input_history(&meeting, "../foreign")
+            .is_err());
+        drop(storage);
+        let reopened = Storage::open(temp.path().into()).unwrap();
+        assert_eq!(
+            serde_json::to_value(
+                reopened
+                    .recording_input_history(&meeting, &session)
+                    .unwrap()
+            )
+            .unwrap(),
+            dto
+        );
+        assert_eq!(std::fs::read(&leaf).unwrap(), bytes);
+        let mut foreign = value.clone();
+        foreign["report"]["ownerId"] = serde_json::json!(Uuid::new_v4().to_string());
+        std::fs::write(&leaf, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert!(reopened
+            .recording_input_history(&meeting, &session)
+            .is_err());
+    }
 
     #[test]
     fn recording_duration_has_no_four_hour_cap_but_requires_an_exact_safe_timeline() {

@@ -112,6 +112,51 @@ private final class SilentSystemFactory: @unchecked Sendable {
 }
 
 final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  func testNormalRecorderCommitsLifecycleHistoryWithoutHeartbeatOrRealStream() async throws {
+    let temporary = try directory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let canonical = try XCTUnwrap(realpath(temporary.path, nil))
+    defer { free(canonical) }
+    let output = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+    let journal = try InputEventJournal(
+      output: output, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", supportsSystem: true)
+    let source = SilentSystemSource()
+    let returned = SilentSystemSource()
+    let factory = SilentSystemFactory([source, returned])
+    let time = SystemTestTime()
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      CaptureClockReading(hostBeforeNs: 1, continuousNs: 2, utcMs: 1000, hostAfterNs: 3)
+    }
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), clock: clock, retries: true,
+      factory: { recorder, token in try factory.make(recorder, token) }, now: { time.read() },
+      inputEventObserver: journal.observer(.system))
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: source, sampleBuffer: try sample())
+    recorder.sourceEnded(source)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    while recorder.snapshot().systemRecovery?.state != "connected", ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    try await recorder.stop()
+    try journal.finish()
+    let value = try XCTUnwrap(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: output.appendingPathComponent("input-events.json")))
+        as? [String: Any])
+    let report = try XCTUnwrap(value["report"] as? [String: Any])
+    let history = try XCTUnwrap(report["systemHistory"] as? [String: Any])
+    XCTAssertEqual(history["lastSequence"] as? Int, 2)
+    XCTAssertEqual((report["system"] as? [String: Any])?["state"] as? String, "stopped")
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: output.appendingPathComponent("input-status.json").path))
+  }
+
   func testInterruptedStopRecordingExportsOwnerBoundEndAndUnchangedPhysicalCAF() async throws {
     let directory = try directory()
     defer { try? FileManager.default.removeItem(at: directory) }

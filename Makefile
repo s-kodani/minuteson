@@ -1,6 +1,12 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+
+check-input-journal:
+	@mon_journal_dir=$$(mktemp -d /tmp/mon-input-journal.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_journal_dir/input-events.json"; rmdir "$$mon_journal_dir"' EXIT; \
+	env MON_INPUT_JOURNAL_FIXTURE_DIR="$$mon_journal_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputEventJournalTests/testPolicyTransitionsAreRetainedWithoutHeartbeatAndSealedWithoutRendering && \
+	env MON_INPUT_JOURNAL_FIXTURE_DIR="$$mon_journal_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_input_journal_is_retained_history_not_live_telemetry -- --ignored
 
 check-input-history:
 	@mon_history_dir=$$(mktemp -d /tmp/mon-input-history.XXXXXX) || exit 1; \
