@@ -47,6 +47,16 @@ pub(crate) struct Notice {
     kind: String,
     interruptions: u64,
     input: String,
+    recipient_id: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Receipt {
+    schema_version: u8,
+    owner_id: String,
+    notice_id: String,
+    target: String,
+    recipient_id: String,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +68,10 @@ pub(crate) struct Snapshot {
     microphone: Input,
     system: Option<Input>,
     notices: Vec<Notice>,
+    #[serde(skip)]
+    observed_at: Instant,
+    #[serde(skip)]
+    observed_wall: SystemTime,
 }
 impl Snapshot {
     pub(crate) fn connected(&self) -> bool {
@@ -203,6 +217,7 @@ impl Notices {
                     kind: kind.into(),
                     interruptions: m.interruptions,
                     input: input.into(),
+                    recipient_id: None,
                 });
             }
         }
@@ -302,13 +317,75 @@ impl StatusReader {
         .flatten()
         .collect();
         Ok(Snapshot {
-            schema_version: 2,
+            schema_version: 3,
             owner_id: p.owner_id,
             revision: p.revision,
             report_age_ms: age_ms,
             microphone: p.microphone,
             system: p.system,
             notices,
+            observed_at: Instant::now(),
+            observed_wall: SystemTime::now(),
+        })
+    }
+    // Receipt is owned by the live recorder, not the disposable WebView. It is
+    // neither a persistence receipt for audio nor evidence of actual rendering.
+    pub(crate) fn receive(
+        &mut self,
+        snapshot: &Snapshot,
+        notice_id: &str,
+        recipient_id: &str,
+        target: &str,
+        visible: bool,
+    ) -> Result<Receipt, String> {
+        let elapsed = snapshot.observed_at.elapsed().max(
+            SystemTime::now()
+                .duration_since(snapshot.observed_wall)
+                .map_err(|_| "通知受付の時計が逆行しました")?,
+        );
+        if !crate::input_levels::valid_owner(recipient_id)
+            || notice_id.len() > 128
+            || !matches!(target, "main" | "recorder")
+            || !visible
+            || snapshot
+                .report_age_ms
+                .saturating_add(elapsed.as_millis().try_into().unwrap_or(u64::MAX))
+                > FRESH_MS
+        {
+            return Err("通知の受付対象・表示状態または報告年齢が不正です".into());
+        }
+        let p = &self.previous.as_ref().ok_or("通知の報告がありません")?.0;
+        if snapshot.schema_version != 3
+            || snapshot.owner_id != p.owner_id
+            || snapshot.revision != p.revision
+            || snapshot.microphone != p.microphone
+            || snapshot.system != p.system
+        {
+            return Err("通知の録音または報告が変更されました".into());
+        }
+        if !snapshot
+            .notices
+            .iter()
+            .any(|n| n.id == notice_id && n.target == target)
+        {
+            return Err("現在の取得状態に対応する通知がありません".into());
+        }
+        let current = self
+            .notices
+            .iter_mut()
+            .filter_map(|n| n.current.as_mut())
+            .find(|n| n.id == notice_id && n.target == target)
+            .ok_or("通知の宛先が変更されました")?;
+        let winner = current
+            .recipient_id
+            .get_or_insert_with(|| recipient_id.to_owned())
+            .clone();
+        Ok(Receipt {
+            schema_version: 1,
+            owner_id: p.owner_id.clone(),
+            notice_id: current.id.clone(),
+            target: current.target.clone(),
+            recipient_id: winner,
         })
     }
 }
@@ -596,6 +673,182 @@ mod tests {
             notice_target(false, notice_window_visible(Some(true), Some(true))),
             None
         );
+    }
+    const RECIPIENT: &str = "ed134978-12fc-4c5e-8e3f-372acbd44ad0";
+    const OTHER_RECIPIENT: &str = "539640c5-f04c-4d91-96f2-36e37008fe1d";
+    fn offered(temp: &tempfile::TempDir, reader: &mut StatusReader) -> Snapshot {
+        let mut v = value();
+        interruption(&mut v, 1);
+        system_interruption(&mut v, 1);
+        write(temp.path(), &v);
+        reader.read(OWNER, Some("main")).unwrap()
+    }
+    #[test]
+    fn receipt_survives_webview_recreation_and_a_lost_response_without_changing_state_or_age() {
+        let (temp, mut reader) = fixture();
+        let r = offered(&temp, &mut reader);
+        let id = r.notices[0].id.clone();
+        let accepted = reader.receive(&r, &id, RECIPIENT, "main", true).unwrap();
+        assert_eq!(accepted.recipient_id, RECIPIENT);
+        // The original caller may lose this response. Its own replay returns the
+        // same receipt; a recreated WebView cannot replace that recipient.
+        let current = reader.read(OWNER, Some("recorder")).unwrap();
+        assert_eq!(current.notices[0].recipient_id.as_deref(), Some(RECIPIENT));
+        assert_eq!(
+            reader
+                .receive(&current, &id, RECIPIENT, "main", true)
+                .unwrap(),
+            accepted
+        );
+        assert_eq!(
+            reader
+                .receive(&current, &id, OTHER_RECIPIENT, "main", true)
+                .unwrap(),
+            accepted
+        );
+        assert_eq!(current.revision, r.revision);
+        assert_eq!(current.microphone, r.microphone);
+        assert_eq!(current.system, r.system);
+        assert!(current.report_age_ms >= r.report_age_ms);
+        let json = serde_json::to_value(&current).unwrap();
+        assert_eq!(json.as_object().unwrap().len(), 7);
+        assert_eq!(json["schemaVersion"], 3);
+        assert_eq!(json["notices"][0].as_object().unwrap().len(), 6);
+        assert_eq!(
+            serde_json::to_value(&accepted)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+    #[test]
+    fn receipt_is_independent_for_each_input_and_for_interruption_and_recovery() {
+        let (temp, mut reader) = fixture();
+        let r = offered(&temp, &mut reader);
+        let mic = r.notices[0].id.clone();
+        let pc = r.notices[1].id.clone();
+        reader.receive(&r, &mic, RECIPIENT, "main", true).unwrap();
+        let r = reader.read(OWNER, None).unwrap();
+        assert!(r.notices[1].recipient_id.is_none());
+        reader
+            .receive(&r, &pc, OTHER_RECIPIENT, "main", true)
+            .unwrap();
+        let mut v = value();
+        v["revision"] = json!(2);
+        interruption(&mut v, 1);
+        v["system"]["sourceEpoch"] = json!(2);
+        v["system"]["interruptions"] = json!(1);
+        write(temp.path(), &v);
+        let r = reader.read(OWNER, Some("recorder")).unwrap();
+        assert_eq!(r.notices[0].recipient_id.as_deref(), Some(RECIPIENT));
+        assert!(r.notices[1].recipient_id.is_none());
+        assert_eq!(r.notices[1].kind, "recovered");
+        assert!(reader
+            .receive(&r, &pc, OTHER_RECIPIENT, "main", true)
+            .is_err());
+        let recovery = r.notices[1].id.clone();
+        assert_eq!(
+            reader
+                .receive(&r, &recovery, OTHER_RECIPIENT, "recorder", true)
+                .unwrap()
+                .target,
+            "recorder"
+        );
+    }
+    #[test]
+    fn hidden_wrong_destination_invalid_recipient_and_invented_event_never_accept() {
+        let (temp, mut reader) = fixture();
+        let r = offered(&temp, &mut reader);
+        for (id, recipient, target, visible) in [
+            (r.notices[0].id.as_str(), RECIPIENT, "main", false),
+            (r.notices[0].id.as_str(), RECIPIENT, "recorder", true),
+            (r.notices[0].id.as_str(), RECIPIENT, "settings", true),
+            (r.notices[0].id.as_str(), "invalid", "main", true),
+            (
+                "other-owner:microphone:1:interrupted",
+                RECIPIENT,
+                "main",
+                true,
+            ),
+        ] {
+            assert!(reader.receive(&r, id, recipient, target, visible).is_err());
+        }
+        assert!(reader
+            .read(OWNER, None)
+            .unwrap()
+            .notices
+            .iter()
+            .all(|n| n.recipient_id.is_none()));
+    }
+    #[test]
+    fn stale_snapshot_wall_reversal_and_stop_cannot_accept_even_a_previously_offered_notice() {
+        let (temp, mut reader) = fixture();
+        let r = offered(&temp, &mut reader);
+        let id = r.notices[0].id.clone();
+        let mut stale = r.clone();
+        stale.observed_at = Instant::now() - Duration::from_secs(2);
+        assert!(reader
+            .receive(&stale, &id, RECIPIENT, "main", true)
+            .is_err());
+        stale = r.clone();
+        stale.observed_wall = SystemTime::now() + Duration::from_secs(2);
+        assert!(reader
+            .receive(&stale, &id, RECIPIENT, "main", true)
+            .is_err());
+        let mut v = value();
+        interruption(&mut v, 1);
+        system_interruption(&mut v, 1);
+        v["revision"] = json!(2);
+        v["microphone"]["state"] = json!("stopped");
+        write(temp.path(), &v);
+        let stopped = reader.read(OWNER, None).unwrap();
+        assert!(reader.receive(&r, &id, RECIPIENT, "main", true).is_err());
+        assert!(reader
+            .receive(&stopped, &id, RECIPIENT, "main", true)
+            .is_err());
+    }
+    #[test]
+    fn receipt_rejects_mismatched_projection_and_a_superseded_episode() {
+        let (temp, mut reader) = fixture();
+        let report = offered(&temp, &mut reader);
+        let id = report.notices[0].id.clone();
+        let mut candidates = Vec::new();
+        let mut wrong = report.clone();
+        wrong.schema_version = 2;
+        candidates.push(wrong);
+        let mut wrong = report.clone();
+        wrong.owner_id = OTHER_RECIPIENT.into();
+        candidates.push(wrong);
+        let mut wrong = report.clone();
+        wrong.revision += 1;
+        candidates.push(wrong);
+        let mut wrong = report.clone();
+        wrong.microphone.source_epoch += 1;
+        candidates.push(wrong);
+        let mut wrong = report.clone();
+        wrong.system = None;
+        candidates.push(wrong);
+        for candidate in candidates {
+            assert!(reader
+                .receive(&candidate, &id, RECIPIENT, "main", true)
+                .is_err());
+        }
+        let mut next = value();
+        next["revision"] = json!(2);
+        interruption(&mut next, 2);
+        next["microphone"]["sourceEpoch"] = json!(2);
+        system_interruption(&mut next, 1);
+        write(temp.path(), &next);
+        let current = reader.read(OWNER, Some("main")).unwrap();
+        assert!(reader
+            .receive(&report, &id, RECIPIENT, "main", true)
+            .is_err());
+        assert!(reader
+            .receive(&current, &id, RECIPIENT, "main", true)
+            .is_err());
+        assert!(current.notices.iter().all(|n| n.recipient_id.is_none()));
     }
     fn system_interruption(v: &mut Value, count: u64) {
         v["system"]["state"] = json!("disconnected");

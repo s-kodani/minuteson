@@ -102,6 +102,28 @@ impl SessionStore {
             true
         })
     }
+    pub(crate) fn with_active_owner<T>(
+        &self,
+        owner: &str,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let snapshot = self
+            .0
+            .lock()
+            .map_err(|_| "録音状態のロックに失敗しました")?;
+        if !crate::input_levels::valid_owner(owner)
+            || snapshot.session_id.as_deref() != Some(owner)
+            || !matches!(
+                snapshot.phase,
+                RecordingPhase::Preparing | RecordingPhase::Recording
+            )
+        {
+            return Err("通知を受付する録音が変更されたか、停止しました".into());
+        }
+        // Keep the canonical phase/owner locked through the short receipt
+        // mutation, without changing recording revisions or touching audio.
+        action()
+    }
 }
 
 #[cfg(test)]
@@ -206,5 +228,87 @@ mod tests {
                 .is_none());
             assert_eq!(store.snapshot(), before);
         }
+    }
+    #[test]
+    fn notification_receipt_guard_never_mutates_stopped_or_replaced_recording() {
+        let owner = "735027d4-a03e-43d3-830a-21e767dfaf88";
+        let store = SessionStore::default();
+        let called = std::cell::Cell::new(0);
+        for phase in [
+            RecordingPhase::Idle,
+            RecordingPhase::Stopping,
+            RecordingPhase::Saving,
+            RecordingPhase::Error,
+        ] {
+            store.update(|s| {
+                s.session_id = Some(owner.into());
+                s.phase = phase;
+            });
+            assert!(store
+                .with_active_owner(owner, || {
+                    called.set(called.get() + 1);
+                    Ok(())
+                })
+                .is_err());
+        }
+        store.update(|s| {
+            s.session_id = Some("539640c5-f04c-4d91-96f2-36e37008fe1d".into());
+            s.phase = RecordingPhase::Recording;
+        });
+        assert!(store
+            .with_active_owner(owner, || {
+                called.set(called.get() + 1);
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(called.get(), 0);
+        store.update(|s| {
+            s.session_id = Some(owner.into());
+        });
+        let before = store.snapshot();
+        store
+            .with_active_owner(owner, || {
+                called.set(1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(store.snapshot(), before);
+        assert_eq!(called.get(), 1);
+    }
+    #[test]
+    fn stop_cannot_interleave_with_the_short_notification_receipt_mutation() {
+        use std::sync::{mpsc, Arc, Barrier};
+        use std::time::Duration;
+        let owner = "735027d4-a03e-43d3-830a-21e767dfaf88";
+        let store = Arc::new(SessionStore::default());
+        store.update(|s| {
+            s.session_id = Some(owner.into());
+            s.phase = RecordingPhase::Recording;
+        });
+        let gate = Arc::new(Barrier::new(2));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let worker_store = store.clone();
+        let worker_gate = gate.clone();
+        let receiver = std::thread::spawn(move || {
+            worker_store
+                .with_active_owner(owner, || {
+                    entered_tx.send(()).unwrap();
+                    worker_gate.wait();
+                    Ok(())
+                })
+                .unwrap()
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let stop_store = store.clone();
+        let (stopped_tx, stopped_rx) = mpsc::channel();
+        let stopper = std::thread::spawn(move || {
+            stop_store.update(|s| s.phase = RecordingPhase::Stopping);
+            stopped_tx.send(()).unwrap();
+        });
+        assert!(stopped_rx.recv_timeout(Duration::from_millis(20)).is_err());
+        gate.wait();
+        receiver.join().unwrap();
+        stopper.join().unwrap();
+        assert_eq!(store.snapshot().phase, RecordingPhase::Stopping);
     }
 }

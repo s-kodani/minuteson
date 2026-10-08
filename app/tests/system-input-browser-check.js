@@ -9,8 +9,8 @@ async page=>{
   const binding=(state="connected",sourceEpoch=1,interruptions=0,reason=null)=>({state,sourceEpoch,interruptions,reason});
   const set=async(microphone,system,targets={})=>page.evaluate(([microphone,system,targets])=>{
     const f=window.closeFixture,id=f.recording.sessionId,notices=[];
-    for(const input of ["microphone","system"]){const m=input==="microphone"?microphone:system,target=targets[input];if(!m||!target)continue;const kind=m.state==="connected"?"recovered":"interrupted";notices.push({id:`${id}:${input}:${m.interruptions}:${kind}`,input,target,kind,interruptions:m.interruptions});}
-    f.inputStatus={schemaVersion:2,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone,system,notices};
+    for(const input of ["microphone","system"]){const m=input==="microphone"?microphone:system,target=targets[input];if(!m||!target)continue;const kind=m.state==="connected"?"recovered":"interrupted";notices.push({id:`${id}:${input}:${m.interruptions}:${kind}`,input,target,kind,interruptions:m.interruptions,recipientId:null});}
+    f.inputStatus={schemaVersion:3,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone,system,notices};
   },[microphone,system,targets]);
   const toast=kind=>page.locator(".toast-card").filter({hasText:kind==="system"?/PC音声の取得|PC音声取得/u:/マイクの取得/u});
   const count=()=>page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_input_status").length);

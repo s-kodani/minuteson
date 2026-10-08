@@ -1849,6 +1849,24 @@ fn get_recording_input_status(
     }
     RecorderController::input_status(window.app_handle(), &session_id)
 }
+#[tauri::command]
+fn receive_recording_input_notice(
+    window: WebviewWindow,
+    session_id: String,
+    notice_id: String,
+    recipient_id: String,
+) -> Result<input_status::Receipt, String> {
+    if window.label() != "main" && window.label() != "recorder" {
+        return Err("入力通知は録音画面から受付してください".into());
+    }
+    RecorderController::receive_input_notice(
+        window.app_handle(),
+        &session_id,
+        &notice_id,
+        &recipient_id,
+        window.label(),
+    )
+}
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplicationCloseActivity {
@@ -2265,6 +2283,7 @@ pub fn run() {
             get_recording_levels,
             get_recording_writes,
             get_recording_input_status,
+            receive_recording_input_notice,
             get_capture_test_snapshot,
             get_capture_test_recovery,
             retry_capture_test_recovery,

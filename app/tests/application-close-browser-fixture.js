@@ -9,6 +9,7 @@ const clone = value => structuredClone(value);
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const importing = { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
 const recoverySeed=sessionStorage.getItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");sessionStorage.removeItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");
+const receiptSeed=sessionStorage.getItem("MON_INPUT_RECEIPT_FIXTURE");sessionStorage.removeItem("MON_INPUT_RECEIPT_FIXTURE");
 const f = window.closeFixture = {
   recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
@@ -21,6 +22,9 @@ const f = window.closeFixture = {
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
   writes:null,holdWrites:false,pendingWrites:[],failWrites:false,refreshWrites:false,
   inputStatus:null,holdInputStatus:false,pendingInputStatus:[],failInputStatus:false,refreshInputStatus:false,
+  inputReceipts:{},receiptBeforeFailure:false,receiptLost:false,receiptHoldBefore:false,receiptHoldAfter:false,receiptPending:[],
+  failRecordingSnapshot:false,
+  persistInputReceiptFixture:()=>sessionStorage.setItem("MON_INPUT_RECEIPT_FIXTURE",JSON.stringify({recording:f.recording,inputStatus:f.inputStatus,inputReceipts:f.inputReceipts,refreshInputStatus:f.refreshInputStatus,meetings:data.meetings})),
   captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
   captureRecovery:recoverySeed?JSON.parse(recoverySeed):{schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null},recoveryReadFailure:false,recoveryRetryLost:false,recoveryRetryKeepsAttention:false,recoveryRetryHoldAck:false,recoveryPendingReplies:[],
   testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
@@ -32,6 +36,7 @@ const f = window.closeFixture = {
   finishImport: saved => f.importChanged({ busy: false, phase: saved ? "saved" : "cancelled", saved: saved ? { id: crypto.randomUUID(), meetingId: data.meetings[0].id, state: "saved" } : null }),
   finishData: published => data.changed({ busy: false, phase: published ? "completed" : "cancelled", retryAllowed: false, backupPreview: null, backupReceipt: published ? { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 1024, sha256: "a".repeat(64) } : null }),
 };
+if(receiptSeed){const {meetings,...receiptState}=JSON.parse(receiptSeed);Object.assign(f,receiptState);data.meetings=meetings;}
 registerPendingEdits(async () => {
   f.flushes++;
   if (f.flushDelay) await new Promise(resolve => setTimeout(resolve, f.flushDelay));
@@ -49,7 +54,7 @@ mockIPC(async (command, args) => {
     f.uiPreferences={...f.uiPreferences,lockVersion:f.uiPreferences.lockVersion+1,payload:clone(args.payload)};
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
-  if (command === "get_recording_snapshot") return clone(f.recording);
+  if (command === "get_recording_snapshot") {if(f.failRecordingSnapshot)throw Error("模擬録音状態取得失敗");return clone(f.recording);}
   if(command==="get_capture_test_recovery"){
     if(f.recoveryReadFailure)throw Error("模擬テスト回復状態読戻し失敗");return clone(f.captureRecovery);
   }
@@ -133,8 +138,22 @@ mockIPC(async (command, args) => {
   if(command==="get_recording_input_status"){
     if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬マイク状態所有変更／停止済み");
     if(f.refreshInputStatus&&f.inputStatus)f.inputStatus.revision++;
-    const value=clone(f.inputStatus);if(f.holdInputStatus)await new Promise(resolve=>f.pendingInputStatus.push(resolve));
+    const value=clone(f.inputStatus);
+    if(value)for(const n of value.notices){const accepted=f.inputReceipts[n.id];if(accepted&&accepted.target===n.target)n.recipientId=accepted.recipientId;}
+    if(f.holdInputStatus)await new Promise(resolve=>f.pendingInputStatus.push(resolve));
     if(f.failInputStatus||!value)throw Error("模擬マイク状態未確認");return value;
+  }
+  if(command==="receive_recording_input_notice"){
+    if(f.receiptHoldBefore)await new Promise(resolve=>f.receiptPending.push(resolve));
+    const target=new URLSearchParams(location.search).get("window")==="recorder"?"recorder":"main";
+    const n=f.inputStatus?.notices.find(n=>n.id===args.noticeId&&n.target===target);
+    if(f.receiptBeforeFailure||f.failInputStatus||args.sessionId!==f.recording.sessionId||f.inputStatus?.ownerId!==args.sessionId||
+      !["preparing","recording"].includes(f.recording.phase)||!n||f.inputStatus.reportAgeMs>1000||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(args.recipientId))throw Error("模擬通知の所有・現在イベント・受付先変更");
+    const receipt=f.inputReceipts[n.id]??={schemaVersion:1,ownerId:args.sessionId,noticeId:n.id,target,recipientId:args.recipientId};
+    if(receipt.target!==target)throw Error("模擬受付先変更");
+    if(f.receiptHoldAfter)await new Promise(resolve=>f.receiptPending.push(resolve));
+    if(f.receiptLost)throw Error("模擬受付後の応答喪失");return clone(receipt);
   }
   if (command === "get_capture_inputs") {
     const snapshot=clone(f.captureInputs);

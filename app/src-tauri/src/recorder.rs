@@ -83,6 +83,59 @@ fn recording_command(
 }
 
 impl RecorderController {
+    pub(crate) fn receive_input_notice(
+        app: &AppHandle,
+        session_id: &str,
+        notice_id: &str,
+        recipient_id: &str,
+        target: &str,
+    ) -> Result<crate::input_status::Receipt, String> {
+        if !matches!(target, "main" | "recorder")
+            || notice_id.len() > 128
+            || !crate::input_levels::valid_owner(session_id)
+            || !crate::input_levels::valid_owner(recipient_id)
+        {
+            return Err("通知の受付引数が不正です".into());
+        }
+        let controller = app.state::<Self>();
+        let mut active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_mut().ok_or("通知を受付できる録音がありません")?;
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        let mut child = current
+            .child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("録音プロセスは終了しました".into());
+        }
+        // Do not assign a new destination while confirming a previously offered
+        // notice. Read the real current publication again before any mutation.
+        let report = current.input_status.read(session_id, None)?;
+        let visible = app.get_webview_window(target).is_some_and(|w| {
+            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
+        });
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("通知受付の確認中に録音が終了しました".into());
+        }
+        let result = app
+            .state::<SessionStore>()
+            .with_active_owner(session_id, || {
+                current
+                    .input_status
+                    .receive(&report, notice_id, recipient_id, target, visible)
+            })?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("通知受付の確認中に録音が終了しました".into());
+        }
+        Ok(result)
+    }
     pub(crate) fn input_status(
         app: &AppHandle,
         session_id: &str,

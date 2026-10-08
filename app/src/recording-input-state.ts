@@ -1,10 +1,12 @@
 // Binding status, PCM levels and CAF writes are deliberately separate evidence.
 export type MicrophoneStatus={state:"connected"|"disconnected"|"reconnecting"|"unavailable"|"stopped";sourceEpoch:number;interruptions:number;reason:string|null};
 export type InputKind="microphone"|"system";
-export type InputNotice={id:string;input:InputKind;target:"main"|"recorder";kind:"interrupted"|"recovered";interruptions:number};
-export type InputStatus={schemaVersion:2;ownerId:string;revision:number;reportAgeMs:number;microphone:MicrophoneStatus;system:MicrophoneStatus|null;notices:InputNotice[]};
+export type InputNotice={id:string;input:InputKind;target:"main"|"recorder";kind:"interrupted"|"recovered";interruptions:number;recipientId:string|null};
+export type InputStatus={schemaVersion:3;ownerId:string;revision:number;reportAgeMs:number;microphone:MicrophoneStatus;system:MicrophoneStatus|null;notices:InputNotice[]};
+export type InputNoticeReceipt={schemaVersion:1;ownerId:string;noticeId:string;target:"main"|"recorder";recipientId:string};
 export type VisibleInput={state:"unknown"|"stale"}|MicrophoneStatus;
 const owner=(v:unknown)=>typeof v==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(v);
+export const validInputOwner=owner;
 const integer=(v:unknown,min=0)=>typeof v==="number"&&Number.isSafeInteger(v)&&v>=min;
 const time=(v:number)=>Number.isFinite(v)&&v>=0&&v<=Number.MAX_SAFE_INTEGER;
 const reasons=new Set(["identity_changed","engine_changed","device_disconnected","identity_ambiguous","metadata_unavailable","permission_unavailable","restart_failed","format_changed"]);
@@ -12,7 +14,7 @@ const systemReasons=new Set(["stream_stopped","application_unavailable","acquisi
 function record(v:unknown,keys:string[]){if(!v||typeof v!=="object"||Array.isArray(v)||Object.keys(v).sort().join("|")!==keys.slice().sort().join("|"))throw Error("入力状態の形式が不正です。");return v as Record<string,unknown>;}
 export function checkedInputStatus(v:unknown,expectedOwner:string):InputStatus{
   const r=record(v,["schemaVersion","ownerId","revision","reportAgeMs","microphone","system","notices"]);
-  if(r.schemaVersion!==2||!owner(r.ownerId)||r.ownerId!==expectedOwner||!integer(r.revision,1)||!integer(r.reportAgeMs))throw Error("入力状態の対象または版が不正です。");
+  if(r.schemaVersion!==3||!owner(r.ownerId)||r.ownerId!==expectedOwner||!integer(r.revision,1)||!integer(r.reportAgeMs))throw Error("入力状態の対象または版が不正です。");
   function input(value:unknown,kind:InputKind):MicrophoneStatus{
     const m=record(value,["state","sourceEpoch","interruptions","reason"]);
     if(!integer(m.sourceEpoch)||!integer(m.interruptions)||typeof m.state!=="string"||!["connected","disconnected","reconnecting","unavailable","stopped"].includes(m.state)||
@@ -23,14 +25,19 @@ export function checkedInputStatus(v:unknown,expectedOwner:string):InputStatus{
   const microphone=input(r.microphone,"microphone"),system=r.system===null?null:input(r.system,"system");
   if(!Array.isArray(r.notices)||r.notices.length>2)throw Error("入力通知の形式が不正です。");
   const seen=new Set<InputKind>(),notices=r.notices.map(value=>{
-    const n=record(value,["id","input","target","kind","interruptions"]);
+    const n=record(value,["id","input","target","kind","interruptions","recipientId"]);
     if(n.input!=="microphone"&&n.input!=="system"||seen.has(n.input as InputKind))throw Error("入力通知の対象が不正です。");
     const m=n.input==="microphone"?microphone:system;seen.add(n.input as InputKind);
     if(!m||typeof n.target!=="string"||!["main","recorder"].includes(n.target)||typeof n.kind!=="string"||!["interrupted","recovered"].includes(n.kind)||!integer(n.interruptions,1)||n.interruptions!==m.interruptions||
-      n.id!==`${r.ownerId}:${n.input}:${n.interruptions}:${n.kind}`||m.state==="stopped"||(n.kind==="recovered")!==(m.state==="connected"))throw Error("入力通知と取得状態が一致しません。");
+      n.id!==`${r.ownerId}:${n.input}:${n.interruptions}:${n.kind}`||!(n.recipientId===null||owner(n.recipientId))||m.state==="stopped"||(n.kind==="recovered")!==(m.state==="connected"))throw Error("入力通知と取得状態が一致しません。");
     return n as InputNotice;
   });
-  return {schemaVersion:2,ownerId:r.ownerId as string,revision:r.revision as number,reportAgeMs:r.reportAgeMs as number,microphone,system,notices};
+  return {schemaVersion:3,ownerId:r.ownerId as string,revision:r.revision as number,reportAgeMs:r.reportAgeMs as number,microphone,system,notices};
+}
+export function checkedInputNoticeReceipt(value:unknown,expectedOwner:string,noticeId:string,target:"main"|"recorder"):InputNoticeReceipt{
+  const r=record(value,["schemaVersion","ownerId","noticeId","target","recipientId"]);
+  if(r.schemaVersion!==1||!owner(r.ownerId)||r.ownerId!==expectedOwner||r.noticeId!==noticeId||r.target!==target||!owner(r.recipientId))throw Error("入力通知の受付結果が一致しません。");
+  return r as InputNoticeReceipt;
 }
 function backwards(m:MicrophoneStatus,old:MicrophoneStatus){return m.sourceEpoch<old.sourceEpoch||m.interruptions<old.interruptions||old.state==="stopped"&&JSON.stringify(m)!==JSON.stringify(old)||m.state==="connected"&&(["disconnected","unavailable"].includes(old.state)||m.interruptions>old.interruptions)&&m.sourceEpoch<=old.sourceEpoch;}
 export class RecordingInputSession{
@@ -42,6 +49,7 @@ export class RecordingInputSession{
     if(prior&&next.revision<prior.revision)return false;
     if(prior){
       if(backwards(next.microphone,prior.microphone)||!!next.system!==!!prior.system||next.system&&prior.system&&backwards(next.system,prior.system))throw Error("入力の取得世代が逆行しました。");
+      for(const notice of next.notices){const old=prior.notices.find(n=>n.id===notice.id);if(old?.recipientId&&notice.recipientId!==old.recipientId)throw Error("入力通知の受付先が変更されました。");}
       if(next.revision===prior.revision){
         if(JSON.stringify(next.microphone)!==JSON.stringify(prior.microphone)||JSON.stringify(next.system)!==JSON.stringify(prior.system)||next.reportAgeMs<this.age)throw Error("同じ入力状態の版が変更されました。");
       }else{this.firstAt=at;this.firstAge=next.reportAgeMs;}

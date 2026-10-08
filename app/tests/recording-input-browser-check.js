@@ -8,7 +8,7 @@ async page=>{
   const count=()=>page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_input_status").length);
   const set=async(value,epoch,count,target=null,reason=null)=>page.evaluate(([value,epoch,count,target,reason])=>{
     const f=window.closeFixture,id=f.recording.sessionId,kind=value==="connected"?"recovered":"interrupted";
-    f.inputStatus={schemaVersion:2,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{state:value,sourceEpoch:epoch,interruptions:count,reason},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:target?[{id:`${id}:microphone:${count}:${kind}`,input:"microphone",target,kind,interruptions:count}]:[]};
+    f.inputStatus={schemaVersion:3,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{state:value,sourceEpoch:epoch,interruptions:count,reason},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:target?[{id:`${id}:microphone:${count}:${kind}`,input:"microphone",target,kind,interruptions:count,recipientId:null}]:[]};
   },[value,epoch,count,target,reason]);
   const toast=()=>page.locator(".toast-card").filter({hasText:/マイクの取得|同じマイク/u});
   try{

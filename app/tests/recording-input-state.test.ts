@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {checkedInputStatus,RecordingInputSession,microphoneLabel,systemLabel} from "../src/recording-input-state.ts";
+import {checkedInputStatus,checkedInputNoticeReceipt,RecordingInputSession,microphoneLabel,systemLabel} from "../src/recording-input-state.ts";
 import {InputLevelClock} from "../src/input-level-state.ts";
 const id="735027d4-a03e-43d3-830a-21e767dfaf88";
-const report=()=>({schemaVersion:2,ownerId:id,revision:1,reportAgeMs:0,microphone:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:[]});
-const issue=()=>({...report(),revision:2,microphone:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"device_disconnected"},notices:[{id:`${id}:microphone:1:interrupted`,input:"microphone",target:"main",kind:"interrupted",interruptions:1}]});
+const report=()=>({schemaVersion:3,ownerId:id,revision:1,reportAgeMs:0,microphone:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:[]});
+const issue=()=>({...report(),revision:2,microphone:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"device_disconnected"},notices:[{id:`${id}:microphone:1:interrupted`,input:"microphone",target:"main",kind:"interrupted",interruptions:1,recipientId:null as string|null}]});
 test("binding status requires current owner, bounded counters, explicit reason and no extra fields",()=>{
   assert.deepEqual(checkedInputStatus(report(),id),report());assert.deepEqual(checkedInputStatus(issue(),id),issue());
   for(const r of [null,[],{}, {...report(),ownerId:"wrong"},{...report(),revision:0},{...report(),reportAgeMs:NaN},{...report(),extra:true},
@@ -58,10 +58,10 @@ test("format changes and unknown reports remain explicit and do not suggest anot
   assert.match(microphoneLabel({state:"unknown"}),/確認できません/u);
   assert.doesNotMatch(microphoneLabel(checkedInputStatus(issue(),id).microphone),/保存中|PCの音声は録音中|自動切替/u);
 });
-const systemIssue=()=>({...report(),revision:2,system:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"stream_stopped"},notices:[{id:`${id}:system:1:interrupted`,input:"system",target:"recorder",kind:"interrupted",interruptions:1}]});
-test("schema two requires both tracks explicitly and never guesses an unsupported system binding",()=>{
+const systemIssue=()=>({...report(),revision:2,system:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"stream_stopped"},notices:[{id:`${id}:system:1:interrupted`,input:"system",target:"recorder",kind:"interrupted",interruptions:1,recipientId:null}]});
+test("schema three requires both tracks explicitly and never guesses an unsupported system binding",()=>{
   const missing=report() as Record<string,unknown>;delete missing.system;
-  for(const r of [missing,{...report(),schemaVersion:1},{...report(),system:undefined},{...report(),system:[]},{...report(),system:{...report().system,reason:undefined}},
+  for(const r of [missing,{...report(),schemaVersion:1},{...report(),schemaVersion:2},{...report(),system:undefined},{...report(),system:[]},{...report(),system:{...report().system,reason:undefined}},
     {...report(),system:{...report().system,sourceEpoch:0}},{...report(),system:{...report().system,sourceEpoch:Number.MAX_SAFE_INTEGER+1}},
     {...report(),system:{...report().system,interruptions:1}},{...report(),system:{...report().system,state:"saved"}},{...systemIssue(),system:{...systemIssue().system,reason:"device_disconnected"}},
     {...issue(),microphone:{...issue().microphone,reason:"stream_stopped"}}])assert.throws(()=>checkedInputStatus(r,id));
@@ -69,6 +69,18 @@ test("schema two requires both tracks explicitly and never guesses an unsupporte
   assert.equal(s.read(0).microphone.state,"connected");assert.equal(s.read(0).system.state,"unknown");assert.deepEqual(s.read(0).notices,[]);
   assert.throws(()=>s.accept({...report(),revision:2},1));
   s.reset(id);s.accept(report(),0);assert.throws(()=>s.accept({...report(),revision:2,system:null},1));
+});
+test("notice receipt projection is strict and the accepted recipient cannot be reset or replaced",()=>{
+  const recipient="735027d4-a03e-43d3-830a-21e767dfaf89",other="735027d4-a03e-43d3-830a-21e767dfaf90";
+  const s=new RecordingInputSession();s.reset(id);s.accept(issue(),0);
+  const accepted={...issue(),notices:[{...issue().notices[0],recipientId:recipient}]};s.accept(accepted,800);
+  assert.equal(s.read(800).notices[0].recipientId,recipient);
+  assert.throws(()=>s.accept(issue(),801));assert.throws(()=>s.accept({...accepted,revision:3,notices:[{...accepted.notices[0],recipientId:other}]},802));
+  assert.deepEqual(s.read(1001).notices,[]); // Receipt metadata cannot refresh capture evidence.
+  for(const recipientId of [undefined,"",{},recipient.toUpperCase()])assert.throws(()=>checkedInputStatus({...issue(),notices:[{...issue().notices[0],recipientId}]},id));
+  const n=issue().notices[0],receipt={schemaVersion:1,ownerId:id,noticeId:n.id,target:"main" as const,recipientId:recipient};
+  assert.deepEqual(checkedInputNoticeReceipt(receipt,id,n.id,"main"),receipt);
+  for(const value of [null,[],{...receipt,extra:true},{...receipt,schemaVersion:3},{...receipt,ownerId:other},{...receipt,noticeId:"other"},{...receipt,target:"recorder"},{...receipt,recipientId:null}])assert.throws(()=>checkedInputNoticeReceipt(value,id,n.id,"main"));
 });
 test("system-specific reasons and each notification must match their own input",()=>{
   assert.deepEqual(checkedInputStatus(systemIssue(),id),systemIssue());
