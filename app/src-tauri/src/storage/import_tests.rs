@@ -413,6 +413,7 @@ fn duplicate_import_operations_and_recording_exclusion_preserve_existing_work() 
         mode: "system".into(),
         backend: "screencapturekit".into(),
         target_pids: vec![],
+        microphone_device_uid: None,
     };
     assert!(s.prepare_recording(&other.id, &config, "capture").is_err());
     s.fail_audio_import(&first.id, "cancelled", "取消").unwrap();

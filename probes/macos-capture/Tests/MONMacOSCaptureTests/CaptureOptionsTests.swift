@@ -93,4 +93,21 @@ final class CaptureOptionsTests: XCTestCase {
       ]
     XCTAssertNoThrow(try Options.parse(selected))
   }
+
+  func testMicrophoneUIDRemainsOneBoundedArgumentAndDoesNotChangeStopControls() throws {
+    let uid = "USB input/名前 with spaces"
+    let selected = try Options.parse(
+      output + controlled + ["--until-stopped", "--microphone-uid", uid])
+    XCTAssertEqual(selected.microphoneUID, uid)
+    XCTAssertNil(selected.duration)
+    XCTAssertEqual(selected.parentPID, 1234)
+    XCTAssertNil(try Options.parse(output).microphoneUID)
+    for arguments in [
+      ["--microphone-uid"], ["--microphone-uid", ""], ["--microphone-uid", "a\nb"],
+      ["--microphone-uid", String(repeating: "x", count: 1025)],
+      ["--microphone-uid", uid, "--microphone-uid", uid],
+    ] {
+      XCTAssertThrowsError(try Options.parse(output + arguments))
+    }
+  }
 }

@@ -482,11 +482,16 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
     storage.connection.lock().unwrap().execute("UPDATE file_assets SET relative_path=?1,size_bytes=13,content_hash=?2 WHERE id='asset'",params![format!("meetings/{}/audio/source.caf",meeting.id),format!("{:x}",Sha256::digest(b"fixture audio"))]).unwrap();
     let relative = format!("meetings/{}/audio/manifest.json", meeting.id);
     let manifest_path = storage.root.join(&relative);
-    std::fs::write(&manifest_path,serde_json::to_vec(&json!({"schemaVersion":1,"captureMode":"application","backend":"coreaudio","targetPID":777,"targetPIDs":[777],"targetApplicationName":"Meeting App","state":"saved","microphone":{"frames":48000,"sampleRate":48000,"channels":1,"appendFailures":0},"system":{"frames":48000,"sampleRate":48000,"channels":2,"appendFailures":0},"errors":["file error /Users/source-machine/recording"],"power":{"assertionId":123}})).unwrap()).unwrap();
+    std::fs::write(&manifest_path,serde_json::to_vec(&json!({"schemaVersion":1,"captureMode":"application","backend":"coreaudio","targetPID":777,"targetPIDs":[777],"targetApplicationName":"Meeting App","microphoneDeviceUID":"private-device-123","state":"saved","microphone":{"frames":48000,"sampleRate":48000,"channels":1,"appendFailures":0},"system":{"frames":48000,"sampleRate":48000,"channels":2,"appendFailures":0},"errors":["file error /Users/source-machine/recording"],"power":{"assertionId":123}})).unwrap()).unwrap();
     let asset = storage
         .register_ready_meeting_asset(&meeting.id, Path::new(&relative), "application/json")
         .unwrap();
-    storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET audio_manifest_hash=?1,capture_config_json=?2,capture_mode='application'",params![asset.content_hash,json!({"mode":"application","backend":"coreaudio","target_pids":[777]}).to_string()]).unwrap();
+    storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET audio_manifest_hash=?1,capture_config_json=?2,capture_mode='application'",params![asset.content_hash,json!({"mode":"application","backend":"coreaudio","target_pids":[777],"microphone_device_uid":"private-device-123"}).to_string()]).unwrap();
+    let tx_connection = storage.connection.lock().unwrap();
+    let tx = tx_connection.unchecked_transaction().unwrap();
+    super::super::capture_preferences::save(&tx, "private-device-123").unwrap();
+    tx.commit().unwrap();
+    drop(tx_connection);
     let (path, _) = write(&storage, output.path());
     let archive = verified(&path, output.path());
     let portable: Value =
@@ -494,6 +499,7 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
     assert_eq!(portable["targetPIDs"], json!([]));
     assert!(portable["targetPID"].is_null());
     assert!(portable.get("power").is_none());
+    assert!(portable.get("microphoneDeviceUID").is_none());
     assert_eq!(portable["errors"], json!([]));
     assert_eq!(portable["backupRemovedErrorCount"], 1);
     let condition: String = archive
@@ -508,6 +514,19 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
         serde_json::from_str::<Value>(&condition).unwrap()["target_pids"],
         json!([])
     );
+    assert!(serde_json::from_str::<Value>(&condition).unwrap()["microphone_device_uid"].is_null());
+    assert!(!condition.contains("private-device-123"));
+    assert_eq!(
+        storage.selected_microphone_uid().unwrap().as_deref(),
+        Some("private-device-123")
+    );
+    assert!(!archive
+        .manifest
+        .tables
+        .iter()
+        .any(|table| table.name == "app_settings"));
+    let original: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(original["microphoneDeviceUID"], "private-device-123");
     let entry = archive
         .manifest
         .entries

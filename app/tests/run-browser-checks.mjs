@@ -34,6 +34,7 @@ const suites = [
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
+  ["microphone-input", null, "microphone-input-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],

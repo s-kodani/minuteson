@@ -6,6 +6,7 @@ mod audio_clock;
 mod audio_import;
 #[cfg(target_os = "macos")]
 mod bootstrap;
+mod capture_inputs;
 mod data_controller;
 mod diarization;
 mod exports;
@@ -1734,6 +1735,7 @@ fn capture_available(window: WebviewWindow) -> Result<bool, String> {
 async fn start_recording(
     window: WebviewWindow,
     meeting_id: String,
+    microphone_uid: String,
 ) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
@@ -1747,9 +1749,11 @@ async fn start_recording(
             if app.state::<SessionStore>().snapshot().is_active() {
                 return Err("別の録音が進行中です".into());
             }
+            app.state::<Storage>().require_data_writable()?;
+            RecorderController::inputs(&app)?.require_microphone(&microphone_uid)?;
             ImportController::prepare_recording(&app)?;
             let result = AnalysisController::prepare_recording(&app)
-                .and_then(|_| RecorderController::start(&app, &meeting_id));
+                .and_then(|_| RecorderController::start(&app, &meeting_id, &microphone_uid));
             if result.is_err() {
                 AnalysisController::recording_finished(&app);
             }
@@ -1758,6 +1762,17 @@ async fn start_recording(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_capture_inputs(window: WebviewWindow) -> Result<capture_inputs::InputDevices, String> {
+    if window.label() != "main" {
+        return Err("マイク一覧はメイン画面で確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || RecorderController::inputs(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2078,6 +2093,7 @@ pub fn run() {
             get_recording_snapshot,
             get_application_close_activity,
             capture_available,
+            get_capture_inputs,
             start_recording,
             stop_recording,
             get_recording_confirmation,

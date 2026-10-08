@@ -1,4 +1,6 @@
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import CoreMedia
 import Darwin
 import Foundation
@@ -13,6 +15,7 @@ struct Options {
   let targetPIDs: [pid_t]
   let stopOnFile: Bool
   let parentPID: pid_t?
+  var microphoneUID: String? = nil
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -25,6 +28,7 @@ struct Options {
     var targetPIDs: [pid_t] = []
     var stopOnFile = false
     var parentPID: pid_t?
+    var microphoneUID: String?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -67,6 +71,12 @@ struct Options {
           throw ProbeError.usage("--backend must be screencapturekit or coreaudio")
         }
         backend = arguments[index]
+      case "--microphone-uid":
+        index += 1
+        guard index < arguments.count, microphoneUID == nil,
+          InputDevices.validUID(arguments[index])
+        else { throw ProbeError.usage("--microphone-uid requires one valid device UID") }
+        microphoneUID = arguments[index]
       case "--stop-on-file":
         stopOnFile = true
       case "--until-stopped":
@@ -111,7 +121,7 @@ struct Options {
       output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
-      parentPID: parentPID)
+      parentPID: parentPID, microphoneUID: microphoneUID)
   }
 
   func shouldContinueRecording(
@@ -197,6 +207,7 @@ struct Manifest: Encodable {
   var power = RecordingPowerStatus()
   var errors: [String]
   var captureClock: CaptureClockMetadata?
+  var microphoneDeviceUID: String?
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -416,12 +427,19 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil) {
+  private let requestedUID: String?
+  private var inputUnit: AudioUnit?
+  private var selectedDeviceID: AudioObjectID?
+  private(set) var deviceUID: String?
+
+  init(outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil) {
     self.outputURL = outputURL
     self.clock = clock
+    self.requestedUID = microphoneUID
   }
 
   func start() async throws {
+    let selected = try InputDevices.choose(requestedUID, from: InputDevices.live().devices)
     var permission = AVCaptureDevice.authorizationStatus(for: .audio)
     if permission == .notDetermined {
       _ = await AVCaptureDevice.requestAccess(for: .audio)
@@ -433,6 +451,20 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       )
     }
     let node = engine.inputNode
+    guard let unit = node.audioUnit else {
+      throw ProbeError.capture("microphone input unit is unavailable")
+    }
+    var device = selected.objectID
+    let status = AudioUnitSetProperty(
+      unit, kAudioOutputUnitProperty_CurrentDevice,
+      kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioObjectID>.stride))
+    guard status == noErr else {
+      throw ProbeError.capture("could not select microphone: \(status)")
+    }
+    try InputDevices.verifyDevice(unit, expected: selected.objectID)
+    inputUnit = unit
+    selectedDeviceID = selected.objectID
+    deviceUID = selected.uid
     let format = node.outputFormat(forBus: 0)
     guard format.sampleRate > 0, format.channelCount > 0 else {
       throw ProbeError.capture("microphone has no usable audio format")
@@ -450,6 +482,10 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       self.lock.lock()
       defer { self.lock.unlock() }
       do {
+        guard let unit = self.inputUnit, let device = self.selectedDeviceID else {
+          throw ProbeError.capture("microphone selection is missing")
+        }
+        try InputDevices.verifyDevice(unit, expected: device)
         let observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
         guard let file = self.file else {
           throw ProbeError.capture("microphone CAF writer is closed")
@@ -480,6 +516,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     tapInstalled = true
     engine.prepare()
     try engine.start()
+    try InputDevices.verifyDevice(unit, expected: selected.objectID)
   }
 
   func stop() {
@@ -515,6 +552,14 @@ private enum Main {
         try listAudioProcesses()
         return
       }
+      if arguments == ["--list-input-devices"] {
+        let data = try JSONEncoder().encode(InputDevices.live())
+        guard data.count <= 256 * 1024 else {
+          throw ProbeError.capture("input device report is too large")
+        }
+        print(String(decoding: data, as: UTF8.self))
+        return
+      }
       let options = try Options.parse(arguments)
       if FileManager.default.fileExists(atPath: options.output.path) {
         let contents = try FileManager.default.contentsOfDirectory(atPath: options.output.path)
@@ -528,7 +573,8 @@ private enum Main {
       // probes retain schema 1 until their formal evaluation harness is updated.
       let clock = options.duration == nil ? try CaptureClockDomain.live() : nil
       let mic = MicrophoneRecorder(
-        outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock)
+        outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
+        microphoneUID: options.microphoneUID)
       let system = SystemAudioRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock)
       let tap = CoreAudioTapRecorder(
@@ -560,6 +606,7 @@ private enum Main {
         try power.acquire()
         manifest.power.acquired = true
         try await mic.start()
+        manifest.microphoneDeviceUID = mic.deviceUID
         if options.backend == "coreaudio" {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
@@ -639,10 +686,11 @@ private enum Main {
   private static let usage = """
     Usage: mon-macos-capture --list-apps
            mon-macos-capture --list-audio-processes
+           mon-macos-capture --list-input-devices
            mon-macos-capture --output <directory> [--duration <seconds>]
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
              [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
-             [--until-stopped]
+             [--until-stopped] [--microphone-uid <stable-device-uid>]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """

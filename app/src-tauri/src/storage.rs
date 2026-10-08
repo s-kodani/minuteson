@@ -14,6 +14,7 @@ mod analysis_ui;
 // Backup snapshot/archive core; additive restore and controller integration follow.
 #[allow(dead_code)]
 pub(crate) mod backup;
+mod capture_preferences;
 #[allow(dead_code)] // Shared deletion admission and user confirmation follow.
 pub(crate) mod deletion;
 mod diarization;
@@ -70,6 +71,7 @@ pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
 pub(crate) use minutes_ui::{MinutesAdoptRequest, MinutesVersionState};
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
+pub(crate) use recordings::valid_microphone_uid;
 pub use recordings::RecordingConfig;
 pub(crate) use revisions::{CommittedAnalysis, CommittedMinutes};
 pub(crate) use speaker_review::{SpeakerReviewRequest, SpeakerReviewResponse};
@@ -730,6 +732,7 @@ mod tests {
                     mode: "system".into(),
                     backend: "screencapturekit".into(),
                     target_pids: vec![],
+                    microphone_device_uid: None,
                 },
                 "start",
             )

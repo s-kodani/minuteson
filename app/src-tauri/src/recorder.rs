@@ -18,7 +18,12 @@ struct ActiveCapture {
 #[derive(Default)]
 pub struct RecorderController(Mutex<Option<ActiveCapture>>, Mutex<()>);
 
-fn recording_command(binary: &Path, output: &Path, parent_pid: u32) -> Command {
+fn recording_command(
+    binary: &Path,
+    output: &Path,
+    parent_pid: u32,
+    microphone_uid: &str,
+) -> Command {
     let mut command = Command::new(binary);
     command
         .arg("--output")
@@ -33,6 +38,8 @@ fn recording_command(binary: &Path, output: &Path, parent_pid: u32) -> Command {
         .arg("--parent-pid")
         .arg(parent_pid.to_string())
         .arg("--until-stopped")
+        .arg("--microphone-uid")
+        .arg(microphone_uid)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
@@ -56,8 +63,23 @@ impl RecorderController {
         probe_path(app).is_ok()
     }
 
-    pub fn start(app: &AppHandle, meeting_id: &str) -> Result<RecordingSnapshot, String> {
+    pub(crate) fn inputs(app: &AppHandle) -> Result<crate::capture_inputs::InputDevices, String> {
+        let binary = probe_path(app)?;
+        let mut inputs = crate::capture_inputs::read(&binary)?;
+        if probe_path(app)? != binary {
+            return Err("録音ヘルパーが変更されました。再確認してください".into());
+        }
+        inputs.selected_microphone_uid = app.state::<Storage>().selected_microphone_uid()?;
+        Ok(inputs)
+    }
+
+    pub fn start(
+        app: &AppHandle,
+        meeting_id: &str,
+        microphone_uid: &str,
+    ) -> Result<RecordingSnapshot, String> {
         app.state::<Storage>().require_data_writable()?;
+        Self::inputs(app)?.require_microphone(microphone_uid)?;
         let binary = probe_path(app)?;
         let controller = app.state::<RecorderController>();
         let mut active = controller
@@ -75,6 +97,7 @@ impl RecorderController {
             mode: "system".into(),
             backend: "screencapturekit".into(),
             target_pids: vec![],
+            microphone_device_uid: Some(microphone_uid.into()),
         };
         let session =
             storage.prepare_recording(meeting_id, &config, &Uuid::new_v4().to_string())?;
@@ -101,7 +124,7 @@ impl RecorderController {
             {
                 return Err("録音先に既存ファイルがあります".into());
             }
-            recording_command(&binary, &output, std::process::id())
+            recording_command(&binary, &output, std::process::id(), microphone_uid)
                 .spawn()
                 .map_err(|error| error.to_string())
         })();
@@ -191,7 +214,7 @@ mod tests {
     fn product_recording_waits_for_stop_or_parent_exit_without_a_duration_deadline() {
         let binary = Path::new("/tmp/mon-command-test/probe");
         let output = Path::new("/tmp/mon-command-test/audio with spaces");
-        let command = recording_command(binary, output, 1234);
+        let command = recording_command(binary, output, 1234, "USB input/名前 with spaces");
         assert_eq!(command.get_program(), binary.as_os_str());
         let arguments: Vec<_> = command.get_args().collect();
         let expected = [
@@ -207,6 +230,8 @@ mod tests {
             "--parent-pid",
             "1234",
             "--until-stopped",
+            "--microphone-uid",
+            "USB input/名前 with spaces",
         ];
         assert_eq!(
             arguments,

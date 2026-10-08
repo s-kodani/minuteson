@@ -320,6 +320,8 @@ fn redact_json(
                         | "targetPID"
                         | "device_id"
                         | "device_uid"
+                        | "microphoneDeviceUID"
+                        | "microphone_device_uid"
                         | "gpuDeviceId"
                 ) {
                     *item = Value::Null;

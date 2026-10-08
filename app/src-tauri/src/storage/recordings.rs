@@ -14,6 +14,8 @@ struct CaptureManifest {
     backend: String,
     #[serde(rename = "targetPIDs")]
     target_pids: Vec<i32>,
+    #[serde(default, rename = "microphoneDeviceUID")]
+    microphone_device_uid: Option<String>,
     state: String,
     errors: Vec<String>,
     microphone: CaptureTrack,
@@ -70,10 +72,19 @@ pub struct RecordingConfig {
     pub mode: String,
     pub backend: String,
     pub target_pids: Vec<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone_device_uid: Option<String>,
 }
 
 impl RecordingConfig {
     fn validate(&self) -> Result<(), String> {
+        if self
+            .microphone_device_uid
+            .as_deref()
+            .is_some_and(|uid| !valid_microphone_uid(uid))
+        {
+            return Err("マイクの識別情報が不正です".into());
+        }
         if !matches!(self.mode.as_str(), "system" | "application")
             || !matches!(self.backend.as_str(), "screencapturekit" | "coreaudio")
         {
@@ -94,6 +105,10 @@ impl RecordingConfig {
         }
         Ok(())
     }
+}
+
+pub(crate) fn valid_microphone_uid(uid: &str) -> bool {
+    !uid.trim().is_empty() && uid.len() <= 1024 && !uid.chars().any(char::is_control)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -198,6 +213,9 @@ impl Storage {
             "INSERT INTO recording_sessions (id, meeting_id, state, capture_mode, capture_config_json, start_operation_id, created_at, updated_at) VALUES (?1, ?2, 'preparing', ?3, ?4, ?5, ?6, ?6)",
             params![id, meeting_id, config.mode, config_json, start_operation_id, now],
         ).map_err(|error| error.to_string())?;
+        if let Some(uid) = config.microphone_device_uid.as_deref() {
+            super::capture_preferences::save(&transaction, uid)?;
+        }
         let session = load_session(&transaction, &id)?.ok_or("録音セッションを読み込めません")?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(session)
@@ -342,6 +360,10 @@ impl Storage {
             || manifest.capture_mode != config.mode
             || manifest.backend != config.backend
             || manifest.target_pids != config.target_pids
+            || config
+                .microphone_device_uid
+                .as_ref()
+                .is_some_and(|uid| manifest.microphone_device_uid.as_ref() != Some(uid))
         {
             return Err("録音manifestと開始条件が一致しません".into());
         }
@@ -689,6 +711,7 @@ mod tests {
             mode: "system".into(),
             backend: "screencapturekit".into(),
             target_pids: vec![],
+            microphone_device_uid: None,
         }
     }
 
@@ -721,6 +744,68 @@ mod tests {
         )
         .unwrap();
         (meeting.id, session.id, output, manifest)
+    }
+
+    #[test]
+    fn explicit_microphone_identity_must_match_before_audio_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+        let mut selected = config();
+        selected.microphone_device_uid = Some("usb-123".into());
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE recording_sessions SET capture_config_json=?1 WHERE id=?2",
+                params![serde_json::to_string(&selected).unwrap(), session],
+            )
+            .unwrap();
+        for uid in [None, Some("another-microphone")] {
+            manifest
+                .as_object_mut()
+                .unwrap()
+                .remove("microphoneDeviceUID");
+            if let Some(uid) = uid {
+                manifest["microphoneDeviceUID"] = serde_json::json!(uid);
+            }
+            std::fs::write(
+                output.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            assert!(storage
+                .finalize_recording(&session)
+                .unwrap_err()
+                .contains("開始条件"));
+            assert!(output.join("microphone.caf").exists());
+            assert_eq!(
+                storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                "recording"
+            );
+            assert_eq!(
+                storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM audio_tracks", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        manifest["microphoneDeviceUID"] = serde_json::json!("usb-123");
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        storage.finalize_recording(&session).unwrap();
+        assert_eq!(
+            storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+            "recorded"
+        );
     }
 
     #[test]
