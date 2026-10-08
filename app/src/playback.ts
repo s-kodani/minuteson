@@ -7,6 +7,67 @@ export interface PlaybackInfo {
   endUs: number;
   trackKind: string;
   alignment: string;
+  missingRanges?: PlaybackMissingRange[];
+}
+
+export interface PlaybackMissingRange {
+  trackKind: "mic" | "system" | "imported";
+  startUs: number;
+  endUs: number;
+  startFrame: number;
+  endFrame: number;
+  reasonCode: string;
+}
+
+export function validateMissingRanges(info: PlaybackInfo): PlaybackMissingRange[] {
+  if (info.missingRanges === undefined) return [];
+  if (!Array.isArray(info.missingRanges) || info.missingRanges.length > 2048
+    || info.startUs !== 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= 0
+    || info.sampleRate !== 48000 || info.channels !== 1 || info.alignment !== "unverified"
+    || !["mic", "system", "both", "imported"].includes(info.trackKind)
+    || !Number.isSafeInteger(info.totalFrames)
+    || BigInt(info.totalFrames) !== (BigInt(info.endUs) * 48000n + 999999n) / 1000000n) {
+    throw Error("会議音声の欠損情報が不正です。");
+  }
+  let previous: PlaybackMissingRange | null = null;
+  const counts = new Map<string,number>();
+  for (const gap of info.missingRanges) {
+    if (!gap || typeof gap !== "object" || Object.keys(gap).sort().join(",") !== "endFrame,endUs,reasonCode,startFrame,startUs,trackKind"
+      || !["mic", "system", "imported"].includes(gap.trackKind)
+      || (info.trackKind === "both" ? gap.trackKind === "imported" : gap.trackKind !== info.trackKind)
+      || !Number.isSafeInteger(gap.startUs) || !Number.isSafeInteger(gap.endUs)
+      || gap.startUs < 0 || gap.endUs <= gap.startUs || gap.endUs > info.endUs
+      || !Number.isSafeInteger(gap.startFrame) || !Number.isSafeInteger(gap.endFrame)
+      || gap.startFrame < 0 || gap.endFrame <= gap.startFrame || gap.endFrame > info.totalFrames
+      || BigInt(gap.startFrame) !== BigInt(gap.startUs) * 48000n / 1000000n
+      || BigInt(gap.endFrame) !== (BigInt(gap.endUs) * 48000n + 999999n) / 1000000n
+      || typeof gap.reasonCode !== "string" || !gap.reasonCode || new TextEncoder().encode(gap.reasonCode).length > 256 || /\p{Cc}/u.test(gap.reasonCode)
+      || previous && (gap.startFrame < previous.startFrame || gap.startFrame === previous.startFrame && gap.endFrame < previous.endFrame)) {
+      throw Error("会議音声の欠損範囲と保存時間軸が一致しません。");
+    }
+    const count=(counts.get(gap.trackKind) ?? 0)+1;
+    if(count>1024)throw Error("会議音声の欠損記録が多すぎます。");
+    counts.set(gap.trackKind,count);
+    previous = gap;
+  }
+  return info.missingRanges;
+}
+
+export function missingAtFrame(info: PlaybackInfo, frame: number): PlaybackMissingRange[] {
+  return (info.missingRanges ?? []).filter(gap => gap.startFrame <= frame && frame < gap.endFrame);
+}
+
+export function playbackPacketFrames(info: PlaybackInfo, frame: number): number {
+  if (missingAtFrame(info, frame).length) return 0;
+  let frames = Math.min(65536, info.totalFrames - frame);
+  for (const gap of info.missingRanges ?? []) if (gap.startFrame > frame) frames = Math.min(frames, gap.startFrame - frame);
+  return frames;
+}
+
+export function nextSavedFrame(info: PlaybackInfo, frame: number): number | null {
+  let next = frame;
+  for (const gap of info.missingRanges ?? []) if (gap.startFrame <= next && next < gap.endFrame) next = gap.endFrame;
+  return next < info.totalFrames ? next : null;
 }
 
 export interface AudioPacket {
@@ -91,7 +152,8 @@ export class ChunkPlayer {
     if (!Number.isSafeInteger(info.totalFrames) || info.totalFrames <= 0 || !Number.isSafeInteger(info.sampleRate) || info.sampleRate < 8000 || info.sampleRate > 384000 || !Number.isInteger(info.channels) || info.channels < 1 || info.channels > 8) {
       throw new Error("再生情報が不正です");
     }
-    this.info = info;
+    const missingRanges = validateMissingRanges(info);
+    this.info = { ...info, missingRanges:missingRanges.length ? missingRanges.map(gap=>({...gap})) : undefined };
     this.changed();
   }
 
@@ -134,6 +196,7 @@ export class ChunkPlayer {
   async play(): Promise<void> {
     if (!this.info || this.playing) return;
     if (this.position >= this.info.totalFrames) this.position = 0;
+    if (missingAtFrame(this.info, this.position).length) { this.error=null; this.changed(); return; }
     this.playing = true;
     this.error = null;
     this.nextFrame = this.position;
@@ -162,10 +225,17 @@ export class ChunkPlayer {
       while (generation === this.generation && this.playing && this.info && this.scheduled.length < 3 && this.nextFrame < this.info.totalFrames) {
         const info = this.info;
         const from = this.nextFrame;
+        const frames = playbackPacketFrames(info, from);
+        // Stop only after preceding scheduled PCM has finished. Prefetch must
+        // not cut off known audio early or silently jump over missing time.
+        if (frames === 0) {
+          if (this.scheduled.length === 0) { this.position=from; this.playing=false; this.changed(); }
+          break;
+        }
         const bytes = await this.read(info.token, from);
         if (generation !== this.generation) return;
         const packet = decodeAudioPacket(bytes);
-        if (packet.sampleRate !== info.sampleRate || packet.channels.length !== info.channels || packet.frames !== Math.min(65536, info.totalFrames - from)) {
+        if (packet.sampleRate !== info.sampleRate || packet.channels.length !== info.channels || packet.frames !== frames) {
           throw new Error("再生情報と音声パケットが一致しません");
         }
         const at = Math.max(this.nextTime, this.clock.now() + 0.04);

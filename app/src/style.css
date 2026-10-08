@@ -392,6 +392,16 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-playback-dock .audio-player>input[type=range] { grid-column:1 / -1; grid-row:2; margin:0; min-width:0; }
 .meeting-playback-dock .audio-player>.heading-with-info { grid-column:2; grid-row:1; font-size:11px; }
 .meeting-playback-dock .audio-player>p { grid-column:1 / -1; margin:0; overflow-wrap:anywhere; }
+.audio-missing { grid-column:1 / -1; min-width:0; margin-top:6px; padding:8px 10px; border:1px solid var(--warning-border); border-radius:8px; background:var(--warning-surface); overflow-wrap:anywhere; }
+.audio-player .audio-missing p { color:var(--warning-text); margin:0 0 6px; }
+.audio-missing summary { cursor:pointer; font-size:12px; color:var(--warning-text); }
+.audio-missing-position { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+.audio-missing-position>p:first-child { flex:1 1 220px; }
+.audio-missing details>p { margin-top:8px; }
+.audio-missing ol { padding-left:24px; margin:8px 0; }
+.audio-missing li { margin:6px 0; font-size:12px; }
+.audio-missing li>span { margin-right:8px; }
+.audio-missing button { max-width:100%; white-space:normal; }
 @media (max-width:760px) { .meeting-playback-dock { padding:8px 16px; } .meeting-playback-dock .playback-empty { font-size:12px; margin-top:4px; } .meeting-playback-dock .audio-player { grid-template-columns:minmax(0,1fr); } .meeting-playback-dock .audio-player>.heading-with-info { grid-column:1; grid-row:auto; } }
 .recovery-actions { display:flex; flex-wrap:wrap; gap:12px; margin:18px 0; }
 .recovery-inventory p { display:grid; gap:8px; padding-block:12px; border-bottom:1px solid var(--border); }

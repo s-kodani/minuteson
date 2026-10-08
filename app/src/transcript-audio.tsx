@@ -10,6 +10,7 @@ import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface"
 import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode, type MeetingPlaybackRequest, type MeetingPlaybackRestore } from "./meeting-playback-state";
 import { playbackTimeline } from "./playback-follow";
 import { PlaybackPreparationPool } from "./playback-preparation";
+import { PlaybackMissing } from "./playback-missing";
 
 export class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
@@ -148,6 +149,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         return;
       }
       token.current = info.token;
+      if (!meeting && info.missingRanges?.length) throw new Error("発言音声に会議全体の欠損情報が含まれています");
       const startUs = split?.expectedStartUs ?? transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
       const endUs = split?.expectedEndUs ?? transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
       if (reference && !meeting && (info.startUs !== startUs || info.endUs !== endUs)) {
@@ -220,6 +222,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       <input type="range" aria-label={meetingScope ? "会議全体の再生位置" : "発言内の再生位置"} min={0} max={info.totalFrames} step={Math.max(1, Math.floor(info.sampleRate / 10))} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={preparing || locked} />
       <div className="heading-with-info"><span>{meetingScope ? meetingPlaybackLabel(info.trackKind as MeetingPlaybackMode) : info.trackKind === "mic" ? "マイク音声" : info.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={meetingScope ? "会議全体の音声再生" : "発言の音声再生"}>{meetingScope ? "選択した種類の保存音声を会議全体の時間軸で再生します。両方では各音声を半分の音量で混ぜます。実録音の同期やエコー除去の正確さは未検証です。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}</InfoPopover></div>
       {info.alignment === "unverified" && <p>会議時間軸との同期精度は未検証です。</p>}
+      {meetingScope && <PlaybackMissing key={info.token} info={info} frame={snapshot.frame} disabled={preparing || locked} onSeek={frame=>{player.pause();player.seek(frame);}} />}
       {snapshot.buffering && <p role="status">音声を読み込んでいます。</p>}
     </>}
     {(error || snapshot.error) && <p className="action-error" role="alert">音声を再生できません: {error || snapshot.error}</p>}

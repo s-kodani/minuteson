@@ -43,7 +43,7 @@ fixture.setUtterances = utterances => { analysis.utterances = structuredClone(ut
 fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
 fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
 fixture.setMeetingSource = (id,sourceType) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.sourceType=sourceType;meeting.lifecycle=sourceType === "audio_import" ? "imported" : "recorded"; };
-fixture.meetingAudio = { endUs:3600000000, sessions:{},holdModes:[],pending:[],failModes:[],corrupt:null };
+fixture.meetingAudio = { endUs:3600000000, sessions:{},holdModes:[],pending:[],failModes:[],corrupt:null,gaps:[] };
 // Opt-in native preparation protocol for cancellation checks. Older suites
 // intentionally keep their late-reply bridge to exercise client fallback.
 fixture.preparation = { strict:false, reservations:{}, holdRegister:false, registerPending:[], responsive:false, losePrepare:false, loseReceipt:false, failCancel:false, failClose:false };
@@ -245,6 +245,10 @@ mockIPC(async (command, args) => {
       const entry=preparationEntry(args);
       const data=fixture.meetingAudio,mode=args.request.mode;
       const info={token:crypto.randomUUID(),sampleRate:48000,channels:1,totalFrames:Math.ceil(data.endUs*48000/1000000),startUs:0,endUs:data.endUs,trackKind:mode,alignment:"unverified"};
+      const gaps=data.gaps.filter(gap=>mode==="both"? ["mic","system"].includes(gap.trackKind):gap.trackKind===mode)
+        .map(gap=>({...structuredClone(gap),startFrame:Math.floor(gap.startUs*48000/1e6),endFrame:Math.ceil(gap.endUs*48000/1e6)}))
+        .sort((a,b)=>a.startFrame-b.startFrame||a.endFrame-b.endFrame||a.trackKind.localeCompare(b.trackKind));
+      if(gaps.length)info.missingRanges=gaps;
       if(data.holdModes.includes(mode)) await new Promise((resolve,reject)=>{if(entry)entry.reject=reject;data.pending.push({mode,preparationId:args.preparationId,token:info.token,release:resolve});});
       if(data.failModes.includes(mode)) throw Error("指定した会議音声に欠損があります");
       Object.assign(info,data.corrupt??{});return publishPlayback(entry,info);
@@ -257,7 +261,12 @@ mockIPC(async (command, args) => {
     }
     case "read_playback_chunk": {
       const info=fixture.meetingAudio.sessions[args.token];
-      const frames = Math.min(65536, (info?.totalFrames??720000) - args.offsetFrames),channels=info?.channels??2;
+      let frames = Math.min(65536, (info?.totalFrames??720000) - args.offsetFrames);
+      for(const gap of info?.missingRanges??[]) {
+        if(gap.startFrame<=args.offsetFrames&&args.offsetFrames<gap.endFrame)throw Error("現在位置の音声は欠損しています");
+        if(gap.startFrame>args.offsetFrames)frames=Math.min(frames,gap.startFrame-args.offsetFrames);
+      }
+      const channels=info?.channels??2;
       const bytes = new ArrayBuffer(12 + frames * channels * 4);
       const view = new DataView(bytes);
       view.setUint32(0, 48000, true);

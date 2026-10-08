@@ -1,4 +1,4 @@
-import type { PlaybackInfo } from "./playback";
+import { validateMissingRanges, type PlaybackInfo } from "./playback.ts";
 
 export type MeetingPlaybackMode = "mic" | "system" | "both" | "imported";
 export type MeetingPlaybackRequest = { meetingId: string; mode: MeetingPlaybackMode };
@@ -15,6 +15,7 @@ export function meetingPlaybackLabel(mode: MeetingPlaybackMode): string {
 // This contract is distinct from a version-scoped utterance/evidence range.
 // A mode change must not silently clamp the position into a changed recording.
 export function validateMeetingPlayback(info: PlaybackInfo, mode: MeetingPlaybackMode, restore: MeetingPlaybackRestore): void {
+  validateMissingRanges(info);
   if (!info.token || info.startUs !== 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= 0
     || info.sampleRate !== 48000 || info.channels !== 1 || info.trackKind !== mode
     || !Number.isSafeInteger(info.totalFrames) || info.totalFrames < 1

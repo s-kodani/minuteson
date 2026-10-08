@@ -29,3 +29,11 @@ test("mode switch never clamps invalid position or reuses a changed source durat
     assert.throws(() => validateMeetingPlayback(info, "both", { frame:240000,rate:1.5,playing:false,endUs:info.endUs,...patch }));
   }
 });
+
+test("mode switch can preserve a position within a declared gap but not foreign or forged gap data",()=>{
+  const range={trackKind:"system" as const,startUs:100000,endUs:200000,startFrame:4800,endFrame:9600,reasonCode:"capture_timestamp_gap"};
+  validateMeetingPlayback({...info,missingRanges:[range]},"both",{frame:6000,rate:1.5,playing:true,endUs:info.endUs});
+  validateMeetingPlayback({...info,trackKind:"mic"},"mic",{frame:6000,rate:1.5,playing:false,endUs:info.endUs});
+  assert.throws(()=>validateMeetingPlayback({...info,trackKind:"mic",missingRanges:[range]},"mic",{frame:6000,rate:1,playing:true}));
+  assert.throws(()=>validateMeetingPlayback({...info,missingRanges:[{...range,endFrame:9601}]},"both",{frame:6000,rate:1,playing:true}));
+});

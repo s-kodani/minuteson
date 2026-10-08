@@ -50,6 +50,7 @@ const suites = [
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],
   ["fixed-player", "browser-fixture.js", "fixed-player-browser-check.js"],
   ["meeting-audio", "browser-fixture.js", "meeting-audio-browser-check.js"],
+  ["meeting-missing", "browser-fixture.js", "meeting-missing-browser-check.js"],
   ["playback-speakers", "browser-fixture.js", "playback-speaker-browser-check.js"],
   ["estimated-speakers", "browser-fixture.js", "estimated-speaker-colors-browser-check.js"],
   ["playback-cancellation", "browser-fixture.js", "playback-cancellation-browser-check.js"],
