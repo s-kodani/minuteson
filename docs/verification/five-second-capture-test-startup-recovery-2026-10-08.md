@@ -36,11 +36,11 @@ macOSの通常の5秒テストを、永続する所有台帳と取得側へ継�
 | 型検査とビルド | 終了コード0 | `/private/tmp/mon-capture-test-recovery-client-final-build.log` |
 | 合成IPCブラウザ全体 | 64組808ケース成功 | `/private/tmp/mon-capture-test-recovery-browser-full.log` |
 | 形式検査とPython | 終了コード0、65件成功 | `/private/tmp/mon-capture-test-startup-lint-python.log` |
-| Rust全体の再検査 | 実行中 | `/private/tmp/mon-capture-test-startup-final-native-full.log` |
+| Rust全体の再検査 | 1461件成功、失敗0件、43件ignored、終了コード0 | `/private/tmp/mon-capture-test-startup-final-native-full.log` |
 
 ブラウザ重点6組96ケースと追加の回復11ケースは、全体808ケースに含み重複加算しない。回復画面の960pxダークと360pxダークを画像で確認した。Swift本体は前段から変更せず、前段の全66件中65件成功・連携用1件skipと、今回の専用連携実行を区別する。既存のバンドルサイズ警告は残る。
 
-Rust全体の再検査が終了するまで、専用キャッシュ `/private/tmp/mon-capture-journal-proof.xZqE1w` を保持し、同じ領域へ再ビルドを重ねない。リポジトリ内のtargetと既存releaseは変更しない。
+この段階のRust全体の再検査は879.31秒で成功した。前段の全体失敗は修正後の結果と区別し、記録を残す。専用キャッシュ `/private/tmp/mon-capture-journal-proof.xZqE1w` は検査終了後に後続の書込み確認の検証へ再利用した。後続の検査が動いている間は同じ領域へ再ビルドを重ねない。リポジトリ内のtargetと既存releaseは変更しない。
 
 ## 残対応と検証範囲
 

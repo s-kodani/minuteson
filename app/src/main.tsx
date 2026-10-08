@@ -37,6 +37,7 @@ import {CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
 import {CaptureTestRecoveryPanel,useCaptureTestRecovery} from "./capture-test-recovery";
+import {RecordingWriteStatus} from "./recording-write-status";
 import {waitForCaptureTestStop} from "./capture-test-client";
 import {stopAllPlayback} from "./playback-barrier";
 import {newRecordingPreparation,sameRecordingPreparation,validRecordingTitle,type RecordingPreparation} from "./recording-preparation-state";
@@ -102,7 +103,7 @@ function RecorderPanel() {
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
       <div className="mini-bottom">
-        <span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>
+        {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?<RecordingWriteStatus compact owner={state.snapshot.sessionId}/>:<span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>}
         <button type="button" onClick={() => action.run("open_main_window")} disabled={action.busy || !isTauri()}>メインを開く</button>
         {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <button type="button" className="stop-button" onClick={() => void decision.request()} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected}>{state.snapshot.phase === "preparing" ? "中止" : "停止"}</button>}
         {idle && <button type="button" className="text-button" onClick={() => action.run("hide_recorder_preview")} disabled={action.busy}>閉じる</button>}

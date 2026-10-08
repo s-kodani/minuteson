@@ -19,6 +19,7 @@ const f = window.closeFixture = {
   captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
   failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
+  writes:null,holdWrites:false,pendingWrites:[],failWrites:false,refreshWrites:false,
   captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
   captureRecovery:recoverySeed?JSON.parse(recoverySeed):{schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null},recoveryReadFailure:false,recoveryRetryLost:false,recoveryRetryKeepsAttention:false,recoveryRetryHoldAck:false,recoveryPendingReplies:[],
   testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
@@ -120,6 +121,12 @@ mockIPC(async (command, args) => {
     if(f.holdInputLevels)await new Promise(resolve=>f.pendingInputLevels.push(resolve));
     if(f.failInputLevels||!value)throw Error("模擬入力レベル未確認");
     return value;
+  }
+  if(command==="get_recording_writes"){
+    if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬書込み所有変更／停止済み");
+    if(f.refreshWrites&&f.writes){f.writes.revision++;for(const name of ["microphone","system"])if(f.writes[name].state==="written")f.writes[name].frames+=480;}
+    const value=clone(f.writes);if(f.holdWrites)await new Promise(resolve=>f.pendingWrites.push(resolve));
+    if(f.failWrites||!value)throw Error("模擬書込み未確認");return value;
   }
   if (command === "capture_available") return true;
   if (command === "get_capture_inputs") {

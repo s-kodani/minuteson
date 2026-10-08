@@ -26,6 +26,7 @@ mod playback;
 mod recorder;
 mod recording_confirmation;
 mod recording_confirmation_window;
+mod recording_writes;
 mod resampling;
 mod restored_processing;
 mod saved_artifact;
@@ -1827,6 +1828,16 @@ fn get_recording_levels(
     }
     RecorderController::levels(window.app_handle(), &session_id)
 }
+#[tauri::command]
+fn get_recording_writes(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<recording_writes::Snapshot, String> {
+    if window.label() != "main" && window.label() != "recorder" {
+        return Err("書込み状態は録音画面から確認してください".into());
+    }
+    RecorderController::writes(window.app_handle(), &session_id)
+}
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplicationCloseActivity {
@@ -2241,6 +2252,7 @@ pub fn run() {
             cancel_data_operation,
             get_recording_snapshot,
             get_recording_levels,
+            get_recording_writes,
             get_capture_test_snapshot,
             get_capture_test_recovery,
             retry_capture_test_recovery,

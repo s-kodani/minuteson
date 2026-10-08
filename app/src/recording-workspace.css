@@ -6,14 +6,14 @@
 .recording-workspace-title{overflow-wrap:anywhere;}
 .recording-workspace .capture-input-selection{margin-top:24px;}
 .recording-workspace .clock{text-align:center;margin:24px 0;}
-.recording-track-status{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
-.recording-track-status div{border:1px solid var(--border);border-radius:10px;padding:12px;}
-.recording-track-status dt{font-weight:600;}
-.recording-track-status dd{margin:8px 0 0;}
+.recording-track-status,.recording-write-tracks{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.recording-track-status div,.recording-write-tracks div{border:1px solid var(--border);border-radius:10px;padding:12px;}
+.recording-track-status dt,.recording-write-tracks dt{font-weight:600;}
+.recording-track-status dd,.recording-write-tracks dd{margin:8px 0 0;overflow-wrap:anywhere;}
 .input-level{display:grid;gap:6px;margin-top:10px;font-size:.85rem;overflow-wrap:anywhere;}
 .input-level meter{width:100%;height:18px;accent-color:var(--accent);}
 .input-level-clipping{color:var(--text);font-weight:600;}
-@media(max-width:600px){.recording-workspace{padding:16px;margin:12px auto;}.recording-track-status{grid-template-columns:1fr;}}
+@media(max-width:600px){.recording-workspace{padding:16px;margin:12px auto;}.recording-track-status,.recording-write-tracks{grid-template-columns:1fr;}}
 .capture-test-panel { margin: 1.25rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
 .capture-test-panel h3 { margin-top: 0; }
 .capture-test-panel p { overflow-wrap: anywhere; }

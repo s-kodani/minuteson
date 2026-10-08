@@ -9,7 +9,7 @@ const LIMIT: u64 = 16 * 1024;
 const SAFE: u64 = 9_007_199_254_740_991;
 
 #[cfg(unix)]
-fn open_telemetry(directory: &Path) -> Result<File, String> {
+pub(crate) fn open_capture_directory(directory: &Path) -> Result<File, String> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
@@ -42,7 +42,15 @@ fn open_telemetry(directory: &Path) -> Result<File, String> {
         }
         parent = unsafe { File::from_raw_fd(fd) };
     }
-    let name = std::ffi::CString::new("input-levels.json").unwrap();
+    Ok(parent)
+}
+#[cfg(unix)]
+pub(crate) fn open_capture_file_at(parent: &File, name: &str) -> Result<File, String> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    if !matches!(name, "input-levels.json" | "microphone.caf" | "system.caf") {
+        return Err("録音確認のファイル名が不正です".into());
+    }
+    let name = std::ffi::CString::new(name).unwrap();
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -56,8 +64,15 @@ fn open_telemetry(directory: &Path) -> Result<File, String> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 #[cfg(not(unix))]
-fn open_telemetry(_directory: &Path) -> Result<File, String> {
+pub(crate) fn open_capture_directory(_directory: &Path) -> Result<File, String> {
     Err("このOSの入力レベル確認は未対応です".into())
+}
+#[cfg(not(unix))]
+pub(crate) fn open_capture_file_at(_parent: &File, _name: &str) -> Result<File, String> {
+    Err("このOSの入力レベル確認は未対応です".into())
+}
+fn open_capture_file(directory: &Path, name: &str) -> Result<File, String> {
+    open_capture_file_at(&open_capture_directory(directory)?, name)
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -153,7 +168,7 @@ impl LevelReader {
         }
         // Traverse through directory descriptors, not path-following opens: a
         // parent swapped to a symlink between checks cannot redirect this read.
-        let file = open_telemetry(directory)?;
+        let file = open_capture_file(directory, "input-levels.json")?;
         self.read_file(file, owner)
     }
     // A private capture test already owns a pinned directory descriptor. Use
@@ -389,7 +404,7 @@ mod tests {
         symlink(&real, &link).unwrap();
         let mut reader = LevelReader::default();
         assert!(reader.read(&link, OWNER).is_err());
-        assert!(open_telemetry(&link).is_err());
+        assert!(open_capture_file(&link, "input-levels.json").is_err());
         symlink(
             real.join("input-levels.json"),
             path.join("input-levels.json"),

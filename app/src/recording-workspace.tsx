@@ -4,6 +4,7 @@ import type {RecordingPreparation} from "./recording-preparation-state";
 import {InfoPopover} from "./info-popover";
 import "./recording-workspace.css";
 import {InputLevelMeter,useRecordingLevels} from "./input-levels";
+import {RecordingWriteStatus} from "./recording-write-status";
 
 export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
@@ -24,7 +25,8 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     {active?<>
       <div className="clock" aria-label="録音経過時間">{formatElapsed(snapshot.elapsedMs)}</div>
       <dl className="recording-track-status"><div><dt>マイク</dt><dd>{snapshot.microphoneConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="マイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd>{snapshot.systemAudioConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="PCの音声" level={levels.system}/></dd></div></dl>
-      <p>接続状態は録音処理の報告です。入力レベルは受信した音声の測定値で、更新が1秒を超えて止まると値を表示しません。最新の書き込み確認は未対応です。接続や入力レベルは保存の成功を示すものではありません。</p>
+      <p>接続状態は録音処理の報告です。入力レベルは受信した音声の測定値で、更新が1秒を超えて止まると値を表示しません。接続や入力レベルは保存の成功を示すものではありません。</p>
+      <RecordingWriteStatus owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/>
       <InfoPopover label="録音後の解析" details={<p>音声の保存が完了してから文字起こしと話者分離を進めます。準備済みモデルがない場合も音声を保持し、モデル準備後に解析できます。</p>}>解析は録音の保存完了後に行います。</InfoPopover>
     </>:<>
       {inputs}

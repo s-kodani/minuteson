@@ -90,7 +90,7 @@ async page=>{
       await page.screenshot({path:`input-levels-${theme}-${width}.png`});
     }
     results.push("two independent meters and silence/writing disclaimer fit both themes at 1280/960/360px");
-    check((await panel().innerText()).includes("保存の成功を示すものではありません")&&(await panel().innerText()).includes("最新の書き込み確認は未対応"),"telemetry claimed saved audio");
+    check((await panel().innerText()).includes("保存の成功を示すものではありません")&&(await panel().innerText()).includes("入力レベルや接続状態だけでは保存中と表示しません"),"telemetry claimed saved audio");
     results.push("input evidence is explicitly separate from durable CAF writing and saving success");
     return {passed:results.length,results};
   }catch(cause){throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator('body').innerText()}`);}

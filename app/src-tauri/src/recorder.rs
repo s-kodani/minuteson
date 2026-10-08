@@ -15,6 +15,7 @@ struct ActiveCapture {
     stop_operation_id: Option<String>,
     level_directory: PathBuf,
     levels: crate::input_levels::LevelReader,
+    writes: crate::recording_writes::WriteReader,
 }
 
 #[derive(Default)]
@@ -81,6 +82,39 @@ fn recording_command(
 }
 
 impl RecorderController {
+    pub(crate) fn writes(
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<crate::recording_writes::Snapshot, String> {
+        let controller = app.state::<Self>();
+        let mut active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_mut().ok_or("書込み確認できる録音がありません")?;
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        let mut child = current
+            .child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("録音プロセスは終了しました".into());
+        }
+        let result = current.writes.read(&current.level_directory, session_id)?;
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("書込み確認中に録音プロセスが終了しました".into());
+        }
+        Ok(result)
+    }
     pub(crate) fn levels(
         app: &AppHandle,
         session_id: &str,
@@ -200,37 +234,40 @@ impl RecorderController {
             .join("audio")
             .join(&session.id);
         let output = storage.managed_path(&relative)?;
-        let launch = (|| -> Result<(Child, PathBuf), String> {
-            std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
-            let root = storage
-                .managed_path(Path::new("meetings"))?
-                .parent()
-                .ok_or("保存先が不正です")?
-                .canonicalize()
+        let launch =
+            (|| -> Result<(Child, PathBuf, crate::recording_writes::WriteReader), String> {
+                std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+                let root = storage
+                    .managed_path(Path::new("meetings"))?
+                    .parent()
+                    .ok_or("保存先が不正です")?
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?;
+                if output.canonicalize().map_err(|error| error.to_string())? != root.join(&relative)
+                {
+                    return Err("録音先が管理領域外です".into());
+                }
+                if std::fs::read_dir(&output)
+                    .map_err(|error| error.to_string())?
+                    .next()
+                    .is_some()
+                {
+                    return Err("録音先に既存ファイルがあります".into());
+                }
+                let writes = crate::recording_writes::WriteReader::pin(&root.join(&relative))?;
+                let child = recording_command(
+                    &binary,
+                    &output,
+                    std::process::id(),
+                    microphone_uid,
+                    scope,
+                    &session.id,
+                )?
+                .spawn()
                 .map_err(|error| error.to_string())?;
-            if output.canonicalize().map_err(|error| error.to_string())? != root.join(&relative) {
-                return Err("録音先が管理領域外です".into());
-            }
-            if std::fs::read_dir(&output)
-                .map_err(|error| error.to_string())?
-                .next()
-                .is_some()
-            {
-                return Err("録音先に既存ファイルがあります".into());
-            }
-            let child = recording_command(
-                &binary,
-                &output,
-                std::process::id(),
-                microphone_uid,
-                scope,
-                &session.id,
-            )?
-            .spawn()
-            .map_err(|error| error.to_string())?;
-            Ok((child, root.join(&relative)))
-        })();
-        let (child, level_directory) = match launch {
+                Ok((child, root.join(&relative), writes))
+            })();
+        let (child, level_directory, writes) = match launch {
             Ok(child) => child,
             Err(error) => {
                 let _ = storage.fail_recording(&session.id);
@@ -245,6 +282,7 @@ impl RecorderController {
             stop_operation_id: None,
             level_directory,
             levels: Default::default(),
+            writes,
         });
         let snapshot = publish(app, |state| {
             state.phase = RecordingPhase::Preparing;
