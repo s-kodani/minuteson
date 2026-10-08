@@ -38,7 +38,7 @@ APIの七項目は形式版・所有・版・報告年齢・両入力・通知�
 | 合成IPC画面全体 | 67組866ケース成功、終了コード0。重点ケースはこの総数に含む | `/private/tmp/mon-both-input-status-browser-full.log` |
 | Rust全体 | 1487件成功、失敗0件、専用実行用48件ignored。849.76秒 | `/private/tmp/mon-both-input-status-full-check2.log` |
 | 最終ソースの重点回帰 | 入力状態16件、共有状態5件と削除履歴21件、録音4件成功。専用3件ignored。全体へ重複加算しない | `/private/tmp/mon-both-input-status-native-final-focused.log` |
-| 両入力の実JSON連携 | Swiftの実際の取得制御から生成1件、Rustの所有・両入力・通知・実年齢の読戻し1件成功 | 同上 |
+| 両入力の実JSON連携 | Swiftの実際の取得制御から生成1件、Rustの所有・両入力・通知・実年齢の読戻し1件成功 | `/private/tmp/mon-both-input-status-full-check2.log` |
 | 既存の音声と測定の専用連携 | CAF読戻し、時計、入力レベル、私有5秒枠、マイク再取得、PC音声再取得のRust7件成功。5秒枠のみ2件で、各Swift生成も成功 | 同上 |
 | 通常の全体ローカル検査 | `make check` 終了コード0。正式評価前提不足の7警告と既存のlinker警告を維持 | 同上 |
 
