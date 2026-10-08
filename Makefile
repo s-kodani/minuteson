@@ -1,6 +1,6 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test
 
 check-app:
 	npm --prefix app run build
@@ -24,6 +24,12 @@ check-input-levels:
 	trap 'rm -f "$$mon_level_dir/input-levels.json"; rmdir "$$mon_level_dir"' EXIT; \
 	env MON_INPUT_LEVEL_FIXTURE_DIR="$$mon_level_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputLevelTests/testSwiftLevelPublicationAndManifestExclusion && \
 	env MON_INPUT_LEVEL_FIXTURE_DIR="$$mon_level_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_input_levels -- --ignored
+
+check-capture-test:
+	@mon_test_dir=$$(mktemp -d /tmp/mon-capture-test.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_test_dir/manifest.json" "$$mon_test_dir/microphone.caf" "$$mon_test_dir/system.caf"; rmdir "$$mon_test_dir"' EXIT; \
+	env MON_CAPTURE_TEST_FIXTURE_DIR="$$mon_test_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter CaptureTestWindowTests/testSwiftFiveSecondWindowWritesOnlySelectedFramesAndExportsPrivateManifest && \
+	env MON_CAPTURE_TEST_FIXTURE_DIR="$$mon_test_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_five_second_test -- --ignored
 
 test:
 	python3 -m unittest discover -s tests -v

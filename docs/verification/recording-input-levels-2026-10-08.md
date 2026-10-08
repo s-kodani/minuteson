@@ -26,13 +26,15 @@ PCM窓の年齢、ネイティブ報告の年齢、API要求開始からの画�
 
 最終フロントエンド433件と型検査・ビルドが終了コード0で成功した。追加13件は形式・所有・振幅・無音・古い報告・矛盾・時計の逆行と、スリープ相当の壁時計だけの進みを確認する。
 
-Swift重点9件が終了コード0で成功した。両配置の逆位相Float32、Int16・Int32の正規化、無音・過大入力・非有限・未対応形式・空窓・時計不整合、交互配置とチャンネル別配置の実CMSampleBufferからのコピー、所有と停止条件、JSONと保存manifestからの除外を確認した。通常の全体検査内のSwift51件も成功したが、全体実行は進行中である。合成PCMを使い、マイクやPC音声を取得する検査ではない。
+Swift重点9件が終了コード0で成功した。両配置の逆位相Float32、Int16・Int32の正規化、無音・過大入力・非有限・未対応形式・空窓・時計不整合、交互配置とチャンネル別配置の実CMSampleBufferからのコピー、所有と停止条件、JSONと保存manifestからの除外を確認した。合成PCMを使い、マイクやPC音声を取得する検査ではない。
 
 最終Rustの入力レベル7件と録音条件4件が終了コード0で成功した。独立した値・必須項目・不正数値・版の不一致・時間の逆行、同じ報告の再読込と更新時刻変更、シンボリックリンク・ハードリンク・FIFO・容量上限を検査した。録音条件では、現在の正準セッションと準備中・録音中だけを許し、接続済みでも停止中・保存中・待機中・失敗では確認しない。専用のSwift生成1件・Rust読戻し1件も終了コード0で、実PCMの測定値を一時JSONから両トラック独立に読んだ。生成・読戻しは通常検査末尾の `make check-input-levels` へ追加し、通常Rustのignored区分と区別する。
 
 製品MainWindowの合成IPC関連8組123ケースが終了コード0で成功した。入力レベル13ケースに加え、録音確認13・開始終了22・マイク15・アプリ15・中央準備11・画面連携7・キーボード27を含む。入力レベルでは接続から値を作らないこと、別トラックの未受信、無音、過大入力、更新停止、不正応答、応答待ち中の単一要求、所有変更、停止後の遅い応答、不正IDでの画面保持を確認した。両テーマの1280・960・360pxで二つのメーターと横方向の収まりを照合し、1280pxライトと360pxダークを目視確認した。
 
-ログは `/private/tmp/mon-input-level-unit-final-retry.log`、`/private/tmp/mon-input-level-build-proof.log`、`/private/tmp/mon-input-level-swift-proof.log`、`/private/tmp/mon-input-level-native-proof.log`、`/private/tmp/mon-input-level-recorder-proof.log`、`/private/tmp/mon-input-level-cross-final.log`、`/private/tmp/mon-input-level-ui-10hz-proof.log` と `output/playwright/input-levels-10hz-proof-2026-10-08/` にある。表示の間隔調整前の全62組771ケースは最終ソースの一括合格として扱わない。最終版の通常の全体検査は `/private/tmp/mon-input-level-full-check.log`、全画面回帰は `/private/tmp/mon-input-level-ui-full-proof.log` で進行中である。
+製品ソース `9b21112` の通常の全体検査は終了コード0で完了した。Python65件、Swift51件、フロントエンド433件と型検査・ビルド、Rust通常1421件・失敗0件・既存38件ignored、CAF全4800フレーム、AVFoundation製CAF読出し1件、Swift時計情報生成1件・Rust統合1件、Swift入力レベル生成1件・Rust読戻し1件が成功した。合成IPCの全画面回帰も、同じフロントエンドソースの全62組771ケースが終了コード0となり、62件の結果JSONと件数を照合した。重点123ケースと各追加テストは重複加算しない。
+
+重点ログは `/private/tmp/mon-input-level-unit-final-retry.log`、`/private/tmp/mon-input-level-build-proof.log`、`/private/tmp/mon-input-level-swift-proof.log`、`/private/tmp/mon-input-level-native-proof.log`、`/private/tmp/mon-input-level-recorder-proof.log`、`/private/tmp/mon-input-level-cross-final.log`、`/private/tmp/mon-input-level-ui-10hz-proof.log` と `output/playwright/input-levels-10hz-proof-2026-10-08/` にある。全体検査は `/private/tmp/mon-input-level-full-check.log`、完了した全画面回帰は `/private/tmp/mon-input-level-ui-full-retry.log` と `output/playwright/input-levels-full-retry-2026-10-08/` にある。前の全画面実行は検証用ブラウザのセッション切断で中断したため、合格として扱わない。表示の間隔調整前の全62組771ケースも最終ソースの一括合格には使わない。
 
 ## 残対応
 

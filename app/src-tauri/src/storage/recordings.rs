@@ -492,6 +492,15 @@ impl Storage {
         {
             return Err("録音manifestが検証中に変更されました".into());
         }
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        // A test is not a meeting recording, even if both private CAF files
+        // finalized successfully. Never adopt its short capture as a session.
+        if value.get("captureTest").is_some() {
+            return Err("録音前テストの音声を会議録音として確定することはできません".into());
+        }
+        // Preserve serde's duplicate-known-field rejection on the original
+        // bytes; a Value alone would collapse conflicting fields.
         serde_json::from_slice(&bytes).map_err(|error| error.to_string())
     }
 
@@ -1081,6 +1090,142 @@ mod tests {
         let error = storage.read_capture_manifest(&proof).err().unwrap();
         assert!(error.contains("検証中に変更"), "{error}");
         assert_eq!(std::fs::read(&path).unwrap(), changed);
+    }
+
+    #[test]
+    fn five_second_test_manifest_is_never_adopted_as_a_meeting_or_analysis_job() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+        let mic = std::fs::read(output.join("microphone.caf")).unwrap();
+        let system = std::fs::read(output.join("system.caf")).unwrap();
+        for test in [
+            serde_json::Value::Null,
+            serde_json::json!({"ownerId":Uuid::new_v4().to_string(),"durationSeconds":5,"completed":true}),
+        ] {
+            manifest["captureTest"] = test;
+            let bytes = serde_json::to_vec(&manifest).unwrap();
+            std::fs::write(output.join("manifest.json"), &bytes).unwrap();
+            assert!(storage
+                .finalize_recording(&session)
+                .unwrap_err()
+                .contains("録音前テスト"));
+            assert_eq!(
+                storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                "recording"
+            );
+            let db = storage.connection.lock().unwrap();
+            for table in ["audio_tracks", "file_assets", "processing_jobs"] {
+                assert_eq!(
+                    db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+            }
+            drop(db);
+            assert_eq!(std::fs::read(output.join("manifest.json")).unwrap(), bytes);
+            assert_eq!(std::fs::read(output.join("microphone.caf")).unwrap(), mic);
+            assert_eq!(std::fs::read(output.join("system.caf")).unwrap(), system);
+        }
+    }
+
+    #[test]
+    fn capture_test_marker_check_does_not_weaken_duplicate_field_rejection() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (_, session, output, manifest) = saved_probe_fixture(&storage);
+        let original = serde_json::to_string(&manifest).unwrap();
+        let duplicated = format!("{{\"state\":\"saved\",{}", &original[1..]);
+        std::fs::write(output.join("manifest.json"), &duplicated).unwrap();
+        assert!(storage
+            .finalize_recording(&session)
+            .unwrap_err()
+            .contains("duplicate field"));
+        assert_eq!(
+            std::fs::read_to_string(output.join("manifest.json")).unwrap(),
+            duplicated
+        );
+    }
+
+    #[test]
+    #[ignore = "requires actual Swift-generated five-second test CAF fixtures; make check-capture-test"]
+    fn swift_generated_five_second_test_caf_and_manifest_stay_private() {
+        let fixture = PathBuf::from(std::env::var_os("MON_CAPTURE_TEST_FIXTURE_DIR").unwrap());
+        let manifest_bytes = std::fs::read(fixture.join("manifest.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["state"], "saved");
+        assert_eq!(manifest["requestedDurationSeconds"], 5);
+        let test = &manifest["captureTest"];
+        assert!(crate::input_levels::valid_owner(
+            test["ownerId"].as_str().unwrap()
+        ));
+        assert_eq!(test["durationSeconds"], 5);
+        assert_eq!(test["completed"], true);
+        assert_eq!(
+            test["windowEndNs"].as_i64().unwrap() - test["windowStartNs"].as_i64().unwrap(),
+            5_000_000_000
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, _) = saved_probe_fixture(&storage);
+        for (name, frames, value) in [
+            ("microphone.caf", 40000_u64, 0.125_f32),
+            ("system.caf", 31200_u64, 0.0_f32),
+        ] {
+            let source = fixture.join(name);
+            let (format, size, hash) =
+                crate::audio::inspect_recorded_caf(File::open(&source).unwrap(), &|| false)
+                    .unwrap();
+            assert_eq!(format.sample_rate, 8000);
+            assert_eq!(format.channels, 2);
+            assert_eq!(format.frames, frames);
+            let mut audio =
+                crate::audio::VerifiedAudio::open(File::open(&source).unwrap(), size, &hash)
+                    .unwrap();
+            let bytes = audio.read_frames(0, frames).unwrap();
+            assert_eq!(bytes.len() as u64, frames * 8);
+            for frame in bytes.chunks_exact(8) {
+                assert_eq!(f32::from_le_bytes(frame[..4].try_into().unwrap()), value);
+                assert_eq!(f32::from_le_bytes(frame[4..].try_into().unwrap()), -value);
+            }
+            std::fs::copy(&source, output.join(name)).unwrap();
+        }
+        assert_eq!(
+            manifest["system"]["clockSegments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            manifest["system"]["clockSegments"][1]["timelineStartUs"],
+            2_900_000
+        );
+        std::fs::write(output.join("manifest.json"), &manifest_bytes).unwrap();
+        assert!(storage
+            .finalize_recording(&session)
+            .unwrap_err()
+            .contains("録音前テスト"));
+        assert_eq!(
+            storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+            "recording"
+        );
+        assert_eq!(
+            storage
+                .connection
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM audio_tracks", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            std::fs::read(output.join("manifest.json")).unwrap(),
+            manifest_bytes
+        );
     }
 
     #[test]

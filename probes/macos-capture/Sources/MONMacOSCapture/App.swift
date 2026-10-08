@@ -18,6 +18,7 @@ struct Options {
   var microphoneUID: String? = nil
   var applicationIdentity: CaptureApplicationIdentity? = nil
   var inputLevelOwner: String? = nil
+  var captureTestOwner: String? = nil
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -33,6 +34,7 @@ struct Options {
     var microphoneUID: String?
     var applicationIdentity: CaptureApplicationIdentity?
     var inputLevelOwner: String?
+    var captureTestOwner: String?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -98,6 +100,12 @@ struct Options {
           InputLevelReport.validOwner(arguments[index])
         else { throw ProbeError.usage("--input-level-owner requires one canonical UUID v4") }
         inputLevelOwner = arguments[index]
+      case "--five-second-test":
+        index += 1
+        guard index < arguments.count, captureTestOwner == nil,
+          InputLevelReport.validOwner(arguments[index])
+        else { throw ProbeError.usage("--five-second-test requires one canonical UUID v4") }
+        captureTestOwner = arguments[index]
       case "--until-stopped":
         untilStopped = true
       case "--parent-pid":
@@ -146,12 +154,24 @@ struct Options {
     if inputLevelOwner != nil && (!stopOnFile || parentPID == nil) {
       throw ProbeError.usage("input levels require stop control and a parent PID")
     }
+    if let captureTestOwner {
+      guard stopOnFile, parentPID != nil, microphoneUID != nil,
+        !durationSpecified, !untilStopped, backend == "screencapturekit", inputLevelOwner == nil,
+        mode == "system" || applicationIdentity != nil
+      else {
+        throw ProbeError.usage(
+          "five-second test requires stop control, parent PID, microphone UID and exact application identity when selected; duration, until-stopped, input-level-owner and Core Audio are not accepted"
+        )
+      }
+      duration = 5
+      inputLevelOwner = captureTestOwner
+    }
     return Self(
       output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
       parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity,
-      inputLevelOwner: inputLevelOwner)
+      inputLevelOwner: inputLevelOwner, captureTestOwner: captureTestOwner)
   }
 
   func shouldContinueRecording(
@@ -240,6 +260,7 @@ struct Manifest: Encodable {
   var captureClock: CaptureClockMetadata?
   var microphoneDeviceUID: String?
   var targetApplicationIdentity: CaptureApplicationIdentity?
+  var captureTest: CaptureTestMetadata? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -277,13 +298,18 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
+  private let testWindow: CaptureTestWindow?
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false) {
+  init(
+    outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false,
+    testWindow: CaptureTestWindow? = nil
+  ) {
     self.outputURL = outputURL
     self.clock = clock
     self.levelsEnabled = levelsEnabled
+    self.testWindow = testWindow
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
@@ -401,10 +427,27 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     defer { lock.unlock() }
     if stopping { return }
     do {
+      if let testWindow, !testWindow.accepting { return }
       if let identity = applicationIdentity {
         guard try CaptureApplications.processStart(identity.pid) == identity.launchTimeUs else {
           throw ProbeError.capture("application changed during capture")
         }
+      }
+      var sampleBuffer = sampleBuffer
+      var testObservation: CaptureClockObservation?
+      if let testWindow {
+        guard let clock, let description = sampleBuffer.formatDescription,
+          let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+        else { throw ProbeError.capture("five-second test clock or audio format is missing") }
+        let observation = clock.observe(
+          presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
+        guard
+          let selected = try testWindow.selection(
+            observation: observation, frames: sampleBuffer.numSamples,
+            sampleRate: format.mSampleRate, savedFrames: stats.frames)
+        else { return }
+        sampleBuffer = try testPCMFrames(sampleBuffer, range: selected.frames)
+        testObservation = selected.observation
       }
       if writer == nil {
         let format = sampleBuffer.formatDescription.flatMap {
@@ -452,8 +495,10 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
         format.mSampleRate == sampleRate, format.mChannelsPerFrame == stats.channels
       else { throw ProbeError.capture("system audio format changed during capture") }
       if levelsEnabled { stats.inputLevel.receive(sampleBuffer, at: receivedAt) }
-      let observation = clock?.observe(
-        presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
+      let observation =
+        testObservation
+        ?? clock?.observe(
+          presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
       let contiguous = try continuousPCMSample(
         sampleBuffer, frameOffset: stats.frames, sampleRate: sampleRate)
       guard input.append(contiguous) else {
@@ -482,6 +527,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
+  private let testWindow: CaptureTestWindow?
 
   private let requestedUID: String?
   private var inputUnit: AudioUnit?
@@ -490,12 +536,13 @@ private final class MicrophoneRecorder: @unchecked Sendable {
 
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
-    levelsEnabled: Bool = false
+    levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil
   ) {
     self.outputURL = outputURL
     self.clock = clock
     self.requestedUID = microphoneUID
     self.levelsEnabled = levelsEnabled
+    self.testWindow = testWindow
   }
 
   func start() async throws {
@@ -543,11 +590,29 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       self.lock.lock()
       defer { self.lock.unlock() }
       do {
+        if let testWindow = self.testWindow, !testWindow.accepting { return }
         guard let unit = self.inputUnit, let device = self.selectedDeviceID else {
           throw ProbeError.capture("microphone selection is missing")
         }
         try InputDevices.verifyDevice(unit, expected: device)
-        let observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
+        var observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
+        var buffer = buffer
+        var sourceFrameOffset: Int64 = 0
+        if let testWindow = self.testWindow {
+          guard let currentObservation = observation else {
+            throw ProbeError.capture("five-second test microphone clock is missing")
+          }
+          guard
+            let selected = try testWindow.selection(
+              observation: currentObservation, frames: Int(buffer.frameLength),
+              sampleRate: buffer.format.sampleRate, savedFrames: self.stats.frames)
+          else { return }
+          buffer = try testPCMFrames(buffer, range: selected.frames)
+          sourceFrameOffset = Int64(selected.frames.lowerBound)
+          // Keep the trimmed first frame on the same proven capture clock.
+          // Do not substitute callback arrival time for hardware timestamps.
+          observation = selected.observation
+        }
         guard let file = self.file else {
           throw ProbeError.capture("microphone CAF writer is closed")
         }
@@ -555,12 +620,18 @@ private final class MicrophoneRecorder: @unchecked Sendable {
           buffer.format.channelCount == self.stats.channels,
           !when.isSampleTimeValid || when.sampleRate == self.stats.sampleRate
         else { throw ProbeError.capture("microphone format changed during capture") }
+        var savedSourceFrame: Int64?
+        if when.isSampleTimeValid {
+          let (frame, overflow) = when.sampleTime.addingReportingOverflow(sourceFrameOffset)
+          guard !overflow else { throw ProbeError.capture("microphone frame offset overflows") }
+          savedSourceFrame = frame
+        }
         if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
         try file.write(from: buffer)
         self.stats.callbackCount += 1
         self.stats.frames += Int64(buffer.frameLength)
         if when.isSampleTimeValid, when.sampleRate > 0 {
-          let seconds = Double(when.sampleTime) / when.sampleRate
+          let seconds = Double(savedSourceFrame ?? when.sampleTime) / when.sampleRate
           if self.stats.firstPresentationTimeSeconds == nil {
             self.stats.firstPresentationTimeSeconds = seconds
           }
@@ -569,7 +640,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         if let observation {
           self.stats.recordSavedClock(
             observation, frames: Int64(buffer.frameLength),
-            sourceFrame: when.isSampleTimeValid ? when.sampleTime : nil)
+            sourceFrame: savedSourceFrame)
         }
       } catch {
         self.stats.appendFailures += 1
@@ -648,13 +719,17 @@ private enum Main {
       let manifestURL = options.output.appendingPathComponent("manifest.json")
       // Production recordings require capture-time proof. Bounded measurement
       // probes retain schema 1 until their formal evaluation harness is updated.
-      let clock = options.duration == nil ? try CaptureClockDomain.live() : nil
+      let clock =
+        options.duration == nil || options.captureTestOwner != nil
+        ? try CaptureClockDomain.live() : nil
+      let testWindow = try options.captureTestOwner.map { try CaptureTestWindow(ownerId: $0) }
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
-        microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil)
+        microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
+        testWindow: testWindow)
       let system = SystemAudioRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
-        levelsEnabled: options.inputLevelOwner != nil)
+        levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow)
       let tap = CoreAudioTapRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil)
@@ -676,6 +751,7 @@ private enum Main {
         system: TrackStats(),
         errors: []
       )
+      manifest.captureTest = testWindow?.metadata()
       try write(manifest, to: manifestURL)
       let power = RecordingPowerAssertion()
       // Also covers a throw while writing the final manifest. Do not depend on
@@ -696,6 +772,15 @@ private enum Main {
           manifest.targetBundleIdentifier = system.targetBundleIdentifier
         }
         manifest.state = "recording"
+        if testWindow != nil,
+          FileManager.default.fileExists(
+            atPath: options.output.appendingPathComponent("stop.request").path)
+            || parentHasExited(options.parentPID)
+        {
+          throw ProbeError.capture("five-second test was cancelled during initialization")
+        }
+        try testWindow?.open(at: PCMInputLevel.nowNanoseconds())
+        manifest.captureTest = testWindow?.metadata()
         try write(manifest, to: manifestURL)
         if options.stopOnFile {
           let stopRequest = options.output.appendingPathComponent("stop.request")
@@ -727,10 +812,14 @@ private enum Main {
           }
           try await Task.sleep(for: .seconds(duration))
         }
+        testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
         if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
         let micStats = mic.snapshot()
         let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+        if let testWindow, !testWindow.metadata().completed {
+          throw ProbeError.capture("five-second test stopped before its window completed")
+        }
         guard micStats.frames > 0, systemStats.frames > 0,
           micStats.appendFailures == 0, systemStats.appendFailures == 0
         else {
@@ -745,6 +834,7 @@ private enum Main {
         if let clock { try manifest.finalizeClock(clock) }
         manifest.state = "saved"
       } catch {
+        testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
         do {
           if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
@@ -760,6 +850,7 @@ private enum Main {
         manifest.errors.append(String(describing: error))
       }
       manifest.endedAtUTC = ISO8601DateFormatter().string(from: Date())
+      manifest.captureTest = testWindow?.metadata()
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()
         manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
@@ -788,7 +879,10 @@ private enum Main {
              [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
              [--until-stopped] [--microphone-uid <stable-device-uid>] [--application-identity <json>]
              [--input-level-owner <session-uuid>]
+             [--five-second-test <test-uuid>]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
+    --five-second-test requires --stop-on-file, --parent-pid and --microphone-uid.
+    Its shared 5-second capture window opens only after both inputs initialize.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
 
