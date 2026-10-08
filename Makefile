@@ -1,6 +1,12 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test check-microphone-recovery
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test check-microphone-recovery
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery
+
+check-input-status:
+	@mon_status_dir=$$(mktemp -d /tmp/mon-input-status.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_status_dir/input-status.json"; rmdir "$$mon_status_dir"' EXIT; \
+	env MON_INPUT_STATUS_FIXTURE_DIR="$$mon_status_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputStatusTests/testSwiftBindingHeartbeatPublishesActualPolicyAndExportsForNativeReader && \
+	env MON_INPUT_STATUS_FIXTURE_DIR="$$mon_status_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_input_status -- --ignored
 
 check-app:
 	npm --prefix app run build

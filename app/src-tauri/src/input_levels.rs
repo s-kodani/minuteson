@@ -47,7 +47,10 @@ pub(crate) fn open_capture_directory(directory: &Path) -> Result<File, String> {
 #[cfg(unix)]
 pub(crate) fn open_capture_file_at(parent: &File, name: &str) -> Result<File, String> {
     use std::os::fd::{AsRawFd, FromRawFd};
-    if !matches!(name, "input-levels.json" | "microphone.caf" | "system.caf") {
+    if !matches!(
+        name,
+        "input-levels.json" | "input-status.json" | "microphone.caf" | "system.caf"
+    ) {
         return Err("録音確認のファイル名が不正です".into());
     }
     let name = std::ffi::CString::new(name).unwrap();

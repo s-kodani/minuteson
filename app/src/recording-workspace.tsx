@@ -5,6 +5,7 @@ import {InfoPopover} from "./info-popover";
 import "./recording-workspace.css";
 import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 import {RecordingWriteStatus} from "./recording-write-status";
+import {RecordingMicrophoneStatus} from "./recording-input-status";
 
 export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
@@ -24,8 +25,8 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     {preparation&&!preparation.submitted&&<p>日時から仮の会議名を入れています。変更せずに開始できます。開始の確認前には会議や音声を保存しません。</p>}
     {active?<>
       <div className="clock" aria-label="録音経過時間">{formatElapsed(snapshot.elapsedMs)}</div>
-      <dl className="recording-track-status"><div><dt>マイク</dt><dd>{snapshot.microphoneConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="マイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd>{snapshot.systemAudioConnected?"接続状態: 接続済み":"接続状態: 未接続"}<InputLevelMeter label="PCの音声" level={levels.system}/></dd></div></dl>
-      <p>接続状態は録音処理の報告です。入力レベルは受信した音声の測定値で、更新が1秒を超えて止まると値を表示しません。接続や入力レベルは保存の成功を示すものではありません。</p>
+      <dl className="recording-track-status"><div><dt>マイク</dt><dd><RecordingMicrophoneStatus owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/><InputLevelMeter label="マイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd>{snapshot.systemAudioConnected?"開始時の接続: 確認済み":"開始時の接続: 未確認"}<InputLevelMeter label="PCの音声" level={levels.system}/></dd></div></dl>
+      <p>マイクの接続状態は同じ機器の取得処理の最新報告です。PCの音声の接続表示は開始時の確認です。入力レベルは受信音声の測定値で、状態・測定値の更新が1秒を超えて止まると現在の値として表示しません。接続・復帰や入力レベルは保存の成功を示すものではありません。</p>
       <RecordingWriteStatus owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/>
       <InfoPopover label="録音後の解析" details={<p>音声の保存が完了してから文字起こしと話者分離を進めます。準備済みモデルがない場合も音声を保持し、モデル準備後に解析できます。</p>}>解析は録音の保存完了後に行います。</InfoPopover>
     </>:<>

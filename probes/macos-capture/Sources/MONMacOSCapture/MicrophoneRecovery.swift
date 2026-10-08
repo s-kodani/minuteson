@@ -16,6 +16,19 @@ struct MicrophoneRecovery {
     let sourceEpoch: UInt64
     let interruptions: UInt64
     let reason: String?
+
+    enum CodingKeys: String, CodingKey { case state, sourceEpoch, interruptions, reason }
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(state, forKey: .state)
+      try container.encode(sourceEpoch, forKey: .sourceEpoch)
+      try container.encode(interruptions, forKey: .interruptions)
+      if let reason {
+        try container.encode(reason, forKey: .reason)
+      } else {
+        try container.encodeNil(forKey: .reason)
+      }
+    }
   }
 
   let uid: String

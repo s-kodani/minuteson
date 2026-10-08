@@ -15,6 +15,7 @@ mod exports;
 mod generation;
 mod import_controller;
 mod input_levels;
+mod input_status;
 mod local_engine;
 mod minutes_document;
 mod model_application;
@@ -1838,6 +1839,16 @@ fn get_recording_writes(
     }
     RecorderController::writes(window.app_handle(), &session_id)
 }
+#[tauri::command]
+fn get_recording_input_status(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<input_status::Snapshot, String> {
+    if window.label() != "main" && window.label() != "recorder" {
+        return Err("マイク状態は録音画面から確認してください".into());
+    }
+    RecorderController::input_status(window.app_handle(), &session_id)
+}
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplicationCloseActivity {
@@ -2253,6 +2264,7 @@ pub fn run() {
             get_recording_snapshot,
             get_recording_levels,
             get_recording_writes,
+            get_recording_input_status,
             get_capture_test_snapshot,
             get_capture_test_recovery,
             retry_capture_test_recovery,

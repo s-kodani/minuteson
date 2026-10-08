@@ -66,6 +66,20 @@ impl SessionStore {
         snapshot.revision = snapshot.revision.saturating_add(1);
         snapshot.clone()
     }
+    pub(crate) fn update_if(
+        &self,
+        change: impl FnOnce(&mut RecordingSnapshot) -> bool,
+    ) -> Option<RecordingSnapshot> {
+        let mut snapshot = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !change(&mut snapshot) {
+            return None;
+        }
+        snapshot.revision = snapshot.revision.saturating_add(1);
+        Some(snapshot.clone())
+    }
 }
 
 #[cfg(test)]
@@ -91,5 +105,40 @@ mod tests {
         assert_eq!(changed, second_window);
         assert_eq!(second_window.revision, 1);
         assert!(second_window.is_active());
+    }
+    #[test]
+    fn late_input_telemetry_cannot_change_a_stopped_or_different_owner() {
+        let store = SessionStore::default();
+        store.update(|s| {
+            s.phase = RecordingPhase::Recording;
+            s.session_id = Some("current".into());
+        });
+        let update = |s: &mut RecordingSnapshot| {
+            if s.session_id.as_deref() != Some("current")
+                || !matches!(
+                    s.phase,
+                    RecordingPhase::Preparing | RecordingPhase::Recording
+                )
+            {
+                return false;
+            }
+            s.microphone_connected = true;
+            true
+        };
+        assert!(store.update_if(update).unwrap().microphone_connected);
+        store.update(|s| {
+            s.phase = RecordingPhase::Stopping;
+            s.microphone_connected = false;
+        });
+        let before = store.snapshot();
+        assert!(store.update_if(update).is_none());
+        assert_eq!(store.snapshot(), before);
+        store.update(|s| {
+            s.phase = RecordingPhase::Recording;
+            s.session_id = Some("next".into());
+        });
+        let before = store.snapshot();
+        assert!(store.update_if(update).is_none());
+        assert_eq!(store.snapshot(), before);
     }
 }

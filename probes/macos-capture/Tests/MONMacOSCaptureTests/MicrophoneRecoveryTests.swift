@@ -89,7 +89,8 @@ final class MicrophoneRecoveryTests: XCTestCase {
     let json =
       try JSONSerialization.jsonObject(with: JSONEncoder().encode(recovery.status))
       as! [String: Any]
-    XCTAssertEqual(Set(json.keys), ["state", "sourceEpoch", "interruptions"])
+    XCTAssertEqual(Set(json.keys), ["state", "sourceEpoch", "interruptions", "reason"])
+    XCTAssertTrue(json["reason"] is NSNull)
     XCTAssertEqual(json["state"] as? String, "connected")
   }
 

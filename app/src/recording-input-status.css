@@ -1,0 +1,8 @@
+.recording-input-status { display:block; overflow-wrap:anywhere; }
+.recording-input-status[data-input-state="disconnected"],.recording-input-status[data-input-state="unavailable"],.mini-input-status:not([data-input-state="connected"]) { color:var(--danger-text); }
+.mini-shell { padding:8px 14px; }
+.mini-bottom { margin-top:8px; }
+.mini-input-status { font-size:10px; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mini-input-notice { display:flex; align-items:center; gap:4px; margin-top:4px; font-size:10px; line-height:16px; }
+.mini-input-notice span { min-width:0; flex:1; white-space:nowrap; }
+.mini-input-notice button { flex:none; width:24px; height:24px; padding:0; font-size:14px; background:var(--raised); color:var(--text); }

@@ -18,6 +18,9 @@ struct Options {
   var microphoneUID: String? = nil
   var applicationIdentity: CaptureApplicationIdentity? = nil
   var inputLevelOwner: String? = nil
+  var publishesInputStatus: Bool {
+    duration == nil && captureTestOwner == nil && inputLevelOwner != nil
+  }
   var captureTestOwner: String? = nil
   var captureTestLeaseFD: Int32? = nil
 
@@ -872,6 +875,10 @@ private enum Main {
           try? FileManager.default.removeItem(
             at: options.output.appendingPathComponent("input-levels.json"))
         }
+        if options.publishesInputStatus {
+          try? FileManager.default.removeItem(
+            at: options.output.appendingPathComponent("input-status.json"))
+        }
       }
       let manifestURL = options.output.appendingPathComponent("manifest.json")
       // Production recordings require capture-time proof. Bounded measurement
@@ -959,6 +966,12 @@ private enum Main {
             }
             if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
               levelRevision += 1
+              if options.publishesInputStatus,
+                let status = microphone.microphoneRecovery
+              {
+                try? InputStatusReport(ownerId: owner, revision: levelRevision, microphone: status)
+                  .publish(to: options.output)
+              }
               let microphone = microphone.inputLevel
               let systemLevel =
                 (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
