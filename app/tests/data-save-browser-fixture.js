@@ -20,7 +20,7 @@ export const dataSaveIPC = async (command, args) => {
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return dataIdleRead(command);
   if (command === "get_ui_preferences") return dataIdleRead(command);
   if (["get_capture_test_snapshot","get_capture_test_recovery"].includes(command)) return dataIdleRead(command);
-  if (command === "get_analysis_notification_jobs") return dataIdleRead(command);
+  if (["get_analysis_notification_jobs","get_archived_recording_input_notices"].includes(command)) return dataIdleRead(command);
   if (command === "get_application_close_activity") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
   if (command === "get_data_operation_availability") { const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker; return { available: reason === null, reason }; }

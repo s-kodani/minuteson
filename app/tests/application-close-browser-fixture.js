@@ -3,6 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { registerPendingEdits } from "../src/draft-save.ts";
 import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";
+import {archivedFixture,archivedPage,archivedAction,newArchivedRow,reopenArchived} from "./archived-input-browser-fixture.js";
 import { toasts } from "../src/toast";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
@@ -12,6 +13,7 @@ const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnecte
 const importing = { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
 const recoverySeed=sessionStorage.getItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");sessionStorage.removeItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");
 const receiptSeed=sessionStorage.getItem("MON_INPUT_RECEIPT_FIXTURE");sessionStorage.removeItem("MON_INPUT_RECEIPT_FIXTURE");
+const archivedSeed=sessionStorage.getItem("MON_ARCHIVED_INPUT_FIXTURE");sessionStorage.removeItem("MON_ARCHIVED_INPUT_FIXTURE");
 const f = window.closeFixture = {
   recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
@@ -27,6 +29,8 @@ const f = window.closeFixture = {
   inputReceipts:{},receiptBeforeFailure:false,receiptLost:false,receiptHoldBefore:false,receiptHoldAfter:false,receiptPending:[],
   queueState:null,queueHold:{receive:false,render:false,close:false},queueLost:{receive:false,render:false,close:false},queueReplies:[],
   queuedAction:(command,args)=>queuedAction(f,command,args),
+  archived:archivedFixture(),newArchivedRow:options=>newArchivedRow(data,options),archivedAction:args=>archivedAction(f,args),
+  persistArchivedFixture:()=>sessionStorage.setItem("MON_ARCHIVED_INPUT_FIXTURE",JSON.stringify({rows:f.archived.rows,meetings:data.meetings})),
   showQueueBlockers:()=>{for(const key of ["block1","block2","block3"])toasts.show({key,level:"error",message:`合成優先通知 ${key}`});},
   failRecordingSnapshot:false,
   persistInputReceiptFixture:()=>sessionStorage.setItem("MON_INPUT_RECEIPT_FIXTURE",JSON.stringify({recording:f.recording,inputStatus:f.inputStatus,inputReceipts:f.inputReceipts,queueState:f.queueState,refreshInputStatus:f.refreshInputStatus,meetings:data.meetings})),
@@ -42,6 +46,7 @@ const f = window.closeFixture = {
   finishData: published => data.changed({ busy: false, phase: published ? "completed" : "cancelled", retryAllowed: false, backupPreview: null, backupReceipt: published ? { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, omittedPcmCount: 0, omittedLogCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 1024, sha256: "a".repeat(64) } : null }),
 };
 if(receiptSeed){const {meetings,...receiptState}=JSON.parse(receiptSeed);Object.assign(f,receiptState);data.meetings=meetings;}
+if(archivedSeed){const seed=JSON.parse(archivedSeed);data.meetings=seed.meetings;f.archived.rows=reopenArchived(seed.rows);}
 registerPendingEdits(async () => {
   f.flushes++;
   if (f.flushDelay) await new Promise(resolve => setTimeout(resolve, f.flushDelay));
@@ -53,6 +58,9 @@ registerPendingEdits(async () => {
 });
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: clone(args) });
+  if(command==="get_archived_recording_input_notices")return archivedPage(f,args);
+  if(command==="acknowledge_archived_recording_input_notice")return archivedAction(f,args.request);
+  if(command==="get_diarization_tracks"&&f.archived.rows.some(row=>row.meetingId===args.meetingId))return {tracks:[]};
   if(command==="get_ui_preferences")return clone(f.uiPreferences);
   if(command==="save_ui_preferences"){
     if(args.expectedLockVersion!==f.uiPreferences.lockVersion||data.snapshot.busy||data.snapshot.restartRequired)throw Error("模擬表示設定競合／書込停止");

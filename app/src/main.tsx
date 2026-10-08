@@ -3,6 +3,7 @@ import { InfoPopover } from "./info-popover";
 import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
+import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
@@ -619,6 +620,7 @@ function MainWindow() {
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <CaptureTestRecoveryPanel control={captureTestRecovery} locked={operationNavigationLocked||captureBusy||closingBusy||startConfirm.pending} currentTest={!!captureTest.snapshot||!!captureTest.pending}/>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
+          <ArchivedInputNotices locked={navigationLocked} paused={!dataOperation.connected||!!dataOperation.snapshot?.busy||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
           <AudioImportPanel visible={screen==="overview" && !detail} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);

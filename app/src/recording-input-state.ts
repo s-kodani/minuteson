@@ -30,6 +30,15 @@ function checkedDelivery(value:unknown,notice:InputNotice):NoticeDelivery{
     status.interruptions!==notice.interruptions||(notice.kind==="recovered"?status.state!=="connected":!["disconnected","unavailable"].includes(status.state)))throw Error("通知の履歴・受付世代または表示確認が不正です。");
   return {...d,status} as NoticeDelivery;
 }
+/** An actual past event, without a current-input projection or report age. */
+export function checkedHistoricalInputNotice(value:unknown,expectedOwner:string):InputNotice {
+  const n=record(value,["id","input","target","kind","interruptions","recipientId","delivery"]);
+  if(!owner(expectedOwner)||(n.input!=="microphone"&&n.input!=="system")||n.target!=="main"||
+    (n.kind!=="interrupted"&&n.kind!=="recovered")||!integer(n.interruptions,1)||
+    n.id!==`${expectedOwner}:${n.input}:${n.interruptions}:${n.kind}`||!(n.recipientId===null||owner(n.recipientId)))throw Error("保存後通知のイベントまたは所有が不正です。");
+  const delivery=checkedDelivery(n.delivery,n as InputNotice);
+  return {...n,delivery:{...delivery,status:{...delivery.status}}} as InputNotice;
+}
 export function checkedInputStatus(v:unknown,expectedOwner:string):InputStatus{
   const queued=!!v&&typeof v==="object"&&(v as Record<string,unknown>).schemaVersion===4;
   const r=record(v,["schemaVersion","ownerId","revision","reportAgeMs","microphone","system","notices",...(queued?["noticeLoss"]:[])]);

@@ -246,7 +246,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-detail-content .minutes-card>.card-head { flex-wrap:wrap; gap:6px; }
 .meeting-detail-content .minutes-document-status { flex:none; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px; }
 .meeting-detail-content .minutes-document-status .data-updated { padding:4px 8px; font-size:12px; }
-.meeting-detail-content .job-notifications { flex:none; max-height:16dvh; overflow:auto; }
+.meeting-detail-content .job-notifications,.meeting-detail-content .archived-input-notices { flex:none; max-height:16dvh; overflow:auto; }
 .meeting-detail-content .transcript-card>.action-error,.meeting-detail-content .issue-status { flex:none; max-height:10dvh; overflow:auto; font-size:12px; }
 .transcript-split { display:grid; grid-template-columns:216px minmax(0,1fr); gap:24px; flex:1; min-height:0; }
 .transcript-main { display:flex; flex-direction:column; gap:6px; min-width:0; min-height:0; overflow:hidden; }

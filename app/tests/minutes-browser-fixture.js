@@ -98,6 +98,7 @@ async (page) => {
         if (cmd === "get_meeting") return meeting(args.id);
         if (cmd === "capture_available") return false;
         if (cmd === "get_analysis_notification_jobs") return [];
+        if (cmd === "get_archived_recording_input_notices") return {schemaVersion:1,recordings:[],nextCursor:null};
         if (cmd === "get_ui_preferences") return copy(data.ui);
         if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(cmd)) return null;
         if (cmd === "save_ui_preferences") {
