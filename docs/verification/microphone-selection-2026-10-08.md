@@ -30,7 +30,11 @@ Rustの重点検査は、一覧取得6件、端末内設定4件、録音manifest
 
 一覧取得の先行検査では、100ms以内の模擬ヘルパー起動とPIDファイル作成を前提にした時間超過テストが失敗した。時間上限の検査と、直接取得した子PIDの停止・回収の検査を分離し、修正後の6件が終了コード0で成功した。製品の5秒上限や回収処理を緩めていない。既存のネイティブリンクの `__eh_frame` 警告は残る。
 
-最終ソースの通常の `make check` は `/private/tmp/mon-microphone-full-check.log` で実行中であり、全体の合格結果へはまだ加算しない。
+マイク選択追加の製品ソース `107f451` の通常の `make check` は終了コード0で完了した。Python65件、Swift38件、フロントエンド413件と型検査・ビルド、Rust通常1400件・失敗0件・既存37件ignored、CAF4800/4800フレームの読戻しとAVFoundation製CAF読出し1件、Swift生成1件・Rust時計情報統合1件が成功した。Rust通常検査は886.71秒だった。ログは `/private/tmp/mon-microphone-full-check.log` にある。
+
+実行中に追加した[アプリ選択部品](capture-scope-component-2026-10-08.md)は、別のフロントエンド416件・型検査・ビルド・部品ブラウザ9ケースとして扱う。RustとSwiftの製品コードはこの後続追加では変更しておらず、前段の413件と後続の416件を区別する。SwiftPMのユーザーキャッシュ書込み警告は残る。
+
+全体検査の終了と使用中プロセスがないことを確認し、専用Rustキャッシュ `/private/tmp/mon-microphone-proof.fzYEQt` 約2.1GiBを削除した。検査で再生成できるキャッシュだけを回収し、`app/src-tauri/target` 約38MiBと既存release成果物を保持した。
 
 ## 残対応
 
