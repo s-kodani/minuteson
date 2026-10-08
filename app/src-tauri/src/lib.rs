@@ -1845,7 +1845,7 @@ fn get_recording_input_status(
     session_id: String,
 ) -> Result<input_status::Snapshot, String> {
     if window.label() != "main" && window.label() != "recorder" {
-        return Err("マイク状態は録音画面から確認してください".into());
+        return Err("入力状態は録音画面から確認してください".into());
     }
     RecorderController::input_status(window.app_handle(), &session_id)
 }

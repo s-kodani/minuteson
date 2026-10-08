@@ -1181,8 +1181,11 @@ private enum Main {
               if options.publishesInputStatus,
                 let status = microphone.microphoneRecovery
               {
-                try? InputStatusReport(ownerId: owner, revision: levelRevision, microphone: status)
-                  .publish(to: options.output)
+                try? InputStatusReport(
+                  ownerId: owner, revision: levelRevision, microphone: status,
+                  system: systemStats.systemRecovery
+                )
+                .publish(to: options.output)
               }
               let microphone = microphone.inputLevel
               let systemLevel =

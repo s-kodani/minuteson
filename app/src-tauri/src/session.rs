@@ -80,6 +80,28 @@ impl SessionStore {
         snapshot.revision = snapshot.revision.saturating_add(1);
         Some(snapshot.clone())
     }
+    pub(crate) fn update_input_connections(
+        &self,
+        owner: &str,
+        microphone: bool,
+        system: bool,
+    ) -> Option<RecordingSnapshot> {
+        self.update_if(|snapshot| {
+            if snapshot.session_id.as_deref() != Some(owner)
+                || !matches!(
+                    snapshot.phase,
+                    RecordingPhase::Preparing | RecordingPhase::Recording
+                )
+                || (snapshot.microphone_connected == microphone
+                    && snapshot.system_audio_connected == system)
+            {
+                return false;
+            }
+            snapshot.microphone_connected = microphone;
+            snapshot.system_audio_connected = system;
+            true
+        })
+    }
 }
 
 #[cfg(test)]
@@ -113,32 +135,76 @@ mod tests {
             s.phase = RecordingPhase::Recording;
             s.session_id = Some("current".into());
         });
-        let update = |s: &mut RecordingSnapshot| {
-            if s.session_id.as_deref() != Some("current")
-                || !matches!(
-                    s.phase,
-                    RecordingPhase::Preparing | RecordingPhase::Recording
-                )
-            {
-                return false;
-            }
-            s.microphone_connected = true;
-            true
-        };
-        assert!(store.update_if(update).unwrap().microphone_connected);
+        let connected = store
+            .update_input_connections("current", true, true)
+            .unwrap();
+        assert!(connected.microphone_connected && connected.system_audio_connected);
         store.update(|s| {
             s.phase = RecordingPhase::Stopping;
             s.microphone_connected = false;
+            s.system_audio_connected = false;
         });
         let before = store.snapshot();
-        assert!(store.update_if(update).is_none());
+        assert!(store
+            .update_input_connections("current", true, true)
+            .is_none());
         assert_eq!(store.snapshot(), before);
         store.update(|s| {
             s.phase = RecordingPhase::Recording;
             s.session_id = Some("next".into());
         });
         let before = store.snapshot();
-        assert!(store.update_if(update).is_none());
+        assert!(store
+            .update_input_connections("current", true, true)
+            .is_none());
         assert_eq!(store.snapshot(), before);
+    }
+    #[test]
+    fn paired_input_flags_update_once_without_overwriting_the_other_lane() {
+        let store = SessionStore::default();
+        store.update(|s| {
+            s.phase = RecordingPhase::Preparing;
+            s.session_id = Some("current".into());
+        });
+        let mic_only = store
+            .update_input_connections("current", true, false)
+            .unwrap();
+        assert!(mic_only.microphone_connected);
+        assert!(!mic_only.system_audio_connected);
+        assert!(store
+            .update_input_connections("current", true, false)
+            .is_none());
+        assert_eq!(store.snapshot(), mic_only);
+        let pc_only = store
+            .update_input_connections("current", false, true)
+            .unwrap();
+        assert!(!pc_only.microphone_connected);
+        assert!(pc_only.system_audio_connected);
+        assert_eq!(pc_only.revision, mic_only.revision + 1);
+        assert_eq!(store.snapshot(), pc_only);
+        let unknown = store
+            .update_input_connections("current", false, false)
+            .unwrap();
+        assert!(!unknown.microphone_connected && !unknown.system_audio_connected);
+    }
+    #[test]
+    fn no_terminal_phase_can_become_connected_from_late_input_status() {
+        let store = SessionStore::default();
+        for phase in [
+            RecordingPhase::Idle,
+            RecordingPhase::Stopping,
+            RecordingPhase::Saving,
+            RecordingPhase::Error,
+        ] {
+            store.update(|s| {
+                s.phase = phase;
+                s.session_id = Some("current".into());
+            });
+            let before = store.snapshot();
+            assert!(store
+                .update_input_connections("current", true, true)
+                .is_none());
+            assert_eq!(store.snapshot(), before);
+        }
     }
 }

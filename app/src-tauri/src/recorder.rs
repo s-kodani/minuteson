@@ -94,7 +94,7 @@ impl RecorderController {
             .map_err(|_| "録音ロックを取得できません")?;
         let current = active
             .as_mut()
-            .ok_or("マイク状態を確認できる録音がありません")?;
+            .ok_or("入力状態を確認できる録音がありません")?;
         require_level_session(
             &current.session_id,
             &app.state::<SessionStore>().snapshot(),
@@ -109,12 +109,12 @@ impl RecorderController {
         }
         // One backend owner chooses one notification destination. Both windows
         // still read the same retained state; hiding a window never retries audio.
-        let main_visible = app
-            .get_webview_window("main")
-            .is_some_and(|w| w.is_visible().unwrap_or(false));
-        let recorder_visible = app
-            .get_webview_window("recorder")
-            .is_some_and(|w| w.is_visible().unwrap_or(false));
+        let main_visible = app.get_webview_window("main").is_some_and(|w| {
+            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
+        });
+        let recorder_visible = app.get_webview_window("recorder").is_some_and(|w| {
+            crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
+        });
         let target = crate::input_status::notice_target(main_visible, recorder_visible);
         let result = current.input_status.read(session_id, target)?;
         require_level_session(
@@ -123,7 +123,7 @@ impl RecorderController {
             session_id,
         )?;
         if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("マイク状態の確認中に録音プロセスが終了しました".into());
+            return Err("入力状態の確認中に録音プロセスが終了しました".into());
         }
         Ok(result)
     }
@@ -662,28 +662,23 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                     publish(&app, |snapshot| {
                         snapshot.phase = RecordingPhase::Recording;
                         snapshot.microphone_connected = false;
-                        snapshot.system_audio_connected = true;
+                        snapshot.system_audio_connected = false;
                     });
                 }
             } else if state.phase == RecordingPhase::Stopping {
                 announced = true;
             }
         }
-        let connected = RecorderController::input_status(&app, &session_id)
-            .is_ok_and(|status| status.connected());
-        if let Some(snapshot) = app.state::<SessionStore>().update_if(|snapshot| {
-            if snapshot.session_id.as_deref() != Some(&session_id)
-                || !matches!(
-                    snapshot.phase,
-                    RecordingPhase::Preparing | RecordingPhase::Recording
-                )
-                || snapshot.microphone_connected == connected
-            {
-                return false;
-            }
-            snapshot.microphone_connected = connected;
-            true
-        }) {
+        let status = RecorderController::input_status(&app, &session_id).ok();
+        let connected = status.as_ref().is_some_and(|status| status.connected());
+        let system_connected = status
+            .as_ref()
+            .is_some_and(|status| status.system_connected());
+        if let Some(snapshot) = app.state::<SessionStore>().update_input_connections(
+            &session_id,
+            connected,
+            system_connected,
+        ) {
             crate::recording_confirmation_window::session_changed(&app, &snapshot);
             let _ = app.emit("session-changed", snapshot);
         }

@@ -9,6 +9,9 @@ use std::time::{Duration, Instant, SystemTime};
 const LIMIT: u64 = 16 * 1024;
 const SAFE: u64 = 9_007_199_254_740_991;
 pub(crate) const FRESH_MS: u64 = 1000;
+pub(crate) fn notice_window_visible(visible: Option<bool>, minimized: Option<bool>) -> bool {
+    visible == Some(true) && minimized == Some(false)
+}
 pub(crate) fn notice_target(main_visible: bool, recorder_visible: bool) -> Option<&'static str> {
     if main_visible {
         Some("main")
@@ -21,7 +24,7 @@ pub(crate) fn notice_target(main_visible: bool, recorder_visible: bool) -> Optio
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Microphone {
+pub(crate) struct Input {
     pub(crate) state: String,
     source_epoch: u64,
     interruptions: u64,
@@ -33,7 +36,8 @@ struct Publication {
     schema_version: u8,
     owner_id: String,
     revision: u64,
-    microphone: Microphone,
+    microphone: Input,
+    system: Option<Input>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +46,7 @@ pub(crate) struct Notice {
     target: String,
     kind: String,
     interruptions: u64,
+    input: String,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,45 +55,83 @@ pub(crate) struct Snapshot {
     owner_id: String,
     revision: u64,
     report_age_ms: u64,
-    microphone: Microphone,
-    notice: Option<Notice>,
+    microphone: Input,
+    system: Option<Input>,
+    notices: Vec<Notice>,
 }
 impl Snapshot {
     pub(crate) fn connected(&self) -> bool {
         self.report_age_ms <= FRESH_MS && self.microphone.state == "connected"
     }
+    pub(crate) fn system_connected(&self) -> bool {
+        self.report_age_ms <= FRESH_MS
+            && self.system.as_ref().is_some_and(|s| s.state == "connected")
+    }
 }
 fn parse(bytes: &[u8], owner: &str) -> Result<Publication, String> {
     if bytes.is_empty() || bytes.len() as u64 > LIMIT || !crate::input_levels::valid_owner(owner) {
-        return Err("マイク状態の対象または容量が不正です".into());
+        return Err("入力状態の対象または容量が不正です".into());
     }
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let keys = ["state", "sourceEpoch", "interruptions", "reason"];
-    let fields = value["microphone"]
-        .as_object()
-        .ok_or("マイク状態の形式が不正です")?;
-    if fields.len() != keys.len() || keys.iter().any(|key| !fields.contains_key(*key)) {
-        return Err("マイク状態の必須項目がありません".into());
+    let top = value.as_object().ok_or("入力状態の形式が不正です")?;
+    let keys = [
+        "schemaVersion",
+        "ownerId",
+        "revision",
+        "microphone",
+        "system",
+    ];
+    if top.len() != keys.len() || keys.iter().any(|key| !top.contains_key(*key)) {
+        return Err("入力状態の必須項目がありません".into());
+    }
+    for key in ["microphone", "system"] {
+        if key == "system" && value[key].is_null() {
+            continue;
+        }
+        let fields = value[key].as_object().ok_or("入力状態の形式が不正です")?;
+        let keys = ["state", "sourceEpoch", "interruptions", "reason"];
+        if fields.len() != keys.len() || keys.iter().any(|key| !fields.contains_key(*key)) {
+            return Err("入力状態の必須項目がありません".into());
+        }
     }
     let p: Publication = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let m = &p.microphone;
-    let reason_valid = m.reason.as_deref().is_none_or(|reason| {
-        matches!(
-            reason,
-            "identity_changed"
-                | "engine_changed"
-                | "device_disconnected"
-                | "identity_ambiguous"
-                | "metadata_unavailable"
-                | "permission_unavailable"
-                | "restart_failed"
-                | "format_changed"
-        )
-    });
-    if p.schema_version != 1
+    if p.schema_version != 2
         || p.owner_id != owner
         || !(1..=SAFE).contains(&p.revision)
-        || m.source_epoch > SAFE
+        || !valid_input(&p.microphone, "microphone")
+        || p.system.as_ref().is_some_and(|s| !valid_input(s, "system"))
+    {
+        return Err("入力状態の版または取得状態が不正です".into());
+    }
+    Ok(p)
+}
+fn valid_input(m: &Input, input: &str) -> bool {
+    let reason_valid = m.reason.as_deref().is_none_or(|reason| {
+        if input == "microphone" {
+            matches!(
+                reason,
+                "identity_changed"
+                    | "engine_changed"
+                    | "device_disconnected"
+                    | "identity_ambiguous"
+                    | "metadata_unavailable"
+                    | "permission_unavailable"
+                    | "restart_failed"
+                    | "format_changed"
+            )
+        } else {
+            matches!(
+                reason,
+                "stream_stopped"
+                    | "application_unavailable"
+                    | "acquisition_timeout"
+                    | "permission_unavailable"
+                    | "restart_failed"
+                    | "format_changed"
+            )
+        }
+    });
+    !(m.source_epoch > SAFE
         || m.interruptions > SAFE
         || !reason_valid
         || !matches!(
@@ -98,17 +141,22 @@ fn parse(bytes: &[u8], owner: &str) -> Result<Publication, String> {
         || (m.state == "connected"
             && (m.source_epoch == 0 || m.interruptions >= m.source_epoch || m.reason.is_some()))
         || (matches!(m.state.as_str(), "disconnected" | "unavailable")
-            && (m.interruptions == 0 || m.reason.is_none()))
-    {
-        return Err("マイク状態の版または取得状態が不正です".into());
-    }
-    Ok(p)
+            && (m.interruptions == 0 || m.reason.is_none())))
+}
+fn backwards(m: &Input, old: &Input) -> bool {
+    m.source_epoch < old.source_epoch
+        || m.interruptions < old.interruptions
+        || (old.state == "stopped" && m != old)
+        || (m.state == "connected"
+            && (matches!(old.state.as_str(), "disconnected" | "unavailable")
+                || m.interruptions > old.interruptions)
+            && m.source_epoch <= old.source_epoch)
 }
 fn millis(duration: Duration) -> Result<u64, String> {
     u64::try_from(duration.as_millis().saturating_add(1))
         .ok()
         .filter(|v| *v <= SAFE)
-        .ok_or_else(|| "マイク状態の時計が範囲外です".into())
+        .ok_or_else(|| "入力状態の時計が範囲外です".into())
 }
 #[derive(Default)]
 struct Notices {
@@ -117,11 +165,25 @@ struct Notices {
     current: Option<Notice>,
 }
 impl Notices {
+    #[cfg(test)]
     fn observe(&mut self, p: &Publication, age: u64, target: Option<&str>) -> Option<Notice> {
-        if age > FRESH_MS || p.microphone.state == "stopped" {
+        self.observe_input(p, "microphone", age, target)
+    }
+    fn observe_input(
+        &mut self,
+        p: &Publication,
+        input: &str,
+        age: u64,
+        target: Option<&str>,
+    ) -> Option<Notice> {
+        let m = if input == "microphone" {
+            &p.microphone
+        } else {
+            p.system.as_ref()?
+        };
+        if age > FRESH_MS || m.state == "stopped" {
             return None;
         }
-        let m = &p.microphone;
         let kind = if m.state == "connected" {
             "recovered"
         } else {
@@ -136,10 +198,11 @@ impl Notices {
             if let Some(target) = target.filter(|v| matches!(*v, "main" | "recorder")) {
                 *count = m.interruptions;
                 self.current = Some(Notice {
-                    id: format!("{}:microphone:{}:{kind}", p.owner_id, m.interruptions),
+                    id: format!("{}:{input}:{}:{kind}", p.owner_id, m.interruptions),
                     target: target.into(),
                     kind: kind.into(),
                     interruptions: m.interruptions,
+                    input: input.into(),
                 });
             }
         }
@@ -152,14 +215,14 @@ impl Notices {
 pub(crate) struct StatusReader {
     directory: File,
     previous: Option<(Publication, u64, Instant, SystemTime)>,
-    notices: Notices,
+    notices: [Notices; 2],
 }
 impl StatusReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
         Ok(Self {
             directory: crate::input_levels::open_capture_directory(directory)?,
             previous: None,
-            notices: Notices::default(),
+            notices: Default::default(),
         })
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
@@ -167,13 +230,13 @@ impl StatusReader {
         let file = crate::input_levels::open_capture_file_at(&self.directory, "input-status.json")?;
         let before = file.metadata().map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() > LIMIT {
-            return Err("マイク状態のファイルが不正です".into());
+            return Err("入力状態のファイルが不正です".into());
         }
         let modified = before.modified().map_err(|e| e.to_string())?;
         let now = SystemTime::now();
         let age = now
             .duration_since(modified)
-            .map_err(|_| "マイク状態の時計が逆行しました")?;
+            .map_err(|_| "入力状態の時計が逆行しました")?;
         let mut bytes = Vec::new();
         (&file)
             .take(LIMIT + 1)
@@ -181,7 +244,7 @@ impl StatusReader {
             .map_err(|e| e.to_string())?;
         let after = file.metadata().map_err(|e| e.to_string())?;
         if before.len() != after.len() || modified != after.modified().map_err(|e| e.to_string())? {
-            return Err("マイク状態が読込み中に変更されました".into());
+            return Err("入力状態が読込み中に変更されました".into());
         }
         #[cfg(unix)]
         {
@@ -191,36 +254,35 @@ impl StatusReader {
                 || before.dev() != after.dev()
                 || before.ino() != after.ino()
             {
-                return Err("マイク状態の実体が不正です".into());
+                return Err("入力状態の実体が不正です".into());
             }
         }
         let p = parse(&bytes, owner)?;
         let mut age_ms = millis(age)?.saturating_add(millis(started.elapsed())?);
         if let Some((previous, first_age, first_read, first_wall)) = &self.previous {
             if now < *first_wall {
-                return Err("マイク状態の時計が逆行しました".into());
+                return Err("入力状態の時計が逆行しました".into());
             }
             let m = &p.microphone;
             let old = &previous.microphone;
             if p.owner_id != previous.owner_id
                 || p.revision < previous.revision
-                || m.source_epoch < old.source_epoch
-                || m.interruptions < old.interruptions
-                || (old.state == "stopped" && m != old)
-                || (m.state == "connected"
-                    && (matches!(old.state.as_str(), "disconnected" | "unavailable")
-                        || m.interruptions > old.interruptions)
-                    && m.source_epoch <= old.source_epoch)
+                || backwards(m, old)
+                || p.system.is_some() != previous.system.is_some()
+                || p.system
+                    .as_ref()
+                    .zip(previous.system.as_ref())
+                    .is_some_and(|(s, old)| backwards(s, old))
             {
-                return Err("マイク状態の対象・版・取得世代が逆行しました".into());
+                return Err("入力状態の対象・版・取得世代が逆行しました".into());
             }
             if p.revision == previous.revision {
                 if p != *previous {
-                    return Err("同じマイク状態の版に異なる内容があります".into());
+                    return Err("同じ入力状態の版に異なる内容があります".into());
                 }
                 let elapsed = first_read.elapsed().max(
                     now.duration_since(*first_wall)
-                        .map_err(|_| "マイク状態の時計が逆行しました")?,
+                        .map_err(|_| "入力状態の時計が逆行しました")?,
                 );
                 age_ms = age_ms.max(first_age.saturating_add(millis(elapsed)?));
             } else {
@@ -230,16 +292,23 @@ impl StatusReader {
             self.previous = Some((p.clone(), age_ms, Instant::now(), now));
         }
         if age_ms > SAFE {
-            return Err("マイク状態の時計が範囲外です".into());
+            return Err("入力状態の時計が範囲外です".into());
         }
-        let notice = self.notices.observe(&p, age_ms, target);
+        let notices = [
+            self.notices[0].observe_input(&p, "microphone", age_ms, target),
+            self.notices[1].observe_input(&p, "system", age_ms, target),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         Ok(Snapshot {
-            schema_version: 1,
+            schema_version: 2,
             owner_id: p.owner_id,
             revision: p.revision,
             report_age_ms: age_ms,
             microphone: p.microphone,
-            notice,
+            system: p.system,
+            notices,
         })
     }
 }
@@ -251,7 +320,7 @@ mod tests {
     use std::fs;
     const OWNER: &str = "735027d4-a03e-43d3-830a-21e767dfaf88";
     fn value() -> Value {
-        json!({"schemaVersion":1,"ownerId":OWNER,"revision":1,"microphone":{"state":"connected","sourceEpoch":1,"interruptions":0,"reason":null}})
+        json!({"schemaVersion":2,"ownerId":OWNER,"revision":1,"microphone":{"state":"connected","sourceEpoch":1,"interruptions":0,"reason":null},"system":{"state":"connected","sourceEpoch":1,"interruptions":0,"reason":null}})
     }
     fn decoded(v: &Value) -> Publication {
         parse(&serde_json::to_vec(v).unwrap(), OWNER).unwrap()
@@ -279,7 +348,7 @@ mod tests {
         let p = decoded(&value());
         assert_eq!(p.microphone.state, "connected");
         for (field, invalid) in [
-            ("schemaVersion", json!(2)),
+            ("schemaVersion", json!(1)),
             ("ownerId", json!("wrong")),
             ("revision", json!(0)),
             ("revision", json!(SAFE + 1)),
@@ -383,7 +452,7 @@ mod tests {
         write(temp.path(), &v);
         let s = reader.read(OWNER, Some("main")).unwrap();
         assert!(!s.connected());
-        assert!(s.notice.is_none());
+        assert!(s.notices.is_empty());
         v["revision"] = json!(2);
         v["microphone"]["state"] = json!("connected");
         write(temp.path(), &v);
@@ -507,6 +576,192 @@ mod tests {
         assert_eq!(notice_target(false, false), None);
     }
     #[test]
+    fn minimized_or_unconfirmed_window_state_cannot_receive_new_notices() {
+        assert!(notice_window_visible(Some(true), Some(false)));
+        for (visible, minimized) in [
+            (Some(true), Some(true)),
+            (Some(false), Some(false)),
+            (Some(false), Some(true)),
+            (None, Some(false)),
+            (Some(true), None),
+            (None, None),
+        ] {
+            assert!(!notice_window_visible(visible, minimized));
+            assert_eq!(
+                notice_target(notice_window_visible(visible, minimized), true),
+                Some("recorder")
+            );
+        }
+        assert_eq!(
+            notice_target(false, notice_window_visible(Some(true), Some(true))),
+            None
+        );
+    }
+    fn system_interruption(v: &mut Value, count: u64) {
+        v["system"]["state"] = json!("disconnected");
+        v["system"]["interruptions"] = json!(count);
+        v["system"]["reason"] = json!("stream_stopped");
+    }
+    #[test]
+    fn system_binding_requires_schema_two_explicit_availability_and_lane_specific_reasons() {
+        for field in ["state", "sourceEpoch", "interruptions", "reason"] {
+            let mut v = value();
+            v["system"].as_object_mut().unwrap().remove(field);
+            assert!(parse(&serde_json::to_vec(&v).unwrap(), OWNER).is_err());
+        }
+        let mut v = value();
+        v.as_object_mut().unwrap().remove("system");
+        assert!(parse(&serde_json::to_vec(&v).unwrap(), OWNER).is_err());
+        v = value();
+        v["system"] = Value::Null;
+        assert!(decoded(&v).system.is_none());
+        for (field, bad) in [
+            ("sourceEpoch", json!(0)),
+            ("sourceEpoch", json!(SAFE + 1)),
+            ("interruptions", json!(-1)),
+            ("interruptions", json!(1)),
+            ("reason", json!("unknown")),
+            ("state", json!("saved")),
+            ("extra", json!(true)),
+        ] {
+            let mut v = value();
+            v["system"][field] = bad;
+            assert!(parse(&serde_json::to_vec(&v).unwrap(), OWNER).is_err());
+        }
+        v = value();
+        system_interruption(&mut v, 1);
+        for reason in [
+            "stream_stopped",
+            "application_unavailable",
+            "acquisition_timeout",
+            "permission_unavailable",
+            "restart_failed",
+            "format_changed",
+        ] {
+            v["system"]["reason"] = json!(reason);
+            decoded(&v);
+        }
+        for reason in [
+            "device_disconnected",
+            "identity_changed",
+            "metadata_unavailable",
+        ] {
+            v["system"]["reason"] = json!(reason);
+            assert!(parse(&serde_json::to_vec(&v).unwrap(), OWNER).is_err());
+        }
+        interruption(&mut v, 1);
+        v["microphone"]["reason"] = json!("stream_stopped");
+        assert!(parse(&serde_json::to_vec(&v).unwrap(), OWNER).is_err());
+    }
+    #[test]
+    fn unsupported_system_is_not_connected_and_cannot_change_backend_within_one_owner() {
+        for unsupported_first in [true, false] {
+            let (temp, mut reader) = fixture();
+            let mut v = value();
+            if unsupported_first {
+                v["system"] = Value::Null;
+            }
+            write(temp.path(), &v);
+            let r = reader.read(OWNER, Some("main")).unwrap();
+            assert!(r.connected());
+            assert_eq!(r.system_connected(), !unsupported_first);
+            assert!(r.notices.is_empty());
+            v["revision"] = json!(2);
+            v["system"] = if unsupported_first {
+                value()["system"].clone()
+            } else {
+                Value::Null
+            };
+            write(temp.path(), &v);
+            assert!(reader.read(OWNER, Some("main")).is_err());
+        }
+    }
+    #[test]
+    fn system_changes_are_independent_monotonic_and_stop_is_sticky() {
+        let (temp, mut reader) = fixture();
+        reader.read(OWNER, None).unwrap();
+        let mut v = value();
+        system_interruption(&mut v, 1);
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).is_err()); // immutable publication
+        v["revision"] = json!(2);
+        write(temp.path(), &v);
+        let r = reader.read(OWNER, Some("main")).unwrap();
+        assert!(r.connected());
+        assert!(!r.system_connected());
+        assert_eq!(r.notices.len(), 1);
+        assert_eq!(r.notices[0].input, "system");
+        v["revision"] = json!(3);
+        v["system"]["state"] = json!("connected");
+        v["system"]["reason"] = Value::Null;
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).is_err()); // invalid old epoch
+        v["system"]["state"] = json!("reconnecting");
+        v["system"]["sourceEpoch"] = json!(2);
+        write(temp.path(), &v);
+        reader.read(OWNER, None).unwrap();
+        v["revision"] = json!(4);
+        v["system"]["state"] = json!("connected");
+        write(temp.path(), &v);
+        let r = reader.read(OWNER, Some("recorder")).unwrap();
+        assert!(r.connected());
+        assert!(r.system_connected());
+        assert_eq!(r.notices[0].kind, "recovered");
+        assert_eq!(r.notices[0].target, "recorder");
+        v["revision"] = json!(5);
+        v["system"]["interruptions"] = json!(0);
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).is_err());
+        v["system"]["interruptions"] = json!(1);
+        v["system"]["sourceEpoch"] = json!(1);
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).is_err());
+        v["system"]["sourceEpoch"] = json!(2);
+        v["system"]["state"] = json!("stopped");
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, Some("main")).unwrap().notices.is_empty());
+        v["revision"] = json!(6);
+        v["system"]["state"] = json!("connected");
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).is_err());
+    }
+    #[test]
+    fn simultaneous_notices_keep_separate_input_ids_fixed_destinations_and_real_age() {
+        let (temp, mut reader) = fixture();
+        let mut v = value();
+        interruption(&mut v, 1);
+        system_interruption(&mut v, 1);
+        write(temp.path(), &v);
+        assert!(reader.read(OWNER, None).unwrap().notices.is_empty());
+        let r = reader.read(OWNER, Some("main")).unwrap();
+        assert_eq!(r.notices.len(), 2);
+        assert_ne!(r.notices[0].id, r.notices[1].id);
+        assert_eq!(r.notices[0].input, "microphone");
+        assert_eq!(r.notices[1].input, "system");
+        assert!(reader
+            .read(OWNER, Some("recorder"))
+            .unwrap()
+            .notices
+            .iter()
+            .all(|n| n.target == "main"));
+        v["revision"] = json!(2);
+        v["system"]["sourceEpoch"] = json!(2);
+        v["system"]["state"] = json!("connected");
+        v["system"]["reason"] = Value::Null;
+        write(temp.path(), &v);
+        let r = reader.read(OWNER, Some("recorder")).unwrap();
+        assert_eq!(r.notices[0].target, "main");
+        assert_eq!(r.notices[0].kind, "interrupted");
+        assert_eq!(r.notices[1].target, "recorder");
+        assert_eq!(r.notices[1].kind, "recovered");
+        reader.previous.as_mut().unwrap().1 = 2000;
+        write(temp.path(), &v);
+        let stale = reader.read(OWNER, Some("main")).unwrap();
+        assert!(!stale.connected());
+        assert!(!stale.system_connected());
+        assert!(stale.notices.is_empty());
+    }
+    #[test]
     #[ignore = "Swift-owned fixture; run make check-input-status without audio capture"]
     fn swift_generated_input_status_is_owner_bound_and_never_pcm_proof() {
         let path = std::path::PathBuf::from(
@@ -518,17 +773,23 @@ mod tests {
         assert_eq!(r.revision, 4);
         assert_eq!(r.microphone.source_epoch, 2);
         assert_eq!(r.microphone.interruptions, 1);
+        let system = r.system.as_ref().unwrap();
+        assert_eq!(system.source_epoch, 2);
+        assert_eq!(system.interruptions, 1);
         // A standalone run may compile Rust after Swift writes the fixture.
         // Keep its real age: never touch it to manufacture a fresh heartbeat.
         let fresh = r.report_age_ms <= FRESH_MS;
         assert_eq!(r.connected(), fresh);
         if fresh {
-            assert_eq!(r.notice.unwrap().kind, "recovered");
+            assert_eq!(r.notices.len(), 2);
+            assert!(r.notices.iter().all(|n| n.kind == "recovered"));
+            assert!(r.system_connected());
         } else {
-            assert!(r.notice.is_none());
+            assert!(r.notices.is_empty());
+            assert!(!r.system_connected());
         }
         let other = reader.read(OWNER, Some("recorder")).unwrap();
-        if let Some(notice) = other.notice {
+        for notice in other.notices {
             assert_eq!(notice.target, "main");
         }
         assert_eq!(before, fs::read(path.join("input-status.json")).unwrap());

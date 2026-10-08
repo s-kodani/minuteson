@@ -38,7 +38,7 @@ import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
 import {CaptureTestRecoveryPanel,useCaptureTestRecovery} from "./capture-test-recovery";
 import {RecordingWriteStatus} from "./recording-write-status";
-import {RecordingInputProvider,RecordingInputNotice,RecordingMicrophoneStatus} from "./recording-input-status";
+import {RecordingInputProvider,RecordingInputNotice,RecordingCompactInputs} from "./recording-input-status";
 import {waitForCaptureTestStop} from "./capture-test-client";
 import {stopAllPlayback} from "./playback-barrier";
 import {newRecordingPreparation,sameRecordingPreparation,validRecordingTitle,type RecordingPreparation} from "./recording-preparation-state";
@@ -101,7 +101,7 @@ function RecorderPanel() {
       <div className="mini-top">
         <span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />
         <strong>{phaseLabel(state)}</strong>
-        {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingMicrophoneStatus compact owner={state.snapshot.sessionId}/>}
+        {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
       <div className="mini-bottom">

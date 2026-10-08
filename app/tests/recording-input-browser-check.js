@@ -4,11 +4,11 @@ async page=>{
   await page.context().route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/,async route=>{
     const response=await route.fetch(),body=(await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u,'<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');await route.fulfill({response,body});
   });
-  const status=()=>page.locator("[data-input-state]"),state=async value=>page.waitForFunction(v=>document.querySelector("[data-input-state]")?.dataset.inputState===v,value);
+  const status=()=>page.locator('[data-input-kind="microphone"]'),state=async value=>page.waitForFunction(v=>document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState===v,value);
   const count=()=>page.evaluate(()=>window.closeFixture.calls.filter(c=>c.command==="get_recording_input_status").length);
   const set=async(value,epoch,count,target=null,reason=null)=>page.evaluate(([value,epoch,count,target,reason])=>{
     const f=window.closeFixture,id=f.recording.sessionId,kind=value==="connected"?"recovered":"interrupted";
-    f.inputStatus={schemaVersion:1,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{state:value,sourceEpoch:epoch,interruptions:count,reason},notice:target?{id:`${id}:microphone:${count}:${kind}`,target,kind,interruptions:count}:null};
+    f.inputStatus={schemaVersion:2,ownerId:id,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{state:value,sourceEpoch:epoch,interruptions:count,reason},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:target?[{id:`${id}:microphone:${count}:${kind}`,input:"microphone",target,kind,interruptions:count}]:[]};
   },[value,epoch,count,target,reason]);
   const toast=()=>page.locator(".toast-card").filter({hasText:/マイクの取得|同じマイク/u});
   try{
