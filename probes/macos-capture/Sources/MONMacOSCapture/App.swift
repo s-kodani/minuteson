@@ -231,6 +231,9 @@ struct TrackStats: Encodable {
   var inputLevel = PCMInputLevel()
   var microphoneRecovery: MicrophoneRecovery.Status?
   var systemRecovery: SystemAudioRecovery.Status?
+  // Snapshot under the same policy lock. Never mix a newer event suffix with
+  // an older current state, and do not add telemetry to the audio manifest.
+  var inputEventHistory: InputEventHistory?
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
@@ -711,6 +714,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     defer { lock.unlock() }
     var result = pcm.stats
     result.systemRecovery = recovery?.status
+    result.inputEventHistory = recovery?.history
     return result
   }
 
@@ -1076,6 +1080,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     defer { lock.unlock() }
     var result = stats
     result.microphoneRecovery = recovery?.status
+    result.inputEventHistory = recovery?.history
     return result
   }
 }
@@ -1243,7 +1248,9 @@ private enum Main {
               {
                 try? InputStatusReport(
                   ownerId: owner, revision: levelRevision, microphone: status,
-                  system: systemStats.systemRecovery
+                  system: systemStats.systemRecovery,
+                  microphoneHistory: microphone.inputEventHistory,
+                  systemHistory: systemStats.inputEventHistory
                 )
                 .publish(to: options.output)
               }

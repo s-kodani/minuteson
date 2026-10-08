@@ -39,6 +39,7 @@ struct MicrophoneRecovery {
   private var binding: Binding?
   private var interrupted = false
   private var stopped = false
+  private(set) var history = InputEventHistory()
 
   init(uid: String) throws {
     guard InputDevices.validUID(uid) else { throw ProbeError.capture("recovery UID is invalid") }
@@ -76,6 +77,7 @@ struct MicrophoneRecovery {
     state = "connected"
     reason = nil
     interrupted = false
+    if interruptions > 0 { history.append("recovered", status: status) }
   }
 
   func accepts(_ token: Binding) -> Bool {
@@ -86,6 +88,7 @@ struct MicrophoneRecovery {
 
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
     guard !stopped else { return }
+    let first = !interrupted
     if !interrupted {
       interruptions += 1
       interrupted = true
@@ -93,6 +96,7 @@ struct MicrophoneRecovery {
     state = unavailable ? "unavailable" : "disconnected"
     self.reason = reason
     binding = nil
+    if first { history.append("interrupted", status: status) }
   }
 
   mutating func stop() {

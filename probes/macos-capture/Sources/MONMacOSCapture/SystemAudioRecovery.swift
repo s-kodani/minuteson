@@ -20,6 +20,7 @@ struct SystemAudioRecovery {
   private var formatBlocked = false
   private var startedAt: Int64?
   private var lastAttempt: Int64?
+  private(set) var history = InputEventHistory()
 
   init(targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity?, retries: Bool) throws {
     guard targetPID.map({ $0 > 0 }) ?? true,
@@ -78,10 +79,12 @@ struct SystemAudioRecovery {
     state = "connected"
     reason = nil
     interrupted = false
+    if interruptions > 0 { history.append("recovered", status: status) }
   }
 
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
     guard !stopped, !formatBlocked else { return }
+    let first = !interrupted
     if reason == "format_changed" { formatBlocked = true }
     if !interrupted {
       interruptions += 1
@@ -90,6 +93,7 @@ struct SystemAudioRecovery {
     binding = nil
     state = unavailable ? "unavailable" : "disconnected"
     self.reason = reason
+    if first { history.append("interrupted", status: status) }
   }
 
   mutating func expire(at now: Int64) -> Bool {

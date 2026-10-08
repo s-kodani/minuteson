@@ -1,6 +1,12 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+
+check-input-history:
+	@mon_history_dir=$$(mktemp -d /tmp/mon-input-history.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_history_dir/input-status.json"; rmdir "$$mon_history_dir"' EXIT; \
+	env MON_INPUT_HISTORY_FIXTURE_DIR="$$mon_history_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputEventHistoryTests/testBothRapidTransitionsSurviveOneHeartbeatAndExportForRust && \
+	env MON_INPUT_HISTORY_FIXTURE_DIR="$$mon_history_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_input_history -- --ignored
 
 check-speaker-embedding:
 	sh probes/speaker-embedding/check.sh

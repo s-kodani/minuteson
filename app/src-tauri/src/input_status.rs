@@ -6,7 +6,12 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-const LIMIT: u64 = 16 * 1024;
+mod history;
+#[cfg(test)]
+mod history_tests;
+use history::History;
+const LIMIT: u64 = 64 * 1024;
+const LEGACY_LIMIT: u64 = 16 * 1024;
 const SAFE: u64 = 9_007_199_254_740_991;
 pub(crate) const FRESH_MS: u64 = 1000;
 pub(crate) fn notice_window_visible(visible: Option<bool>, minimized: Option<bool>) -> bool {
@@ -38,6 +43,10 @@ struct Publication {
     revision: u64,
     microphone: Input,
     system: Option<Input>,
+    #[serde(default)]
+    microphone_history: Option<History>,
+    #[serde(default)]
+    system_history: Option<History>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,13 +97,16 @@ fn parse(bytes: &[u8], owner: &str) -> Result<Publication, String> {
     }
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let top = value.as_object().ok_or("入力状態の形式が不正です")?;
-    let keys = [
+    let mut keys = vec![
         "schemaVersion",
         "ownerId",
         "revision",
         "microphone",
         "system",
     ];
+    if value["schemaVersion"] == 3 {
+        keys.extend(["microphoneHistory", "systemHistory"]);
+    }
     if top.len() != keys.len() || keys.iter().any(|key| !top.contains_key(*key)) {
         return Err("入力状態の必須項目がありません".into());
     }
@@ -109,13 +121,30 @@ fn parse(bytes: &[u8], owner: &str) -> Result<Publication, String> {
         }
     }
     let p: Publication = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if p.schema_version != 2
+    if !matches!(p.schema_version, 2 | 3)
+        || (p.schema_version == 2 && bytes.len() as u64 > LEGACY_LIMIT)
         || p.owner_id != owner
         || !(1..=SAFE).contains(&p.revision)
         || !valid_input(&p.microphone, "microphone")
         || p.system.as_ref().is_some_and(|s| !valid_input(s, "system"))
     {
         return Err("入力状態の版または取得状態が不正です".into());
+    }
+    if p.schema_version == 3 {
+        if !p.microphone_history.as_ref().is_some_and(|h| {
+            history::closed(&value["microphoneHistory"]) && h.valid(&p.microphone, "microphone")
+        }) || p.system.is_some() != p.system_history.is_some()
+            || p.system
+                .as_ref()
+                .zip(p.system_history.as_ref())
+                .is_some_and(|(s, h)| {
+                    !history::closed(&value["systemHistory"]) || !h.valid(s, "system")
+                })
+        {
+            return Err("入力状態の遷移履歴が不正です".into());
+        }
+    } else if p.microphone_history.is_some() || p.system_history.is_some() {
+        return Err("旧入力状態に遷移履歴があります".into());
     }
     Ok(p)
 }
@@ -281,6 +310,7 @@ impl StatusReader {
             let m = &p.microphone;
             let old = &previous.microphone;
             if p.owner_id != previous.owner_id
+                || p.schema_version != previous.schema_version
                 || p.revision < previous.revision
                 || backwards(m, old)
                 || p.system.is_some() != previous.system.is_some()
@@ -288,6 +318,14 @@ impl StatusReader {
                     .as_ref()
                     .zip(previous.system.as_ref())
                     .is_some_and(|(s, old)| backwards(s, old))
+                || p.microphone_history
+                    .as_ref()
+                    .zip(previous.microphone_history.as_ref())
+                    .is_some_and(|(h, old)| !h.advances(old))
+                || p.system_history
+                    .as_ref()
+                    .zip(previous.system_history.as_ref())
+                    .is_some_and(|(h, old)| !h.advances(old))
             {
                 return Err("入力状態の対象・版・取得世代が逆行しました".into());
             }
