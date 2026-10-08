@@ -11,7 +11,7 @@ mod file;
 mod tests;
 
 const LIMIT: u64 = 128 * 1024;
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Record {
     schema_version: u8,

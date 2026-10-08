@@ -9,6 +9,11 @@ use crate::input_status::{
 use serde::{Deserialize, Serialize};
 use std::{fs::File, time::Instant};
 
+// The portable codec does not acquire a second mutable writer or publish a
+// backup. Wiring the immutable result into archive ownership is a separate step.
+#[allow(dead_code)]
+pub(crate) mod portable;
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Record {

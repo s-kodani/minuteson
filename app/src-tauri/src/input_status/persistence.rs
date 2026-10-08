@@ -39,6 +39,57 @@ struct Final {
     state: String,
 }
 
+/// Redacted, immutable producer diagnostics for recordings without a registered
+/// audio manifest too. Owner provenance never becomes restored IPC authority.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(in crate::input_status) struct HistoricalFinal {
+    owner_id: String,
+    state: String,
+    persistence: Option<Persistence>,
+    unconfirmed_at_stop: bool,
+}
+impl HistoricalFinal {
+    pub(in crate::input_status) fn from_manifest(
+        bytes: &[u8],
+        owner: &str,
+    ) -> Result<Option<Self>, String> {
+        if bytes.is_empty() || bytes.len() > 256 * 1024 {
+            return Err("持ち運ぶ停止時診断の容量が不正です".into());
+        }
+        let report: Final = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if report.input_event_journal_persistence.is_none()
+            && report.input_event_journal_error.is_none()
+        {
+            return Ok(None);
+        }
+        let result = Self {
+            owner_id: report
+                .recording_owner_id
+                .ok_or("停止時診断の所有がありません")?,
+            state: report.state,
+            persistence: report.input_event_journal_persistence,
+            unconfirmed_at_stop: report.input_event_journal_error.is_some(),
+        };
+        result.validate(owner)?;
+        Ok(Some(result))
+    }
+    pub(in crate::input_status) fn validate(&self, owner: &str) -> Result<(), String> {
+        if self.owner_id != owner
+            || !crate::input_levels::valid_owner(owner)
+            || !matches!(self.state.as_str(), "saved" | "failed")
+            || self
+                .persistence
+                .as_ref()
+                .is_some_and(|p| !p.valid() || !p.closed)
+            || (self.persistence.is_none() && !self.unconfirmed_at_stop)
+        {
+            return Err("持ち運ぶ停止時診断の所有または保存結果が不正です".into());
+        }
+        Ok(())
+    }
+}
+
 /// Preserve the writer's final result as historical producer evidence, while
 /// removing the arbitrary native error text (which can contain host paths).
 /// This does not remap an owner, grant notification reception, verify a journal
