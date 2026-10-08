@@ -267,6 +267,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let mut fixed_source = None;
+        let mut fixed_known = None;
         if let Some((job_id, completed_units)) = job {
             let (spec, _) = super::jobs::read_fixed_input(&transaction, job_id)?;
             if spec.kind == JobKind::Diarization {
@@ -311,6 +312,26 @@ impl Storage {
                 fixed_source = Some(source);
             } else if spec.kind != JobKind::Transcription {
                 return Err("未対応の解析候補ジョブです".into());
+            } else if spec.parameters["schemaVersion"] == 3 {
+                let known: super::transcription::known::KnownInput =
+                    serde_json::from_value(spec.parameters["knownInput"].clone())
+                        .map_err(|e| e.to_string())?;
+                let source =
+                    super::transcription::read_analysis_audio_plan(&transaction, meeting_id, None)?;
+                if spec.parameters["source"]
+                    != serde_json::to_value(&source).map_err(|e| e.to_string())?
+                    || known
+                        != super::transcription::known::read(&transaction, meeting_id, &source)?
+                {
+                    return Err("公開直前に固定した保存音声・欠損が変更されています".into());
+                }
+                known.validate(&source)?;
+                if input.config["audioCoverage"]
+                    != serde_json::json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"})
+                {
+                    return Err("保存区間別の候補と固定した音声範囲が一致しません".into());
+                }
+                fixed_known = Some((source, known));
             }
             let valid: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id = ?1 AND meeting_id = ?2 AND kind IN ('transcription','diarization') AND state = 'running' AND completed_units = ?3 AND total_units = ?3 AND input_hash = ?4 AND profile_snapshot_json = ?5 AND output_analysis_id IS NULL)",
@@ -390,6 +411,15 @@ impl Storage {
         let mut last_start = -1;
         let mut total_text_bytes = 0_usize;
         for utterance in &input.utterances {
+            if let Some((source, known)) = &fixed_known {
+                if !known.runs.iter().any(|run| {
+                    source.tracks[run.track_index].id == utterance.track_id
+                        && utterance.start_us >= run.start_us
+                        && utterance.end_us <= run.end_us
+                }) {
+                    return Err("文字起こし候補が固定した保存区間の外側へ出ています".into());
+                }
+            }
             validate_span(
                 &tracks,
                 &utterance.track_id,

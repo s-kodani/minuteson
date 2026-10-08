@@ -6,12 +6,80 @@ pub(crate) mod whisper;
 pub(crate) use restore::restore_saved_results;
 
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
+use crate::storage::KnownInput;
 use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use whisper::WhisperConfig;
+
+fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
+    let current = if p.known_input.is_some() {
+        storage.recorded_analysis_input(&spec.meeting_id)?
+    } else {
+        (storage.recorded_audio_plan(&spec.meeting_id)?, None)
+    };
+    if current != (p.source.clone(), p.known_input.clone()) {
+        return Err("固定した録音入力・欠損・時刻補正が変更されています".into());
+    }
+    Ok(())
+}
+
+fn verify_sources(
+    storage: &Storage,
+    spec: &JobSpec,
+    p: &Parameters,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    check_source(storage, spec, p)?;
+    for track in &p.source.tracks {
+        if p.known_input.is_some() {
+            storage.prepare_analysis_track(&spec.meeting_id, track, cancelled)?;
+        } else {
+            let audio = storage.prepare_track_audio_cancellable(
+                &spec.meeting_id,
+                &track.id,
+                track.start_us,
+                track.end_us,
+                cancelled,
+            )?;
+            if audio.total_frames() != track.total_frames()?
+                || audio.sample_rate != track.sample_rate
+                || audio.channels != track.channels
+            {
+                return Err("固定した入力フレーム数が変更されています".into());
+            }
+        }
+    }
+    check_source(storage, spec, p)
+}
+
+fn unit_audio(
+    storage: &Storage,
+    spec: &JobSpec,
+    p: &Parameters,
+    unit: &Unit,
+    cancelled: &impl Fn() -> bool,
+) -> Result<crate::playback::PreparedAudio, String> {
+    let track = &p.source.tracks[unit.track_index];
+    if let Some(index) = unit.run_index {
+        let run = p
+            .known_input
+            .as_ref()
+            .and_then(|known| known.runs.get(index))
+            .ok_or("固定保存区間がありません")?;
+        storage.prepare_analysis_run(&spec.meeting_id, track, run, cancelled)
+    } else {
+        storage.prepare_track_audio_cancellable(
+            &spec.meeting_id,
+            &track.id,
+            track.start_us,
+            track.end_us,
+            cancelled,
+        )
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -98,33 +166,13 @@ pub(crate) fn retry_preflight(
         Execution::Whisper(&parameters.engine),
         cancelled,
     )?;
-    if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
-        return Err("固定した録音入力が変更されています".into());
-    }
+    check_source(storage, spec, &parameters)?;
     storage.verify_meeting_asset(
         &spec.meeting_id,
         &parameters.source.manifest_asset_id,
         &spec.input_hash,
     )?;
-    for track in &parameters.source.tracks {
-        // Verify every chunk, its format and interval, not merely the manifest.
-        let audio = storage.prepare_track_audio_cancellable(
-            &spec.meeting_id,
-            &track.id,
-            track.start_us,
-            track.end_us,
-            cancelled,
-        )?;
-        if audio.total_frames() != track.total_frames()?
-            || audio.sample_rate != track.sample_rate
-            || audio.channels != track.channels
-        {
-            return Err("固定した入力フレーム数が変更されています".into());
-        }
-    }
-    if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
-        return Err("固定した録音入力・時刻補正が音声準備中に変更されています".into());
-    }
+    verify_sources(storage, spec, &parameters, cancelled)?;
     for output in &decoded.outputs {
         verify_saved_pcm(storage, spec, &parameters, output, cancelled)?;
         let bytes = storage.read_analysis_result(
@@ -169,18 +217,7 @@ fn verify_saved_pcm(
                 .units
                 .get(output.index)
                 .ok_or("完了PCMの区間が範囲外です")?;
-            let track = parameters
-                .source
-                .tracks
-                .get(unit.track_index)
-                .ok_or("完了PCMのトラックがありません")?;
-            let mut audio = storage.prepare_track_audio_cancellable(
-                &spec.meeting_id,
-                &track.id,
-                track.start_us,
-                track.end_us,
-                cancelled,
-            )?;
+            let mut audio = unit_audio(storage, spec, parameters, unit, cancelled)?;
             wave::write_window(
                 &mut audio,
                 unit.window_first,
@@ -202,6 +239,8 @@ struct Parameters {
     units: Vec<Unit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     vocabulary: Option<crate::storage::VocabularySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_input: Option<KnownInput>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -212,6 +251,8 @@ struct Unit {
     core_end: u64,
     window_first: u64,
     window_end: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_index: Option<usize>,
 }
 
 #[derive(Default, Debug, Deserialize, Serialize)]
@@ -272,16 +313,17 @@ fn decode_parameters(
     let parameters: Parameters =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     if spec.kind != JobKind::Transcription
-        || !matches!(parameters.schema_version, 1 | 2)
+        || !matches!(parameters.schema_version, 1 | 2 | 3)
+        || (parameters.schema_version == 3) != parameters.known_input.is_some()
         || spec.input_hash != parameters.source.manifest_hash
         || spec.total_units != Some(parameters.units.len() as i64)
-        || parameters.units != units(&parameters.source)?
+        || parameters.units != planned_units(&parameters.source, parameters.known_input.as_ref())?
     {
         return Err("解析ジョブの入力計画が不正です".into());
     }
     match (&parameters.vocabulary, parameters.schema_version) {
         (None, 1) => {}
-        (Some(snapshot), 2) if parameters.engine.prompt == snapshot.actual_prompt => {
+        (Some(snapshot), 2 | 3) if parameters.engine.prompt == snapshot.actual_prompt => {
             verify(snapshot)?;
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
@@ -335,6 +377,39 @@ fn units(source: &RecordedAudioPlan) -> Result<Vec<Unit>, String> {
                 core_end: end,
                 window_first: first.saturating_sub(rate * 2),
                 window_end: (end + rate * 2).min(frames),
+                run_index: None,
+            });
+            first = end;
+        }
+    }
+    Ok(units)
+}
+
+fn planned_units(
+    source: &RecordedAudioPlan,
+    known: Option<&KnownInput>,
+) -> Result<Vec<Unit>, String> {
+    let Some(known) = known else {
+        return units(source);
+    };
+    known.validate(source)?;
+    if !known.needed(source) {
+        return Err("連続音声へ保存区間別の固定条件を混在させることはできません".into());
+    }
+    let mut units = Vec::new();
+    for (run_index, run) in known.runs.iter().enumerate() {
+        let rate = u64::from(source.tracks[run.track_index].sample_rate);
+        let frames = run.end_frame - run.first_frame;
+        let mut first = 0;
+        while first < frames {
+            let end = (first + rate * 120).min(frames);
+            units.push(Unit {
+                track_index: run.track_index,
+                core_first: first,
+                core_end: end,
+                window_first: first.saturating_sub(rate * 2),
+                window_end: (end + rate * 2).min(frames),
+                run_index: Some(run_index),
             });
             first = end;
         }
@@ -370,14 +445,14 @@ pub(crate) fn enqueue_with_stamp(
         profile,
         Execution::Whisper(&engine),
     )?;
-    let source = storage.recorded_audio_plan(meeting_id)?;
+    let (source, known_input) = storage.recorded_analysis_input(meeting_id)?;
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
-    let units = units(&source)?;
+    let units = planned_units(&source, known_input.as_ref())?;
     let total = units.len() as i64;
     let extra = engine.prompt.clone();
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let parameters=Parameters{schema_version:2,source,engine,units,vocabulary:Some(snapshot)};
+        let parameters=Parameters{schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input};
         Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
@@ -408,9 +483,7 @@ pub(crate) fn process(
             Execution::Whisper(&parameters.engine),
             &cancelled,
         )?;
-        if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
-            return Err("固定した録音入力が変更されています".into());
-        }
+        check_source(storage, &spec, &parameters)?;
         storage.verify_meeting_asset(
             &spec.meeting_id,
             &parameters.source.manifest_asset_id,
@@ -435,36 +508,27 @@ pub(crate) fn process(
                 ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
             whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
         }
-        let mut prepared = Vec::new();
-        for track in &parameters.source.tracks {
-            if cancelled() {
-                return Ok(None);
-            }
-            let audio = storage.prepare_track_audio_cancellable(
-                &spec.meeting_id,
-                &track.id,
-                track.start_us,
-                track.end_us,
-                &cancelled,
-            )?;
-            if audio.total_frames() != track.total_frames()?
-                || audio.sample_rate != track.sample_rate
-                || audio.channels != track.channels
-            {
-                return Err("録音入力のフレーム数が変更されています".into());
-            }
-            prepared.push(audio);
-        }
-        if storage.recorded_audio_plan(&spec.meeting_id)? != parameters.source {
-            return Err("固定した録音入力・時刻補正が音声準備中に変更されています".into());
-        }
+        verify_sources(storage, &spec, &parameters, &cancelled)?;
+        // At most one prepared run, not all gap-separated runs in memory.
+        let mut prepared: Option<(usize, Option<usize>, crate::playback::PreparedAudio)> = None;
         for index in checkpoint.outputs.len()..parameters.units.len() {
             if cancelled() {
                 return Ok(None);
             }
             let unit = &parameters.units[index];
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-            let audio = &mut prepared[unit.track_index];
+            if prepared
+                .as_ref()
+                .is_none_or(|(track, run, _)| *track != unit.track_index || *run != unit.run_index)
+            {
+                prepared = Some((
+                    unit.track_index,
+                    unit.run_index,
+                    unit_audio(storage, &spec, &parameters, unit, &cancelled)?,
+                ));
+                check_source(storage, &spec, &parameters)?;
+            }
+            let audio = &mut prepared.as_mut().unwrap().2;
             let frames = wave::write_window(
                 audio,
                 unit.window_first,
@@ -550,6 +614,7 @@ pub(crate) fn process(
             }
         }
         runtime.verify(&cancelled)?;
+        check_source(storage, &spec, &parameters)?;
         let mut utterances = Vec::new();
         managed::verify(
             &spec.profile_snapshot,
@@ -562,6 +627,13 @@ pub(crate) fn process(
             }
             let unit = &parameters.units[output.index];
             let track = &parameters.source.tracks[unit.track_index];
+            let run = unit
+                .run_index
+                .map(|index| &parameters.known_input.as_ref().unwrap().runs[index]);
+            let origin = run.map_or(track.start_us, |run| {
+                (run.first_frame * 1_000_000 / u64::from(track.sample_rate)) as i64
+            });
+            let known_end = run.map_or(track.end_us, |run| run.end_us);
             let duration = ((unit.window_end - unit.window_first) * 1_000_000
                 / u64::from(track.sample_rate)) as i64;
             let bytes = storage.read_analysis_result(
@@ -581,9 +653,8 @@ pub(crate) fn process(
                 }
                 utterances.push(UtteranceInput {
                     track_id: track.id.clone(),
-                    start_us: track.start_us + window_start as i64 + segment.start_us,
-                    end_us: (track.start_us + window_start as i64 + segment.end_us)
-                        .min(track.end_us),
+                    start_us: origin + window_start as i64 + segment.start_us,
+                    end_us: (origin + window_start as i64 + segment.end_us).min(known_end),
                     text: segment.text,
                     speaker_keys: vec![],
                     confidence: None,
@@ -597,7 +668,24 @@ pub(crate) fn process(
                 right.end_us,
             ))
         });
-        let candidate = storage.finish_transcription_candidate(&spec.meeting_id, job_id, checkpoint.outputs.len() as i64, AnalysisInput { audio_manifest_hash: spec.input_hash.clone(), profile_snapshot: spec.profile_snapshot.clone(), config: serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint","vocabulary":parameters.vocabulary}), speakers: vec![], segments: vec![], utterances })?;
+        check_source(storage, &spec, &parameters)?;
+        let mut config = serde_json::json!({"jobId":job_id,"specHash":job.spec_hash,"retryOfJobId":job.retry_of_job_id,"attempt":job.attempt,"diarization":"pending","timelineAlignment":"unverified","chunkSeconds":120,"contextSeconds":2,"ownership":"segment_midpoint","vocabulary":parameters.vocabulary});
+        if let Some(known) = &parameters.known_input {
+            config["audioCoverage"] = serde_json::json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"});
+        }
+        let candidate = storage.finish_transcription_candidate(
+            &spec.meeting_id,
+            job_id,
+            checkpoint.outputs.len() as i64,
+            AnalysisInput {
+                audio_manifest_hash: spec.input_hash.clone(),
+                profile_snapshot: spec.profile_snapshot.clone(),
+                config,
+                speakers: vec![],
+                segments: vec![],
+                utterances,
+            },
+        )?;
         progress(storage.get_job(job_id)?);
         Ok(Some(candidate))
     })();

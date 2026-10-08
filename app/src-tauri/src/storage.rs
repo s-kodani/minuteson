@@ -45,6 +45,7 @@ mod recordings;
 mod revisions;
 mod speaker_review;
 mod transcription;
+pub(crate) use transcription::known::KnownInput;
 mod ui_preferences;
 pub(crate) mod vocabulary;
 pub use analysis::AnalysisView;

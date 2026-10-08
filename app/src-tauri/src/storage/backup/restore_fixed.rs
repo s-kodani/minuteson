@@ -539,10 +539,28 @@ impl<'p, 's> FixedData<'p, 's> {
     }
 
     pub(super) fn audio_plan(&self, meeting: &str, value: &Value) -> Result<Value, String> {
+        self.analysis_audio_plan(meeting, value, None)
+    }
+
+    pub(super) fn analysis_audio_plan(
+        &self,
+        meeting: &str,
+        value: &Value,
+        known: Option<&super::super::transcription::known::KnownInput>,
+    ) -> Result<Value, String> {
         let mut plan: RecordedAudioPlan =
             serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
         let source = self.ids.source();
-        let expected = if source.deleted_audio.contains(meeting) {
+        let expected = if known.is_some() {
+            super::super::transcription::read_analysis_audio_plan(
+                &source.database,
+                meeting,
+                source
+                    .deleted_audio
+                    .contains(meeting)
+                    .then_some(&source.deleted_audio),
+            )?
+        } else if source.deleted_audio.contains(meeting) {
             super::super::transcription::read_historical_audio_plan(
                 &source.database,
                 meeting,
@@ -553,6 +571,14 @@ impl<'p, 's> FixedData<'p, 's> {
         };
         if plan != expected {
             return Err("固定音声のトラック・区間・時刻・由来が元版と一致しません".into());
+        }
+        if let Some(known) = known {
+            if *known
+                != super::super::transcription::known::read(&source.database, meeting, &expected)?
+            {
+                return Err("固定した保存区間・欠損が復元元の記録と一致しません".into());
+            }
+            known.validate(&expected)?;
         }
         plan.manifest_hash = self.resolve(
             "file_assets",

@@ -8,6 +8,7 @@ pub(crate) struct ClockAudio {
     pub(crate) first_output: u64,
     pub(crate) frames: u64,
     cached_filter: Option<((usize, u32), Filter)>,
+    known_bounds: Option<(u64, u64)>,
 }
 
 impl ClockAudio {
@@ -24,6 +25,7 @@ impl ClockAudio {
             first_output,
             frames: last - first_output,
             cached_filter: None,
+            known_bounds: None,
         })
     }
 
@@ -49,6 +51,7 @@ impl ClockAudio {
             first_output,
             frames: last - first_output,
             cached_filter: None,
+            known_bounds: None,
         })
     }
 
@@ -63,7 +66,17 @@ impl ClockAudio {
         first: u64,
         frames: u64,
     ) -> Result<Vec<u8>, String> {
-        self.read_known(spans, channels, rate, first, frames, None)
+        self.read_known(spans, channels, rate, first, frames, self.known_bounds)
+    }
+
+    pub(crate) fn restrict_to_known(&mut self, first: u64, end: u64) -> Result<(), String> {
+        if end <= first || first < self.first_output || end > self.first_output + self.frames {
+            return Err("固定した保存区間のフレームが範囲外です".into());
+        }
+        self.first_output = first;
+        self.frames = end - first;
+        self.known_bounds = Some((first, end));
+        Ok(())
     }
 
     // Whole-meeting gap labels can also exclude PCM within a physically

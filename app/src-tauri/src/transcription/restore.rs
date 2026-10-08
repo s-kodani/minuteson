@@ -26,6 +26,7 @@ pub(crate) fn restore_saved_results(
     if old.profile_snapshot != new.profile_snapshot
         || before.schema_version != after.schema_version
         || before.units != after.units
+        || before.known_input != after.known_input
         || serde_json::to_value(&before.engine).map_err(|e| e.to_string())?
             != serde_json::to_value(&after.engine).map_err(|e| e.to_string())?
         || !(1..=64).contains(&before.engine.threads)

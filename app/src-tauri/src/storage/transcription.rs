@@ -2,6 +2,7 @@ use super::*;
 use crate::audio_clock::{ClockChunk, ClockLayout, ClockSegment};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+pub(crate) mod known;
 
 #[cfg(all(test, unix))]
 #[path = "transcription_tests.rs"]
@@ -80,6 +81,32 @@ pub(super) fn read_clock_segments(
 }
 
 impl TrackPlan {
+    pub(crate) fn clock_layout(&self) -> Result<ClockLayout, String> {
+        if self
+            .chunks
+            .iter()
+            .any(|chunk| chunk.sample_rate != self.sample_rate || chunk.channels != self.channels)
+        {
+            return Err("時刻補正のトラックと音声区間の形式が一致しません".into());
+        }
+        let layout = ClockLayout::new(
+            &self
+                .chunks
+                .iter()
+                .map(|chunk| ClockChunk {
+                    frames: chunk.frames,
+                    start_us: chunk.start_us,
+                    end_us: chunk.end_us,
+                    segments: &chunk.clock_segments,
+                })
+                .collect::<Vec<_>>(),
+            self.sample_rate,
+        )?;
+        if self.start_us != layout.start_us || self.end_us != layout.end_us {
+            return Err("保存トラックと取得時計の端点が一致しません".into());
+        }
+        Ok(layout)
+    }
     pub(crate) fn total_frames(&self) -> Result<u64, String> {
         if self
             .chunks
@@ -139,7 +166,12 @@ pub(super) fn read_audio_plan(
 ) -> Result<RecordedAudioPlan, String> {
     #[cfg(unix)]
     super::deletion::audio::require_source(transaction, meeting_id)?;
-    read_audio_metadata(transaction, meeting_id, AudioMetadataState::Available)
+    read_audio_metadata(
+        transaction,
+        meeting_id,
+        AudioMetadataState::Available,
+        false,
+    )
 }
 
 /// Restore-only metadata, not playable input or permission to enqueue work.
@@ -151,7 +183,23 @@ pub(super) fn read_historical_audio_plan(
     history: &super::backup::DeletedAudioHistory,
 ) -> Result<RecordedAudioPlan, String> {
     history.verify_meeting(transaction, meeting_id)?;
-    read_audio_metadata(transaction, meeting_id, AudioMetadataState::Deleted)
+    read_audio_metadata(transaction, meeting_id, AudioMetadataState::Deleted, false)
+}
+
+pub(super) fn read_analysis_audio_plan(
+    db: &Connection,
+    meeting: &str,
+    historical: Option<&super::backup::DeletedAudioHistory>,
+) -> Result<RecordedAudioPlan, String> {
+    let state = if let Some(history) = historical {
+        history.verify_meeting(db, meeting)?;
+        AudioMetadataState::Deleted
+    } else {
+        #[cfg(unix)]
+        super::deletion::audio::require_source(db, meeting)?;
+        AudioMetadataState::Available
+    };
+    read_audio_metadata(db, meeting, state, true)
 }
 
 enum AudioMetadataState {
@@ -163,6 +211,7 @@ fn read_audio_metadata(
     transaction: &Connection,
     meeting_id: &str,
     state: AudioMetadataState,
+    known_runs: bool,
 ) -> Result<RecordedAudioPlan, String> {
     let (track_state, chunk_state) = match state {
         AudioMetadataState::Available => ("ready", "ready"),
@@ -231,11 +280,36 @@ fn read_audio_metadata(
             channels,
             chunks,
         };
-        plan.total_frames()?;
+        if known_runs {
+            plan.clock_layout()?;
+            // Missing/corrupt rows cannot be hidden by filtering available rows.
+            let mut query = transaction.prepare("SELECT sequence FROM audio_chunks WHERE track_id=?1 AND meeting_id=?2 ORDER BY start_us,sequence LIMIT 1025").map_err(|e|e.to_string())?;
+            let sequences = query
+                .query_map(params![plan.id, meeting_id], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            if sequences.len() != plan.chunks.len()
+                || sequences
+                    .iter()
+                    .enumerate()
+                    .any(|(index, sequence)| *sequence != index as i64)
+            {
+                return Err("解析入力の保存ファイルに欠損または不正な連番があります".into());
+            }
+        } else {
+            plan.total_frames()?;
+        }
         plans.push(plan);
     }
     if plans.is_empty() || plans.len() > 2 || (source_kind == "audio_import" && plans.len() != 1) {
         return Err("解析対象の保存済み音声トラックが不正です".into());
+    }
+    if known_runs {
+        let count:i64=transaction.query_row("SELECT count(*) FROM audio_tracks WHERE meeting_id=?1 AND ((?2='recording' AND kind IN ('mic','system')) OR (?2='audio_import' AND kind='imported'))",params![meeting_id,source_kind],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if count != plans.len() as i64 {
+            return Err("解析対象の入力が未確定・破損・欠落しています".into());
+        }
     }
     Ok(RecordedAudioPlan {
         manifest_asset_id,

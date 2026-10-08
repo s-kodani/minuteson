@@ -6,6 +6,8 @@ use crate::transcription::{
     RetryRequest,
 };
 use std::os::unix::fs::PermissionsExt;
+#[path = "transcription_tests/known_tests.rs"]
+pub(crate) mod known_tests;
 
 pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperConfig) {
     let storage = Storage::open(root.to_owned()).unwrap();

@@ -32,7 +32,13 @@ impl FixedData<'_, '_> {
             return Err("固定条件はオブジェクトである必要があります".into());
         }
         if let Some(source) = original.get("source") {
-            value["source"] = self.audio_plan(meeting, source)?;
+            let known: Option<crate::storage::transcription::known::KnownInput> = original
+                .get("knownInput")
+                .filter(|value| !value.is_null())
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            value["source"] = self.analysis_audio_plan(meeting, source, known.as_ref())?;
         }
         if let Some(request) = original.get("request") {
             value["request"] = self.request(meeting, request)?;
