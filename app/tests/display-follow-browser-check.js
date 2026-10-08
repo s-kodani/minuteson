@@ -94,9 +94,11 @@ async (page, capturePath, detailUI) => {
   results.push("actual silent full playback seeks to page 2 and the current row, preserving slider focus and scrolling only transcript body; OFF never moves it");
   await port.hover();await page.mouse.wheel(0,-350);await resume.waitFor();
   await slider.fill("4800000");await pause();
+  const pausedCheckpoint=await slider.inputValue();
+  check(Number(pausedCheckpoint)>=4800000,"pause moved behind the requested seek");
   check((await pages.innerText()).includes("2 / 3"),"manual wheel failed to suspend page following");
   await mode.selectOption("system");await player.getByRole("button",{name:"再生",exact:true}).waitFor();
-  check(await resume.isVisible()&&await slider.inputValue()==="4800000","track change reset manual suspension or paused checkpoint");
+  check(await resume.isVisible()&&await slider.inputValue()===pausedCheckpoint,`track change reset manual suspension or paused checkpoint (before=${pausedCheckpoint}, after=${await slider.inputValue()}, suspended=${await resume.isVisible()})`);
   await player.getByRole("button",{name:"再生",exact:true}).click();await resume.click();await expectPage("3 / 3");await pause();
   check(Number(await slider.inputValue())>=4800000&&await speed.inputValue()==="1","resume restarted audio or changed rate");
   results.push("manual wheel suspends even cross-page seeks; track switching retains suspension, frame and paused state; explicit resume follows without restarting audio");

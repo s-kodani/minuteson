@@ -32,7 +32,13 @@ async (page,capturePath,detailUI) => {
   const originalReads=await reads();await frozen.evaluate(e=>window.frozenSpeakerNode=e);
   const drawer=page.getByRole("dialog",{name:"議事録の目次・根拠",exact:true});
   const close=async()=>{if(await drawer.isVisible())await drawer.getByRole("button",{name:"議事録の目次・根拠を閉じる",exact:true}).click();};
-  const open=async()=>{const trigger=page.getByRole("button",{name:"議事録の目次・根拠を開く",exact:true});if(await trigger.isVisible()&&await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();};
+  const open=async()=>{
+    // Resize events commit asynchronously. Wait for the real right-side host
+    // to adopt the viewport before deciding whether its drawer needs opening.
+    await page.waitForFunction(()=>{const pane=document.querySelector('.workspace-panel-shell[data-side="right"]');return pane?.getAttribute("data-narrow")===String(matchMedia("(max-width: 1119px)").matches);});
+    const trigger=page.getByRole("button",{name:"議事録の目次・根拠を開く",exact:true});
+    if(await trigger.isVisible()&&await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();
+  };
   for(const width of [1280,960])for(const theme of ["light","dark"]){
     await close();await page.setViewportSize({width,height:820});
     await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);

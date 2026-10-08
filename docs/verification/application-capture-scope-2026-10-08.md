@@ -24,7 +24,9 @@ Rust重点18件が終了コード0で成功した。このうち今回追加し�
 
 製品MainWindowの合成IPCブラウザ15ケースが終了コード0で成功した。全体録音での一覧取得なし、明示選択、同名アプリ、確認取消、二重実行、確認中と編集保存中の再起動・終了・識別子変更、一覧失敗と明示再確認、不正一覧、画面移動後の遅い応答、開始応答喪失を扱う。ネイティブの最終受付拒否は合成IPCの挙動として確認しており、実機の録音開始試験とは区別する。
 
-ログは `/private/tmp/mon-application-selection-native.log`、`/private/tmp/mon-application-selection-swift.log`、`/private/tmp/mon-application-selection-unit.log`、`/private/tmp/mon-application-selection-build-final.log` と `output/playwright/application-scope-focused-retry-2026-10-08/` にある。選択欄の見た目調整後の全画面回帰とネイティブ全体検査は実行中で、まだ合格扱いにしない。先行の重点画面検査15件、マイク15件、独立部品9件、終了22件や過去の全体結果を重複加算しない。
+製品ソース `a5d6ba4` の通常の全体検査は終了コード0で完了した。Python65件、Swift42件、フロントエンド416件と型検査・ビルド、Rust通常1406件・失敗0件・既存37件ignored、CAF全4800フレーム・AVFoundation製CAF読出し1件・Swift生成1件・Rust時計情報統合1件が成功した。ログは `/private/tmp/mon-application-selection-full-check.log` にある。後続の録音準備変更とは検査時点を区別する。
+
+全画面回帰では、幅変更後のReact配置状態と、無音再生を実際に停止した位置を待たずに判断する検査の問題が見つかった。検査を修正し、固定根拠7ケースと文字サイズ・追従18ケースはそれぞれ終了コード0で成功した。現在の全画面再実行は `/private/tmp/mon-application-selection-ui-full-proof.log` と `output/playwright/application-scope-full-proof-2026-10-08/` に記録しており、まだ全体合格扱いにしない。重点検査と過去の全体結果を重複加算しない。
 
 ## 残対応
 
