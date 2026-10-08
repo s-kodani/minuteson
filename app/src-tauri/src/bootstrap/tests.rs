@@ -275,6 +275,58 @@ fn bootstrap_exclusive_control_lock_survives_initialization_and_releases_on_drop
     drop(s);
     assert!(Bootstrap::open(&f.config, &f.legacy).is_ok());
 }
+
+#[test]
+fn bootstrap_owner_drop_releases_its_lock_despite_a_retained_duplicate_descriptor() {
+    let f = Fixture::new();
+    let (b, s) = f.start();
+    // Negative control: closing a bare locked File does not release the
+    // shared flock while a duplicate survives. This reproduces the old
+    // lifetime bug without depending on concurrent-spawn scheduling.
+    let control_path = f.config.join("synthetic-negative-control.lock");
+    let bare = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&control_path)
+        .unwrap();
+    bare.try_lock().unwrap();
+    let retained = bare.try_clone().unwrap();
+    drop(bare);
+    let contender = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&control_path)
+        .unwrap();
+    assert!(contender.try_lock().is_err());
+    retained.unlock().unwrap();
+    contender.try_lock().unwrap();
+    drop(retained);
+    drop(contender);
+
+    // Models the shared open file description inherited before another
+    // thread's spawn reaches exec. CLOEXEC does not close it before exec.
+    let inherited = b.lock.try_clone().unwrap();
+    let saved = std::fs::read(f.config.join(NAME)).unwrap();
+    // Failed acquisition must not create an unlocking guard or release b.
+    for _ in 0..2 {
+        assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+        assert!(b.view().is_ok());
+    }
+    drop(s);
+    drop(b);
+    let next = Bootstrap::open(&f.config, &f.legacy).unwrap();
+    assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), saved);
+    assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+    // The stale raw descriptor's eventual close cannot unlock next's
+    // separately acquired file description.
+    drop(inherited);
+    assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+    assert!(next.view().is_ok());
+    drop(next);
+    assert!(Bootstrap::open(&f.config, &f.legacy).is_ok());
+}
 #[test]
 fn bootstrap_pending_intent_replays_on_old_root_even_when_target_disappears_and_cancel_deletes_nothing(
 ) {

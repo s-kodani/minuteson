@@ -258,6 +258,29 @@ struct State {
     uncertain: bool,
 }
 
+// An unrelated concurrent spawn can retain a duplicate of the open file
+// description until exec, even with O_CLOEXEC. Closing our descriptor alone
+// would then leave the bootstrap flock held past this owner's lifetime.
+// Construct the guard only AFTER acquisition; a denied opener must never
+// unlock the existing owner's lock.
+struct BootstrapLock(File);
+impl std::ops::Deref for BootstrapLock {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for BootstrapLock {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for BootstrapLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct View {
@@ -276,7 +299,6 @@ pub(crate) struct Bootstrap {
     directory: File,
     config: PathBuf,
     identity: Identity,
-    lock: File,
     lock_identity: Identity,
     selected: PathBuf,
     selected_identity: Identity,
@@ -284,6 +306,8 @@ pub(crate) struct Bootstrap {
     models_root: PathBuf,
     state: Mutex<State>,
     restart_required: std::sync::atomic::AtomicBool,
+    // Release only after the owner's other fields have been dropped.
+    lock: BootstrapLock,
 }
 
 impl Bootstrap {
@@ -327,16 +351,17 @@ impl Bootstrap {
         if fd < 0 {
             return Err("起動設定のロックを開けません。設定を保持します".into());
         }
-        let mut lock = unsafe { File::from_raw_fd(fd) };
+        let lock = unsafe { File::from_raw_fd(fd) };
         if !regular(&lock.metadata().map_err(|e| e.to_string())?, true) {
             return Err("起動設定のロックの実体・権限が不正です".into());
         }
         lock.try_lock().map_err(|e| {
             format!("同じ起動設定のアプリが実行中、または排他を確認できません: {e}")
         })?;
+        let mut lock = BootstrapLock(lock);
         let lock_identity = Identity::read(&lock.metadata().map_err(|e| e.to_string())?)?;
         let mut stamp = vec![];
-        (&mut lock)
+        (&mut *lock)
             .take(128)
             .read_to_end(&mut stamp)
             .map_err(|e| e.to_string())?;
