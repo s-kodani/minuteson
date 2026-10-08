@@ -1,6 +1,12 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery
+
+check-system-recovery:
+	@mon_system_dir=$$(mktemp -d /tmp/mon-system-recovery.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_system_dir/manifest.json" "$$mon_system_dir/microphone.caf" "$$mon_system_dir/system.caf"; rmdir "$$mon_system_dir"' EXIT; \
+	env MON_SYSTEM_RECOVERY_FIXTURE_DIR="$$mon_system_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter SystemAudioRecoveryTests/testNormalRecorderRebindsWithoutAdoptingOldErrorsOrPCMAndExportsRealCAF && \
+	env MON_SYSTEM_RECOVERY_FIXTURE_DIR="$$mon_system_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_system_rebinding_retains_pcm_gap_and_continuous_microphone -- --ignored
 
 check-input-status:
 	@mon_status_dir=$$(mktemp -d /tmp/mon-input-status.XXXXXX) || exit 1; \

@@ -3,7 +3,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-struct CaptureApplicationIdentity: Codable, Equatable {
+struct CaptureApplicationIdentity: Codable, Equatable, Sendable {
   let pid: pid_t
   let bundleIdentifier: String
   let launchTimeUs: Int64

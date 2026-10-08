@@ -1,0 +1,699 @@
+import AVFoundation
+import CoreMedia
+import Foundation
+import ScreenCaptureKit
+import XCTest
+
+@testable import MONMacOSCapture
+
+private final class SystemTestTime: @unchecked Sendable {
+  private let lock = NSLock()
+  private var time: Int64 = 1_000_000_000
+  private var allowed = true
+  func read() -> Int64? { lock.withLock { time } }
+  func set(_ value: Int64) { lock.withLock { time = value } }
+  func mayContinue() -> Bool { lock.withLock { allowed } }
+  func requestStop() { lock.withLock { allowed = false } }
+}
+
+private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable {
+  let native: SCStream? = nil
+  let applicationName: String? = "confirmed application"
+  let bundleIdentifier: String? = "com.example.confirmed"
+  private let lock = NSLock()
+  private var held: Bool
+  private var continuation: CheckedContinuation<Void, any Error>?
+  private var starts = 0
+  private var stops = 0
+  private var detachments = 0
+  private var stopAction: (@Sendable () -> Void)?
+  private let startFailure: Bool
+  init(held: Bool = false, startFailure: Bool = false) {
+    self.held = held
+    self.startFailure = startFailure
+  }
+  var counts: (Int, Int, Int) { lock.withLock { (starts, stops, detachments) } }
+  func start() async throws {
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, any Error>) in
+      let wait = lock.withLock {
+        starts += 1
+        if held {
+          self.continuation = continuation
+          return true
+        }
+        return false
+      }
+      if !wait {
+        if startFailure {
+          continuation.resume(throwing: ProbeError.capture("synthetic start failure"))
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+  func release() {
+    let pending = lock.withLock {
+      held = false
+      let pending = continuation
+      continuation = nil
+      return pending
+    }
+    pending?.resume()
+  }
+  func stop() async throws { lock.withLock { stops += 1 } }
+  func requestStop(_ completion: @escaping @Sendable (Error?) -> Void) {
+    let action = lock.withLock {
+      stops += 1
+      let action = stopAction
+      stopAction = nil
+      return action
+    }
+    action?()
+    completion(nil)
+  }
+  func onStop(_ action: @escaping @Sendable () -> Void) { lock.withLock { stopAction = action } }
+  func detach() throws { lock.withLock { detachments += 1 } }
+}
+
+private final class SilentApplicationIdentity: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current: CaptureApplicationIdentity
+  init(_ identity: CaptureApplicationIdentity) { current = identity }
+  func set(_ identity: CaptureApplicationIdentity) { lock.withLock { current = identity } }
+  func require(_ identity: CaptureApplicationIdentity) throws {
+    guard lock.withLock({ current == identity }) else {
+      throw ProbeError.capture("synthetic PID reuse")
+    }
+  }
+}
+
+private final class SilentSystemFactory: @unchecked Sendable {
+  private let lock = NSLock()
+  let sources: [SilentSystemSource]
+  private var scopes: [(pid_t?, CaptureApplicationIdentity?)] = []
+  init(_ sources: [SilentSystemSource]) { self.sources = sources }
+  var calls: Int { lock.withLock { scopes.count } }
+  var observedScopes: [(pid_t?, CaptureApplicationIdentity?)] { lock.withLock { scopes } }
+  func make(_ recorder: SystemAudioRecorder, _ token: SystemAudioRecovery.Binding) throws
+    -> any SystemCaptureStream
+  {
+    let scope = recorder.confirmedScope()
+    return try lock.withLock {
+      let index = scopes.count
+      guard index < sources.count else { throw ProbeError.capture("unexpected additional source") }
+      scopes.append(scope)
+      return sources[index]
+    }
+  }
+}
+
+final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  private let identity = CaptureApplicationIdentity(
+    pid: 321, bundleIdentifier: "com.example.confirmed", launchTimeUs: 1_700_000_000_000_000)
+
+  private func clock() throws -> CaptureClockDomain {
+    try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      CaptureClockReading(
+        hostBeforeNs: 999_999_990, continuousNs: 1_000_000_000,
+        utcMs: 1_700_000_000_000, hostAfterNs: 1_000_000_010)
+    }
+  }
+  private func wait(_ predicate: () -> Bool) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    while !predicate(), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    XCTAssertTrue(predicate(), "owned asynchronous operation did not reach the expected state")
+  }
+  private func sample(frames: Int = 480, value: Float = 0.25, rate: Double = 48000) throws
+    -> CMSampleBuffer
+  {
+    var format = AudioStreamBasicDescription(
+      mSampleRate: rate, mFormatID: kAudioFormatLinearPCM,
+      mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+      mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
+      mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
+    var description: CMAudioFormatDescription?
+    XCTAssertEqual(
+      CMAudioFormatDescriptionCreate(
+        allocator: kCFAllocatorDefault, asbd: &format, layoutSize: 0, layout: nil,
+        magicCookieSize: 0, magicCookie: nil, extensions: nil,
+        formatDescriptionOut: &description), noErr)
+    let values = (0..<frames * 2).map { $0 % 2 == 0 ? value : -value }
+    var block: CMBlockBuffer?
+    XCTAssertEqual(
+      CMBlockBufferCreateWithMemoryBlock(
+        allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: values.count * 4,
+        blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
+        dataLength: values.count * 4, flags: 0, blockBufferOut: &block), noErr)
+    let data = try XCTUnwrap(block)
+    values.withUnsafeBytes {
+      XCTAssertEqual(
+        CMBlockBufferReplaceDataBytes(
+          with: $0.baseAddress!, blockBuffer: data, offsetIntoDestination: 0, dataLength: $0.count),
+        noErr)
+    }
+    var sample: CMSampleBuffer?
+    XCTAssertEqual(
+      CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+        allocator: kCFAllocatorDefault, dataBuffer: data,
+        formatDescription: try XCTUnwrap(description),
+        sampleCount: frames, presentationTimeStamp: CMTime(value: 77, timescale: 1),
+        packetDescriptions: nil, sampleBufferOut: &sample), noErr)
+    return try XCTUnwrap(sample)
+  }
+  private func directory() throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "mon-system-recovery-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+    return url
+  }
+  private func recorder(
+    _ directory: URL, _ factory: SilentSystemFactory, _ time: SystemTestTime,
+    retries: Bool = true,
+    requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void = { _ in }
+  ) throws -> SystemAudioRecorder {
+    SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"), clock: try clock(),
+      levelsEnabled: true, retries: retries, factory: { try factory.make($0, $1) },
+      now: time.read, requireIdentity: requireIdentity, mayContinue: time.mayContinue)
+  }
+
+  func testFrozenApplicationScopeRejectsGlobalFallbackPIDReuseAndUnconfirmedRetry() throws {
+    XCTAssertThrowsError(
+      try SystemAudioRecovery(targetPID: identity.pid, applicationIdentity: nil, retries: true))
+    XCTAssertThrowsError(
+      try SystemAudioRecovery(targetPID: 999, applicationIdentity: identity, retries: true))
+    let policy = try SystemAudioRecovery(
+      targetPID: identity.pid, applicationIdentity: identity, retries: true)
+    try policy.requireScope(targetPID: identity.pid, identity: identity)
+    for changed in [
+      nil,
+      CaptureApplicationIdentity(
+        pid: identity.pid, bundleIdentifier: identity.bundleIdentifier,
+        launchTimeUs: identity.launchTimeUs + 1),
+    ] {
+      XCTAssertThrowsError(try policy.requireScope(targetPID: identity.pid, identity: changed))
+    }
+    XCTAssertThrowsError(try policy.requireScope(targetPID: nil, identity: nil))
+    let system = try SystemAudioRecovery(targetPID: nil, applicationIdentity: nil, retries: true)
+    XCTAssertThrowsError(try system.requireScope(targetPID: identity.pid, identity: identity))
+  }
+
+  func testOnlyUnboundedConfirmedScreenCaptureOptionsEnableRecovery() throws {
+    let output = ["--output", "/tmp/mon-system-option-test"]
+    let controlled = ["--stop-on-file", "--parent-pid", "1234", "--until-stopped"]
+    let json = String(decoding: try JSONEncoder().encode(identity), as: UTF8.self)
+    XCTAssertTrue(try Options.parse(output + controlled).recoversSystemAudio)
+    XCTAssertTrue(
+      try Options.parse(
+        output + controlled + [
+          "--mode", "application", "--pid", "321", "--application-identity", json,
+        ]
+      ).recoversSystemAudio)
+    for args in [
+      [], ["--duration", "14400"], controlled + ["--mode", "application", "--pid", "321"],
+      controlled + ["--backend", "coreaudio", "--mode", "application", "--pid", "321"],
+      [
+        "--stop-on-file", "--parent-pid", "1234", "--microphone-uid", "fixed-mic",
+        "--five-second-test", "12345678-1234-4234-8234-123456789abc",
+      ],
+    ] {
+      XCTAssertFalse(try Options.parse(output + args).recoversSystemAudio)
+    }
+  }
+
+  func testApplicationReacquisitionCannotFollowARestartedProcessOrFallbackToWholePC() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([old, current])
+    let time = SystemTestTime()
+    let application = SilentApplicationIdentity(identity)
+    let recorder = try recorder(directory, factory, time, requireIdentity: application.require)
+    try await recorder.start(targetPID: identity.pid, applicationIdentity: identity)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertTrue(factory.observedScopes.allSatisfy { $0.0 == identity.pid && $0.1 == identity })
+    let reused = CaptureApplicationIdentity(
+      pid: identity.pid, bundleIdentifier: identity.bundleIdentifier,
+      launchTimeUs: identity.launchTimeUs + 1)
+    application.set(reused)
+    time.set(3_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    recorder.receive(
+      from: current, sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "application_unavailable")
+    XCTAssertEqual(recorder.confirmedScope().0, identity.pid)
+    XCTAssertEqual(recorder.confirmedScope().1, identity)
+    do {
+      try await recorder.stop()
+      XCTFail("changed application cannot publish complete capture")
+    } catch {}
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testStopDrainsFinalPartialPacketButRejectsSubsequentSamples() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource()
+    let factory = SilentSystemFactory([source])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    try await wait { recorder.readyForPCM }
+    // Build inside the callback to avoid transferring a non-Sendable buffer.
+    source.onStop { [self] in
+      do {
+        recorder.receive(
+          from: source, sampleBuffer: try sample(frames: 17, value: 0.5),
+          observation: .timestamp(1_010_000_000))
+      } catch { XCTFail("synthetic final packet failed: \(error)") }
+    }
+    try await recorder.stop()
+    XCTAssertEqual(recorder.snapshot().frames, 497)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(value: 9), observation: .timestamp(1_020_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 497)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 497)
+    try await recorder.stop()
+    XCTAssertEqual(source.counts.1, 1)
+  }
+
+  func testFailedRestartRemainsOneEpisodeAndNextConfirmedAttemptCanRecover() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let failed = SilentSystemSource(startFailure: true)
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([old, failed, current])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "restart_failed")
+    XCTAssertEqual(failed.counts.1, 1)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 2)
+    time.set(3_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.interruptions, 1)
+    recorder.sourceEnded(failed)
+    try await wait { recorder.readyForPCM }
+    recorder.receive(
+      from: current, sampleBuffer: try sample(value: 0.5), observation: .timestamp(1_030_000_000))
+    try await recorder.stop()
+    XCTAssertEqual(recorder.snapshot().frames, 960)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.sourceEpoch, 3)
+  }
+
+  func testTimeoutRetainsSingleFlightAndLateResultCannotActivate() throws {
+    var policy = try SystemAudioRecovery(targetPID: nil, applicationIdentity: nil, retries: true)
+    let token = try policy.begin(at: 1_000_000_000)
+    XCTAssertFalse(policy.expire(at: 5_999_999_999))
+    XCTAssertTrue(policy.expire(at: 6_000_000_000))
+    XCTAssertEqual(policy.operation, token)
+    XCTAssertThrowsError(try policy.activate(token))
+    XCTAssertThrowsError(try policy.begin(at: 7_000_000_000))
+    for now in [7_000_000_000, 8_000_000_000] { XCTAssertTrue(policy.expire(at: Int64(now))) }
+    XCTAssertEqual(policy.status.interruptions, 1)
+    policy.operationFinished(token)
+    let replacement = try policy.begin(at: 9_000_000_000)
+    policy.operationFinished(token)
+    XCTAssertEqual(policy.operation, replacement)
+    XCTAssertThrowsError(try policy.activate(token))
+    try policy.activate(replacement)
+    policy.operationFinished(replacement)
+    XCTAssertTrue(policy.accepts(replacement))
+    XCTAssertFalse(policy.accepts(token))
+  }
+
+  func testRetryRateStopAndFormatMismatchNeverCreateNewSource() throws {
+    var policy = try SystemAudioRecovery(targetPID: nil, applicationIdentity: nil, retries: true)
+    let original = try policy.begin(at: 1_000_000_000)
+    try policy.activate(original)
+    policy.operationFinished(original)
+    policy.interrupt("stream_stopped")
+    XCTAssertThrowsError(try policy.begin(at: 1_999_999_999))
+    XCTAssertThrowsError(try policy.begin(at: 0))
+    let next = try policy.begin(at: 2_000_000_000)
+    try policy.activate(next)
+    policy.operationFinished(next)
+    policy.interrupt("format_changed", unavailable: true)
+    policy.interrupt("application_unavailable", unavailable: true)
+    XCTAssertEqual(policy.status.reason, "format_changed")
+    XCTAssertThrowsError(try policy.begin(at: 3_000_000_000))
+    policy.stop()
+    let stopped = policy.status
+    policy.interrupt("stream_stopped")
+    XCTAssertFalse(policy.expire(at: 9_000_000_000))
+    XCTAssertEqual(policy.status, stopped)
+    XCTAssertThrowsError(try policy.begin(at: 10_000_000_000))
+    XCTAssertThrowsError(try policy.activate(next))
+  }
+
+  func testNormalRecorderRebindsWithoutAdoptingOldErrorsOrPCMAndExportsRealCAF() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([old, current])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    recorder.sourceEnded(old)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "stream_stopped")
+    recorder.receive(
+      from: old, sampleBuffer: try sample(value: 9), observation: .timestamp(1_010_000_000))
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertTrue(factory.observedScopes.allSatisfy { $0.0 == nil && $0.1 == nil })
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.sourceEpoch, 2)
+    recorder.sourceEnded(old)
+    recorder.receive(
+      from: old, sampleBuffer: try sample(value: 9), observation: .timestamp(1_020_000_000))
+    try await wait { recorder.readyForPCM }
+    recorder.receive(
+      from: current, sampleBuffer: try sample(value: 0.5), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 960)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    try await recorder.stop()
+    XCTAssertEqual(current.counts.1, 1)
+    let micURL = directory.appendingPathComponent("microphone.caf")
+    let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2))
+    var micFile: AVAudioFile? = try AVAudioFile(
+      forWriting: micURL, settings: format.settings,
+      commonFormat: .pcmFormatFloat32, interleaved: false)
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1920))
+    buffer.frameLength = 1920
+    for channel in 0..<2 {
+      for frame in 0..<1920 {
+        buffer.floatChannelData![channel][frame] = channel == 0 ? 0.125 : -0.125
+      }
+    }
+    try XCTUnwrap(micFile).write(from: buffer)
+    micFile = nil
+    var mic = TrackStats(frames: 1920, sampleRate: 48000, channels: 2)
+    mic.recordSavedClock(.timestamp(1_000_000_000), frames: 1920, sourceFrame: nil)
+    var manifest = Manifest(
+      schemaVersion: 2, scenario: "synthetic-system-recovery", captureMode: "system",
+      backend: "screencapturekit", targetPID: nil, targetPIDs: [],
+      startedAtUTC: "2023-11-14T22:13:20Z",
+      requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: mic, system: recorder.snapshot(), errors: [])
+    try manifest.finalizeClock(clock())
+    XCTAssertEqual(manifest.system.clockSegments?.count, 2)
+    XCTAssertEqual(manifest.system.clockSegments?[0].timelineEndUs, 10000)
+    XCTAssertEqual(manifest.system.clockSegments?[1].timelineStartUs, 30000)
+    try verifyRecordedCAF(directory.appendingPathComponent("system.caf"), expected: manifest.system)
+    let reader = try AVAudioFile(forReading: directory.appendingPathComponent("system.caf"))
+    XCTAssertEqual(reader.length, 960)
+    let output = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: reader.processingFormat, frameCapacity: 960))
+    try reader.read(into: output)
+    for channel in 0..<2 {
+      for frame in 0..<960 {
+        XCTAssertEqual(
+          output.floatChannelData![channel][frame],
+          (frame < 480 ? Float(0.25) : 0.5) * (channel == 0 ? 1 : -1))
+      }
+    }
+    try manifest.encodedData().write(
+      to: directory.appendingPathComponent("manifest.json"), options: .withoutOverwriting)
+    if let destination = ProcessInfo.processInfo.environment["MON_SYSTEM_RECOVERY_FIXTURE_DIR"] {
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination).isEmpty)
+      for name in ["manifest.json", "microphone.caf", "system.caf"] {
+        try FileManager.default.copyItem(
+          at: directory.appendingPathComponent(name),
+          to: URL(fileURLWithPath: destination).appendingPathComponent(name))
+      }
+    }
+  }
+
+  func testNoSamplesDoesNotInferAStreamFailureAndBoundedProbeDoesNotRetry() async throws {
+    for retries in [true, false] {
+      let directory = try directory()
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let source = SilentSystemSource()
+      let factory = SilentSystemFactory([source])
+      let time = SystemTestTime()
+      let recorder = try recorder(directory, factory, time, retries: retries)
+      try await recorder.start(targetPID: nil)
+      time.set(100_000_000_000)
+      for _ in 0..<10 { recorder.maintain() }
+      XCTAssertEqual(factory.calls, 1)
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+      if !retries {
+        recorder.sourceEnded(source)
+        recorder.maintain()
+        XCTAssertEqual(factory.calls, 1)
+        XCTAssertEqual(recorder.snapshot().appendFailures, 1)
+      }
+      do {
+        try await recorder.stop()
+        XCTFail("empty audio cannot finalize")
+      } catch {}
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+    }
+  }
+
+  func testExpiredStartStaysOwnedUntilReturnAndCannotActivateOrAppend() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let held = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([old, held])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { held.counts.0 == 1 }
+    time.set(7_000_000_000)
+    for _ in 0..<100 { recorder.maintain() }
+    XCTAssertTrue(recorder.acquisitionPending)
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "acquisition_timeout")
+    recorder.receive(
+      from: held, sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    held.release()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(held.counts.1, 1)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.interruptions, 1)
+    do {
+      try await recorder.stop()
+      XCTFail("unrecovered tail cannot publish saved")
+    } catch {}
+    let reader = try AVAudioFile(forReading: directory.appendingPathComponent("system.caf"))
+    XCTAssertEqual(reader.length, 480)
+  }
+
+  func testStopDuringPendingRestartPreventsLateActivationAndKeepsSavedPCM() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let held = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([old, held])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { held.counts.0 == 1 }
+    let stopping = Task { try await recorder.stop() }
+    try await wait { recorder.snapshot().systemRecovery?.state == "stopped" }
+    held.release()
+    do {
+      try await stopping.value
+      XCTFail("interrupted tail must remain unresolved")
+    } catch {}
+    XCTAssertFalse(recorder.acquisitionPending)
+    recorder.maintain()
+    recorder.sourceEnded(held)
+    recorder.receive(
+      from: held, sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "stopped")
+  }
+
+  func testCurrentStartingStreamPreservesEarlyPCMWithoutClaimingConnected() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let held = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([held])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    let starting = Task { try await recorder.start(targetPID: nil) }
+    try await wait { held.counts.0 == 1 }
+    recorder.receive(from: held, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "reconnecting")
+    held.release()
+    try await starting.value
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    try await recorder.stop()
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testStopRequestRejectsLateStartBeforeControlLoopObservesIt() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let held = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([old, held])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { held.counts.0 == 1 }
+    time.requestStop()
+    held.release()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertNotEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    XCTAssertEqual(held.counts.1, 1)
+    recorder.receive(
+      from: held, sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    do {
+      try await recorder.stop()
+      XCTFail("interrupted tail must remain retained")
+    } catch {}
+  }
+
+  func testUnresponsiveStartDoesNotBlockPCMFinalizationOrCreateAnotherSource() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let held = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([old, held])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { held.counts.0 == 1 }
+    let began = ContinuousClock.now
+    do {
+      try await recorder.stop()
+      XCTFail("pending OS request cannot prove complete capture")
+    } catch {}
+    XCTAssertLessThan(began.duration(to: .now), .seconds(7))
+    XCTAssertTrue(recorder.acquisitionPending)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+    held.release()
+    try await wait { !recorder.acquisitionPending }
+    recorder.maintain()
+    recorder.receive(
+      from: held, sampleBuffer: try sample(value: 9), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "stopped")
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+  }
+
+  func testLateShareableContentCannotEvenStartAStreamAfterTimeout() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let current = SilentSystemSource()
+    let contentGate = SilentSystemSource(held: true)
+    let factory = SilentSystemFactory([old, current])
+    let time = SystemTestTime()
+    let recorder = SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"), clock: try clock(),
+      retries: true,
+      factory: { recorder, token in
+        if token.epoch > 1 { try await contentGate.start() }
+        return try factory.make(recorder, token)
+      }, now: time.read, mayContinue: time.mayContinue)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { contentGate.counts.0 == 1 }
+    time.set(7_000_000_000)
+    recorder.maintain()
+    XCTAssertTrue(recorder.acquisitionPending)
+    contentGate.release()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(current.counts.0, 0)
+    XCTAssertEqual(current.counts.2, 1)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "acquisition_timeout")
+    do {
+      try await recorder.stop()
+      XCTFail("missing tail remains unresolved")
+    } catch {}
+  }
+
+  func testChangedSourceFormatBlocksRetriesWithoutOverwritingExistingCAF() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource()
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([old, current])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    recorder.receive(
+      from: current, sampleBuffer: try sample(rate: 44100), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "format_changed")
+    time.set(10_000_000_000)
+    for _ in 0..<10 { recorder.maintain() }
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(current.counts.1, 1)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    do {
+      try await recorder.stop()
+      XCTFail("format change must retain unresolved audio")
+    } catch {}
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+}

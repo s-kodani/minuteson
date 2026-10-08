@@ -21,6 +21,10 @@ struct Options {
   var publishesInputStatus: Bool {
     duration == nil && captureTestOwner == nil && inputLevelOwner != nil
   }
+  var recoversSystemAudio: Bool {
+    duration == nil && captureTestOwner == nil && backend == "screencapturekit"
+      && (targetPIDs.isEmpty || applicationIdentity != nil)
+  }
   var captureTestOwner: String? = nil
   var captureTestLeaseFD: Int32? = nil
 
@@ -226,11 +230,12 @@ struct TrackStats: Encodable {
   var timing: CaptureTrackTiming?
   var inputLevel = PCMInputLevel()
   var microphoneRecovery: MicrophoneRecovery.Status?
+  var systemRecovery: SystemAudioRecovery.Status?
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
     case appendFailures, sampleRate, channels, clockSegments, clockFailure
-    case microphoneRecovery
+    case microphoneRecovery, systemRecovery
   }
 
   var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
@@ -306,39 +311,152 @@ struct Manifest: Encodable {
   }
 }
 
-private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
+final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+  private enum AcquisitionError: Error { case applicationUnavailable }
+  typealias Factory =
+    @Sendable (SystemAudioRecorder, SystemAudioRecovery.Binding) async throws ->
+    any SystemCaptureStream
   private let outputURL: URL
   private let queue = DispatchQueue(label: "app.mon.capture.system")
   private let lock = NSLock()
-  private var writer: AVAssetWriter?
-  private var input: AVAssetWriterInput?
-  private var stream: SCStream?
+  private let pcm: SystemPCMWriter
+  private var stream: (any SystemCaptureStream)?
+  private var streamToken: SystemAudioRecovery.Binding?
+  private var streamEnded = false
+  private var recovery: SystemAudioRecovery?
+  private var operationTask: Task<Void, Never>?
+  private var drainingToken: SystemAudioRecovery.Binding?
   private var captureStarted = false
   private var finished = false
   private var stopping = false
-  private var lastSampleEnd: CMTime?
-  private var stats = TrackStats()
+  private let retries: Bool
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
   private let testWindow: CaptureTestWindow?
+  private let factory: Factory?
+  private let now: @Sendable () -> Int64?
+  private let requireIdentity: @Sendable (CaptureApplicationIdentity) throws -> Void
+  private let mayContinue: @Sendable () -> Bool
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false,
-    testWindow: CaptureTestWindow? = nil
+    testWindow: CaptureTestWindow? = nil, retries: Bool = false,
+    factory: Factory? = nil, now: @escaping @Sendable () -> Int64? = PCMInputLevel.nowNanoseconds,
+    requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void =
+      CaptureApplications.current,
+    mayContinue: @escaping @Sendable () -> Bool = { true }
   ) {
     self.outputURL = outputURL
+    self.pcm = SystemPCMWriter(outputURL: outputURL)
     self.clock = clock
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
+    self.retries = retries && clock != nil && testWindow == nil
+    self.factory = factory
+    self.now = now
+    self.requireIdentity = requireIdentity
+    self.mayContinue = mayContinue
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
 
   func start(targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity? = nil) async throws
   {
-    if let applicationIdentity { try CaptureApplications.current(applicationIdentity) }
+    let policy = try SystemAudioRecovery(
+      targetPID: targetPID, applicationIdentity: applicationIdentity, retries: retries)
+    let token = try lock.withLock {
+      guard recovery == nil, !stopping else {
+        throw ProbeError.capture("system start is already owned")
+      }
+      recovery = policy
+      self.applicationIdentity = applicationIdentity
+      return try recovery!.begin(at: now() ?? -1)
+    }
+    defer { lock.withLock { recovery?.operationFinished(token) } }
+    do { try await acquire(token) } catch {
+      lock.withLock {
+        if recovery?.owns(token) == true {
+          recovery?.interrupt(failureReason(error), unavailable: true)
+        }
+        pcm.invalidateLevels()
+      }
+      if lock.withLock({ streamToken == token }) { try? await retireStream() }
+      throw error
+    }
+  }
+
+  private func requireOwned(_ token: SystemAudioRecovery.Binding) throws {
+    try Task.checkCancellation()
+    guard mayContinue(), lock.withLock({ !stopping && recovery?.owns(token) == true }) else {
+      throw ProbeError.capture("system acquisition is obsolete or stopped")
+    }
+  }
+
+  private func verifyIdentity(_ identity: CaptureApplicationIdentity) throws {
+    do { try requireIdentity(identity) } catch { throw AcquisitionError.applicationUnavailable }
+  }
+
+  private func failureReason(_ error: Error) -> String {
+    if error is AcquisitionError { return "application_unavailable" }
+    if case ProbeError.permission = error { return "permission_unavailable" }
+    return "restart_failed"
+  }
+
+  private func acquire(_ token: SystemAudioRecovery.Binding) async throws {
+    try requireOwned(token)
+    if let identity = lock.withLock({ recovery?.applicationIdentity }) {
+      try verifyIdentity(identity)
+    }
+    let source: any SystemCaptureStream
+    if let factory {
+      source = try await factory(self, token)
+    } else {
+      source = try await makeStream(token)
+    }
+    do {
+      try requireOwned(token)
+      if let identity = lock.withLock({ recovery?.applicationIdentity }) {
+        try verifyIdentity(identity)
+      }
+      try lock.withLock {
+        guard !stopping, recovery?.owns(token) == true, stream == nil else {
+          throw ProbeError.capture("system stream cannot replace an owned stream")
+        }
+        stream = source
+        streamToken = token
+        streamEnded = false
+        captureStarted = true
+        targetApplicationName = source.applicationName
+        targetBundleIdentifier = source.bundleIdentifier
+      }
+    } catch {
+      try? source.detach()
+      throw error
+    }
+    try requireOwned(token)
+    try await source.start()
+    try requireOwned(token)
+    if let identity = lock.withLock({ recovery?.applicationIdentity }) {
+      try verifyIdentity(identity)
+    }
+    try lock.withLock {
+      guard !stopping, stream === source, !streamEnded else {
+        throw ProbeError.capture("system stream ended before activation")
+      }
+      try recovery?.activate(token)
+    }
+  }
+
+  private func makeStream(_ token: SystemAudioRecovery.Binding) async throws
+    -> any SystemCaptureStream
+  {
+    try requireOwned(token)
+    let (targetPID, applicationIdentity) = lock.withLock {
+      (recovery?.targetPID, recovery?.applicationIdentity)
+    }
+    if let applicationIdentity { try verifyIdentity(applicationIdentity) }
     let content: SCShareableContent
     do {
       content = try await SCShareableContent.excludingDesktopWindows(
@@ -346,24 +464,29 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     } catch {
       throw ProbeError.permission("system audio permission or shareable content failed: \(error)")
     }
+    try requireOwned(token)
+    if let applicationIdentity { try verifyIdentity(applicationIdentity) }
     guard let display = content.displays.first else {
       throw ProbeError.capture("no display available for system audio capture")
     }
     let filter: SCContentFilter
+    var name: String?
+    var bundle: String?
     if let targetPID {
-      guard let application = content.applications.first(where: { $0.processID == targetPID })
+      let matches = content.applications.filter { $0.processID == targetPID }
+      guard matches.count == 1, let application = matches.first
       else {
         throw ProbeError.capture("selected process is not available in shareable applications")
       }
-      targetApplicationName = application.applicationName
-      targetBundleIdentifier = application.bundleIdentifier
+      name = application.applicationName
+      bundle = application.bundleIdentifier
       if let applicationIdentity {
         guard application.processID == applicationIdentity.pid,
           application.bundleIdentifier == applicationIdentity.bundleIdentifier
         else {
           throw ProbeError.capture("shareable application does not match the confirmed identity")
         }
-        try CaptureApplications.current(applicationIdentity)
+        try verifyIdentity(applicationIdentity)
       }
       filter = SCContentFilter(
         display: display, including: [application], exceptingWindows: [])
@@ -379,64 +502,171 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     configuration.excludesCurrentProcessAudio = true
     configuration.sampleRate = 48_000
     configuration.channelCount = 2
-    let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+    let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
-    self.stream = stream
-    self.applicationIdentity = applicationIdentity
-    do {
-      try await stream.startCapture()
-      captureStarted = true
-      if let applicationIdentity { try CaptureApplications.current(applicationIdentity) }
-    } catch {
-      throw ProbeError.permission("system audio capture could not start: \(error)")
+    return ScreenCaptureStream(
+      stream: stream, output: self, applicationName: name, bundleIdentifier: bundle)
+  }
+
+  /// Never stop ScreenCaptureKit on its delegate/sample queue. Awaiting OS
+  /// work happens in this owned task, leaving the microphone/control loop free.
+  private func retireStream() async throws {
+    let old = lock.withLock { (stream, captureStarted && !streamEnded) }
+    if let stream = old.0 {
+      if old.1 { try await stream.stop() }
+      try? stream.detach()
+      queue.sync {}
+      lock.withLock {
+        if self.stream === stream {
+          self.stream = nil
+          streamToken = nil
+          captureStarted = false
+          streamEnded = true
+        }
+      }
     }
   }
 
+  func maintain() {
+    guard retries, mayContinue(), lock.withLock({ !stopping }) else { return }
+    if let identity = lock.withLock({ applicationIdentity }) {
+      do { try requireIdentity(identity) } catch {
+        lock.withLock {
+          recovery?.interrupt("application_unavailable", unavailable: true)
+          pcm.invalidateLevels()
+        }
+      }
+    }
+    guard let now = now() else { return }
+    lock.withLock {
+      guard !stopping, let policy = recovery else { return }
+      if recovery?.expire(at: now) == true {
+        pcm.invalidateLevels()
+        operationTask?.cancel()
+      }
+      // A timed-out request retains operation ownership. Do not accumulate
+      // simultaneous SCStreams, tasks or permission prompts on every poll.
+      let retirementOnly = policy.status.reason == "format_changed" && stream != nil
+      guard policy.status.state != "connected", recovery?.operation == nil,
+        let token = try?
+          (retirementOnly ? recovery?.beginRetirement(at: now) : recovery?.begin(at: now))
+      else { return }
+      operationTask = Task { [self] in
+        defer {
+          lock.withLock {
+            recovery?.operationFinished(token)
+            operationTask = nil
+          }
+        }
+        do {
+          try await retireStream()
+          if retirementOnly { return }
+          try requireOwned(token)
+          if let identity = lock.withLock({ applicationIdentity }) { try verifyIdentity(identity) }
+          try await acquire(token)
+        } catch {
+          lock.withLock {
+            if recovery?.owns(token) == true {
+              recovery?.interrupt(failureReason(error), unavailable: true)
+            }
+            pcm.invalidateLevels()
+          }
+          // Also owns the cleanup of a late start. A hanging cleanup remains
+          // single-flight and can never activate a replacement source.
+          if lock.withLock({ streamToken == token }) { try? await retireStream() }
+        }
+      }
+    }
+  }
+
+  func stream(_ stream: SCStream, didStopWithError error: Error) {
+    if let source = lock.withLock({ self.stream?.native === stream ? self.stream : nil }) {
+      sourceEnded(source)
+    }
+  }
+
+  func sourceEnded(_ stream: any SystemCaptureStream) {
+    lock.withLock {
+      guard self.stream === stream, let token = streamToken else { return }
+      streamEnded = true
+      guard !stopping, recovery?.owns(token) == true else { return }
+      recovery?.interrupt("stream_stopped")
+      pcm.invalidateLevels()
+      if !retries { pcm.recordFailure() }
+    }
+  }
+
+  private final class StopReceipt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: (Bool, String?) = (false, nil)
+    func complete(_ error: Error?) {
+      lock.withLock { value = (true, error.map { String(describing: $0) }) }
+    }
+    func read() -> (Bool, String?) { lock.withLock { value } }
+  }
+
   func stop() async throws {
-    if finished { return }
+    let previous = lock.withLock { () -> SystemAudioRecovery.Status? in
+      guard !finished else { return nil }
+      stopping = true
+      let status = recovery?.status
+      if let token = streamToken, recovery?.accepts(token) == true { drainingToken = token }
+      recovery?.stop()
+      operationTask?.cancel()
+      return status
+    }
+    if lock.withLock({ finished }) { return }
     var streamStopError: String?
-    if captureStarted, let stream {
-      do {
-        try await stream.stopCapture()
-      } catch {
-        streamStopError = String(describing: error)
-        lock.withLock { stopping = true }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while lock.withLock({ recovery?.operation != nil }), ContinuousClock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    if lock.withLock({ recovery?.operation != nil }) {
+      streamStopError =
+        "system acquisition is still pending; retained audio is not published as saved"
+    } else if let active = lock.withLock({ captureStarted && !streamEnded ? stream : nil }) {
+      let receipt = StopReceipt()
+      active.requestStop { receipt.complete($0) }
+      let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+      while !receipt.read().0, ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(10))
       }
+      let result = receipt.read()
+      streamStopError = result.0 ? result.1 : "system stream stop timed out"
+    }
+    queue.sync {}
+    lock.withLock {
+      drainingToken = nil
       captureStarted = false
-      queue.sync {}
-    }
-    let (input, writer, lastSampleEnd) = lock.withLock {
-      () -> (AVAssetWriterInput?, AVAssetWriter?, CMTime?) in
-      let result = (self.input, self.writer, self.lastSampleEnd)
-      self.input = nil
-      self.writer = nil
-      self.lastSampleEnd = nil
-      return result
-    }
-    // Without an explicit end time, AVAssetWriter can omit a partial final PCM packet.
-    if let writer, let lastSampleEnd { writer.endSession(atSourceTime: lastSampleEnd) }
-    input?.markAsFinished()
-    if let writer {
-      await writer.finishWriting()
-      if writer.status != .completed {
-        throw ProbeError.capture(
-          "system CAF finalization failed: \(writer.error?.localizedDescription ?? String(describing: writer.status))"
-        )
-      }
+      pcm.invalidateLevels()
       finished = true
-      if let streamStopError {
-        throw ProbeError.capture(
-          "system audio capture stop failed after CAF finalization: \(streamStopError)")
-      }
-    } else {
-      throw ProbeError.capture("no system audio samples were received")
+    }
+    if let source = lock.withLock({ stream }), lock.withLock({ recovery?.operation == nil }) {
+      try? source.detach()
+    }
+    try await pcm.finish()
+    if let streamStopError {
+      throw ProbeError.capture("system stop failed after CAF finalization: \(streamStopError)")
+    }
+    if retries, previous?.state != "connected" {
+      throw ProbeError.capture(
+        "system input did not recover before stop; trailing missing time is unresolved")
     }
   }
 
   func snapshot() -> TrackStats {
     lock.lock()
     defer { lock.unlock() }
-    return stats
+    var result = pcm.stats
+    result.systemRecovery = recovery?.status
+    return result
+  }
+
+  var acquisitionPending: Bool { lock.withLock { recovery?.operation != nil } }
+  var readyForPCM: Bool { lock.withLock { pcm.ready } }
+
+  func confirmedScope() -> (pid_t?, CaptureApplicationIdentity?) {
+    lock.withLock { (recovery?.targetPID, recovery?.applicationIdentity) }
   }
 
   func stream(
@@ -444,15 +674,32 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     of outputType: SCStreamOutputType
   ) {
     guard outputType == .audio, sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
+    if let source = lock.withLock({ self.stream?.native === stream ? self.stream : nil }) {
+      receive(from: source, sampleBuffer: sampleBuffer)
+    }
+  }
+
+  func receive(
+    from stream: any SystemCaptureStream, sampleBuffer: CMSampleBuffer,
+    observation suppliedObservation: CaptureClockObservation? = nil
+  ) {
+    guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
     let receivedAt = levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
     lock.lock()
     defer { lock.unlock() }
-    if stopping { return }
+    guard self.stream === stream, let token = streamToken,
+      !streamEnded,
+      (!stopping && mayContinue() && recovery?.acceptsPCM(token) == true)
+        || (stopping && drainingToken == token)
+    else { return }
     do {
       if let testWindow, !testWindow.accepting { return }
       if let identity = applicationIdentity {
-        guard try CaptureApplications.processStart(identity.pid) == identity.launchTimeUs else {
-          throw ProbeError.capture("application changed during capture")
+        do { try requireIdentity(identity) } catch {
+          recovery?.interrupt("application_unavailable", unavailable: true)
+          pcm.invalidateLevels()
+          if !retries { pcm.recordFailure() }
+          return
         }
       }
       var sampleBuffer = sampleBuffer
@@ -462,79 +709,31 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
           let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
         else { throw ProbeError.capture("five-second test clock or audio format is missing") }
         let observation = clock.observe(
-          presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
+          presentation: sampleBuffer.presentationTimeStamp,
+          clock: stream.native?.synchronizationClock)
         guard
           let selected = try testWindow.selection(
             observation: observation, frames: sampleBuffer.numSamples,
-            sampleRate: format.mSampleRate, savedFrames: stats.frames)
+            sampleRate: format.mSampleRate, savedFrames: pcm.stats.frames)
         else { return }
         sampleBuffer = try testPCMFrames(sampleBuffer, range: selected.frames)
         testObservation = selected.observation
       }
-      if writer == nil {
-        let format = sampleBuffer.formatDescription.flatMap {
-          CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee
-        }
-        guard let format else { throw ProbeError.capture("system audio format is missing") }
-        guard format.mSampleRate > 0, format.mChannelsPerFrame > 0 else {
-          throw ProbeError.capture("system audio format is invalid")
-        }
-        let settings: [String: Any] = [
-          AVFormatIDKey: kAudioFormatLinearPCM,
-          AVSampleRateKey: format.mSampleRate,
-          AVNumberOfChannelsKey: format.mChannelsPerFrame,
-          AVLinearPCMBitDepthKey: 32,
-          AVLinearPCMIsFloatKey: true,
-          AVLinearPCMIsNonInterleaved: false,
-          AVLinearPCMIsBigEndianKey: false,
-        ]
-        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .caf)
-        guard writer.canApply(outputSettings: settings, forMediaType: .audio) else {
-          throw ProbeError.capture("cannot write system audio format to CAF")
-        }
-        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-        input.expectsMediaDataInRealTime = true
-        guard writer.canAdd(input) else {
-          throw ProbeError.capture("cannot add system audio writer input")
-        }
-        writer.add(input)
-        guard writer.startWriting() else {
-          throw ProbeError.capture("cannot start system CAF writer")
-        }
-        writer.startSession(atSourceTime: .zero)
-        self.writer = writer
-        self.input = input
-        stats.sampleRate = format.mSampleRate
-        stats.channels = format.mChannelsPerFrame
-        stats.firstPresentationTimeSeconds = sampleBuffer.presentationTimeStamp.seconds
-      }
-      stats.callbackCount += 1
-      guard let sampleRate = stats.sampleRate, let input, input.isReadyForMoreMediaData else {
-        throw ProbeError.capture("system audio writer is not ready")
-      }
-      guard let description = sampleBuffer.formatDescription,
-        let format = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
-        format.mSampleRate == sampleRate, format.mChannelsPerFrame == stats.channels
-      else { throw ProbeError.capture("system audio format changed during capture") }
-      if levelsEnabled { stats.inputLevel.receive(sampleBuffer, at: receivedAt) }
       let observation =
         testObservation
+        ?? suppliedObservation
         ?? clock?.observe(
-          presentation: sampleBuffer.presentationTimeStamp, clock: stream.synchronizationClock)
-      let contiguous = try continuousPCMSample(
-        sampleBuffer, frameOffset: stats.frames, sampleRate: sampleRate)
-      guard input.append(contiguous) else {
-        throw ProbeError.capture("system audio append failed")
-      }
-      let frames = Int64(sampleBuffer.numSamples)
-      stats.frames += frames
-      stats.lastPresentationTimeSeconds = sampleBuffer.presentationTimeStamp.seconds
-      if let observation {
-        stats.recordSavedClock(observation, frames: frames, sourceFrame: nil)
-      }
-      lastSampleEnd = CMTime(value: stats.frames, timescale: Int32(sampleRate))
+          presentation: sampleBuffer.presentationTimeStamp,
+          clock: stream.native?.synchronizationClock)
+      try pcm.append(
+        sampleBuffer, observation: observation, sourceEpoch: token.epoch,
+        levelsEnabled: levelsEnabled, receivedAt: receivedAt)
+    } catch SystemPCMWriter.AppendError.formatChanged {
+      recovery?.interrupt("format_changed", unavailable: true)
+      pcm.invalidateLevels()
+      if !retries { pcm.recordFailure() }
     } catch {
-      stats.appendFailures += 1
+      pcm.recordFailure()
     }
   }
 
@@ -891,9 +1090,18 @@ private enum Main {
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
         testWindow: testWindow)
+      let systemStopRequest = options.output.appendingPathComponent("stop.request")
+      let systemParentPID = options.parentPID
+      let systemControlled = options.stopOnFile
       let system = SystemAudioRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
-        levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow)
+        levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow,
+        retries: options.recoversSystemAudio,
+        mayContinue: {
+          !systemControlled
+            || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
+              && !parentHasExited(systemParentPID))
+        })
       let tap = CoreAudioTapRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil)
@@ -958,10 +1166,14 @@ private enum Main {
             parentExited: parentHasExited(options.parentPID))
           {
             mic.maintain()
+            if options.backend == "screencapturekit" { system.maintain() }
             let microphone = mic.snapshot()
-            if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery {
+            let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+            if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery
+              || systemStats.systemRecovery != manifest.system.systemRecovery
+            {
               manifest.microphone = microphone
-              manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+              manifest.system = systemStats
               try write(manifest, to: manifestURL)
             }
             if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
