@@ -1,6 +1,11 @@
 //! One explicit, meeting-free capture test. Read-only reconciliation never
 //! replays start; cancellation remains busy until the owned process exits.
 mod files;
+// Durable ownership is verified before connecting startup collection and the
+// signed helper's inherited lease in the next integration stage.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod journal;
 #[cfg(test)]
 mod tests;
 use crate::analysis_worker::AnalysisController;

@@ -19,6 +19,7 @@ struct Options {
   var applicationIdentity: CaptureApplicationIdentity? = nil
   var inputLevelOwner: String? = nil
   var captureTestOwner: String? = nil
+  var captureTestLeaseFD: Int32? = nil
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -35,6 +36,7 @@ struct Options {
     var applicationIdentity: CaptureApplicationIdentity?
     var inputLevelOwner: String?
     var captureTestOwner: String?
+    var captureTestLeaseFD: Int32?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -106,6 +108,13 @@ struct Options {
           InputLevelReport.validOwner(arguments[index])
         else { throw ProbeError.usage("--five-second-test requires one canonical UUID v4") }
         captureTestOwner = arguments[index]
+      case "--capture-test-lease-fd":
+        index += 1
+        guard index < arguments.count, captureTestLeaseFD == nil,
+          let descriptor = Int32(arguments[index]), descriptor >= 3,
+          String(descriptor) == arguments[index]
+        else { throw ProbeError.usage("--capture-test-lease-fd requires one descriptor >= 3") }
+        captureTestLeaseFD = descriptor
       case "--until-stopped":
         untilStopped = true
       case "--parent-pid":
@@ -166,12 +175,16 @@ struct Options {
       duration = 5
       inputLevelOwner = captureTestOwner
     }
+    if captureTestLeaseFD != nil && captureTestOwner == nil {
+      throw ProbeError.usage("an inherited test lease is only valid for a five-second test")
+    }
     return Self(
       output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
       parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity,
-      inputLevelOwner: inputLevelOwner, captureTestOwner: captureTestOwner)
+      inputLevelOwner: inputLevelOwner, captureTestOwner: captureTestOwner,
+      captureTestLeaseFD: captureTestLeaseFD)
   }
 
   func shouldContinueRecording(
@@ -702,6 +715,13 @@ private enum Main {
         return
       }
       let options = try Options.parse(arguments)
+      if let descriptor = options.captureTestLeaseFD, let owner = options.captureTestOwner {
+        // Validate before inspecting inputs or opening any audio. Do not close
+        // or unlock the inherited description: the kernel retains it through
+        // every asynchronous callback and error path until this process exits.
+        try CaptureTestLease.requireInherited(
+          descriptor: descriptor, output: options.output, owner: owner)
+      }
       if let identity = options.applicationIdentity { try CaptureApplications.current(identity) }
       if FileManager.default.fileExists(atPath: options.output.path) {
         let contents = try FileManager.default.contentsOfDirectory(atPath: options.output.path)
@@ -885,9 +905,11 @@ private enum Main {
              [--until-stopped] [--microphone-uid <stable-device-uid>] [--application-identity <json>]
              [--input-level-owner <session-uuid>]
              [--five-second-test <test-uuid>]
+             [--capture-test-lease-fd <inherited-descriptor>]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     --five-second-test requires --stop-on-file, --parent-pid and --microphone-uid.
     Its shared 5-second capture window opens only after both inputs initialize.
+    A supplied capture-test lease must be inherited, private, locked and bound to that test's output.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
 

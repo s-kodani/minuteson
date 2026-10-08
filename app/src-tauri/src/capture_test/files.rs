@@ -22,6 +22,8 @@ const FILES: [&str; 5] = [
 pub(super) struct TestDirectory {
     pub(super) path: PathBuf,
     pin: File,
+    #[cfg(target_os = "macos")]
+    owner: Option<super::journal::Area>,
 }
 impl TestDirectory {
     pub(super) fn new() -> Result<Self, String> {
@@ -32,9 +34,59 @@ impl TestDirectory {
         let path = directory.path().canonicalize().map_err(|e| e.to_string())?;
         let pin = File::open(&path).map_err(|e| e.to_string())?;
         let _ = directory.keep();
-        Ok(Self { path, pin })
+        Ok(Self {
+            path,
+            pin,
+            #[cfg(target_os = "macos")]
+            owner: None,
+        })
+    }
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)] // Connected after startup recovery is integrated.
+    pub(super) fn new_owned(
+        registry: &std::sync::Arc<super::journal::Registry>,
+        request: super::Request,
+    ) -> Result<Self, String> {
+        Self::restore_owned(registry.allocate(request)?)
+    }
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    pub(super) fn restore_owned(owner: super::journal::Area) -> Result<Self, String> {
+        Ok(Self {
+            path: owner.path(),
+            pin: owner.pin_directory()?,
+            owner: Some(owner),
+        })
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn recover_owned(owner: super::journal::Area) -> Result<(), String> {
+        let quiet = owner.quiet()?;
+        match std::fs::symlink_metadata(owner.path()) {
+            // A previous collector may have removed the audio and stopped
+            // before committing completion. Missing audio is not a new target.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => owner.finish(&quiet),
+            Err(error) => Err(error.to_string()),
+            Ok(_) => {
+                let directory = Self::restore_owned(owner)?;
+                directory.cleanup_files()?;
+                directory.owner.as_ref().unwrap().finish(&quiet)
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    pub(super) fn inherit_lease(&self, command: &mut std::process::Command) -> Result<i32, String> {
+        self.check_owner()?;
+        self.owner
+            .as_ref()
+            .ok_or("テスト音声の永続所有がありません")?
+            .inherit(command)
     }
     fn check_owner(&self) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(owner) = &self.owner {
+            owner.validate_directory()?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -122,6 +174,18 @@ impl TestDirectory {
         }
     }
     pub(super) fn cleanup(&self) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(owner) = &self.owner {
+            // A parent crash or dropped wrapper is not evidence of the
+            // helper's exit. Hold a separately acquired lease while removing
+            // the bounded fixed-name payload, then commit its completion.
+            let quiet = owner.quiet()?;
+            self.cleanup_files()?;
+            return owner.finish(&quiet);
+        }
+        self.cleanup_files()
+    }
+    fn cleanup_files(&self) -> Result<(), String> {
         match std::fs::symlink_metadata(&self.path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.to_string()),
