@@ -24,6 +24,62 @@ enum State {
     Failed,
     Invalid,
 }
+
+// Read the original bytes before any Value-based portability transform can
+// erase duplicated known keys. Other capture-manifest fields remain independent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Final {
+    #[serde(default)]
+    recording_owner_id: Option<String>,
+    #[serde(default)]
+    input_event_journal_error: Option<String>,
+    #[serde(default)]
+    input_event_journal_persistence: Option<Persistence>,
+    state: String,
+}
+
+/// Preserve the writer's final result as historical producer evidence, while
+/// removing the arbitrary native error text (which can contain host paths).
+/// This does not remap an owner, grant notification reception, verify a journal
+/// commit, or turn an absent legacy diagnostic into a success.
+pub(crate) fn portable_manifest_fields(
+    bytes: &[u8],
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let report: Final = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let mut fields = serde_json::Map::new();
+    if report.input_event_journal_persistence.is_none()
+        && report.input_event_journal_error.is_none()
+    {
+        return Ok(fields);
+    }
+    if report
+        .recording_owner_id
+        .as_deref()
+        .is_none_or(|id| !crate::input_levels::valid_owner(id))
+        || !matches!(report.state.as_str(), "saved" | "failed")
+    {
+        return Err("持ち運ぶ停止時の履歴診断の所有または状態が不正です".into());
+    }
+    if let Some(p) = report.input_event_journal_persistence {
+        if !p.valid() || !p.closed {
+            return Err("持ち運ぶ停止時の履歴診断の結果が不正です".into());
+        }
+        fields.insert(
+            "inputEventJournalPersistence".into(),
+            serde_json::to_value(p).map_err(|e| e.to_string())?,
+        );
+    }
+    if report.input_event_journal_error.is_some() {
+        // A stop timeout remains a timeout even if a later snapshot says that
+        // the writer committed. Repeated backup redaction is idempotent.
+        fields.insert(
+            "inputEventJournalError".into(),
+            serde_json::Value::String("input journal persistence was unconfirmed at stop".into()),
+        );
+    }
+    Ok(fields)
+}
 impl Persistence {
     fn valid(&self) -> bool {
         (1..=SAFE).contains(&self.requested_revision)
@@ -182,17 +238,6 @@ pub(super) fn archived_issue(directory: &File, owner: &str) -> Option<&'static s
     final_issue(directory, owner).unwrap_or(Some("unavailable"))
 }
 fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, String> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Final {
-        #[serde(default)]
-        recording_owner_id: Option<String>,
-        #[serde(default)]
-        input_event_journal_error: Option<String>,
-        #[serde(default)]
-        input_event_journal_persistence: Option<Persistence>,
-        state: String,
-    }
     let Some((data, _)) = bytes(directory, "manifest.json", 256 * 1024)? else {
         return retained_issue(directory, owner);
     };

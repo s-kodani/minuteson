@@ -763,7 +763,7 @@ fn load_session(connection: &Connection, id: &str) -> Result<Option<RecordingSes
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::storage) mod tests {
     use super::*;
     use std::io::Write;
 
@@ -954,7 +954,7 @@ mod tests {
         }
     }
 
-    pub(super) fn saved_probe_fixture(
+    pub(in crate::storage) fn saved_probe_fixture(
         storage: &Storage,
     ) -> (String, String, PathBuf, serde_json::Value) {
         let meeting = storage.create_meeting("物理音声の確定").unwrap();

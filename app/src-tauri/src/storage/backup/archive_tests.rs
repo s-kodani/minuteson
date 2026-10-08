@@ -546,6 +546,113 @@ fn capture_manifest_removes_process_ids_power_handles_and_error_paths_without_ch
 }
 
 #[test]
+fn capture_journal_diagnostics_survive_verified_backup_additive_restore_and_rebackup() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, owner, directory, mut manifest) =
+        super::super::super::recordings::tests::saved_probe_fixture(&storage);
+    let persistence =
+        json!({"requestedRevision":3,"committedRevision":3,"state":"confirmed","closed":true});
+    manifest["recordingOwnerId"] = json!(owner);
+    manifest["inputEventJournalPersistence"] = persistence.clone();
+    // A timeout followed by a confirmed snapshot is still unconfirmed at stop.
+    manifest["inputEventJournalError"] = json!("sync timed out: /Users/source/private/recording");
+    let original = serde_json::to_vec(&manifest).unwrap();
+    let manifest_path = directory.join("manifest.json");
+    std::fs::write(&manifest_path, &original).unwrap();
+    storage.finalize_recording(&owner).unwrap();
+    let source_hash = format!("{:x}", Sha256::digest(&original));
+    let (path, _) = write(&storage, output.path());
+    let archive = verified(&path, output.path());
+    let entry = archive
+        .manifest
+        .entries
+        .iter()
+        .find(|e| e.source_sha256.as_deref() == Some(&source_hash))
+        .unwrap();
+    let source_asset = entry.asset_id.as_ref().unwrap();
+    let encoded = std::fs::read(&archive.assets[source_asset]).unwrap();
+    let portable: Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(portable["inputEventJournalPersistence"], persistence);
+    assert!(portable["inputEventJournalError"].is_string());
+    assert!(!String::from_utf8(encoded.clone())
+        .unwrap()
+        .contains("/Users/source/private"));
+    assert_eq!(portable["state"], "saved");
+    assert_eq!(portable["microphone"], manifest["microphone"]);
+    assert_eq!(portable["system"], manifest["system"]);
+    assert_eq!(entry.source_sha256.as_deref(), Some(source_hash.as_str()));
+    assert_ne!(entry.sha256, source_hash);
+
+    let ids = super::super::restore_ids::RestoreIds::prepare(
+        &archive,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+        &|| false,
+    )
+    .unwrap();
+    let new_meeting = ids.get("meetings", "", &meeting).unwrap();
+    let new_owner = ids.get("recording_sessions", &meeting, &owner).unwrap();
+    let new_asset = ids.get("file_assets", &meeting, source_asset).unwrap();
+    assert_ne!(new_owner, owner);
+    let fixed =
+        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
+    let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
+        &fixed,
+        output.path(),
+        &|| false,
+    )
+    .unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let existing = target.create_meeting("既存会議は保持").unwrap();
+    target.publish_restore(&sealed, &ids, &|| false).unwrap();
+    assert!(target.get_meeting(&existing.id).unwrap().is_some());
+    let restored = target
+        .root
+        .join(format!("meetings/{new_meeting}/restored/{new_asset}"));
+    assert_eq!(std::fs::read(&restored).unwrap(), encoded);
+    assert!(target.verify_asset(&new_asset).unwrap());
+    // The capture owner remains ORIGINAL producer provenance in the manifest;
+    // it is not permission to receive notices for the newly mapped session.
+    assert_eq!(portable["recordingOwnerId"], owner);
+    let next_path = output.path().join("rebackup.monbackup");
+    target.create_backup_archive(&next_path, &|| false).unwrap();
+    let next = verified(&next_path, output.path());
+    assert_eq!(std::fs::read(&next.assets[&new_asset]).unwrap(), encoded);
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), original);
+    assert_eq!(storage.get_meeting(&meeting).unwrap().unwrap().id, meeting);
+}
+
+#[test]
+fn capture_journal_invalid_final_diagnostic_refuses_backup_publication_without_changing_source() {
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, owner, directory, mut manifest) =
+        super::super::super::recordings::tests::saved_probe_fixture(&storage);
+    manifest["recordingOwnerId"] = json!(owner);
+    manifest["inputEventJournalPersistence"] =
+        json!({"requestedRevision":3,"committedRevision":2,"state":"failed","closed":false});
+    let original = serde_json::to_vec(&manifest).unwrap();
+    let manifest_path = directory.join("manifest.json");
+    std::fs::write(&manifest_path, &original).unwrap();
+    storage.finalize_recording(&owner).unwrap();
+    let destination = output.path().join("invalid.monbackup");
+    let failure = storage
+        .create_backup_archive(&destination, &|| false)
+        .unwrap_err();
+    assert!(!failure.published);
+    assert!(!destination.exists());
+    assert!(failure.message.contains("停止時の履歴診断の結果"));
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), original);
+    assert_eq!(storage.get_meeting(&meeting).unwrap().unwrap().id, meeting);
+    // Ordinary data admission is restored after this unpublished failure.
+    storage.create_meeting("失敗後も既存領域を保持").unwrap();
+}
+
+#[test]
 fn reader_rejects_truncated_appended_tampered_and_oversized_headers_before_extraction() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();

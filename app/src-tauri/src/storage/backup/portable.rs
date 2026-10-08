@@ -411,6 +411,7 @@ pub(super) fn portable_json_with_metadata(
     }
     let mut value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     if capture {
+        let diagnostics = crate::input_status::persistence::portable_manifest_fields(bytes)?;
         let original = value.as_object().ok_or("録音manifestが不正です")?;
         let mut result = serde_json::Map::new();
         for key in [
@@ -451,6 +452,7 @@ pub(super) fn portable_json_with_metadata(
                         .map_or(0, Vec::len))
                 }),
         );
+        result.extend(diagnostics);
         value = Value::Object(result);
     }
     // whisper.cpp metadata is machine-generated; never rewrite recognized text.

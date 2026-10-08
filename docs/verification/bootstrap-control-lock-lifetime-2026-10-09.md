@@ -21,3 +21,5 @@
 ## 修正後の重点検査
 
 対照検査と新しい所有者終了の回帰検査、実際の子プロセスによる排他取得拒否とSIGKILL後の再取得を含む起動設定の重点19件が成功した。形式検査も成功している。ログは `/private/tmp/mon-input-transfer-bootstrap-lock-focus-final.log` に保持する。全体再検査はこの重点成功と区別して扱う。
+
+修正後のモデル保持と複数回保存先移動の単独検査も成功し、ログは `/private/tmp/mon-input-transfer-move-lock-fixed.log` に保持する。停止時診断の持ち運び修正も含む全体 `make check` は終了コード0となり、通常Rust1,622件成功・専用60件ignoredだった。失敗していた移動検査もこの全体内で成功している。ログは `/private/tmp/mon-input-transfer-full-check-final.log`。重点・単独検査を全体件数へ加算しない。
