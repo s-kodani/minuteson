@@ -374,6 +374,18 @@ impl ImportController {
         Ok(())
     }
     pub(crate) fn prepare_recording(app: &AppHandle) -> Result<(), String> {
+        Self::prepare_recording_inner(app, None)
+    }
+    pub(crate) fn prepare_recording_checked(
+        app: &AppHandle,
+        expected: &crate::capture_test::ImportExpectation,
+    ) -> Result<(), String> {
+        Self::prepare_recording_inner(app, Some(expected))
+    }
+    fn prepare_recording_inner(
+        app: &AppHandle,
+        expected: Option<&crate::capture_test::ImportExpectation>,
+    ) -> Result<(), String> {
         let c = app.state::<Self>();
         let snapshot = {
             let mut s = c
@@ -382,6 +394,9 @@ impl ImportController {
                 .map_err(|_| "取り込みロックを取得できません")?;
             if s.snapshot.recording_blocked || s.closing {
                 return Err("録音開始または終了処理が進行中です".into());
+            }
+            if let Some(expected) = expected {
+                expected.require(&s.snapshot)?;
             }
             s.snapshot.recording_blocked = true;
             s.cancel.store(true, Ordering::Release);

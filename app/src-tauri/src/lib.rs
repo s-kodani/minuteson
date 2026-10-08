@@ -8,6 +8,7 @@ mod audio_import;
 mod bootstrap;
 mod capture_inputs;
 mod capture_scope;
+mod capture_test;
 mod data_controller;
 mod diarization;
 mod exports;
@@ -1624,7 +1625,10 @@ fn close_playback(
     if window.label() != "main" {
         return Err("Only the main window can close playback".into());
     }
-    store.close(&token)
+    store.close(&token)?;
+    window
+        .state::<capture_test::CaptureTests>()
+        .release_playback(&token)
 }
 
 #[tauri::command]
@@ -1636,6 +1640,9 @@ async fn finish_main_close(
     if window.label() != "main" {
         return Err("Only the main window can finish closing".into());
     }
+    window
+        .state::<capture_test::CaptureTests>()
+        .require_empty()?;
     if window.state::<exports::ExportController>().active() {
         return Err("Markdownの保存・取消が完了してから終了してください".into());
     }
@@ -1658,11 +1665,18 @@ async fn finish_main_close(
     tauri::async_runtime::spawn(async move {
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
-            if expected.is_some() {
-                app.state::<AnalysisController>().seal_exit()?;
-            } else {
-                app.state::<AnalysisController>().begin_exit()?;
-            }
+            RecorderController::with_transition(&app, || {
+                app.state::<capture_test::CaptureTests>().seal_exit()?;
+                let admission = if expected.is_some() {
+                    app.state::<AnalysisController>().seal_exit()
+                } else {
+                    app.state::<AnalysisController>().begin_exit()
+                };
+                if admission.is_err() {
+                    app.state::<capture_test::CaptureTests>().abort_exit()?;
+                }
+                admission
+            })?;
             let result = if let Some(target) = &expected {
                 DataController::shutdown_checked(&app, &target.data_token)
                     .and_then(|_| ImportController::shutdown_checked(&app, &target.import_token))
@@ -1672,6 +1686,7 @@ async fn finish_main_close(
             .and_then(|_| AnalysisController::shutdown(&app));
             if result.is_err() {
                 app.state::<AnalysisController>().abort_shutdown();
+                app.state::<capture_test::CaptureTests>().abort_exit()?;
                 if expected.as_ref().is_none_or(|e| {
                     app.state::<ImportController>()
                         .snapshot()
@@ -1703,6 +1718,78 @@ async fn finish_main_close(
 #[tauri::command]
 fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
     store.snapshot()
+}
+#[tauri::command]
+fn get_capture_test_snapshot(
+    window: WebviewWindow,
+    run_id: Option<String>,
+) -> Result<Option<capture_test::Snapshot>, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から確認してください".into());
+    }
+    window
+        .state::<capture_test::CaptureTests>()
+        .snapshot(run_id.as_deref())
+}
+#[tauri::command]
+async fn start_capture_test(
+    window: WebviewWindow,
+    request: capture_test::Request,
+) -> Result<capture_test::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から開始してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || capture_test::CaptureTests::start(&app, request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn cancel_capture_test(
+    window: WebviewWindow,
+    run_id: String,
+) -> Result<capture_test::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から停止してください".into());
+    }
+    capture_test::CaptureTests::cancel(window.app_handle(), &run_id)
+}
+#[tauri::command]
+async fn discard_capture_test(window: WebviewWindow, run_id: String) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から閉じてください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || capture_test::CaptureTests::discard(&app, &run_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn get_capture_test_levels(
+    window: WebviewWindow,
+    run_id: String,
+) -> Result<input_levels::InputLevels, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から確認してください".into());
+    }
+    capture_test::CaptureTests::levels(window.app_handle(), &run_id)
+}
+#[tauri::command]
+async fn prepare_capture_test_playback(
+    window: WebviewWindow,
+    run_id: String,
+    track_kind: String,
+    preparation_id: String,
+) -> Result<PlaybackInfo, String> {
+    if window.label() != "main" {
+        return Err("録音前テストはメイン画面から再生してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        capture_test::CaptureTests::prepare_playback(&app, &run_id, &track_kind, &preparation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 fn get_recording_levels(
@@ -1757,6 +1844,7 @@ async fn start_recording(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         RecorderController::with_transition(&app, || {
+            app.state::<capture_test::CaptureTests>().require_empty()?;
             if app.state::<StopDecisionStore>().snapshot().visible() {
                 return Err("録音確認を完了してから開始してください".into());
             }
@@ -2034,6 +2122,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SessionStore::default())
         .manage(RecorderController::default())
+        .manage(capture_test::CaptureTests::default())
         .manage(StopDecisionStore::default())
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
@@ -2125,6 +2214,12 @@ pub fn run() {
             cancel_data_operation,
             get_recording_snapshot,
             get_recording_levels,
+            get_capture_test_snapshot,
+            start_capture_test,
+            cancel_capture_test,
+            discard_capture_test,
+            get_capture_test_levels,
+            prepare_capture_test_playback,
             get_application_close_activity,
             capture_available,
             get_capture_inputs,

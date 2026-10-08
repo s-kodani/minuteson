@@ -154,6 +154,11 @@ impl LevelReader {
         // Traverse through directory descriptors, not path-following opens: a
         // parent swapped to a symlink between checks cannot redirect this read.
         let file = open_telemetry(directory)?;
+        self.read_file(file, owner)
+    }
+    // A private capture test already owns a pinned directory descriptor. Use
+    // its descriptor-relative open instead of resolving that path a second time.
+    pub(crate) fn read_file(&mut self, file: File, owner: &str) -> Result<InputLevels, String> {
         let metadata = file.metadata().map_err(|e| e.to_string())?;
         if !metadata.is_file() || metadata.len() > LIMIT {
             return Err("入力レベルのファイル形式または容量が不正です".into());

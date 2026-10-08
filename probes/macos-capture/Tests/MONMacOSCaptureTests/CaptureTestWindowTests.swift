@@ -416,7 +416,8 @@ final class CaptureTestWindowTests: XCTestCase, @unchecked Sendable {
       targetBundleIdentifier: nil, startedAtUTC: "2023-11-14T22:13:20Z",
       requestedDurationSeconds: 5, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: microphone, system: system, errors: [])
-    manifest.captureTest = window.metadata()
+    manifest.microphoneDeviceUID = "fixture-microphone"
+    manifest.captureTest = window.metadata(firstSavedCaptureNanoseconds: origin)
     try manifest.finalizeClock(clock)
     XCTAssertEqual(manifest.microphone.clockSegments?.first?.timelineStartUs, 0)
     XCTAssertEqual(manifest.microphone.clockSegments?.last?.timelineEndUs, 5_000_000)
@@ -446,6 +447,7 @@ final class CaptureTestWindowTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(metadata["durationSeconds"] as? Int, 5)
     XCTAssertEqual(metadata["completed"] as? Bool, true)
     XCTAssertEqual(metadata["windowEndNs"] as? Int64, origin + 5_000_000_000)
+    XCTAssertEqual(metadata["firstSavedCaptureNs"] as? Int64, origin)
     try bytes.write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
     if let destinationPath = ProcessInfo.processInfo.environment["MON_CAPTURE_TEST_FIXTURE_DIR"] {
       let destination = URL(fileURLWithPath: destinationPath, isDirectory: true)

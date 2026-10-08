@@ -854,6 +854,11 @@ private enum Main {
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()
         manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+      } else if let testWindow, let micStart = manifest.microphone.firstCaptureNanoseconds,
+        let systemStart = manifest.system.firstCaptureNanoseconds
+      {
+        manifest.captureTest = testWindow.metadata(
+          firstSavedCaptureNanoseconds: min(micStart, systemStart))
       }
       try write(manifest, to: manifestURL)
       if manifest.state != "saved" {

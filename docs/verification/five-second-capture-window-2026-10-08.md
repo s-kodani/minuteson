@@ -18,12 +18,12 @@ macOS録音ヘルパーに、両入力の初期化後だけ音声を保存する
 
 合成PCMの実CAF生成では、マイクの40000フレームとPC音声の31200フレームを8000Hz・2チャンネルで保存し、全フレーム・全チャンネルを読戻した。PC音声の100msの開始遅れと1秒の取得欠損は時計情報へ残し、実際のゼロ振幅を保持した。初期化中と期限後の入力はCAFへ入らない。専用のSwift生成1件・Rust読戻し1件も終了コード0で、物理CAFとテスト記録を照合し、会議登録を拒否した。`make check-capture-test` を通常の全体検査末尾へ追加した。
 
-Rust重点2件は終了コード0で、テスト情報がnullでも会議・音声資産・解析ジョブへ登録しないことと、追加のテスト情報検査によって従来の重複JSON項目の拒否を弱めないことを確認した。通常のRust全体検査は進行中である。全体実行のSwift段階後にアプリ識別条件を厳しくしたため、最終Swift61件は別の全件実行で確認し、検査時点を区別する。
+Rust重点2件は終了コード0で、テスト情報がnullでも会議・音声資産・解析ジョブへ登録しないことと、追加のテスト情報検査によって従来の重複JSON項目の拒否を弱めないことを確認した。製品ソース `874d8ad` の全体検査は終了コード0で、Python65件、フロントエンド433件と型検査・ビルド、Rust通常1423件・失敗0件・既存39件ignored、CAF全4800フレームと各Swift生成・Rust読戻しが成功した。全体実行のSwift段階60件の後にアプリ識別条件を厳しくしたため、最終Swift61件は別の全件実行で確認し、検査時点を区別する。
 
-ログは `/private/tmp/mon-capture-test-window-swift-final.log`、`/private/tmp/mon-capture-test-adoption-final.log`、`/private/tmp/mon-capture-test-duplicate-field.log`、`/private/tmp/mon-capture-test-cross.log` にある。進行中の全体検査は `/private/tmp/mon-capture-test-window-full-check.log` にある。
+ログは `/private/tmp/mon-capture-test-window-swift-final.log`、`/private/tmp/mon-capture-test-adoption-final.log`、`/private/tmp/mon-capture-test-duplicate-field.log`、`/private/tmp/mon-capture-test-cross.log` にある。終了した全体検査は `/private/tmp/mon-capture-test-window-full-check.log` にある。
 
 ## 残対応
 
-アプリの準備画面からこのモードを起動する処理はまだ接続していない。会議を作らない専用状態、録音・取り込み・解析との排他、明示的な開始確認、応答喪失時の再照合、初期化待ちの取消と期限、所有する一時音声だけの回収を接続する。停止・検証後にマイクとPC音声を別々に再生し、古いテスト結果を現在の入力と混同しない表示も必要である。
+この共通枠追加時点では専用のアプリ操作管理は未接続だった。後続の[専用操作管理と音声検証](five-second-capture-controller-2026-10-08.md)で、会議を作らない状態・取消と期限・私有音声の検証・個別再生準備APIを追加した。準備画面への開始確認・結果再照合・個別再生と表示の接続は残る。
 
 マイク・PC音声の実録音や実機アプリの起動は行っていない。実機での権限、入力範囲、同期、切断、スリープと負荷は未検証である。正式評価・10話者・Windows固有部分とWindows CI停止を維持し、M2-04・M3-08と計画全体は進行中とする。

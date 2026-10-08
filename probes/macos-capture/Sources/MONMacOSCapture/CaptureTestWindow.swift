@@ -7,6 +7,7 @@ struct CaptureTestMetadata: Encodable {
   let durationSeconds = 5
   let windowStartNs: Int64?
   let windowEndNs: Int64?
+  let firstSavedCaptureNs: Int64?
   let completed: Bool
 }
 
@@ -54,10 +55,11 @@ final class CaptureTestWindow: @unchecked Sendable {
     }
   }
 
-  func metadata() -> CaptureTestMetadata {
+  func metadata(firstSavedCaptureNanoseconds: Int64? = nil) -> CaptureTestMetadata {
     lock.withLock {
       CaptureTestMetadata(
-        ownerId: ownerId, windowStartNs: start, windowEndNs: end, completed: completed)
+        ownerId: ownerId, windowStartNs: start, windowEndNs: end,
+        firstSavedCaptureNs: firstSavedCaptureNanoseconds, completed: completed)
     }
   }
 
