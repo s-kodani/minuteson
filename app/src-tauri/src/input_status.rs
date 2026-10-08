@@ -62,8 +62,8 @@ pub(crate) struct Notice {
     #[serde(skip_serializing_if = "Option::is_none")]
     delivery: Option<queue::Delivery>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Receipt {
     schema_version: u8,
     owner_id: String,
@@ -270,6 +270,7 @@ pub(crate) struct StatusReader {
     previous: Option<(Publication, u64, Instant, SystemTime)>,
     notices: [Notices; 2],
     queue: queue::Queue,
+    ledger: Option<queue::Ledger>,
 }
 impl StatusReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
@@ -278,6 +279,7 @@ impl StatusReader {
             previous: None,
             notices: Default::default(),
             queue: Default::default(),
+            ledger: None,
         })
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
@@ -358,8 +360,22 @@ impl StatusReader {
         if age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
-        let notices = if p.schema_version == 3 {
-            self.queue.observe(&p, age_ms, target, Instant::now())
+        let queue_started = Instant::now();
+        let mut notices = if p.schema_version == 3 {
+            if self.ledger.is_none() {
+                let (mut ledger, restored) = queue::Ledger::open(&self.directory, owner)?;
+                if let Some((prior, mut queue)) = restored {
+                    queue::Ledger::advances(&p, &prior)?;
+                    ledger.fence(&mut queue)?;
+                    self.queue = queue;
+                }
+                self.ledger = Some(ledger);
+            }
+            let mut candidate = self.queue.clone();
+            let notices = candidate.observe(&p, age_ms, target, Instant::now());
+            self.ledger.as_mut().unwrap().commit(&p, &candidate)?;
+            self.queue = candidate;
+            notices
         } else {
             [
                 self.notices[0].observe_input(&p, "microphone", age_ms, target),
@@ -369,6 +385,15 @@ impl StatusReader {
             .flatten()
             .collect()
         };
+        // File sync is not a new producer heartbeat. Account for time spent
+        // persisting before any connection flag or delivery offer leaves Rust.
+        age_ms = age_ms.saturating_add(millis(queue_started.elapsed())?);
+        if age_ms > SAFE {
+            return Err("入力状態の時計が範囲外です".into());
+        }
+        if age_ms > FRESH_MS {
+            notices.clear();
+        }
         Ok(Snapshot {
             schema_version: if p.schema_version == 3 { 4 } else { 3 },
             owner_id: p.owner_id,
@@ -478,16 +503,27 @@ impl StatusReader {
         {
             return Err("通知の録音・報告・表示状態または受付世代が不正です".into());
         }
-        self.queue.act(
+        let mut candidate = self.queue.clone();
+        let action_started = Instant::now();
+        let mut receipt = candidate.act(
             &p.owner_id,
             notice_id,
             recipient,
             target,
             generation,
             action,
-            Instant::now(),
+            action_started,
             receive_id,
-        )
+        )?;
+        self.ledger
+            .as_mut()
+            .ok_or("通知の永続台帳がありません")?
+            .commit(p, &candidate)?;
+        self.queue = candidate;
+        if let Some(delivery) = &mut receipt.delivery {
+            delivery.account_persistence_time(action_started.elapsed());
+        }
+        Ok(receipt)
     }
     pub(crate) fn uses_queue(snapshot: &Snapshot) -> bool {
         snapshot.schema_version == 4

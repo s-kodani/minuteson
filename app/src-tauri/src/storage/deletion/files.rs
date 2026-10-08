@@ -240,7 +240,12 @@ impl Records {
                 && self.sessions.contains(p[3])
                 && matches!(
                     p[4],
-                    "microphone.caf" | "system.caf" | "manifest.json" | "input-events.json"
+                    "microphone.caf"
+                        | "system.caf"
+                        | "manifest.json"
+                        | "input-events.json"
+                        | "input-notices.json"
+                        | "input-notices.lock"
                 )
             {
                 return Some("recording".into());

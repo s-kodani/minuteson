@@ -232,6 +232,15 @@ fn overlapping_suffix_remains_immutable_and_stale_history_cannot_freshen_current
 #[ignore = "Swift-owned history fixture; run make check-input-history without audio capture"]
 fn swift_generated_input_history_retains_both_transitions_without_pcm_or_render_claims() {
     let path = std::path::PathBuf::from(std::env::var("MON_INPUT_HISTORY_FIXTURE_DIR").unwrap());
+    // This dedicated Swift fixture predates delivery persistence. Prove these
+    // companions are new test-owned outputs before removing them on completion;
+    // retain the original producer JSON for the Makefile's existing cleanup.
+    for name in ["input-notices.json", "input-notices.lock"] {
+        assert_eq!(
+            fs::symlink_metadata(path.join(name)).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
     let before = fs::read(path.join("input-status.json")).unwrap();
     let mut reader = StatusReader::pin(&path.canonicalize().unwrap()).unwrap();
     let snapshot = reader.read(OWNER, Some("main")).unwrap();
@@ -254,4 +263,8 @@ fn swift_generated_input_history_retains_both_transitions_without_pcm_or_render_
         assert_eq!(v["events"][1]["status"]["sourceEpoch"], 2);
     }
     assert_eq!(before, fs::read(path.join("input-status.json")).unwrap());
+    drop(reader);
+    for name in ["input-notices.json", "input-notices.lock"] {
+        fs::remove_file(path.join(name)).unwrap();
+    }
 }

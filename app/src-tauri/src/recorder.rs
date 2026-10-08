@@ -16,7 +16,7 @@ struct ActiveCapture {
     level_directory: PathBuf,
     levels: crate::input_levels::LevelReader,
     writes: crate::recording_writes::WriteReader,
-    input_status: crate::input_status::StatusReader,
+    input_status: Arc<Mutex<crate::input_status::StatusReader>>,
 }
 
 #[derive(Default)]
@@ -83,6 +83,69 @@ fn recording_command(
 }
 
 impl RecorderController {
+    // Clone a dedicated notification owner under the recorder lock, then release
+    // it before any delivery fsync. Slow notification storage must not hold the
+    // capture/child/session mutexes needed to request recording stop.
+    fn input_owner(
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<
+        (
+            Arc<Mutex<crate::input_status::StatusReader>>,
+            Arc<Mutex<Child>>,
+        ),
+        String,
+    > {
+        let controller = app.state::<Self>();
+        controller.clone_input_owner(&app.state::<SessionStore>().snapshot(), session_id)
+    }
+    fn clone_input_owner(
+        &self,
+        snapshot: &RecordingSnapshot,
+        session_id: &str,
+    ) -> Result<
+        (
+            Arc<Mutex<crate::input_status::StatusReader>>,
+            Arc<Mutex<Child>>,
+        ),
+        String,
+    > {
+        let active = self.0.lock().map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_ref().ok_or("入力確認できる録音がありません")?;
+        require_level_session(&current.session_id, snapshot, session_id)?;
+        Ok((current.input_status.clone(), current.child.clone()))
+    }
+    fn verify_input_owner(
+        app: &AppHandle,
+        session_id: &str,
+        reader: &Arc<Mutex<crate::input_status::StatusReader>>,
+        child: &Arc<Mutex<Child>>,
+    ) -> Result<(), String> {
+        let controller = app.state::<Self>();
+        let active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません")?;
+        let current = active.as_ref().ok_or("入力確認の録音は終了しました")?;
+        if !Arc::ptr_eq(reader, &current.input_status) || !Arc::ptr_eq(child, &current.child) {
+            return Err("入力確認の録音所有者が変更されました".into());
+        }
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        if child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?
+            .try_wait()
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            return Err("入力確認中に録音プロセスが終了しました".into());
+        }
+        Ok(())
+    }
     pub(crate) fn input_notice_action(
         app: &AppHandle,
         session_id: &str,
@@ -100,86 +163,49 @@ impl RecorderController {
         {
             return Err("通知の受付引数が不正です".into());
         }
-        let controller = app.state::<Self>();
-        let mut active = controller
-            .0
+        let (reader, child) = Self::input_owner(app, session_id)?;
+        let mut input = reader
             .lock()
-            .map_err(|_| "録音ロックを取得できません")?;
-        let current = active.as_mut().ok_or("通知を受付できる録音がありません")?;
-        require_level_session(
-            &current.session_id,
-            &app.state::<SessionStore>().snapshot(),
-            session_id,
-        )?;
-        let mut child = current
-            .child
-            .lock()
-            .map_err(|_| "録音プロセスのロックに失敗しました")?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("録音プロセスは終了しました".into());
-        }
+            .map_err(|_| "入力通知のロックを取得できません")?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
         // Do not assign a new destination while confirming a previously offered
         // notice. Read the real current publication again before any mutation.
-        let report = current.input_status.read(session_id, None)?;
+        let report = input.read(session_id, None)?;
         let visible = app.get_webview_window(target).is_some_and(|w| {
             crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
         });
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("通知受付の確認中に録音が終了しました".into());
-        }
-        let result = app
-            .state::<SessionStore>()
-            .with_active_owner(session_id, || {
-                if crate::input_status::StatusReader::uses_queue(&report) {
-                    current.input_status.queued_action(
-                        &report,
-                        notice_id,
-                        recipient_id,
-                        target,
-                        visible,
-                        generation.ok_or("通知の受付世代がありません")?,
-                        action,
-                        receive_id,
-                    )
-                } else if matches!(action, crate::input_status::queue::Action::Receive)
-                    && generation.is_none()
-                {
-                    current
-                        .input_status
-                        .receive(&report, notice_id, recipient_id, target, visible)
-                } else {
-                    Err("旧通知は表示確認キューに対応していません".into())
-                }
-            })?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("通知受付の確認中に録音が終了しました".into());
-        }
-        Ok(result)
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
+        let result = if crate::input_status::StatusReader::uses_queue(&report) {
+            input.queued_action(
+                &report,
+                notice_id,
+                recipient_id,
+                target,
+                visible,
+                generation.ok_or("通知の受付世代がありません")?,
+                action,
+                receive_id,
+            )
+        } else if matches!(action, crate::input_status::queue::Action::Receive)
+            && generation.is_none()
+        {
+            input.receive(&report, notice_id, recipient_id, target, visible)
+        } else {
+            Err("旧通知は表示確認キューに対応していません".into())
+        }?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
+        app.state::<SessionStore>()
+            .with_active_owner(session_id, || Ok(result))
     }
     pub(crate) fn input_status(
         app: &AppHandle,
         session_id: &str,
     ) -> Result<crate::input_status::Snapshot, String> {
-        let controller = app.state::<Self>();
-        let mut active = controller
-            .0
+        let (reader, child) = Self::input_owner(app, session_id)?;
+        let mut input = reader
             .lock()
-            .map_err(|_| "録音ロックを取得できません")?;
-        let current = active
-            .as_mut()
-            .ok_or("入力状態を確認できる録音がありません")?;
-        require_level_session(
-            &current.session_id,
-            &app.state::<SessionStore>().snapshot(),
-            session_id,
-        )?;
-        let mut child = current
-            .child
-            .lock()
-            .map_err(|_| "録音プロセスのロックに失敗しました")?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("録音プロセスは終了しました".into());
-        }
+            .map_err(|_| "入力通知のロックを取得できません")?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
         // One backend owner chooses one notification destination. Both windows
         // still read the same retained state; hiding a window never retries audio.
         let main_visible = app.get_webview_window("main").is_some_and(|w| {
@@ -189,16 +215,10 @@ impl RecorderController {
             crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
         });
         let target = crate::input_status::notice_target(main_visible, recorder_visible);
-        let result = current.input_status.read(session_id, target)?;
-        require_level_session(
-            &current.session_id,
-            &app.state::<SessionStore>().snapshot(),
-            session_id,
-        )?;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("入力状態の確認中に録音プロセスが終了しました".into());
-        }
-        Ok(result)
+        let result = input.read(session_id, target)?;
+        Self::verify_input_owner(app, session_id, &reader, &child)?;
+        app.state::<SessionStore>()
+            .with_active_owner(session_id, || Ok(result))
     }
     pub(crate) fn writes(
         app: &AppHandle,
@@ -402,7 +422,7 @@ impl RecorderController {
             level_directory,
             levels: Default::default(),
             writes,
-            input_status,
+            input_status: Arc::new(Mutex::new(input_status)),
         });
         let snapshot = publish(app, |state| {
             state.phase = RecordingPhase::Preparing;
@@ -472,6 +492,47 @@ impl RecorderController {
 mod tests {
     use super::*;
     const SESSION: &str = "735027d4-a03e-43d3-830a-21e767dfaf88";
+
+    #[test]
+    fn notification_owner_does_not_hold_capture_or_child_lock_while_reader_is_busy() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().canonicalize().unwrap();
+        // A reaped no-op process, not a recording helper or product app.
+        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        child.wait().unwrap();
+        let child = Arc::new(Mutex::new(child));
+        let reader = Arc::new(Mutex::new(
+            crate::input_status::StatusReader::pin(&output).unwrap(),
+        ));
+        let controller = RecorderController(
+            Mutex::new(Some(ActiveCapture {
+                session_id: SESSION.into(),
+                output: output.clone(),
+                child: child.clone(),
+                stop_operation_id: None,
+                level_directory: output.clone(),
+                levels: Default::default(),
+                writes: crate::recording_writes::WriteReader::pin(&output).unwrap(),
+                input_status: reader.clone(),
+            })),
+            Mutex::new(()),
+        );
+        let mut snapshot = RecordingSnapshot {
+            session_id: Some(SESSION.into()),
+            phase: RecordingPhase::Recording,
+            ..Default::default()
+        };
+        let (owned_reader, owned_child) = controller.clone_input_owner(&snapshot, SESSION).unwrap();
+        assert!(Arc::ptr_eq(&reader, &owned_reader));
+        assert!(Arc::ptr_eq(&child, &owned_child));
+        let _busy_notification_storage = owned_reader.lock().unwrap();
+        // These are the exact locks used by stop_target and child termination.
+        assert!(controller.0.try_lock().is_ok());
+        assert!(owned_child.try_lock().is_ok());
+        snapshot.phase = RecordingPhase::Stopping;
+        assert!(controller.clone_input_owner(&snapshot, SESSION).is_err());
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0);
+    }
 
     #[test]
     fn levels_require_current_canonical_active_session_not_connection() {

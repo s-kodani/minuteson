@@ -1,14 +1,16 @@
 //! Live recorder-owned, ordered delivery. Receiving is not rendering. Leases
 //! fence abandoned WebViews; only the confirmed recipient can render/close.
 use super::{history::Event, Input, Notice, Publication, Receipt, SAFE};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 pub(crate) const LEASE_MS: u64 = 5000;
+mod ledger;
+pub(super) use ledger::Ledger;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Delivery {
     sequence: u64,
     generation: u64,
@@ -16,6 +18,13 @@ pub(crate) struct Delivery {
     rendered: bool,
     status: Input,
     receive_id: Option<String>,
+}
+impl Delivery {
+    pub(super) fn account_persistence_time(&mut self, elapsed: Duration) {
+        if let Some(age) = &mut self.lease_age_ms {
+            *age = age.saturating_add(elapsed.as_millis().try_into().unwrap_or(u64::MAX));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -31,11 +40,16 @@ pub(crate) enum Action {
     Close,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Pending {
     event: Event,
     generation: u64,
     target: Option<String>,
     recipient: Option<String>,
+    // A disk record is never a fresh lease. Restoration explicitly fences the
+    // old recipient before this queue may be offered to another WebView.
+    #[serde(skip)]
     claimed: Option<Instant>,
     rendered: bool,
     receive_id: Option<String>,
@@ -66,7 +80,8 @@ impl Pending {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Lane {
     seen: u64,
     lost: u64,
@@ -74,7 +89,8 @@ struct Lane {
     closed: Option<Receipt>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Queue {
     lanes: [Lane; 2],
 }
@@ -275,7 +291,7 @@ mod tests {
     const B: &str = "539640c5-f04c-4d91-96f2-36e37008fe1d";
     const OP: &str = "da93a8dc-c860-478d-ae51-9b982f126a4f";
     const OP2: &str = "57e9ae3a-e22f-4c37-898b-2a6d40cc2658";
-    fn publication(sequence: u64) -> Publication {
+    pub(super) fn publication(sequence: u64) -> Publication {
         let status = |seq: u64, lane: &str| {
             let count = seq / 2 + seq % 2;
             json!({"state":if seq%2==0{"connected"}else{"disconnected"},"sourceEpoch":seq/2+1,"interruptions":count,"reason":if seq%2==0{None}else{Some(if lane=="microphone"{"device_disconnected"}else{"stream_stopped"})}})

@@ -52,6 +52,10 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
     let document = f.file("documents/result.json", Some("application/json"));
     let input_events = f.file(&format!("audio/{}/input-events.json", f.session), None);
     let input_events_before = std::fs::read(&input_events).unwrap();
+    let input_notices = f.file(&format!("audio/{}/input-notices.json", f.session), None);
+    let input_lock = f.file(&format!("audio/{}/input-notices.lock", f.session), None);
+    let input_notices_before = std::fs::read(&input_notices).unwrap();
+    let input_lock_before = std::fs::read(&input_lock).unwrap();
     let unknown = f.file("unknown.wav", None);
     let job = f.job("transcription");
     let unit = uuid::Uuid::new_v4().to_string();
@@ -83,6 +87,8 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
     for retained in [
         &manifest,
         &input_events,
+        &input_notices,
+        &input_lock,
         &document,
         &unknown,
         &result,
@@ -92,6 +98,8 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
         assert!(retained.is_file());
     }
     assert_eq!(std::fs::read(&input_events).unwrap(), input_events_before);
+    assert_eq!(std::fs::read(&input_notices).unwrap(), input_notices_before);
+    assert_eq!(std::fs::read(&input_lock).unwrap(), input_lock_before);
     assert!(f.storage.data_write_blocked());
     let db = f.storage.connection.lock().unwrap();
     assert_eq!(

@@ -338,6 +338,12 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
     f.file(&format!("audio/{}/system.caf", f.session), None);
     f.file(&format!("audio/{}/manifest.json", f.session), None);
     f.file(&format!("audio/{}/input-events.json", f.session), None);
+    f.file(&format!("audio/{}/input-notices.json", f.session), None);
+    f.file(&format!("audio/{}/input-notices.lock", f.session), None);
+    f.file(
+        &format!("audio/{}/.input-notices-unowned.tmp", f.session),
+        None,
+    );
     f.file(
         &format!("audio/{}/.input-events-unowned.tmp", f.session),
         None,
@@ -366,6 +372,13 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
         entry(&preview, "input-events.json").disposition,
         Disposition::Retain
     );
+    for name in ["input-notices.json", "input-notices.lock"] {
+        assert_eq!(entry(&preview, name).disposition, Disposition::Retain);
+    }
+    assert_eq!(
+        entry(&preview, ".input-notices-unowned.tmp").disposition,
+        Disposition::Unclassified
+    );
     assert_eq!(
         entry(&preview, ".input-events-unowned.tmp").disposition,
         Disposition::Unclassified
@@ -379,7 +392,7 @@ fn audio_only_census_accounts_for_recording_leftovers_and_pcm_but_not_result_tex
         entry(&preview, "unknown-speaker.wav").disposition,
         Disposition::Unclassified
     );
-    assert_eq!(preview.unclassified_files, 2);
+    assert_eq!(preview.unclassified_files, 3);
 }
 
 #[test]
