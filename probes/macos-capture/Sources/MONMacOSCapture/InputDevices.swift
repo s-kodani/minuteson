@@ -82,7 +82,9 @@ enum InputDevices {
     return matches[0]
   }
 
-  static func verifyDevice(_ unit: AudioUnit, expected: AudioObjectID) throws {
+  static func verifyDevice(
+    _ unit: AudioUnit, expected: AudioObjectID, expectedUID: String? = nil
+  ) throws {
     var actual: AudioObjectID = 0
     var size = UInt32(MemoryLayout<AudioObjectID>.stride)
     try check(
@@ -92,6 +94,10 @@ enum InputDevices {
     guard size == MemoryLayout<AudioObjectID>.stride, actual == expected else {
       throw ProbeError.capture(
         "microphone changed during recording; other device audio was not accepted")
+    }
+    if let expectedUID {
+      guard validUID(expectedUID), try string(actual, kAudioDevicePropertyDeviceUID) == expectedUID
+      else { throw ProbeError.capture("microphone object no longer has the confirmed UID") }
     }
   }
 

@@ -1,6 +1,6 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test check-microphone-recovery
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-capture-test check-microphone-recovery
 
 check-app:
 	npm --prefix app run build
@@ -30,6 +30,12 @@ check-capture-test:
 	trap 'rm -f "$$mon_test_dir/manifest.json" "$$mon_test_dir/microphone.caf" "$$mon_test_dir/system.caf"; rmdir "$$mon_test_dir"' EXIT; \
 	env MON_CAPTURE_TEST_FIXTURE_DIR="$$mon_test_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter CaptureTestWindowTests/testSwiftFiveSecondWindowWritesOnlySelectedFramesAndExportsPrivateManifest && \
 	env MON_CAPTURE_TEST_FIXTURE_DIR="$$mon_test_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_five_second_test -- --ignored
+
+check-microphone-recovery:
+	@mon_recovery_dir=$$(mktemp -d /tmp/mon-microphone-recovery.XXXXXX) || exit 1; \
+	trap 'rm -f "$$mon_recovery_dir/manifest.json" "$$mon_recovery_dir/microphone.caf" "$$mon_recovery_dir/system.caf"; rmdir "$$mon_recovery_dir"' EXIT; \
+	env MON_MICROPHONE_RECOVERY_FIXTURE_DIR="$$mon_recovery_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter MicrophoneRecoveryTests/testSyntheticCAFAppendsAcrossVerifiedBindingsWithoutOverwritingOrPadding && \
+	env MON_MICROPHONE_RECOVERY_FIXTURE_DIR="$$mon_recovery_dir" cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_microphone_rebinding_retains_pcm_gap_and_other_track_through_database_finalization -- --ignored
 
 test:
 	python3 -m unittest discover -s tests -v

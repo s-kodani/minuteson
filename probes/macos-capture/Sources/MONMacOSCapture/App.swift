@@ -222,16 +222,19 @@ struct TrackStats: Encodable {
   var clockFailure: String?
   var timing: CaptureTrackTiming?
   var inputLevel = PCMInputLevel()
+  var microphoneRecovery: MicrophoneRecovery.Status?
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
     case appendFailures, sampleRate, channels, clockSegments, clockFailure
+    case microphoneRecovery
   }
 
   var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
 
   mutating func recordSavedClock(
-    _ observation: CaptureClockObservation, frames: Int64, sourceFrame: Int64?
+    _ observation: CaptureClockObservation, frames: Int64, sourceFrame: Int64?,
+    sourceEpoch: UInt64 = 0
   ) {
     guard clockFailure == nil else { return }
     do {
@@ -239,7 +242,9 @@ struct TrackStats: Encodable {
         guard let sampleRate else { throw ProbeError.capture("capture sample rate is missing") }
         timing = try CaptureTrackTiming(sampleRate: sampleRate)
       }
-      try timing?.recordSaved(frames: frames, observation: observation, sourceFrame: sourceFrame)
+      try timing?.recordSaved(
+        frames: frames, observation: observation, sourceFrame: sourceFrame,
+        sourceEpoch: sourceEpoch)
     } catch { clockFailure = String(describing: error) }
   }
 
@@ -274,6 +279,7 @@ struct Manifest: Encodable {
   var microphoneDeviceUID: String?
   var targetApplicationIdentity: CaptureApplicationIdentity?
   var captureTest: CaptureTestMetadata? = nil
+  var recordingOwnerId: String? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -532,7 +538,12 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
 }
 
 private final class MicrophoneRecorder: @unchecked Sendable {
-  private let engine = AVAudioEngine()
+  private enum RebindError: Error { case formatChanged }
+  private var engine: AVAudioEngine?
+  private var configurationObserver: NSObjectProtocol?
+  private var configurationChanged = false
+  private var recovery: MicrophoneRecovery?
+  private var lastRecoveryAttempt: ContinuousClock.Instant?
   private let outputURL: URL
   private let lock = NSLock()
   private var file: AVAudioFile?
@@ -570,6 +581,20 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         "microphone permission is \(String(describing: permission)); grant it in System Settings and retry"
       )
     }
+    recovery = try MicrophoneRecovery(uid: selected.uid)
+    deviceUID = selected.uid
+    try configure(selected)
+  }
+
+  private func configure(_ selected: CaptureInputDevice) throws {
+    let token = try lock.withLock {
+      guard let token = try recovery?.begin(selected) else {
+        throw ProbeError.capture("microphone recovery owner is missing")
+      }
+      return token
+    }
+    let engine = AVAudioEngine()
+    self.engine = engine
     let node = engine.inputNode
     guard let unit = node.audioUnit else {
       throw ProbeError.capture("microphone input unit is unavailable")
@@ -581,33 +606,66 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     guard status == noErr else {
       throw ProbeError.capture("could not select microphone: \(status)")
     }
-    try InputDevices.verifyDevice(unit, expected: selected.objectID)
-    inputUnit = unit
-    selectedDeviceID = selected.objectID
-    deviceUID = selected.uid
+    try InputDevices.verifyDevice(unit, expected: selected.objectID, expectedUID: token.uid)
     let format = node.outputFormat(forBus: 0)
     guard format.sampleRate > 0, format.channelCount > 0 else {
       throw ProbeError.capture("microphone has no usable audio format")
     }
-    let file = try AVAudioFile(
-      forWriting: outputURL, settings: format.settings, commonFormat: .pcmFormatFloat32,
-      interleaved: false)
-    self.file = file
-    lock.withLock {
-      stats.sampleRate = format.sampleRate
-      stats.channels = format.channelCount
+    try lock.withLock {
+      if let file {
+        guard file.processingFormat.isEqual(format), stats.sampleRate == format.sampleRate,
+          stats.channels == format.channelCount
+        else {
+          throw RebindError.formatChanged
+        }
+      } else {
+        guard stats.frames == 0 else { throw ProbeError.capture("microphone writer was lost") }
+        file = try AVAudioFile(
+          forWriting: outputURL, settings: format.settings, commonFormat: .pcmFormatFloat32,
+          interleaved: false)
+        stats.sampleRate = format.sampleRate
+        stats.channels = format.channelCount
+      }
+      inputUnit = unit
+      selectedDeviceID = selected.objectID
+      configurationChanged = false
+    }
+    configurationObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+    ) { [weak self] _ in
+      // Apple's callback runs on an internal queue. Never stop, rebuild or
+      // deallocate an engine here; the serialized control loop does that.
+      self?.lock.withLock {
+        guard self?.recovery?.owns(token) == true else { return }
+        if self?.configurationChanged == false,
+          self?.clock == nil || self?.testWindow != nil
+        {
+          self?.stats.appendFailures += 1
+        }
+        self?.configurationChanged = true
+        self?.stats.inputLevel.invalidate()
+      }
     }
     node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, when in
       guard let self else { return }
       let receivedAt = self.levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
       self.lock.lock()
       defer { self.lock.unlock() }
+      guard self.recovery?.accepts(token) == true, !self.configurationChanged else { return }
       do {
-        if let testWindow = self.testWindow, !testWindow.accepting { return }
         guard let unit = self.inputUnit, let device = self.selectedDeviceID else {
           throw ProbeError.capture("microphone selection is missing")
         }
-        try InputDevices.verifyDevice(unit, expected: device)
+        try InputDevices.verifyDevice(unit, expected: device, expectedUID: token.uid)
+      } catch {
+        if self.clock == nil || self.testWindow != nil { self.stats.appendFailures += 1 }
+        self.recovery?.interrupt("identity_changed")
+        self.configurationChanged = true
+        self.stats.inputLevel.invalidate()
+        return
+      }
+      do {
+        if let testWindow = self.testWindow, !testWindow.accepting { return }
         var observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
         var buffer = buffer
         var sourceFrameOffset: Int64 = 0
@@ -653,7 +711,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         if let observation {
           self.stats.recordSavedClock(
             observation, frames: Int64(buffer.frameLength),
-            sourceFrame: savedSourceFrame)
+            sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
         }
       } catch {
         self.stats.appendFailures += 1
@@ -662,22 +720,101 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     tapInstalled = true
     engine.prepare()
     try engine.start()
-    try InputDevices.verifyDevice(unit, expected: selected.objectID)
+    try InputDevices.verifyDevice(unit, expected: selected.objectID, expectedUID: token.uid)
+    try lock.withLock {
+      guard !configurationChanged else {
+        throw ProbeError.capture("microphone changed during restart")
+      }
+      try recovery?.activate(token)
+    }
   }
 
-  func stop() {
-    if tapInstalled {
+  private func releaseEngine() {
+    if let configurationObserver {
+      NotificationCenter.default.removeObserver(configurationObserver)
+      self.configurationObserver = nil
+    }
+    if tapInstalled, let engine {
       engine.inputNode.removeTap(onBus: 0)
       tapInstalled = false
     }
-    engine.stop()
+    engine?.stop()
+    engine = nil
+  }
+
+  private func suspend(_ reason: String, unavailable: Bool = false) {
+    lock.withLock {
+      recovery?.interrupt(reason, unavailable: unavailable)
+      inputUnit = nil
+      selectedDeviceID = nil
+      stats.inputLevel.invalidate()
+    }
+    releaseEngine()
+    // The current CAF remains open. Recreating it would overwrite prior PCM.
+  }
+
+  func maintain() {
+    // Formal bounded probes and a private 5-second test retain their existing
+    // fail/verify contract; only an active production recording retries inputs.
+    guard clock != nil, testWindow == nil,
+      lock.withLock({ recovery?.status.state != "stopped" }), let uid = deviceUID
+    else { return }
+    let report: CaptureInputDevices
+    do { report = try InputDevices.live() } catch {
+      suspend("metadata_unavailable", unavailable: true)
+      return
+    }
+    guard report.microphonePermission == "authorized" else {
+      suspend("permission_unavailable", unavailable: true)
+      return
+    }
+    let matches = report.devices.filter { $0.uid == uid }
+    guard matches.count == 1 else {
+      suspend(
+        matches.isEmpty ? "device_disconnected" : "identity_ambiguous",
+        unavailable: !matches.isEmpty)
+      return
+    }
+    let selected = matches[0]
+    let healthy = lock.withLock {
+      recovery?.status.state == "connected" && !configurationChanged
+        && selectedDeviceID == selected.objectID
+    }
+    if healthy, engine?.isRunning == true, let inputUnit {
+      do {
+        try InputDevices.verifyDevice(
+          inputUnit, expected: selected.objectID, expectedUID: uid)
+        return
+      } catch {
+        // Continue only after invalidating the old engine binding.
+      }
+    }
+    suspend("engine_changed")
+    let now = ContinuousClock.now
+    if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
+    lastRecoveryAttempt = now
+    do { try configure(selected) } catch RebindError.formatChanged {
+      suspend("format_changed", unavailable: true)
+    } catch { suspend("restart_failed", unavailable: true) }
+  }
+
+  func stop() {
+    lock.withLock {
+      recovery?.stop()
+      inputUnit = nil
+      selectedDeviceID = nil
+      stats.inputLevel.invalidate()
+    }
+    releaseEngine()
     lock.withLock { file = nil }
   }
 
   func snapshot() -> TrackStats {
     lock.lock()
     defer { lock.unlock() }
-    return stats
+    var result = stats
+    result.microphoneRecovery = recovery?.status
+    return result
   }
 }
 
@@ -772,6 +909,7 @@ private enum Main {
         errors: []
       )
       manifest.captureTest = testWindow?.metadata()
+      manifest.recordingOwnerId = options.inputLevelOwner
       try write(manifest, to: manifestURL)
       let power = RecordingPowerAssertion()
       // Also covers a throw while writing the final manifest. Do not depend on
@@ -782,6 +920,7 @@ private enum Main {
         manifest.power.acquired = true
         try await mic.start()
         manifest.microphoneDeviceUID = mic.deviceUID
+        manifest.microphone = mic.snapshot()
         if options.backend == "coreaudio" {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
@@ -811,9 +950,16 @@ private enum Main {
             stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
             parentExited: parentHasExited(options.parentPID))
           {
+            mic.maintain()
+            let microphone = mic.snapshot()
+            if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery {
+              manifest.microphone = microphone
+              manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+              try write(manifest, to: manifestURL)
+            }
             if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
               levelRevision += 1
-              let microphone = mic.snapshot().inputLevel
+              let microphone = microphone.inputLevel
               let systemLevel =
                 (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
                 .inputLevel

@@ -161,6 +161,7 @@ struct CaptureTrackTiming {
   private var map: CapturedClockMap
   private var previousSourceEnd: Int64?
   private var previousCaptureEnd: Int64?
+  private var sourceEpoch: UInt64?
   var firstCaptureNanoseconds: Int64? { map.firstCaptureNanoseconds }
 
   init(sampleRate: Double) throws {
@@ -171,7 +172,8 @@ struct CaptureTrackTiming {
   }
 
   mutating func recordSaved(
-    frames: Int64, observation: CaptureClockObservation, sourceFrame: Int64?
+    frames: Int64, observation: CaptureClockObservation, sourceFrame: Int64?,
+    sourceEpoch epoch: UInt64 = 0
   ) throws {
     guard case .timestamp(let start) = observation else {
       if case .invalid(let message) = observation { throw ProbeError.capture(message) }
@@ -183,9 +185,19 @@ struct CaptureTrackTiming {
     let duration = frames * 1_000_000_000 / map.sampleRate
     let (end, overflow) = start.addingReportingOverflow(duration)
     guard !overflow else { throw ProbeError.capture("capture buffer end overflows") }
+    guard epoch <= 9_007_199_254_740_991,
+      sourceEpoch.map({ epoch >= $0 }) ?? true
+    else { throw ProbeError.capture("capture source epoch is reversed or outside bounds") }
     var discontinuity = false
     if let previousCaptureEnd {
-      if let previousSourceEnd, let sourceFrame {
+      if let sourceEpoch, epoch != sourceEpoch {
+        // Only the control path that binds a verified input may advance this
+        // epoch. An engine's reset sample counter cannot erase elapsed time.
+        guard start >= previousCaptureEnd else {
+          throw ProbeError.capture("rebound input overlaps previously saved capture time")
+        }
+        discontinuity = start > previousCaptureEnd
+      } else if let previousSourceEnd, let sourceFrame {
         guard sourceFrame >= previousSourceEnd else {
           throw ProbeError.capture("source frame counter restarted; explicit recovery is required")
         }
@@ -209,6 +221,7 @@ struct CaptureTrackTiming {
       discontinuity: discontinuity)
     previousSourceEnd = sourceEnd
     previousCaptureEnd = end
+    sourceEpoch = epoch
   }
 
   mutating func finish(originNanoseconds: Int64, expectedFrames: Int64) throws

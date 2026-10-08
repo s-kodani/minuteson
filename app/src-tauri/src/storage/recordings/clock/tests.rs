@@ -134,6 +134,89 @@ fn swift_generated_capture_clock_manifest_finalizes_and_preserves_missing_pcm_ti
 }
 
 #[test]
+#[ignore = "requires MON_MICROPHONE_RECOVERY_FIXTURE_DIR with synthetic Swift recovery CAF files and manifest"]
+fn swift_microphone_rebinding_retains_pcm_gap_and_other_track_through_database_finalization() {
+    let fixtures = PathBuf::from(std::env::var_os("MON_MICROPHONE_RECOVERY_FIXTURE_DIR").unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, session, output, _) = saved_probe_fixture(&storage);
+    let names = ["manifest.json", "microphone.caf", "system.caf"];
+    let originals = names.map(|name| std::fs::read(fixtures.join(name)).unwrap());
+    for (name, bytes) in names.iter().zip(&originals) {
+        std::fs::write(output.join(name), bytes).unwrap();
+    }
+    let saved = storage.finalize_recording(&session).unwrap();
+    assert_eq!(saved.state, "saved");
+    assert_eq!(saved.duration_us, 40000);
+    assert_eq!(saved.started_at_utc_ms, Some(1700000000000));
+    let db = storage.connection.lock().unwrap();
+    let mic: String = db
+        .query_row("SELECT id FROM audio_tracks WHERE kind='mic'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let system: String = db
+        .query_row("SELECT id FROM audio_tracks WHERE kind='system'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let gaps: Vec<(String, i64, i64, String)> = db
+        .prepare("SELECT track_id,start_us,end_us,reason_code FROM audio_gaps")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        gaps,
+        vec![(mic.clone(), 10000, 30000, "capture_timestamp_gap".into())]
+    );
+    let frames: Vec<i64> = db
+        .prepare("SELECT frame_count FROM audio_chunks ORDER BY frame_count")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(frames, vec![960, 1920]);
+    drop(db);
+    for (track, start, end, count, value) in [
+        (&mic, 0, 10000, 480, 0.25_f32),
+        (&mic, 30000, 40000, 480, 0.5),
+        (&system, 0, 40000, 1920, 0.125),
+    ] {
+        let mut audio = storage
+            .prepare_track_audio(&meeting, track, start, end)
+            .unwrap();
+        assert_eq!(audio.total_frames(), count);
+        assert_eq!(audio.alignment, "unverified");
+        for (index, sample) in audio
+            .read_pcm(0, count)
+            .unwrap()
+            .chunks_exact(4)
+            .enumerate()
+        {
+            assert_eq!(
+                f32::from_le_bytes(sample.try_into().unwrap()),
+                if index % 2 == 0 { value } else { -value }
+            );
+        }
+    }
+    assert!(storage
+        .prepare_track_audio(&meeting, &mic, 0, 40000)
+        .is_err());
+    assert!(storage.recorded_audio_plan(&meeting).is_err());
+    assert_eq!(
+        names.map(|name| std::fs::read(output.join(name)).unwrap()),
+        originals
+    );
+    assert_eq!(
+        names.map(|name| std::fs::read(fixtures.join(name)).unwrap()),
+        originals
+    );
+}
+
+#[test]
 fn corrected_capture_finalization_binds_physical_frames_clock_maps_utc_and_pcm_readers() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
