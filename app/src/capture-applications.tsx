@@ -7,15 +7,16 @@ import {captureApplicationKey,captureApplicationScope,checkedCaptureApplicationI
 export function useCaptureScope(enabled:boolean,meetingId:string|null){
   const [mode,setMode]=useState<"system"|"application">("system"),[application,setApplication]=useState<CaptureApplicationIdentity|null>(null);
   const [applications,setApplications]=useState<CaptureApplications|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(""),[retry,setRetry]=useState(0);
+  const [catalogMeeting,setCatalogMeeting]=useState<string|null>(null);
   useEffect(()=>{
     if(!enabled||mode!=="application"||!isTauri())return;
     let disposed=false;setApplications(null);setLoading(true);setError("");
-    void invoke<unknown>("get_capture_applications").then(checkedCaptureApplications).then(result=>{if(!disposed)setApplications(result);})
+    void invoke<unknown>("get_capture_applications").then(checkedCaptureApplications).then(result=>{if(!disposed){setApplications(result);setCatalogMeeting(meetingId);}})
       .catch(cause=>{if(!disposed)setError(`アプリ一覧を確認できません。取得範囲は変更していません: ${String(cause)}`);})
       .finally(()=>{if(!disposed)setLoading(false);});
     return()=>{disposed=true;};
   },[enabled,mode,meetingId,retry]);
-  const catalog=enabled&&mode==="application"?applications:null;
+  const catalog=enabled&&mode==="application"&&catalogMeeting===meetingId?applications:null;
   const scope:CaptureScope|null=mode==="system"?{mode:"system",application:null}:application?{mode:"application",application}:null;
   const selected=scope?captureApplicationScope(scope,catalog):null;
   const choose=(key:string)=>{const chosen=catalog?.applications.find(a=>captureApplicationKey(a)===key);if(chosen)setApplication(checkedCaptureApplicationIdentity(chosen));};

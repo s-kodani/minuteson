@@ -35,6 +35,8 @@ import { MeetingPlaybackSurface } from "./playback-surface";
 import { MeetingAudioControls } from "./meeting-audio";
 import {CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {checkedCaptureInputs,usableMicrophone} from "./capture-input-state";
+import {useCaptureScope} from "./capture-applications";
+import {captureApplicationScope,checkedCaptureApplications,checkedCaptureScope} from "./capture-scope-state";
 import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
@@ -149,6 +151,7 @@ function MainWindow() {
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState("");
   const captureInputs=useCaptureInputs(captureAvailable&&selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType!=="audio_import"&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase),selectedMeeting?.id??null);
+  const captureScope=useCaptureScope(captureAvailable&&selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType!=="audio_import"&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase),selectedMeeting?.id??null);
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false), starting = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
@@ -196,8 +199,8 @@ function MainWindow() {
   const closeConfirm = useActionConfirmation(false);
   const navigationLocked = baseNavigationLocked || captureBusy || closingBusy || startConfirm.pending;
   const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
-  const root = useRef({ selectedMeeting, baseWriteLocked, captureAvailable, captureInputs, state });
-  root.current = { selectedMeeting, baseWriteLocked, captureAvailable, captureInputs, state };
+  const root = useRef({ selectedMeeting, baseWriteLocked, captureAvailable, captureInputs, captureScope, state });
+  root.current = { selectedMeeting, baseWriteLocked, captureAvailable, captureInputs, captureScope, state };
   const readCloseContext = async (): Promise<CloseContext> => {
     const [recording, importing, data, activity] = await Promise.all([
       invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),
@@ -300,22 +303,31 @@ function MainWindow() {
     priorPhase.current = phase;
   }, [state, selectedMeeting]);
   const startRecording = async () => {
-    if (!selectedMeeting || !captureInputs.selected || starting.current || closing.current || root.current.baseWriteLocked) return;
+    if (!selectedMeeting || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked) return;
     const microphoneUID=captureInputs.uid;
+    const scope=checkedCaptureScope(captureScope.scope,captureScope.applications);
+    const scopeKey=JSON.stringify(scope);
+    const scopeUnchanged=()=>JSON.stringify(root.current.captureScope.scope)===scopeKey;
     starting.current = true; setCaptureBusy(true); setCaptureError("");
     try {
       const expected = await invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id });
       const importing = await invoke<ImportSnapshot>("get_audio_import"); assertCloseImport(importing);
       const microphone=usableMicrophone(checkedCaptureInputs(await invoke("get_capture_inputs")),microphoneUID);
       if(!microphone)throw Error("選択したマイクまたは権限を再確認してください。別機器には切り替えていません。");
+      const applications=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
+      checkedCaptureScope(scope,applications);
+      const application=captureApplicationScope(scope,applications);
+      const scopeMessage=scope.mode==="system"?"PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。":`PC音声は選択したアプリ（${application?.name}）を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。終了・再起動時は全体取得や別アプリに切り替えません。`;
       if (!expected || expected.lifecycle !== "draft" || expected.sourceType === "audio_import") throw Error("録音対象の会議を再確認してください。");
-      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphone.name}。PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。` + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => root.current.selectedMeeting?.id === expected.id && root.current.captureAvailable && root.current.captureInputs.uid===microphoneUID&&!!root.current.captureInputs.selected && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
-        const [meeting, recording, currentImport, currentInputs] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs)]);
+      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphone.name}。${scopeMessage}` + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => root.current.selectedMeeting?.id === expected.id && root.current.captureAvailable && root.current.captureInputs.uid===microphoneUID&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
+        const [meeting, recording, currentImport, currentInputs, currentApplications] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null)]);
         assertCloseRecording(recording);
         assertCloseImport(currentImport);
         if(!usableMicrophone(currentInputs,microphoneUID)||root.current.captureInputs.uid!==microphoneUID)throw Error("確認したマイクまたは権限が変更されました。録音は開始していません。別機器には切り替えていません。");
+        checkedCaptureScope(scope,currentApplications);
+        if(!scopeUnchanged())throw Error("PC音声の取得範囲が変更されました。録音は開始していません。");
         if (!meeting || meeting.id !== expected.id || meeting.title !== expected.title || meeting.lockVersion !== expected.lockVersion || meeting.lifecycle !== "draft" || meeting.sourceType === "audio_import" || root.current.selectedMeeting?.id !== expected.id || recordingActive(recording) || currentImport.token !== importing.token || !importing.busy && currentImport.revision !== importing.revision) throw Error("録音対象が確認後に変更されました。録音は開始していません。");
-        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID });
+        await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope });
         setSelectedMeeting(await invoke<Meeting | null>("get_meeting", { id: expected.id }));
         setMeetings(await invoke<Meeting[]>("list_meetings"));
       }), onError: cause => setCaptureError(`録音の受付状態を確認してください。開始は自動再送していません: ${String(cause)}`) });
@@ -510,9 +522,9 @@ function MainWindow() {
             <div className="card-head"><div className="heading-with-info"><h2>録音セッション</h2><InfoPopover label="録音セッション" details={<p>マイクとPC音声を別々のトラックに保存します。PC音声の対象範囲はOSのキャプチャ機能と権限に依存し、会議アプリだけに限定されるとは限りません。参加者の同意を得て、不要なアプリの音声を止めてください。保存後は準備済みモデルで文字起こし・話者分離を順に進め、結果を候補として保存します。モデル未準備でも音声は保持します。録音品質・長時間と10話者の正式評価は保留中です。</p>}>マイクとPC音声を別々に保存します。PC音声には会議以外の音が含まれる場合があります。同意を確認し、不要な音を止めてください。保存後の解析結果は確認待ちの候補です。</InfoPopover></div><span className="state-pill">{phaseLabel(state)}</span></div>
             <div className="clock">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</div>
             <p>{state.kind === "ready" && state.snapshot.phase === "idle" ? "録音は開始していません。" : state.kind === "ready" && state.snapshot.errorMessage ? state.snapshot.errorMessage : state.kind === "error" ? state.message : "録音状態を確認しています。"}</p>
-            {captureAvailable&&selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType!=="audio_import"&&<CaptureInputSelection control={captureInputs} locked={writeLocked||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>}
+            {captureAvailable&&selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType!=="audio_import"&&<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>}
             <div className="card-actions">
-              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !captureInputs.selected || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || writeLocked || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
+              <button type="button" onClick={() => void startRecording()} disabled={!isTauri() || !captureAvailable || !captureInputs.selected || !captureScope.scope || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType === "audio_import" || captureBusy || writeLocked || state.kind !== "ready" || (state.snapshot.phase !== "idle" && state.snapshot.phase !== "error")}>録音を開始</button>
               <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
               <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
             </div>

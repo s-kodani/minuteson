@@ -16,6 +16,8 @@ struct CaptureManifest {
     target_pids: Vec<i32>,
     #[serde(default, rename = "microphoneDeviceUID")]
     microphone_device_uid: Option<String>,
+    #[serde(default)]
+    target_application_identity: Option<crate::capture_scope::ApplicationIdentity>,
     state: String,
     errors: Vec<String>,
     microphone: CaptureTrack,
@@ -74,10 +76,21 @@ pub struct RecordingConfig {
     pub target_pids: Vec<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub microphone_device_uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_application_identity: Option<crate::capture_scope::ApplicationIdentity>,
 }
 
 impl RecordingConfig {
     fn validate(&self) -> Result<(), String> {
+        if let Some(identity) = &self.target_application_identity {
+            identity.validate()?;
+            if self.mode != "application"
+                || self.backend != "screencapturekit"
+                || self.target_pids != [identity.pid]
+            {
+                return Err("録音対象アプリの識別情報と取得条件が一致しません".into());
+            }
+        }
         if self
             .microphone_device_uid
             .as_deref()
@@ -356,6 +369,7 @@ impl Storage {
             .map_err(|error| error.to_string())?;
         let config: RecordingConfig =
             serde_json::from_str(&stored_config).map_err(|error| error.to_string())?;
+        config.validate()?;
         if manifest.capture_mode != stored_mode
             || manifest.capture_mode != config.mode
             || manifest.backend != config.backend
@@ -364,6 +378,12 @@ impl Storage {
                 .microphone_device_uid
                 .as_ref()
                 .is_some_and(|uid| manifest.microphone_device_uid.as_ref() != Some(uid))
+            || config
+                .target_application_identity
+                .as_ref()
+                .is_some_and(|identity| {
+                    manifest.target_application_identity.as_ref() != Some(identity)
+                })
         {
             return Err("録音manifestと開始条件が一致しません".into());
         }
@@ -712,6 +732,7 @@ mod tests {
             backend: "screencapturekit".into(),
             target_pids: vec![],
             microphone_device_uid: None,
+            target_application_identity: None,
         }
     }
 
@@ -744,6 +765,115 @@ mod tests {
         )
         .unwrap();
         (meeting.id, session.id, output, manifest)
+    }
+
+    #[test]
+    fn application_identity_must_match_before_atomic_audio_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+        let identity = crate::capture_scope::ApplicationIdentity {
+            pid: 123,
+            bundle_identifier: "com.example.browser".into(),
+            launch_time_us: 1791100000000001,
+        };
+        let mut selected = config();
+        selected.mode = "application".into();
+        selected.target_pids = vec![identity.pid];
+        selected.target_application_identity = Some(identity.clone());
+        assert!(selected.validate().is_ok());
+        storage.connection.lock().unwrap().execute("UPDATE recording_sessions SET capture_mode='application',capture_config_json=?1 WHERE id=?2", params![serde_json::to_string(&selected).unwrap(), session]).unwrap();
+        manifest["captureMode"] = serde_json::json!("application");
+        manifest["targetPIDs"] = serde_json::json!([identity.pid]);
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({"pid":123,"bundleIdentifier":"com.example.browser","launchTimeUs":1791100000000002_i64}),
+            serde_json::json!({"pid":123,"bundleIdentifier":"com.example.other","launchTimeUs":identity.launch_time_us}),
+            serde_json::json!({"pid":456,"bundleIdentifier":identity.bundle_identifier,"launchTimeUs":identity.launch_time_us}),
+        ] {
+            manifest["targetApplicationIdentity"] = invalid;
+            std::fs::write(
+                output.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            assert!(storage
+                .finalize_recording(&session)
+                .unwrap_err()
+                .contains("開始条件"));
+            assert!(output.join("microphone.caf").exists());
+            assert!(output.join("system.caf").exists());
+            assert_eq!(
+                storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                "recording"
+            );
+            assert_eq!(
+                storage
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM audio_tracks", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        manifest["targetApplicationIdentity"] = serde_json::to_value(&identity).unwrap();
+        std::fs::write(
+            output.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        storage.finalize_recording(&session).unwrap();
+        assert_eq!(
+            storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+            "recorded"
+        );
+    }
+
+    #[test]
+    fn application_identity_rejects_conflicting_configuration_before_preparation() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let meeting = storage.create_meeting("アプリの条件確認").unwrap();
+        let identity = crate::capture_scope::ApplicationIdentity {
+            pid: 123,
+            bundle_identifier: "com.example.browser".into(),
+            launch_time_us: 1791100000000001,
+        };
+        for (mode, backend, pids) in [
+            ("system", "screencapturekit", vec![]),
+            ("application", "coreaudio", vec![123]),
+            ("application", "screencapturekit", vec![456]),
+            ("application", "screencapturekit", vec![]),
+        ] {
+            let mut cfg = config();
+            cfg.mode = mode.into();
+            cfg.backend = backend.into();
+            cfg.target_pids = pids;
+            cfg.target_application_identity = Some(identity.clone());
+            assert!(storage
+                .prepare_recording(&meeting.id, &cfg, &Uuid::new_v4().to_string())
+                .is_err());
+            assert_eq!(
+                storage.get_meeting(&meeting.id).unwrap().unwrap().lifecycle,
+                "draft"
+            );
+        }
+        let legacy = config();
+        let json = serde_json::to_string(&legacy).unwrap();
+        assert!(!json.contains("target_application_identity"));
+        assert_eq!(
+            serde_json::from_str::<RecordingConfig>(&json).unwrap(),
+            legacy
+        );
+        let mut cfg = config();
+        cfg.mode = "application".into();
+        cfg.target_pids = vec![123];
+        cfg.target_application_identity = Some(identity);
+        assert!(storage
+            .prepare_recording(&meeting.id, &cfg, &Uuid::new_v4().to_string())
+            .is_ok());
     }
 
     #[test]

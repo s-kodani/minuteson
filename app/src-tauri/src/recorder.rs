@@ -23,17 +23,19 @@ fn recording_command(
     output: &Path,
     parent_pid: u32,
     microphone_uid: &str,
-) -> Command {
+    scope: &crate::capture_scope::CaptureScope,
+) -> Result<Command, String> {
+    scope.validate()?;
     let mut command = Command::new(binary);
     command
         .arg("--output")
         .arg(output)
         .arg("--mode")
-        .arg("system")
+        .arg(&scope.mode)
         .arg("--backend")
         .arg("screencapturekit")
         .arg("--scenario")
-        .arg("mon-app-system")
+        .arg(format!("mon-app-{}", scope.mode))
         .arg("--stop-on-file")
         .arg("--parent-pid")
         .arg(parent_pid.to_string())
@@ -42,7 +44,14 @@ fn recording_command(
         .arg(microphone_uid)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command
+    if let Some(identity) = &scope.application {
+        command
+            .arg("--pid")
+            .arg(identity.pid.to_string())
+            .arg("--application-identity")
+            .arg(serde_json::to_string(identity).map_err(|e| e.to_string())?);
+    }
+    Ok(command)
 }
 
 impl RecorderController {
@@ -73,13 +82,37 @@ impl RecorderController {
         Ok(inputs)
     }
 
+    pub(crate) fn applications(
+        app: &AppHandle,
+    ) -> Result<crate::capture_scope::Applications, String> {
+        let binary = probe_path(app)?;
+        let applications = crate::capture_scope::read(&binary)?;
+        if probe_path(app)? != binary {
+            return Err("録音ヘルパーが変更されました。再確認してください".into());
+        }
+        Ok(applications)
+    }
+
+    pub(crate) fn require_scope(
+        app: &AppHandle,
+        scope: &crate::capture_scope::CaptureScope,
+    ) -> Result<(), String> {
+        scope.validate()?;
+        if let Some(identity) = &scope.application {
+            Self::applications(app)?.require(identity)?;
+        }
+        Ok(())
+    }
+
     pub fn start(
         app: &AppHandle,
         meeting_id: &str,
         microphone_uid: &str,
+        scope: &crate::capture_scope::CaptureScope,
     ) -> Result<RecordingSnapshot, String> {
         app.state::<Storage>().require_data_writable()?;
         Self::inputs(app)?.require_microphone(microphone_uid)?;
+        Self::require_scope(app, scope)?;
         let binary = probe_path(app)?;
         let controller = app.state::<RecorderController>();
         let mut active = controller
@@ -94,10 +127,15 @@ impl RecorderController {
             return Err("解析処理の安全な停止を待っています。停止後に再試行してください".into());
         }
         let config = RecordingConfig {
-            mode: "system".into(),
+            mode: scope.mode.clone(),
             backend: "screencapturekit".into(),
-            target_pids: vec![],
+            target_pids: scope
+                .application
+                .as_ref()
+                .map(|a| vec![a.pid])
+                .unwrap_or_default(),
             microphone_device_uid: Some(microphone_uid.into()),
+            target_application_identity: scope.application.clone(),
         };
         let session =
             storage.prepare_recording(meeting_id, &config, &Uuid::new_v4().to_string())?;
@@ -124,7 +162,7 @@ impl RecorderController {
             {
                 return Err("録音先に既存ファイルがあります".into());
             }
-            recording_command(&binary, &output, std::process::id(), microphone_uid)
+            recording_command(&binary, &output, std::process::id(), microphone_uid, scope)?
                 .spawn()
                 .map_err(|error| error.to_string())
         })();
@@ -214,7 +252,12 @@ mod tests {
     fn product_recording_waits_for_stop_or_parent_exit_without_a_duration_deadline() {
         let binary = Path::new("/tmp/mon-command-test/probe");
         let output = Path::new("/tmp/mon-command-test/audio with spaces");
-        let command = recording_command(binary, output, 1234, "USB input/名前 with spaces");
+        let scope = crate::capture_scope::CaptureScope {
+            mode: "system".into(),
+            application: None,
+        };
+        let command =
+            recording_command(binary, output, 1234, "USB input/名前 with spaces", &scope).unwrap();
         assert_eq!(command.get_program(), binary.as_os_str());
         let arguments: Vec<_> = command.get_args().collect();
         let expected = [
@@ -241,6 +284,59 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(!arguments.contains(&std::ffi::OsStr::new("--duration")));
+    }
+
+    #[test]
+    fn application_command_binds_the_process_instance_as_one_json_argument() {
+        let identity = crate::capture_scope::ApplicationIdentity {
+            pid: 456,
+            bundle_identifier: "com.example.名前 with spaces".into(),
+            launch_time_us: 1791100000000001,
+        };
+        let scope = crate::capture_scope::CaptureScope {
+            mode: "application".into(),
+            application: Some(identity.clone()),
+        };
+        let command = recording_command(
+            Path::new("/tmp/probe"),
+            Path::new("/tmp/output"),
+            1234,
+            "usb",
+            &scope,
+        )
+        .unwrap();
+        let args: Vec<_> = command.get_args().map(|a| a.to_str().unwrap()).collect();
+        let value = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!(value("--mode"), "application");
+        assert_eq!(value("--scenario"), "mon-app-application");
+        assert_eq!(value("--pid"), "456");
+        assert_eq!(
+            serde_json::from_str::<crate::capture_scope::ApplicationIdentity>(value(
+                "--application-identity"
+            ))
+            .unwrap(),
+            identity
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|a| **a == "--application-identity")
+                .count(),
+            1
+        );
+        assert!(!args.contains(&"--duration"));
+        assert!(args.contains(&"--until-stopped"));
+        let malformed = crate::capture_scope::CaptureScope {
+            mode: "system".into(),
+            application: scope.application,
+        };
+        assert!(recording_command(
+            Path::new("/tmp/probe"),
+            Path::new("/tmp/output"),
+            1234,
+            "usb",
+            &malformed
+        )
+        .is_err());
     }
 }
 

@@ -733,6 +733,7 @@ mod tests {
                     backend: "screencapturekit".into(),
                     target_pids: vec![],
                     microphone_device_uid: None,
+                    target_application_identity: None,
                 },
                 "start",
             )

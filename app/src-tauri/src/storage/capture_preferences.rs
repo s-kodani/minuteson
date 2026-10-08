@@ -73,6 +73,7 @@ mod tests {
             backend: "screencapturekit".into(),
             target_pids: vec![],
             microphone_device_uid: uid.map(str::to_owned),
+            target_application_identity: None,
         }
     }
     #[test]

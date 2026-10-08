@@ -76,10 +76,19 @@ pub(crate) fn read(binary: &Path) -> Result<InputDevices, String> {
     read_with_timeout(binary, Duration::from_secs(5))
 }
 fn read_with_timeout(binary: &Path, timeout: Duration) -> Result<InputDevices, String> {
+    parse(&read_report(binary, "--list-input-devices", timeout)?)
+}
+pub(crate) fn read_metadata(binary: &Path, flag: &str) -> Result<Vec<u8>, String> {
+    if !matches!(flag, "--list-input-devices" | "--list-capture-applications") {
+        return Err("一覧取得のコマンドが不正です".into());
+    }
+    read_report(binary, flag, Duration::from_secs(5))
+}
+fn read_report(binary: &Path, flag: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     let mut report = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut child = Probe(
         Command::new(binary)
-            .arg("--list-input-devices")
+            .arg(flag)
             .stdin(Stdio::null())
             .stdout(Stdio::from(report.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::null())
@@ -89,19 +98,20 @@ fn read_with_timeout(binary: &Path, timeout: Duration) -> Result<InputDevices, S
     let start = Instant::now();
     let status = loop {
         if report.metadata().map_err(|e| e.to_string())?.len() > MAX_BYTES {
-            return Err("マイク一覧の応答が大きすぎます".into());
+            return Err("取得対象一覧の応答が大きすぎます".into());
         }
         if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
         if start.elapsed() > timeout {
-            return Err("マイク一覧の取得が時間上限を超えました。再確認してください".into());
+            return Err("取得対象一覧の取得が時間上限を超えました。再確認してください".into());
         }
         std::thread::sleep(Duration::from_millis(20));
     };
     if !status.success() {
         return Err(
-            "マイク一覧を取得できません。同じソースの署名済み録音ヘルパーを確認してください".into(),
+            "取得対象一覧を取得できません。同じソースの署名済み録音ヘルパーを確認してください"
+                .into(),
         );
     }
     report.rewind().map_err(|e| e.to_string())?;
@@ -110,7 +120,10 @@ fn read_with_timeout(binary: &Path, timeout: Duration) -> Result<InputDevices, S
         .take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    parse(&bytes)
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("取得対象一覧の応答が大きすぎます".into());
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

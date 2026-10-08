@@ -526,6 +526,7 @@ fn active_recording_refuses_before_allocating_any_native_copy() {
                 backend: "screencapturekit".into(),
                 target_pids: vec![],
                 microphone_device_uid: None,
+                target_application_identity: None,
             },
             "fixture-active",
         )

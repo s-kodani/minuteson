@@ -14,6 +14,8 @@ const f = window.closeFixture = {
   startLost: false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
   captureInputs:{schemaVersion:1,microphonePermission:"notDetermined",selectedMicrophoneUID:null,devices:[{uid:"built-in",name:"内蔵マイク",isDefault:true},{uid:"usb-123",name:"ヘッドセットのマイク",isDefault:false}]},
   failCaptureInputs:false,captureInputsDelay:0,holdCaptureInputs:false,pendingInputs:[],
+  captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
+  failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
   request: quit => emit("main-close-requested", { quit }),
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
@@ -26,6 +28,7 @@ registerPendingEdits(async () => {
   if (f.failFlush) throw Error("模擬編集保存失敗・入力を保持");
   if (f.mutateDuringFlush === "import") await f.importChanged({ token: crypto.randomUUID() });
   if (f.mutateDuringFlush === "meeting") { data.meetings[0].title = "確認後に変更された会議"; data.meetings[0].lockVersion++; }
+  if(f.mutateApplicationDuringFlush){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationDuringFlush=false;}
   f.mutateDuringFlush = null;
 });
 mockIPC(async (command, args) => {
@@ -37,6 +40,12 @@ mockIPC(async (command, args) => {
     if(f.holdCaptureInputs)await new Promise(resolve=>f.pendingInputs.push(resolve));
     if(f.captureInputsDelay)await new Promise(resolve=>setTimeout(resolve,f.captureInputsDelay));
     if(f.failCaptureInputs)throw Error("模擬マイク一覧取得失敗");
+    return snapshot;
+  }
+  if(command==="get_capture_applications"){
+    const snapshot=clone(f.captureApplications);
+    if(f.holdCaptureApplications)await new Promise(resolve=>f.pendingApplications.push(resolve));
+    if(f.failCaptureApplications)throw Error("模擬アプリ一覧取得失敗");
     return snapshot;
   }
   if (command === "get_audio_import") { if (f.failRead) throw Error("模擬終了対象読戻し失敗"); return clone(f.importing); }
@@ -56,6 +65,9 @@ mockIPC(async (command, args) => {
   if (command === "start_recording") {
     if (args.meetingId !== data.meetings[0].id || !["idle", "error"].includes(f.recording.phase)) throw Error("模擬録音対象変更");
     if(!f.captureInputs.devices.some(d=>d.uid===args.microphoneUid)||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
+    if(f.mutateApplicationAtStart){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationAtStart=false;}
+    const scope=args.captureScope;
+    if(!scope||!(scope.mode==="system"&&scope.application===null||scope.mode==="application"&&scope.application&&f.captureApplications.applications.some(a=>a.pid===scope.application.pid&&a.bundleIdentifier===scope.application.bundleIdentifier&&a.launchTimeUs===scope.application.launchTimeUs)))throw Error("模擬アプリ対象変更・全体へ切り替えていません");
     f.recording = { ...f.recording, revision: f.recording.revision + 1, phase: "preparing", meetingId: args.meetingId, sessionId: crypto.randomUUID() };
     await emit("session-changed", clone(f.recording));
     if (f.startLost) throw Error("模擬録音開始受付の応答喪失");

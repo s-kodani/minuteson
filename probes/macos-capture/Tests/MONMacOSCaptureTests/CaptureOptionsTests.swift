@@ -110,4 +110,33 @@ final class CaptureOptionsTests: XCTestCase {
       XCTAssertThrowsError(try Options.parse(output + arguments))
     }
   }
+
+  func testApplicationIdentityRequiresTheExactTargetAndDoesNotAlterLegacyProbeOptions() throws {
+    let identity = CaptureApplicationIdentity(
+      pid: 123, bundleIdentifier: "com.example.browser", launchTimeUs: 1_791_100_000_000_001)
+    let json = String(decoding: try JSONEncoder().encode(identity), as: UTF8.self)
+    let args =
+      output + controlled + [
+        "--until-stopped", "--mode", "application", "--pid", "123", "--application-identity", json,
+      ]
+    let options = try Options.parse(args)
+    XCTAssertEqual(options.applicationIdentity, identity)
+    XCTAssertNil(options.duration)
+    XCTAssertNil(
+      try Options.parse(output + ["--mode", "application", "--pid", "123"]).applicationIdentity)
+    for extra in [
+      ["--application-identity", json],
+      ["--mode", "application", "--pid", "456", "--application-identity", json],
+      [
+        "--mode", "application", "--pid", "123", "--backend", "coreaudio", "--application-identity",
+        json,
+      ],
+      [
+        "--mode", "application", "--pid", "123", "--application-identity", json,
+        "--application-identity", json,
+      ],
+      ["--application-identity", "{}"],
+      ["--application-identity", String(repeating: "x", count: 4097)],
+    ] { XCTAssertThrowsError(try Options.parse(output + extra)) }
+  }
 }

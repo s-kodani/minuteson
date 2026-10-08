@@ -7,6 +7,7 @@ mod audio_import;
 #[cfg(target_os = "macos")]
 mod bootstrap;
 mod capture_inputs;
+mod capture_scope;
 mod data_controller;
 mod diarization;
 mod exports;
@@ -1736,6 +1737,7 @@ async fn start_recording(
     window: WebviewWindow,
     meeting_id: String,
     microphone_uid: String,
+    capture_scope: capture_scope::CaptureScope,
 ) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
@@ -1751,9 +1753,11 @@ async fn start_recording(
             }
             app.state::<Storage>().require_data_writable()?;
             RecorderController::inputs(&app)?.require_microphone(&microphone_uid)?;
+            RecorderController::require_scope(&app, &capture_scope)?;
             ImportController::prepare_recording(&app)?;
-            let result = AnalysisController::prepare_recording(&app)
-                .and_then(|_| RecorderController::start(&app, &meeting_id, &microphone_uid));
+            let result = AnalysisController::prepare_recording(&app).and_then(|_| {
+                RecorderController::start(&app, &meeting_id, &microphone_uid, &capture_scope)
+            });
             if result.is_err() {
                 AnalysisController::recording_finished(&app);
             }
@@ -1771,6 +1775,19 @@ async fn get_capture_inputs(window: WebviewWindow) -> Result<capture_inputs::Inp
     }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || RecorderController::inputs(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_capture_applications(
+    window: WebviewWindow,
+) -> Result<capture_scope::Applications, String> {
+    if window.label() != "main" {
+        return Err("録音対象アプリの一覧はメイン画面で確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || RecorderController::applications(&app))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -2094,6 +2111,7 @@ pub fn run() {
             get_application_close_activity,
             capture_available,
             get_capture_inputs,
+            get_capture_applications,
             start_recording,
             stop_recording,
             get_recording_confirmation,

@@ -375,6 +375,11 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .capture-input-selection label { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
 .capture-input-selection select { max-width:100%; min-width:0; }
 .capture-input-selection p { overflow-wrap:anywhere; }
+.capture-input-selection select { font:inherit; padding:8px 10px; border:1px solid var(--input-border); border-radius:8px; }
+.capture-scope-details { margin:12px 0; padding:12px; border:1px solid var(--border); border-radius:8px; background:var(--background); }
+.capture-scope-details summary { cursor:pointer; font-size:13px; font-weight:700; }
+.capture-scope-details label { display:grid; gap:6px; margin:12px 0; font-size:12px; color:var(--secondary-text); }
+.capture-scope-details select { width:100%; }
 .fixed-transcript .assigned-speakers,.estimated-speakers { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0; vertical-align:middle; }
 .speaker-label { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px; max-width:100%; padding:3px 6px; border:1px solid currentColor; border-radius:6px; color:var(--speaker-light-fg); background:var(--speaker-light-bg); overflow-wrap:anywhere; font-size:12px; }
 .speaker-label .speaker-unset { display:inline; margin:0; color:inherit; font-size:10px; font-weight:400; }

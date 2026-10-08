@@ -16,6 +16,7 @@ struct Options {
   let stopOnFile: Bool
   let parentPID: pid_t?
   var microphoneUID: String? = nil
+  var applicationIdentity: CaptureApplicationIdentity? = nil
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -29,6 +30,7 @@ struct Options {
     var stopOnFile = false
     var parentPID: pid_t?
     var microphoneUID: String?
+    var applicationIdentity: CaptureApplicationIdentity?
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -77,6 +79,15 @@ struct Options {
           InputDevices.validUID(arguments[index])
         else { throw ProbeError.usage("--microphone-uid requires one valid device UID") }
         microphoneUID = arguments[index]
+      case "--application-identity":
+        index += 1
+        guard index < arguments.count, applicationIdentity == nil,
+          arguments[index].utf8.count <= 4096
+        else { throw ProbeError.usage("--application-identity requires one bounded JSON identity") }
+        let parsed = try JSONDecoder().decode(
+          CaptureApplicationIdentity.self, from: Data(arguments[index].utf8))
+        guard parsed.valid else { throw ProbeError.usage("application identity is invalid") }
+        applicationIdentity = parsed
       case "--stop-on-file":
         stopOnFile = true
       case "--until-stopped":
@@ -110,6 +121,13 @@ struct Options {
     if Set(targetPIDs).count != targetPIDs.count {
       throw ProbeError.usage("duplicate --pid values are not allowed")
     }
+    if let identity = applicationIdentity {
+      guard mode == "application", backend == "screencapturekit", targetPIDs == [identity.pid]
+      else {
+        throw ProbeError.usage(
+          "application identity requires the exact ScreenCaptureKit target PID")
+      }
+    }
     if parentPID != nil && !stopOnFile {
       throw ProbeError.usage("--parent-pid requires --stop-on-file")
     }
@@ -121,7 +139,7 @@ struct Options {
       output: output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
-      parentPID: parentPID, microphoneUID: microphoneUID)
+      parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity)
   }
 
   func shouldContinueRecording(
@@ -208,6 +226,7 @@ struct Manifest: Encodable {
   var errors: [String]
   var captureClock: CaptureClockMetadata?
   var microphoneDeviceUID: String?
+  var targetApplicationIdentity: CaptureApplicationIdentity?
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -252,7 +271,11 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     self.clock = clock
   }
 
-  func start(targetPID: pid_t?) async throws {
+  private var applicationIdentity: CaptureApplicationIdentity?
+
+  func start(targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity? = nil) async throws
+  {
+    if let applicationIdentity { try CaptureApplications.current(applicationIdentity) }
     let content: SCShareableContent
     do {
       content = try await SCShareableContent.excludingDesktopWindows(
@@ -271,6 +294,14 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
       }
       targetApplicationName = application.applicationName
       targetBundleIdentifier = application.bundleIdentifier
+      if let applicationIdentity {
+        guard application.processID == applicationIdentity.pid,
+          application.bundleIdentifier == applicationIdentity.bundleIdentifier
+        else {
+          throw ProbeError.capture("shareable application does not match the confirmed identity")
+        }
+        try CaptureApplications.current(applicationIdentity)
+      }
       filter = SCContentFilter(
         display: display, including: [application], exceptingWindows: [])
     } else {
@@ -288,9 +319,11 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
     try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
     self.stream = stream
+    self.applicationIdentity = applicationIdentity
     do {
       try await stream.startCapture()
       captureStarted = true
+      if let applicationIdentity { try CaptureApplications.current(applicationIdentity) }
     } catch {
       throw ProbeError.permission("system audio capture could not start: \(error)")
     }
@@ -352,6 +385,11 @@ private final class SystemAudioRecorder: NSObject, SCStreamOutput, @unchecked Se
     defer { lock.unlock() }
     if stopping { return }
     do {
+      if let identity = applicationIdentity {
+        guard try CaptureApplications.processStart(identity.pid) == identity.launchTimeUs else {
+          throw ProbeError.capture("application changed during capture")
+        }
+      }
       if writer == nil {
         let format = sampleBuffer.formatDescription.flatMap {
           CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee
@@ -560,7 +598,16 @@ private enum Main {
         print(String(decoding: data, as: UTF8.self))
         return
       }
+      if arguments == ["--list-capture-applications"] {
+        let data = try JSONEncoder().encode(CaptureApplications.live())
+        guard data.count <= 256 * 1024 else {
+          throw ProbeError.capture("application report is too large")
+        }
+        print(String(decoding: data, as: UTF8.self))
+        return
+      }
       let options = try Options.parse(arguments)
+      if let identity = options.applicationIdentity { try CaptureApplications.current(identity) }
       if FileManager.default.fileExists(atPath: options.output.path) {
         let contents = try FileManager.default.contentsOfDirectory(atPath: options.output.path)
         guard contents.isEmpty else {
@@ -610,7 +657,9 @@ private enum Main {
         if options.backend == "coreaudio" {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
-          try await system.start(targetPID: options.targetPIDs.first)
+          try await system.start(
+            targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+          manifest.targetApplicationIdentity = options.applicationIdentity
           manifest.targetApplicationName = system.targetApplicationName
           manifest.targetBundleIdentifier = system.targetBundleIdentifier
         }
@@ -685,12 +734,13 @@ private enum Main {
 
   private static let usage = """
     Usage: mon-macos-capture --list-apps
+           mon-macos-capture --list-capture-applications
            mon-macos-capture --list-audio-processes
            mon-macos-capture --list-input-devices
            mon-macos-capture --output <directory> [--duration <seconds>]
              [--scenario <id>] [--mode system|application] [--pid <process-id> ...]
              [--backend screencapturekit|coreaudio] [--stop-on-file] [--parent-pid <pid>]
-             [--until-stopped] [--microphone-uid <stable-device-uid>]
+             [--until-stopped] [--microphone-uid <stable-device-uid>] [--application-identity <json>]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     Records microphone.caf and system.caf after the required macOS permissions are granted.
     """
