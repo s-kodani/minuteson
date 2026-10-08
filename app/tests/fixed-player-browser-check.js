@@ -109,7 +109,7 @@ async (page, capturePath, detailUI) => {
   const longTitle = "長い会議名".repeat(36);
   await page.evaluate(title => window.monBrowserFixture.setMeetingTitle("meeting-0",title),longTitle); await open(); await play(); await pause();
   await page.waitForFunction(title => document.querySelector(".playback-owner")?.textContent.includes(title),longTitle);
-  await page.evaluate(async () => { const { toasts } = await import("/src/toast.tsx"); toasts.show({ key:"fixed-player-long-notice",level:"warning",important:true,message:"長文の注意を確認してください。".repeat(300) }); });
+  await page.evaluate(() => window.monBrowserFixture.showToast({ key:"fixed-player-long-notice",level:"warning",important:true,message:"長文の注意を確認してください。".repeat(300) }));
   const notice = page.getByRole("complementary",{ name:"通知",exact:true }); await notice.getByRole("alert").waitFor();
   await page.waitForFunction(() => { const t = document.querySelector(".toast-host").getBoundingClientRect(),d = document.querySelector(".meeting-playback-dock").getBoundingClientRect(),h = document.querySelector(".topbar").getBoundingClientRect(); return t.bottom <= d.top - 8 && t.top >= h.bottom + 8; });
   const b = await bounds(); check(b.dock.bottom - b.dock.top <= b.height * .4 + 1 && !b.dockOverflow && b.main.bottom <= b.dock.top + 1,"long owner broke dock allocation");

@@ -83,12 +83,15 @@ fn recording_command(
 }
 
 impl RecorderController {
-    pub(crate) fn receive_input_notice(
+    pub(crate) fn input_notice_action(
         app: &AppHandle,
         session_id: &str,
         notice_id: &str,
         recipient_id: &str,
         target: &str,
+        generation: Option<u64>,
+        action: crate::input_status::queue::Action,
+        receive_id: Option<&str>,
     ) -> Result<crate::input_status::Receipt, String> {
         if !matches!(target, "main" | "recorder")
             || notice_id.len() > 128
@@ -127,9 +130,26 @@ impl RecorderController {
         let result = app
             .state::<SessionStore>()
             .with_active_owner(session_id, || {
-                current
-                    .input_status
-                    .receive(&report, notice_id, recipient_id, target, visible)
+                if crate::input_status::StatusReader::uses_queue(&report) {
+                    current.input_status.queued_action(
+                        &report,
+                        notice_id,
+                        recipient_id,
+                        target,
+                        visible,
+                        generation.ok_or("通知の受付世代がありません")?,
+                        action,
+                        receive_id,
+                    )
+                } else if matches!(action, crate::input_status::queue::Action::Receive)
+                    && generation.is_none()
+                {
+                    current
+                        .input_status
+                        .receive(&report, notice_id, recipient_id, target, visible)
+                } else {
+                    Err("旧通知は表示確認キューに対応していません".into())
+                }
             })?;
         if child.try_wait().map_err(|e| e.to_string())?.is_some() {
             return Err("通知受付の確認中に録音が終了しました".into());

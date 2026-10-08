@@ -5,6 +5,7 @@ async (page, capturePath, detailUI) => {
   const visit = async (label, expected) => {
     await info(label).click(); const popup = page.getByRole("dialog", { name: label, exact: true }); await popup.waitFor();
     check((await popup.innerText()).includes(expected), `${label}: explanation missing`);
+    if(label==="話者の人数")check((await popup.innerText()).includes("各保存区間に同じ人数を割り当てません"), "fixed track count was incorrectly applied to each saved run");
     const box = await popup.boundingBox(), viewport = await page.evaluate(() => ({ width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }));
     check(box.x >= 7.9 && box.y >= 7.9 && box.x + box.width <= viewport.width - 7.9 && box.y + box.height <= viewport.height - 7.9, `${label}: clipped help`);
     await page.keyboard.press("Escape"); await popup.waitFor({ state: "hidden" });
@@ -14,7 +15,7 @@ async (page, capturePath, detailUI) => {
   await visit("録音セッション", "会議以外の音"); results.push("main recording range and consent help without recording");
   await page.getByRole("button", { name: "開く", exact: true }).first().click();
   await detailUI.openMeetingTools(); await detailUI.openDiarization();
-  const expected = [["音声保存後の解析工程", "自動推定"], ["ローカル文字起こし", "現在版と編集"], ["会議の用語", "自動置換"], ["話者分離", "同一人物"], ["話者の人数", "トラックごと"], ["議事録", "根拠"]];
+  const expected = [["音声保存後の解析工程", "自動推定"], ["ローカル文字起こし", "現在版と編集"], ["会議の用語", "自動置換"], ["話者分離", "同一人物"], ["話者の人数", "トラック全体"], ["議事録", "根拠"]];
   for (const [label, text] of expected) { if (label === "議事録") await detailUI.openMinutes(); await visit(label, text); results.push(`production ${label}: keyboard dismissal and bounds`); }
   for (const [summary, label] of [["エンジン設定（端末内に保存）", "文字起こしの標準／高精度"], ["sherpa-onnx 設定（端末内に保存）", "話者分離の標準／高精度"], ["議事録エンジン設定（端末内に保存）", "議事録の標準／高精度"]]) {
     if (label === "話者分離の標準／高精度") await page.getByRole("tab", { name:"文字起こし",exact:true }).click();

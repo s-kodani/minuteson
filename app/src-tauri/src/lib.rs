@@ -1857,16 +1857,59 @@ fn receive_recording_input_notice(
     session_id: String,
     notice_id: String,
     recipient_id: String,
+    generation: Option<u64>,
+    receive_id: Option<String>,
 ) -> Result<input_status::Receipt, String> {
     if window.label() != "main" && window.label() != "recorder" {
         return Err("入力通知は録音画面から受付してください".into());
     }
-    RecorderController::receive_input_notice(
+    RecorderController::input_notice_action(
         window.app_handle(),
         &session_id,
         &notice_id,
         &recipient_id,
         window.label(),
+        generation,
+        input_status::queue::Action::Receive,
+        receive_id.as_deref(),
+    )
+}
+#[tauri::command]
+fn render_recording_input_notice(
+    window: WebviewWindow,
+    session_id: String,
+    notice_id: String,
+    recipient_id: String,
+    generation: u64,
+) -> Result<input_status::Receipt, String> {
+    RecorderController::input_notice_action(
+        window.app_handle(),
+        &session_id,
+        &notice_id,
+        &recipient_id,
+        window.label(),
+        Some(generation),
+        input_status::queue::Action::Render,
+        None,
+    )
+}
+#[tauri::command]
+fn close_recording_input_notice(
+    window: WebviewWindow,
+    session_id: String,
+    notice_id: String,
+    recipient_id: String,
+    generation: u64,
+) -> Result<input_status::Receipt, String> {
+    RecorderController::input_notice_action(
+        window.app_handle(),
+        &session_id,
+        &notice_id,
+        &recipient_id,
+        window.label(),
+        Some(generation),
+        input_status::queue::Action::Close,
+        None,
     )
 }
 #[derive(serde::Serialize)]
@@ -2286,6 +2329,8 @@ pub fn run() {
             get_recording_writes,
             get_recording_input_status,
             receive_recording_input_notice,
+            render_recording_input_notice,
+            close_recording_input_notice,
             get_capture_test_snapshot,
             get_capture_test_recovery,
             retry_capture_test_recovery,

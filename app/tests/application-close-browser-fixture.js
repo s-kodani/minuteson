@@ -2,6 +2,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { registerPendingEdits } from "../src/draft-save.ts";
+import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";
+import { toasts } from "../src/toast";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const data = window.dataFixture;
@@ -23,8 +25,11 @@ const f = window.closeFixture = {
   writes:null,holdWrites:false,pendingWrites:[],failWrites:false,refreshWrites:false,
   inputStatus:null,holdInputStatus:false,pendingInputStatus:[],failInputStatus:false,refreshInputStatus:false,
   inputReceipts:{},receiptBeforeFailure:false,receiptLost:false,receiptHoldBefore:false,receiptHoldAfter:false,receiptPending:[],
+  queueState:null,queueHold:{receive:false,render:false,close:false},queueLost:{receive:false,render:false,close:false},queueReplies:[],
+  queuedAction:(command,args)=>queuedAction(f,command,args),
+  showQueueBlockers:()=>{for(const key of ["block1","block2","block3"])toasts.show({key,level:"error",message:`合成優先通知 ${key}`});},
   failRecordingSnapshot:false,
-  persistInputReceiptFixture:()=>sessionStorage.setItem("MON_INPUT_RECEIPT_FIXTURE",JSON.stringify({recording:f.recording,inputStatus:f.inputStatus,inputReceipts:f.inputReceipts,refreshInputStatus:f.refreshInputStatus,meetings:data.meetings})),
+  persistInputReceiptFixture:()=>sessionStorage.setItem("MON_INPUT_RECEIPT_FIXTURE",JSON.stringify({recording:f.recording,inputStatus:f.inputStatus,inputReceipts:f.inputReceipts,queueState:f.queueState,refreshInputStatus:f.refreshInputStatus,meetings:data.meetings})),
   captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
   captureRecovery:recoverySeed?JSON.parse(recoverySeed):{schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null},recoveryReadFailure:false,recoveryRetryLost:false,recoveryRetryKeepsAttention:false,recoveryRetryHoldAck:false,recoveryPendingReplies:[],
   testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
@@ -138,11 +143,13 @@ mockIPC(async (command, args) => {
   if(command==="get_recording_input_status"){
     if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase))throw Error("模擬マイク状態所有変更／停止済み");
     if(f.refreshInputStatus&&f.inputStatus)f.inputStatus.revision++;
+    if(f.inputStatus?.schemaVersion===4){if(f.failInputStatus)throw Error("模擬状態読取り失敗");return queuedProjection(f);}
     const value=clone(f.inputStatus);
     if(value)for(const n of value.notices){const accepted=f.inputReceipts[n.id];if(accepted&&accepted.target===n.target)n.recipientId=accepted.recipientId;}
     if(f.holdInputStatus)await new Promise(resolve=>f.pendingInputStatus.push(resolve));
     if(f.failInputStatus||!value)throw Error("模擬マイク状態未確認");return value;
   }
+  if(f.inputStatus?.schemaVersion===4&&["receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"].includes(command))return queuedAction(f,command,args);
   if(command==="receive_recording_input_notice"){
     if(f.receiptHoldBefore)await new Promise(resolve=>f.receiptPending.push(resolve));
     const target=new URLSearchParams(location.search).get("window")==="recorder"?"recorder":"main";

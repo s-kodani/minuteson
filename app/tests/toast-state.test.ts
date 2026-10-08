@@ -100,3 +100,34 @@ test("distinct operation IDs notify identical result text without duplicating re
   c.show(notice("one", { eventId: "operation-2" })); assert.ok(c.getSnapshot()[0].id > first); advance(3000);
   c.show(notice("one", { eventId: "operation-2" })); advance(1000); assert.equal(c.getSnapshot().length, 0);
 });
+
+test("render confirmation requires the exact visible card and is emitted once, not by reception or promotion", () => {
+  const { c } = setup(); let rendered = 0;
+  c.show(notice("one", { onRendered: () => rendered++ })); const id = c.getSnapshot()[0].id;
+  assert.equal(rendered, 0);
+  for (const key of ["e1", "e2", "e3"]) c.show(notice(key, { level: "error" }));
+  c.markRendered("one", id); assert.equal(rendered, 0);
+  c.resolve("e1"); assert.equal(rendered, 0);
+  c.markRendered("one", id + 1); assert.equal(rendered, 0);
+  c.markRendered("one", id); c.markRendered("one", id); assert.equal(rendered, 1);
+  c.show(notice("one", { onRendered: () => rendered++ })); c.markRendered("one", id); assert.equal(rendered, 1);
+});
+
+test("hidden and modal-covered cards cannot acknowledge rendering; expiry cannot invent it", () => {
+  const { c, advance } = setup(); let rendered = 0;
+  c.show(notice("one", { onRendered: () => rendered++ })); const id = c.getSnapshot()[0].id;
+  c.pauseAll("hidden", true); c.markRendered("one", id);
+  c.pauseAll("modal", true); c.pauseAll("hidden", false); c.markRendered("one", id);
+  assert.equal(rendered, 0); c.pauseAll("modal", false); advance(4000);
+  c.markRendered("one", id); assert.equal(rendered, 0);
+});
+
+test("render callbacks use current input and reject a stale replacement identity", () => {
+  const { c } = setup(); let old = 0, current = 0;
+  c.show(notice("one", { onRendered: () => old++ })); const first = c.getSnapshot()[0].id;
+  c.show(notice("one", { onRendered: () => current++ })); c.markRendered("one", first);
+  assert.equal(old, 0); assert.equal(current, 1);
+  c.show(notice("one", { eventId: "next", onRendered: () => current++ })); const next = c.getSnapshot()[0].id;
+  c.markRendered("one", first); assert.equal(current, 1);
+  c.markRendered("one", next); assert.equal(current, 2);
+});

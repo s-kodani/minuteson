@@ -61,7 +61,7 @@ fn event_history_keeps_unobserved_interruption_and_recovery_with_no_legacy_forma
     assert_eq!(mic["events"][1]["kind"], "recovered");
     // This stage stores producer proof, not a claim that the existing latest-
     // status notice API has rendered all four events.
-    assert_eq!(serde_json::to_value(snapshot).unwrap()["schemaVersion"], 3);
+    assert_eq!(serde_json::to_value(snapshot).unwrap()["schemaVersion"], 4);
     assert!(p
         .microphone_history
         .as_ref()

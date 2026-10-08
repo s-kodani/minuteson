@@ -13,6 +13,7 @@ export interface ToastInput {
   eventId?: string;
   action?: ToastAction;
   onClose?: () => void;
+  onRendered?: () => void;
 }
 export interface Toast extends ToastInput { id: number; important: boolean; actionBusy?: boolean }
 interface Clock {
@@ -20,7 +21,7 @@ interface Clock {
   start: (run: () => void, delay: number) => unknown;
   stop: (handle: unknown) => void;
 }
-interface Entry { toast: Toast; remaining: number; started: number | null; timer: unknown; pauses: Set<string> }
+interface Entry { toast: Toast; remaining: number; started: number | null; timer: unknown; pauses: Set<string>; rendered:boolean }
 const priority = (t: Toast) => t.important ? 0 : t.level === "error" ? 1 : t.level === "warning" ? 2 : 3;
 const signature = (t: ToastInput) => JSON.stringify([t.level, t.message, t.important ?? t.level === "error", t.eventId ?? null]);
 export const toastKey = (scope: string, type: string) => JSON.stringify([scope, type]);
@@ -76,13 +77,18 @@ export class ToastController {
     }
     if (old) this.stop(old);
     this.acknowledged.delete(input.key);
-    this.entries.set(input.key, { toast: { ...input, id: ++this.serial, important: input.important ?? input.level === "error" }, remaining: input.action ? 8000 : 4000, started: null, timer: null, pauses: old?.pauses ?? new Set() });
+    this.entries.set(input.key, { toast: { ...input, id: ++this.serial, important: input.important ?? input.level === "error" }, remaining: input.action ? 8000 : 4000, started: null, timer: null, pauses: old?.pauses ?? new Set(),rendered:false });
     this.publish();
   }
   resolve(key: string) {
     this.acknowledged.delete(key);
     const entry = this.entries.get(key);
     if (entry) { this.stop(entry); this.entries.delete(key); this.publish(); }
+  }
+  markRendered(key:string,id:number){
+    const entry=this.entries.get(key);
+    if(!entry||entry.toast.id!==id||entry.rendered||this.pauses.size||!this.snapshot.some(t=>t.key===key&&t.id===id)||!entry.toast.onRendered)return;
+    entry.rendered=true;entry.toast.onRendered();
   }
   dismiss(key: string, id: number) {
     const entry = this.entries.get(key);

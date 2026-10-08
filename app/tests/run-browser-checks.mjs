@@ -43,6 +43,7 @@ const suites = [
   ["recording-input-status", null, "recording-input-browser-check.js"],
   ["system-input-status", null, "system-input-browser-check.js"],
   ["input-notice-receipts", null, "input-notice-receipts-browser-check.js"],
+  ["input-notice-queue", null, "input-notice-queue-browser-check.js"],
   ["capture-test", null, "capture-test-browser-check.js"],
   ["capture-test-recovery", null, "capture-test-recovery-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],

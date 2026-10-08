@@ -8,17 +8,17 @@ const CAPACITY: u64 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Event {
-    sequence: u64,
-    kind: String,
-    status: Input,
+    pub(super) sequence: u64,
+    pub(super) kind: String,
+    pub(super) status: Input,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct History {
-    last_sequence: u64,
-    dropped_through: u64,
-    events: Vec<Event>,
+    pub(super) last_sequence: u64,
+    pub(super) dropped_through: u64,
+    pub(super) events: Vec<Event>,
 }
 
 pub(super) fn closed(value: &serde_json::Value) -> bool {

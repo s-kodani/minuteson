@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 mod history;
 #[cfg(test)]
 mod history_tests;
+pub(crate) mod queue;
 use history::History;
 const LIMIT: u64 = 64 * 1024;
 const LEGACY_LIMIT: u64 = 16 * 1024;
@@ -57,6 +58,8 @@ pub(crate) struct Notice {
     interruptions: u64,
     input: String,
     recipient_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery: Option<queue::Delivery>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +69,8 @@ pub(crate) struct Receipt {
     notice_id: String,
     target: String,
     recipient_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery: Option<queue::Delivery>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +82,8 @@ pub(crate) struct Snapshot {
     microphone: Input,
     system: Option<Input>,
     notices: Vec<Notice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notice_loss: Option<queue::Loss>,
     #[serde(skip)]
     observed_at: Instant,
     #[serde(skip)]
@@ -247,6 +254,7 @@ impl Notices {
                     interruptions: m.interruptions,
                     input: input.into(),
                     recipient_id: None,
+                    delivery: None,
                 });
             }
         }
@@ -260,6 +268,7 @@ pub(crate) struct StatusReader {
     directory: File,
     previous: Option<(Publication, u64, Instant, SystemTime)>,
     notices: [Notices; 2],
+    queue: queue::Queue,
 }
 impl StatusReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
@@ -267,6 +276,7 @@ impl StatusReader {
             directory: crate::input_levels::open_capture_directory(directory)?,
             previous: None,
             notices: Default::default(),
+            queue: Default::default(),
         })
     }
     pub(crate) fn read(&mut self, owner: &str, target: Option<&str>) -> Result<Snapshot, String> {
@@ -347,21 +357,26 @@ impl StatusReader {
         if age_ms > SAFE {
             return Err("入力状態の時計が範囲外です".into());
         }
-        let notices = [
-            self.notices[0].observe_input(&p, "microphone", age_ms, target),
-            self.notices[1].observe_input(&p, "system", age_ms, target),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let notices = if p.schema_version == 3 {
+            self.queue.observe(&p, age_ms, target, Instant::now())
+        } else {
+            [
+                self.notices[0].observe_input(&p, "microphone", age_ms, target),
+                self.notices[1].observe_input(&p, "system", age_ms, target),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
+        };
         Ok(Snapshot {
-            schema_version: 3,
+            schema_version: if p.schema_version == 3 { 4 } else { 3 },
             owner_id: p.owner_id,
             revision: p.revision,
             report_age_ms: age_ms,
             microphone: p.microphone,
             system: p.system,
             notices,
+            notice_loss: (p.schema_version == 3).then(|| self.queue.loss()),
             observed_at: Instant::now(),
             observed_wall: SystemTime::now(),
         })
@@ -424,7 +439,57 @@ impl StatusReader {
             notice_id: current.id.clone(),
             target: current.target.clone(),
             recipient_id: winner,
+            delivery: None,
         })
+    }
+    pub(crate) fn queued_action(
+        &mut self,
+        snapshot: &Snapshot,
+        notice_id: &str,
+        recipient: &str,
+        target: &str,
+        visible: bool,
+        generation: u64,
+        action: queue::Action,
+        receive_id: Option<&str>,
+    ) -> Result<Receipt, String> {
+        let p = &self.previous.as_ref().ok_or("入力報告がありません")?.0;
+        let elapsed = snapshot.observed_at.elapsed().max(
+            SystemTime::now()
+                .duration_since(snapshot.observed_wall)
+                .map_err(|_| "通知の時計が逆行しました")?,
+        );
+        if snapshot.schema_version != 4
+            || p.schema_version != 3
+            || snapshot.owner_id != p.owner_id
+            || snapshot.revision != p.revision
+            || snapshot.microphone != p.microphone
+            || snapshot.system != p.system
+            || snapshot
+                .report_age_ms
+                .saturating_add(elapsed.as_millis().try_into().unwrap_or(u64::MAX))
+                > FRESH_MS
+            || !visible
+            || !matches!(target, "main" | "recorder")
+            || !crate::input_levels::valid_owner(recipient)
+            || notice_id.len() > 128
+            || !(1..=SAFE).contains(&generation)
+        {
+            return Err("通知の録音・報告・表示状態または受付世代が不正です".into());
+        }
+        self.queue.act(
+            &p.owner_id,
+            notice_id,
+            recipient,
+            target,
+            generation,
+            action,
+            Instant::now(),
+            receive_id,
+        )
+    }
+    pub(crate) fn uses_queue(snapshot: &Snapshot) -> bool {
+        snapshot.schema_version == 4
     }
 }
 

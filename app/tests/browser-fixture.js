@@ -1,6 +1,7 @@
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { toasts } from "../src/toast";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 import { recoveryFixture,stampFixtureDraft } from "./transcript-recovery-browser-fixture.js";
@@ -14,6 +15,7 @@ const candidate = { ...structuredClone(analysis), id: "candidate", contentHash: 
 const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
 const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
+  showToast: input => toasts.show(input),
   notificationJobs: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
   lostRetryResponse: false,
   transcriptHistory: [],
