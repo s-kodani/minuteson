@@ -19,6 +19,7 @@ export const dataSaveIPC = async (command, args) => {
   f.calls.push({ command, args: structuredClone(args) });
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return dataIdleRead(command);
   if (command === "get_ui_preferences") return dataIdleRead(command);
+  if (command === "get_capture_test_snapshot") return dataIdleRead(command);
   if (command === "get_analysis_notification_jobs") return dataIdleRead(command);
   if (command === "get_application_close_activity") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }

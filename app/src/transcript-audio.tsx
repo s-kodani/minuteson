@@ -11,7 +11,7 @@ import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode
 import { playbackTimeline } from "./playback-follow";
 import { PlaybackPreparationPool } from "./playback-preparation";
 
-class BrowserAudioClock implements PlaybackClock {
+export class BrowserAudioClock implements PlaybackClock {
   private context: AudioContext | null = null;
   now() { return this.context?.currentTime ?? 0; }
   async resume() {

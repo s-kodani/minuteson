@@ -35,6 +35,9 @@ import { MeetingPlaybackSurface } from "./playback-surface";
 import { MeetingAudioControls } from "./meeting-audio";
 import {CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
+import {CaptureTestPanel,useCaptureTest} from "./capture-test";
+import {waitForCaptureTestStop} from "./capture-test-client";
+import {stopAllPlayback} from "./playback-barrier";
 import {newRecordingPreparation,sameRecordingPreparation,validRecordingTitle,type RecordingPreparation} from "./recording-preparation-state";
 import {checkedCaptureInputs,usableMicrophone} from "./capture-input-state";
 import {useCaptureScope} from "./capture-applications";
@@ -158,6 +161,7 @@ function MainWindow() {
   const captureEnabled=captureAvailable&&(screen==="recording"&&!!preparation&&!preparation.submitted||selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase);
   const captureInputs=useCaptureInputs(captureEnabled,captureOwner);
   const captureScope=useCaptureScope(captureEnabled,captureOwner);
+  const captureTest=useCaptureTest();
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false), starting = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
@@ -184,28 +188,30 @@ function MainWindow() {
       setNavigationBusy(false);
     }
   };
-  const deletion = useMeetingDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || modelDeletionPending || audioDeletionPending, withSavedEdits,
+  const deletion = useMeetingDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || modelDeletionPending || audioDeletionPending, withSavedEdits,
     onDeleted: async receipt => {
       setSelectedMeeting(current => current?.id === receipt.meetingId ? null : current);
       setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins();
     } });
-  const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || deletion.protectedNow || audioDeletionPending, withSavedEdits,
+  const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || audioDeletionPending, withSavedEdits,
     onProtectionChange: setModelDeletionPending, onDeleted: async () => { setModelCatalogEpoch(epoch => epoch + 1); } });
-  const audioDeletion = useAudioDeletion({ operation: dataOperation, locked: navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow, withSavedEdits,
+  const audioDeletion = useAudioDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow, withSavedEdits,
     onProtectionChange: setAudioDeletionPending, onDeleted: async () => {
       // Audio availability changes, not document heads. Keep mounted editors and
       // their local buffers, including when recovery deliberately skipped writes.
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
-  const baseNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const baseNavigationLocked=operationNavigationLocked||captureTest.blocked;
   const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
+  const operationWriteLocked=operationNavigationLocked||deletionBlocked||!!dataOperation.snapshot?.restartRequired;
   const startConfirm = useActionConfirmation(baseWriteLocked || closingBusy);
   const closeConfirm = useActionConfirmation(false);
   const navigationLocked = baseNavigationLocked || captureBusy || closingBusy || startConfirm.pending;
   const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
-  const root = useRef({ selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, state });
-  root.current = { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, state };
+  const root = useRef({ selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state });
+  root.current = { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state };
   const readCloseContext = async (): Promise<CloseContext> => {
     const [recording, importing, data, activity] = await Promise.all([
       invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),
@@ -218,6 +224,19 @@ function MainWindow() {
     if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
     closing.current = true; setClosingBusy(true); setMeetingError("");
     try {
+      const test=await captureTest.client.refresh();
+      if(test){
+        const outcome=await closeConfirm({title:"録音前テストを閉じて終了しますか？",target:"録音前の5秒テスト",confirmLabel:"テストを閉じて終了へ進む",
+          message:"進行中なら取得プロセスの停止完了を待ち、再生を止めて一時テスト音声を破棄します。会議の保存音声は変更しません。停止や解放が未確認の場合は終了しません。",
+          action:async()=>{
+            await stopAllPlayback();
+            const current=await captureTest.client.refresh();
+            if(!current||current.runId!==test.runId)throw Error("終了するテストが変更されています。");
+            if(current.busy){await captureTest.client.cancel(test.runId);await waitForCaptureTestStop(test.runId,()=>captureTest.client.refresh());}
+            await captureTest.client.discard(test.runId);
+          }});
+        if(outcome!=="completed")return;
+      }
       const recording = await invoke<RecordingSnapshot>("get_recording_snapshot"); assertCloseRecording(recording);
       if (!quit && recordingActive(recording)) {
         await withConfirmedEdits(withSavedEdits, () => invoke("finish_main_close", { quit: false }));
@@ -329,6 +348,8 @@ function MainWindow() {
       const expected:Meeting|null=local?{id:local.id,title:local.title.trim(),lifecycle:"draft",sourceType:null,lockVersion:0,createdAt:0,updatedAt:0}:saved;
       const ownerUnchanged=()=>local?sameRecordingPreparation(root.current.preparation,local)&&root.current.screen==="recording":root.current.selectedMeeting?.id===owner;
       const importing = await invoke<ImportSnapshot>("get_audio_import"); assertCloseImport(importing);
+      const expectedTest=await captureTest.client.refresh();
+      if(expectedTest?.busy)throw Error("録音前テストの停止・検証が終わってから録音を開始してください。");
       const microphone=usableMicrophone(checkedCaptureInputs(await invoke("get_capture_inputs")),microphoneUID);
       if(!microphone)throw Error("選択したマイクまたは権限を再確認してください。別機器には切り替えていません。");
       const applications=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
@@ -336,7 +357,7 @@ function MainWindow() {
       const application=captureApplicationScope(scope,applications);
       const scopeMessage=scope.mode==="system"?"PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。":`PC音声は選択したアプリ（${application?.name}）を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。終了・再起動時は全体取得や別アプリに切り替えません。`;
       if (!expected || expected.lifecycle !== "draft" || expected.sourceType != null || !ownerUnchanged()) throw Error("録音対象の会議を再確認してください。");
-      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphone.name}。${scopeMessage}` + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.uid===microphoneUID&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
+      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphone.name}。${scopeMessage}` + (expectedTest ? "\n前のテスト音声の再生を停止し、一時音声を破棄してから録音を開始します。保存済み会議の音声は変更しません。" : "") + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.uid===microphoneUID&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
         const [meeting, recording, currentImport, currentInputs, currentApplications] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null)]);
         assertCloseRecording(recording);
         assertCloseImport(currentImport);
@@ -345,6 +366,10 @@ function MainWindow() {
         if(!scopeUnchanged())throw Error("PC音声の取得範囲が変更されました。録音は開始していません。");
         const meetingUnchanged=local?meeting===null:!!meeting&&meeting.id===expected.id&&meeting.title===expected.title&&meeting.lockVersion===expected.lockVersion&&meeting.lifecycle==="draft"&&meeting.sourceType==null;
         if (!meetingUnchanged || !ownerUnchanged() || recordingActive(recording) || currentImport.token !== importing.token || !importing.busy && currentImport.revision !== importing.revision) throw Error("録音対象が確認後に変更されました。録音は開始していません。");
+        await stopAllPlayback();
+        const currentTest=await captureTest.client.refresh();
+        if((currentTest?.runId??null)!==(expectedTest?.runId??null)||currentTest?.busy)throw Error("録音前テストの対象・状態が変更されました。録音は開始していません。");
+        if(currentTest)await captureTest.client.discard(currentTest.runId);
         if(local)setPreparation(current=>current?.id===local.id?{...current,submitted:true}:current);
         await invoke("start_recording", { meetingId: expected.id, microphoneUid:microphoneUID, captureScope:scope, newTitle:local?expected.title:null });
         const accepted=await invoke<Meeting | null>("get_meeting", { id: expected.id });
@@ -358,6 +383,49 @@ function MainWindow() {
       starting.current = false;
       setCaptureBusy(false);
     }
+  };
+  const startCaptureTest=async()=>{
+    if(!captureOwner||!captureInputs.selected||!captureScope.scope||root.current.baseWriteLocked||starting.current||closing.current)return;
+    const owner=captureOwner,uid=captureInputs.uid,scope=checkedCaptureScope(captureScope.scope,captureScope.applications),scopeKey=JSON.stringify(scope);
+    const sameInputs=()=>root.current.screen==="recording"&&(root.current.preparation?.id??root.current.selectedMeeting?.id)===owner&&root.current.captureInputs.uid===uid&&JSON.stringify(root.current.captureScope.scope)===scopeKey;
+    starting.current=true;setCaptureBusy(true);setCaptureError("");
+    try{
+      const previous=await captureTest.client.refresh();
+      if(previous?.busy)throw Error("前のテストの停止・検証を待ってください。");
+      const importing=await invoke<ImportSnapshot>("get_audio_import");assertCloseImport(importing);
+      const microphone=usableMicrophone(checkedCaptureInputs(await invoke("get_capture_inputs")),uid);
+      if(!microphone)throw Error("選択したマイクまたは権限を再確認してください。");
+      const apps=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
+      checkedCaptureScope(scope,apps);
+      const app=captureApplicationScope(scope,apps);
+      await startConfirm({title:"5秒の録音前テストを開始しますか？",target:`${microphone.name} ／ ${scope.mode==="system"?"PCの再生音全体":app?.name}`,confirmLabel:"5秒テストを開始する",
+        message:"マイクとPCの音を一時保存します。参加者の同意と録音権限を確認してください。入力の初期化が終わってから5秒録音し、停止後に各音声を再生できます。会議・解析結果は作りません。解析とモデル準備は安全な停止を待ちます。"+
+          (scope.mode==="system"?"PC音声には通知音や他の動画の音も含まれます。":"選択したアプリを取得します。ブラウザの他のタブの音も含まれる場合があります。終了・再起動時に別アプリへ切り替えません。")+
+          (previous?"前のテスト音声は再生を停止して破棄します。":"")+(importNeedsConsent(importing)?"確認した音声取り込みを安全に取り消し、元ファイルと保存済み会議を保持します。":""),
+        validate:()=>sameInputs()&&!root.current.baseWriteLocked&&root.current.state.kind==="ready"&&["idle","error"].includes(root.current.state.snapshot.phase),
+        action:()=>withConfirmedEdits(withSavedEdits,async()=>{
+          const [recording,currentImport,inputs,applications]=await Promise.all([
+            invoke<RecordingSnapshot>("get_recording_snapshot"),invoke<ImportSnapshot>("get_audio_import"),
+            invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null),
+          ]);
+          assertCloseRecording(recording);assertCloseImport(currentImport);checkedCaptureScope(scope,applications);
+          if(!sameInputs()||recordingActive(recording)||!usableMicrophone(inputs,uid)||currentImport.token!==importing.token||!importing.busy&&(currentImport.busy||currentImport.revision!==importing.revision))throw Error("確認した入力または取り込み状態が変更されました。テストは開始していません。");
+          await stopAllPlayback();
+          const current=await captureTest.client.refresh();
+          if((current?.runId??null)!==(previous?.runId??null)||current?.busy)throw Error("前のテストの状態が変更されています。");
+          if(current)await captureTest.client.discard(current.runId);
+          await captureTest.client.start({runId:crypto.randomUUID(),microphoneUid:uid,captureScope:scope,expectedImport:{token:importing.token,revision:importing.revision,busy:importing.busy}});
+        }),onError:cause=>setCaptureError(String(cause))});
+    }catch(cause){setCaptureError(String(cause));}
+    finally{starting.current=false;setCaptureBusy(false);}
+  };
+  const cancelCaptureTest=async()=>{
+    const id=captureTest.snapshot?.runId??captureTest.pending?.runId;if(!id)return;
+    try{await captureTest.client.cancel(id);}catch(cause){setCaptureError(String(cause));}
+  };
+  const discardCaptureTest=async()=>{
+    const id=captureTest.snapshot?.runId;if(!id)return;
+    try{await stopAllPlayback();await captureTest.client.discard(id);}catch(cause){setCaptureError(String(cause));}
   };
   const stopRecording = async () => {
     await recordingDecision.request();
@@ -544,11 +612,11 @@ function MainWindow() {
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
           {screen !== "settings" && <ThemeReadNotice />}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
           <ModelBodyDeletionPanel operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} visible={screen === "settings"} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
-          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
+          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
           {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} deletionControl={modelDeletion} refreshEpoch={modelCatalogEpoch} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} /><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></> : screen==="recording" ? <>
             <RecordingWorkspace preparation={preparation} title={selectedMeeting?.title??preparation?.title??"録音対象を確認してください"} state={state} owner={captureOwner} locked={writeLocked}
               canStart={isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?!preparation.submitted&&validRecordingTitle(preparation.title):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}
@@ -556,6 +624,9 @@ function MainWindow() {
               onTitle={title=>setPreparation(current=>current&&!current.submitted?{...current,title}:current)} onStart={()=>void startRecording()} onStop={()=>void stopRecording()}
               onBack={()=>void withSavedEdits(()=>{setSelectedMeeting(null);setPreparation(null);setRestoredFilter(null);setScreen("meetings");})} onSettings={()=>void withSavedEdits(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
               inputs={captureAvailable?<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||!!preparation?.submitted||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>:<p>録音ヘルパーが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
+              test={captureAvailable?<CaptureTestPanel control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
+                canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
+                locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
           {!detail && <><div className="eyebrow">DESKTOP FOUNDATION</div>

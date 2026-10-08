@@ -1,5 +1,6 @@
 import {validMicrophoneUID} from "./capture-input-state.ts";
 import {checkedCaptureApplicationIdentity,type CaptureScope} from "./capture-scope-state.ts";
+import type {PlaybackInfo} from "./playback.ts";
 
 export type CaptureTestPhase="preparing"|"recording"|"checking"|"cancelling"|"ready"|"cancelled"|"error";
 export type CaptureTestTrack={frames:number;sampleRate:number;channels:number;durationMs:number;hasGaps:boolean};
@@ -47,6 +48,20 @@ const transitions:Record<CaptureTestPhase,CaptureTestPhase[]>={
   checking:["checking","cancelling","ready","cancelled","error"],
   cancelling:["cancelling","cancelled","error"],ready:["ready"],cancelled:["cancelled"],error:["error"],
 };
+export function checkedCaptureTestRequest(value:unknown):CaptureTestRequest{
+  const v=record(value,["runId","microphoneUid","captureScope","expectedImport"]);
+  const importing=record(v.expectedImport,["token","revision","busy"]);
+  if(!validCaptureTestId(v.runId)||!validMicrophoneUID(v.microphoneUid)||
+    importing.token!==null&&!validCaptureTestId(importing.token)||!integer(importing.revision,0)||typeof importing.busy!=="boolean")throw Error("テストの開始条件が不正です。");
+  return {runId:v.runId,microphoneUid:v.microphoneUid as string,captureScope:scope(v.captureScope),
+    expectedImport:{token:importing.token as string|null,revision:importing.revision,busy:importing.busy}};
+}
+export function checkedCaptureTestPlayback(value:unknown,kind:"mic"|"system",track:CaptureTestTrack):PlaybackInfo{
+  const v=record(value,["token","sampleRate","channels","totalFrames","startUs","endUs","trackKind","alignment"]);
+  if(!validCaptureTestId(v.token)||v.sampleRate!==track.sampleRate||v.channels!==track.channels||v.totalFrames!==track.frames||
+    v.startUs!==0||v.endUs!==Math.floor(track.frames*1_000_000/track.sampleRate)||v.trackKind!==kind||v.alignment!=="unverified")throw Error("検証したテスト音声と再生対象が一致しません。");
+  return v as unknown as PlaybackInfo;
+}
 // Polls can skip intermediate phases. They cannot replace the owner, revive a
 // cancelled run, or publish ready audio for a different microphone/process.
 export function reconcileCaptureTest(prior:CaptureTestSnapshot|null,value:unknown,expected:Pick<CaptureTestRequest,"runId"|"microphoneUid"|"captureScope">):CaptureTestSnapshot{

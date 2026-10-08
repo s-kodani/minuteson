@@ -38,6 +38,6 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
     <div className="heading-with-info"><h3>PCの音声</h3><InfoPopover label="PCの音声の取得範囲" details={<p>ScreenCaptureKitで全体または選択したアプリの音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの権限と実際の音声入力は録音開始時に確認します。</p>}>詳細設定で全体録音またはアプリ選択録音を選べます。会議以外の音が含まれる範囲を確認してください。</InfoPopover></div>
     <p>取得範囲: {scopeControl.mode==="system"?"PCの再生音全体":scopeControl.selected?`選択したアプリ（${scopeControl.selected.name}）`:"アプリの明示選択待ち"}。実際の入力レベルは未確認です。</p>
     <CaptureApplicationSelection control={scopeControl} locked={locked}/>
-    <p>選択したマイクとアプリは録音開始時に再確認します。録音前の入力確認と5秒テストはまだ接続していません。</p>
+    <p>選択したマイクとアプリは録音開始時に再確認します。入力確認には「5秒録音して確認」を使えます。</p>
   </section>;
 }

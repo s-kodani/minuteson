@@ -2,6 +2,8 @@
 
 macOSの共通5秒枠を使う録音前テストへ、会議を作らないネイティブ操作管理と個別再生の準備APIを追加した。開始ID・マイクUID・対象アプリのプロセス識別を固定し、停止確認と実CAFの検証が終わった音声だけを再生準備へ渡す。準備画面の開始確認・取消・結果表示・再生ボタンはまだ未接続で、録音前テスト全体は未完了である。
 
+上記はネイティブ追加時点の範囲である。後続の[録音前の5秒テスト画面と個別再生](five-second-capture-test-ui-2026-10-08.md)で画面を接続した。強制終了後の私有音声回収とMac実機確認は残る。
+
 ## 開始と停止の所有
 
 テストは単回のUUID v4で管理し、同じ開始IDの再送と同時開始を拒否する。事前条件で拒否された受付も、そのIDのエラー状態として保持し、読取りAPIで結果を確認できる。状態には会議ID・音声ファイルのパス・生の取得時刻を公開しない。
@@ -30,7 +32,9 @@ Swift全61件とフロントエンド全438件、型検査・ビルドが終了�
 
 最終ソースの専用Swift生成1件・Rust統合2件も終了コード0となった。Swiftでマイク40000フレーム、PC音声31200フレームの実CAFを8000Hz・2チャンネルで生成し、ネイティブの私有音声検証から個別再生の全PCM読出しまで成功した。PC音声の開始遅れ100msと取得欠損1秒、実際のゼロ振幅を保持し、既存の会議登録拒否も確認した。先行する統合試験は追加加算しない。
 
-全体検査は進行中だが、モデル削除の移動済み同意を保存後にSIGKILLしてWALから回復する既存テスト1件の失敗を検出した。最終ソースでその1件を切り出した再確認は終了コード0となったものの、元の失敗原因は未確定であり、全体検査を成功扱いにしない。全体検査の開始後にも入力レベルの記述子読込みとフロントエンドの状態検査を追加したため、完走後も最終ソース全体の再検査が必要である。
+先行の全体検査は終了コード2で失敗した。Rust通常1434件成功・1件失敗・既存40件ignoredで、モデル削除の移動済み同意を保存後にSIGKILLしてWALから回復する既存テストが、子プロセスの起動時に実行ファイル不在で失敗した。子テストとWAL回復の検証へ進む前のエラーであり、同じキャッシュでの並行再ビルドの影響と考えられるが、原因の断定はしない。最終ソースでその1件を切り出した再確認は終了コード0となった。最終ネイティブ全件は実行中に同じキャッシュへ再ビルドを重ねず再検査しており、先行失敗を合格へ置き換えない。
+
+後続の最終ネイティブ全件再検査は `/private/tmp/mon-capture-test-controller-final-native-full.log` で終了コード0となり、通常1436件成功・失敗0件・既存40件ignoredだった。前回失敗した子プロセス起動のケースも成功した。画面接続後の検証範囲は[録音前の5秒テスト画面と個別再生](five-second-capture-test-ui-2026-10-08.md)を参照。最初の失敗記録と検査時点を区別する。
 
 最終Swiftのログは `/private/tmp/mon-capture-test-controller-swift.log`、フロントエンドは `/private/tmp/mon-capture-test-state-final-build.log` と `/private/tmp/mon-capture-test-state-final-tests.log`、最終Rust重点は `/private/tmp/mon-capture-test-controller-final-focused.log`、入力レベルの回帰は `/private/tmp/mon-capture-test-controller-final-levels.log`、Swift生成とRust統合は `/private/tmp/mon-capture-test-controller-final-cross.log` にある。全体検査は `/private/tmp/mon-capture-test-controller-full-check.log`、失敗した1件の切出し再確認は `/private/tmp/mon-capture-test-controller-failed-case-recheck.log` にある。
 

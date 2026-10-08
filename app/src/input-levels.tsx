@@ -4,6 +4,12 @@ import {InputLevelClock,InputLevelSession,type VisibleLevel} from "./input-level
 
 const unavailable=()=>({microphone:{state:"unavailable"} as VisibleLevel,system:{state:"unavailable"} as VisibleLevel});
 export function useRecordingLevels(owner:string|null){
+  return useOwnedLevels(owner,"recording");
+}
+export function useCaptureTestLevels(owner:string|null){
+  return useOwnedLevels(owner,"test");
+}
+function useOwnedLevels(owner:string|null,kind:"recording"|"test"){
   const [display,setDisplay]=useState<{owner:string|null;microphone:VisibleLevel;system:VisibleLevel}>({owner:null,...unavailable()});
   useEffect(()=>{
     let disposed=false,inFlight=false,failed=true;
@@ -20,7 +26,7 @@ export function useRecordingLevels(owner:string|null){
       // Include RPC latency in freshness, including the very first read.
       const requestedAt=now();
       try{
-        const result=await invoke<unknown>("get_recording_levels",{sessionId:owner});
+        const result=await invoke<unknown>(kind==="recording"?"get_recording_levels":"get_capture_test_levels",kind==="recording"?{sessionId:owner}:{runId:owner});
         if(!disposed){session.accept(result,requestedAt);failed=false;}
       }catch{if(!disposed)failed=true;}
       finally{inFlight=false;paint();}
@@ -28,7 +34,7 @@ export function useRecordingLevels(owner:string|null){
     void poll();
     const timer=window.setInterval(()=>{paint();void poll();},100);
     return()=>{disposed=true;window.clearInterval(timer);};
-  },[owner]);
+  },[owner,kind]);
   return display.owner===owner?display:unavailable();
 }
 

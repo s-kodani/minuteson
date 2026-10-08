@@ -18,6 +18,10 @@ const f = window.closeFixture = {
   captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
   failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
+  captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
+  testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
+  testChanged:patch=>{if(!f.captureTest)throw Error("模擬テストなし");f.captureTest={...f.captureTest,...patch,revision:f.captureTest.revision+1};},
+  testReady:()=>f.testChanged({phase:"ready",busy:false,microphone:{frames:240000,sampleRate:48000,channels:1,durationMs:5000,hasGaps:false},system:{frames:192000,sampleRate:48000,channels:2,durationMs:4000,hasGaps:true}}),
   request: quit => emit("main-close-requested", { quit }),
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
@@ -42,6 +46,62 @@ mockIPC(async (command, args) => {
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
   if (command === "get_recording_snapshot") return clone(f.recording);
+  if(command==="get_capture_test_snapshot"){
+    if(f.testReadFailure)throw Error("模擬テスト状態読戻し失敗");
+    if(args?.runId&&args.runId!==f.captureTest?.runId)throw Error("模擬テスト所有変更");return clone(f.captureTest);
+  }
+  if(command==="start_capture_test"){
+    const r=args.request;
+    if(f.captureTest||!["idle","error"].includes(f.recording.phase)||r.expectedImport.token!==f.importing.token||(!r.expectedImport.busy&&r.expectedImport.revision!==f.importing.revision))throw Error("模擬テスト開始条件変更");
+    if(f.testAbsentStart)throw Error("模擬テスト受付結果不明");
+    f.captureTest={schemaVersion:1,revision:1,runId:r.runId,phase:"preparing",busy:true,microphoneUid:r.microphoneUid,
+      microphoneName:f.captureInputs.devices.find(d=>d.uid===r.microphoneUid)?.name??null,captureScope:clone(r.captureScope),
+      applicationName:r.captureScope.mode==="application"?f.captureApplications.applications.find(a=>a.pid===r.captureScope.application.pid)?.name??null:null,
+      microphone:null,system:null,cleanupPending:false,errorMessage:null};
+    if(f.importing.busy)await f.importChanged({phase:"cancelled",busy:false});
+    if(f.testLost)throw Error("模擬テスト開始応答喪失");return clone(f.captureTest);
+  }
+  if(command==="cancel_capture_test"){
+    if(args.runId!==f.captureTest?.runId)throw Error("模擬取消所有変更");
+    if(f.captureTest.busy)f.testChanged({phase:"cancelling"});
+    if(f.testCancelLost)throw Error("模擬テスト取消応答喪失");return clone(f.captureTest);
+  }
+  if(command==="discard_capture_test"){
+    if(args.runId!==f.captureTest?.runId||f.captureTest.busy||f.testDiscardFailure||Object.keys(f.testPlayback.tokens).length||Object.keys(f.testPlayback.reservations).length)throw Error("模擬テスト回収未完了");
+    f.captureTest=null;if(f.testDiscardLost)throw Error("模擬回収応答喪失");return null;
+  }
+  if(command==="get_capture_test_levels"){
+    if(args.runId!==f.captureTest?.runId||!f.testLevels)throw Error("模擬テスト入力未確認");return clone(f.testLevels);
+  }
+  if(command==="register_playback_preparation"){
+    if(f.testPlayback.reservations[args.preparationId])throw Error("模擬重複準備");
+    f.testPlayback.reservations[args.preparationId]={cancelled:false,token:null};return null;
+  }
+  if(command==="prepare_capture_test_playback"){
+    const p=f.testPlayback,reservation=p.reservations[args.preparationId],run=f.captureTest;
+    if(!reservation||reservation.cancelled||run?.runId!==args.runId||run.phase!=="ready")throw Error("模擬テスト再生所有変更");
+    if(p.hold)await new Promise(resolve=>p.pending.push(resolve));
+    if(reservation.cancelled)throw Error("模擬テスト再生準備取消");
+    const track=args.trackKind==="mic"?run.microphone:run.system;
+    const info={token:crypto.randomUUID(),sampleRate:track.sampleRate,channels:track.channels,totalFrames:track.frames,startUs:0,endUs:Math.floor(track.frames*1000000/track.sampleRate),trackKind:args.trackKind,alignment:"unverified"};
+    p.tokens[info.token]=info;reservation.token=info.token;
+    if(p.losePrepare)throw Error("模擬テスト再生準備応答喪失");return clone(info);
+  }
+  if(command==="finish_playback_preparation"){
+    const p=f.testPlayback,reservation=p.reservations[args.preparationId];
+    if(!reservation||reservation.cancelled||reservation.token!==args.playbackToken)throw Error("模擬テスト受取不一致");
+    delete p.reservations[args.preparationId];if(p.loseReceipt)throw Error("模擬テスト受取応答喪失");return null;
+  }
+  if(command==="cancel_playback_preparation"){
+    const p=f.testPlayback,reservation=p.reservations[args.preparationId];
+    if(reservation){reservation.cancelled=true;if(reservation.token)delete p.tokens[reservation.token];delete p.reservations[args.preparationId];}return null;
+  }
+  if(command==="close_playback"){if(f.testPlayback.failClose)throw Error("模擬テスト再生解放失敗");delete f.testPlayback.tokens[args.token];return null;}
+  if(command==="read_playback_chunk"){
+    const info=f.testPlayback.tokens[args.token];if(!info)throw Error("模擬テスト再生なし");
+    const frames=Math.max(0,Math.min(65536,info.totalFrames-args.offsetFrames)),bytes=new ArrayBuffer(12+frames*info.channels*4),view=new DataView(bytes);
+    view.setUint32(0,info.sampleRate,true);view.setUint32(4,info.channels,true);view.setUint32(8,frames,true);return bytes; // Silent synthetic PCM only.
+  }
   if(command==="get_recording_levels"){
     if(f.refreshInputLevels&&f.inputLevels)f.inputLevels.revision++;
     const value=clone(f.inputLevels);
@@ -78,6 +138,7 @@ mockIPC(async (command, args) => {
     return clone(data.snapshot);
   }
   if (command === "start_recording") {
+    if(f.captureTest)throw Error("模擬テスト所有が残っています");
     if (!["idle", "error"].includes(f.recording.phase)||f.startBeforeCommitFailure) throw Error("模擬録音対象変更・受付前失敗");
     if(!f.captureInputs.devices.some(d=>d.uid===args.microphoneUid)||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
     if(f.mutateApplicationAtStart){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationAtStart=false;}
@@ -95,6 +156,7 @@ mockIPC(async (command, args) => {
     return null;
   }
   if (command === "finish_main_close") {
+    if(f.captureTest)throw Error("模擬テストを回収していません");
     // Mirror native last-hop guards without simulating process exit.
     if (args.expected && (args.expected.importToken !== f.importing.token || args.expected.dataToken !== data.snapshot.token)) throw Error("模擬終了対象変更");
     if (f.finishLost) throw Error("模擬終了受付の応答喪失");

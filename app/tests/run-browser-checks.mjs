@@ -39,6 +39,7 @@ const suites = [
   ["application-scope", null, "application-scope-browser-check.js"],
   ["recording-preparation", null, "recording-preparation-browser-check.js"],
   ["input-levels", null, "input-level-browser-check.js"],
+  ["capture-test", null, "capture-test-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],

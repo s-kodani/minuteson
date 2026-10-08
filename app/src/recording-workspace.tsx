@@ -5,10 +5,10 @@ import {InfoPopover} from "./info-popover";
 import "./recording-workspace.css";
 import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:()=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
-  inputs:ReactNode;notices:ReactNode;
+  inputs:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const snapshot=state.kind==="ready"?state.snapshot:null;
   const owns=!!owner&&snapshot?.meetingId===owner&&!!snapshot.sessionId;
@@ -28,6 +28,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       <InfoPopover label="録音後の解析" details={<p>音声の保存が完了してから文字起こしと話者分離を進めます。準備済みモデルがない場合も音声を保持し、モデル準備後に解析できます。</p>}>解析は録音の保存完了後に行います。</InfoPopover>
     </>:<>
       {inputs}
+      {test}
       <p>録音とAIモデルの準備は別です。モデル未準備でも録音できます。音声保存後の解析にはモデルの準備が必要です。</p>
       <button type="button" className="small-secondary" disabled={locked} onClick={onSettings}>AIモデルの設定を開く</button>
     </>}
