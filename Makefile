@@ -1,6 +1,9 @@
-.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending
+.PHONY: check test lint build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
 
-check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending
+check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-speaker-embedding
+
+check-speaker-embedding:
+	sh probes/speaker-embedding/check.sh
 
 check-capture-ending:
 	cargo test --locked --offline --manifest-path app/src-tauri/Cargo.toml swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewriting_proofs -- --ignored

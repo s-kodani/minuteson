@@ -5,6 +5,10 @@ mod restore;
 // It does not change the legacy whole-track worker's immutable conditions.
 #[allow(dead_code)]
 mod clustering;
+// Separate helper identity, without changing legacy managed SherpaConfig files.
+// The saved-run worker will persist these additional immutable conditions.
+#[allow(dead_code)]
+mod embedding;
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 pub(crate) mod sherpa;
 pub(crate) mod timeline;
