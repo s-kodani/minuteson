@@ -36,6 +36,7 @@ import { MeetingAudioControls } from "./meeting-audio";
 import {CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
+import {CaptureTestRecoveryPanel,useCaptureTestRecovery} from "./capture-test-recovery";
 import {waitForCaptureTestStop} from "./capture-test-client";
 import {stopAllPlayback} from "./playback-barrier";
 import {newRecordingPreparation,sameRecordingPreparation,validRecordingTitle,type RecordingPreparation} from "./recording-preparation-state";
@@ -162,6 +163,7 @@ function MainWindow() {
   const captureInputs=useCaptureInputs(captureEnabled,captureOwner);
   const captureScope=useCaptureScope(captureEnabled,captureOwner);
   const captureTest=useCaptureTest();
+  const captureTestRecovery=useCaptureTestRecovery();
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false), starting = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
@@ -202,7 +204,7 @@ function MainWindow() {
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
   const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
-  const baseNavigationLocked=operationNavigationLocked||captureTest.blocked;
+  const baseNavigationLocked=operationNavigationLocked||captureTest.blocked||captureTestRecovery.blocked;
   const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
   const operationWriteLocked=operationNavigationLocked||deletionBlocked||!!dataOperation.snapshot?.restartRequired;
@@ -224,6 +226,14 @@ function MainWindow() {
     if (closing.current || starting.current || navigating.current || confirmations.getSnapshot()) return;
     closing.current = true; setClosingBusy(true); setMeetingError("");
     try {
+      const recovery=await captureTestRecovery.client.refresh();
+      if(recovery.phase==="checking")throw Error("テスト音声の起動時確認が進行中です。確認後に終了してください。");
+      if(recovery.phase==="attention"){
+        const outcome=await closeConfirm({title:"未回収のテスト音声を保持して終了しますか？",target:"以前の録音前テスト",confirmLabel:"音声を保持して終了へ進む",
+          message:"テスト音声の回収が未完了です。所有台帳と音声を残し、次の起動時に取得の終了と所有を再確認します。未確認の取得プロセスを推測したPIDで終了させたり、音声を強制削除したりしません。会議データは通常の終了手順で保存します。",
+          action:async()=>{const current=await captureTestRecovery.client.refresh();if(current.phase!=="attention"||current.revision!==recovery.revision)throw Error("保持する回復状態が変更されています。終了は再確認してください。");}});
+        if(outcome!=="completed")return;
+      }
       const test=await captureTest.client.refresh();
       if(test){
         const outcome=await closeConfirm({title:"録音前テストを閉じて終了しますか？",target:"録音前の5秒テスト",confirmLabel:"テストを閉じて終了へ進む",
@@ -602,6 +612,7 @@ function MainWindow() {
           }}>{tab === "transcript" ? "文字起こし" : "議事録"}</button>)}
         </div>}
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
+          <CaptureTestRecoveryPanel control={captureTestRecovery} locked={operationNavigationLocked||captureBusy||closingBusy||startConfirm.pending} currentTest={!!captureTest.snapshot||!!captureTest.pending}/>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
           <AudioImportPanel visible={screen==="overview" && !detail} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
@@ -625,7 +636,7 @@ function MainWindow() {
               onBack={()=>void withSavedEdits(()=>{setSelectedMeeting(null);setPreparation(null);setRestoredFilter(null);setScreen("meetings");})} onSettings={()=>void withSavedEdits(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
               inputs={captureAvailable?<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||!!preparation?.submitted||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>:<p>録音ヘルパーが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
               test={captureAvailable?<CaptureTestPanel control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
-                canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
+                canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!captureTestRecovery.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>

@@ -1,11 +1,9 @@
 //! One explicit, meeting-free capture test. Read-only reconciliation never
 //! replays start; cancellation remains busy until the owned process exits.
 mod files;
-// Durable ownership is verified before connecting startup collection and the
-// signed helper's inherited lease in the next integration stage.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 mod journal;
+pub(crate) mod recovery;
 #[cfg(test)]
 mod tests;
 use crate::analysis_worker::AnalysisController;
@@ -103,6 +101,7 @@ struct State {
     current: Option<Run>,
     used: HashSet<String>,
     closing: bool,
+    ownership: recovery::Ownership,
 }
 #[derive(Default)]
 pub(crate) struct CaptureTests(Mutex<State>);
@@ -163,6 +162,19 @@ fn command(
     }
     Ok(command)
 }
+#[cfg(target_os = "macos")]
+fn owned_command(
+    binary: &std::path::Path,
+    directory: &files::TestDirectory,
+    request: &Request,
+) -> Result<Command, String> {
+    let mut launch = command(binary, &directory.path, request)?;
+    let descriptor = directory.inherit_lease(&mut launch)?;
+    launch
+        .arg("--capture-test-lease-fd")
+        .arg(descriptor.to_string());
+    Ok(launch)
+}
 impl CaptureTests {
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, String> {
         self.0
@@ -183,6 +195,7 @@ impl CaptureTests {
     }
     pub(crate) fn require_empty(&self) -> Result<(), String> {
         let state = self.lock()?;
+        state.ownership.require_clear()?;
         if state.closing {
             return Err("アプリの終了処理が進行中です".into());
         }
@@ -193,10 +206,19 @@ impl CaptureTests {
     }
     pub(crate) fn seal_exit(&self) -> Result<(), String> {
         let mut state = self.lock()?;
-        if state.current.is_some() || state.closing {
+        if state.current.is_some() || state.closing || state.ownership.checking() {
             return Err("録音前テストの解放または終了処理が未完了です".into());
         }
         state.closing = true;
+        Ok(())
+    }
+    pub(crate) fn require_exit_ready(&self) -> Result<(), String> {
+        let state = self.lock()?;
+        if state.current.is_some() || state.closing || state.ownership.checking() {
+            return Err("テストまたは回復処理が進行中です。停止・確認後に終了してください".into());
+        }
+        // Attention means retain the journal and audio, not erase them to exit.
+        // The next startup must still check the inherited helper's live lease.
         Ok(())
     }
     pub(crate) fn abort_exit(&self) -> Result<(), String> {
@@ -206,6 +228,7 @@ impl CaptureTests {
     fn reserve(&self, request: Request) -> Result<Snapshot, String> {
         request.validate()?;
         let mut state = self.lock()?;
+        state.ownership.require_clear()?;
         if state.closing
             || state.current.is_some()
             || state.used.contains(&request.run_id)
@@ -243,6 +266,52 @@ impl CaptureTests {
             playback_tokens: vec![],
         });
         Ok(snapshot)
+    }
+    pub(crate) fn recovery_snapshot(&self) -> Result<recovery::Snapshot, String> {
+        Ok(self.lock()?.ownership.snapshot())
+    }
+    pub(crate) fn recovery_blocked(&self) -> bool {
+        self.lock().map_or(true, |state| state.ownership.blocked())
+    }
+    pub(crate) fn initialize(app: &AppHandle, root: &std::path::Path) -> Result<(), String> {
+        app.state::<Self>().lock()?.ownership.configure(root)?;
+        let handle = app.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("mon-test-audio-recovery".into())
+            .spawn(move || {
+                let _ = Self::recover(&handle, None);
+            })
+        {
+            app.state::<Self>()
+                .lock()?
+                .ownership
+                .attention(format!("テスト音声の回復処理を開始できません: {error}"));
+        }
+        Ok(())
+    }
+    pub(crate) fn recover(
+        app: &AppHandle,
+        expected_revision: Option<u64>,
+    ) -> Result<recovery::Snapshot, String> {
+        let result = RecorderController::with_transition(app, || {
+            let controller = app.state::<Self>();
+            let mut state = controller.lock()?;
+            if state.current.is_some() || state.closing {
+                return Err(
+                    "現在のテストまたは終了処理があります。以前の音声の回収は開始していません"
+                        .into(),
+                );
+            }
+            if let Some(revision) = expected_revision {
+                state.ownership.require_retry(revision)?;
+            }
+            Ok(state.ownership.reconcile())
+        })?;
+        let _ = app.emit("capture-test-recovery-changed", &result);
+        if result.phase == "clear" {
+            let _ = AnalysisController::kick(app);
+        }
+        Ok(result)
     }
     fn update(app: &AppHandle, id: &str, action: impl FnOnce(&mut Run)) -> Result<(), String> {
         let controller = app.state::<Self>();
@@ -362,6 +431,14 @@ impl CaptureTests {
                             None
                         };
                     let binary = crate::recorder::probe_path(&app)?;
+                    #[cfg(target_os = "macos")]
+                    let directory = Arc::new(
+                        app.state::<Self>()
+                            .lock()?
+                            .ownership
+                            .allocate(request.clone())?,
+                    );
+                    #[cfg(not(target_os = "macos"))]
                     let directory = Arc::new(files::TestDirectory::new()?);
                     Self::update(&app, &id, |run| {
                         run.directory = Some(directory.clone());
@@ -371,11 +448,15 @@ impl CaptureTests {
                     if cancelled() {
                         return Err("録音前テストを取り消しました".into());
                     }
-                    let child = Arc::new(Probe(Mutex::new(
-                        command(&binary, &directory.path, &request)?
-                            .spawn()
-                            .map_err(|e| e.to_string())?,
-                    )));
+                    #[cfg(target_os = "macos")]
+                    let mut launch = owned_command(&binary, &directory, &request)?;
+                    #[cfg(not(target_os = "macos"))]
+                    let mut launch = command(&binary, &directory.path, &request)?;
+                    let spawned = launch.spawn().map_err(|e| e.to_string());
+                    // The command's pre_exec closure owns a duplicate. Release
+                    // it before any collector tests whether the helper exited.
+                    drop(launch);
+                    let child = Arc::new(Probe(Mutex::new(spawned?)));
                     Self::update(&app, &id, |run| run.child = Some(child.clone()))?;
                     Ok((directory, child))
                 })?;
@@ -434,10 +515,10 @@ impl CaptureTests {
             );
         }
         let _ = RecorderController::with_transition(&app, || {
-            if priority {
-                AnalysisController::recording_finished(&app);
-            }
-            Self::update(&app, &id, |run| {
+            let updated = Self::update(&app, &id, |run| {
+                if let Some(directory) = &run.directory {
+                    directory.release_parent_lease();
+                }
                 run.child = None;
                 run.task_done = true;
                 run.snapshot.busy = false;
@@ -463,7 +544,11 @@ impl CaptureTests {
                         }
                     }
                 }
-            })
+            });
+            if priority {
+                AnalysisController::recording_finished(&app);
+            }
+            updated
         });
     }
     pub(crate) fn cancel(app: &AppHandle, id: &str) -> Result<Snapshot, String> {

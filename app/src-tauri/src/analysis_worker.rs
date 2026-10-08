@@ -50,7 +50,11 @@ pub struct AnalysisController {
 
 impl AnalysisController {
     pub fn kick(app: &AppHandle) -> Result<(), String> {
-        if app.state::<Storage>().data_write_blocked() {
+        if app.state::<Storage>().data_write_blocked()
+            || app
+                .state::<crate::capture_test::CaptureTests>()
+                .recovery_blocked()
+        {
             return Ok(());
         }
         let importing = app
@@ -102,6 +106,9 @@ impl AnalysisController {
             let controller = app.state::<Self>();
             let stopping = || {
                 app.state::<Storage>().data_write_blocked()
+                    || app
+                        .state::<crate::capture_test::CaptureTests>()
+                        .recovery_blocked()
                     || controller.shutdown.load(Ordering::SeqCst)
                     || controller
                         .state

@@ -26,6 +26,7 @@ pub(super) struct TestDirectory {
     owner: Option<super::journal::Area>,
 }
 impl TestDirectory {
+    #[cfg(any(test, not(target_os = "macos")))]
     pub(super) fn new() -> Result<Self, String> {
         let directory = tempfile::Builder::new()
             .prefix("mon-owned-capture-test-")
@@ -42,7 +43,6 @@ impl TestDirectory {
         })
     }
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)] // Connected after startup recovery is integrated.
     pub(super) fn new_owned(
         registry: &std::sync::Arc<super::journal::Registry>,
         request: super::Request,
@@ -50,7 +50,6 @@ impl TestDirectory {
         Self::restore_owned(registry.allocate(request)?)
     }
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
     pub(super) fn restore_owned(owner: super::journal::Area) -> Result<Self, String> {
         Ok(Self {
             path: owner.path(),
@@ -74,13 +73,18 @@ impl TestDirectory {
         }
     }
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
     pub(super) fn inherit_lease(&self, command: &mut std::process::Command) -> Result<i32, String> {
         self.check_owner()?;
         self.owner
             .as_ref()
             .ok_or("テスト音声の永続所有がありません")?
             .inherit(command)
+    }
+    pub(super) fn release_parent_lease(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(owner) = &self.owner {
+            owner.release_parent_lease();
+        }
     }
     fn check_owner(&self) -> Result<(), String> {
         #[cfg(target_os = "macos")]

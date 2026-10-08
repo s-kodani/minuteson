@@ -1,5 +1,6 @@
 // Baseline for older main-window browser fixtures. Not production code.
 export function dataIdleRead(command) {
+  if (command === "get_capture_test_recovery") return { schemaVersion: 1, revision: 2, phase: "clear", runId: null, errorMessage: null };
   if (command === "get_capture_test_snapshot") return null;
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return null;
   if (command === "get_analysis_notification_jobs") return [];

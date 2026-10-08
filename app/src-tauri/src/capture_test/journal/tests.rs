@@ -62,6 +62,22 @@ fn durable_test_ownership_is_single_allocated_private_and_never_replays_removed_
     assert!(registry.allocate(super::tests::request()).is_ok());
 }
 #[test]
+fn registry_drop_releases_only_the_non_capture_lock_after_closing_sqlite() {
+    let fixture = tempfile::tempdir().unwrap();
+    let registry = Registry::open(fixture.path()).unwrap();
+    // Models the same open description briefly inherited by another thread's
+    // fork before exec. It must not outlive the global registry owner.
+    let inherited = registry._lock.try_clone().unwrap();
+    drop(registry);
+    let reopened = Registry::open(fixture.path());
+    assert!(
+        reopened.is_ok(),
+        "a retained non-capture duplicate held the registry lock: {:?}",
+        reopened.err()
+    );
+    assert!(regular(&inherited, 0).is_ok());
+}
+#[test]
 fn restored_record_keeps_exact_inputs_and_cannot_restart_capture() {
     let fixture = tempfile::tempdir().unwrap();
     let registry = Registry::open(fixture.path()).unwrap();

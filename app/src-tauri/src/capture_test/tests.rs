@@ -1,5 +1,5 @@
 use super::*;
-fn request() -> Request {
+pub(super) fn request() -> Request {
     Request {
         run_id: uuid::Uuid::new_v4().to_string(),
         microphone_uid: "USB input/名前 with spaces".into(),
@@ -14,9 +14,71 @@ fn request() -> Request {
         },
     }
 }
+fn controller() -> (CaptureTests, tempfile::TempDir) {
+    let fixture = tempfile::tempdir().unwrap();
+    let controller = CaptureTests::default();
+    {
+        let mut state = controller.lock().unwrap();
+        state.ownership.configure(fixture.path()).unwrap();
+        assert_eq!(state.ownership.reconcile().phase, "clear");
+    }
+    (controller, fixture)
+}
+#[test]
+#[cfg(target_os = "macos")]
+fn startup_checking_and_attention_reject_new_capture_but_attention_can_exit_without_deleting() {
+    let controller = CaptureTests::default();
+    assert!(controller.reserve(request()).is_err());
+    assert!(controller.require_empty().is_err());
+    assert!(controller.require_exit_ready().is_err());
+    assert!(controller.seal_exit().is_err());
+    controller
+        .lock()
+        .unwrap()
+        .ownership
+        .attention("owned audio retained".into());
+    assert_eq!(controller.recovery_snapshot().unwrap().phase, "attention");
+    assert!(controller.reserve(request()).is_err());
+    assert!(controller.require_empty().is_err());
+    controller.require_exit_ready().unwrap();
+    controller.seal_exit().unwrap();
+    assert!(controller.reserve(request()).is_err());
+    controller.abort_exit().unwrap();
+    assert!(controller.recovery_blocked());
+}
+#[test]
+#[cfg(target_os = "macos")]
+fn production_owned_directory_passes_only_its_explicit_lease_to_the_helper_command() {
+    let (controller, _fixture) = controller();
+    let request = request();
+    controller.reserve(request.clone()).unwrap();
+    let directory = controller
+        .lock()
+        .unwrap()
+        .ownership
+        .allocate(request.clone())
+        .unwrap();
+    let mut launch =
+        owned_command(std::path::Path::new("/usr/bin/true"), &directory, &request).unwrap();
+    let args: Vec<_> = launch
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args.iter()
+            .filter(|a| a.as_str() == "--capture-test-lease-fd")
+            .count(),
+        1
+    );
+    assert!(args.last().unwrap().parse::<i32>().unwrap() >= 3);
+    let mut helper = launch.spawn().unwrap();
+    drop(launch);
+    assert!(helper.wait().unwrap().success());
+    directory.cleanup().unwrap();
+}
 #[test]
 fn test_admission_is_single_owner_one_shot_and_has_no_meeting_identity() {
-    let controller = CaptureTests::default();
+    let (controller, _fixture) = controller();
     let request = request();
     let first = controller.reserve(request.clone()).unwrap();
     assert_eq!(first.run_id, request.run_id);
@@ -37,7 +99,7 @@ fn test_admission_is_single_owner_one_shot_and_has_no_meeting_identity() {
 }
 #[test]
 fn test_exit_seal_rechecks_pending_tests_and_blocks_late_capture_until_abort() {
-    let controller = CaptureTests::default();
+    let (controller, _fixture) = controller();
     controller.seal_exit().unwrap();
     assert!(controller.reserve(request()).is_err());
     assert!(controller.require_empty().is_err());
@@ -173,7 +235,7 @@ fn test_watch_deadline_and_cancel_reap_only_the_owned_fake_process() {
 #[cfg(unix)]
 #[test]
 fn test_failed_exit_confirmation_keeps_owner_busy_and_retries_same_process() {
-    let controller = CaptureTests::default();
+    let (controller, _fixture) = controller();
     let request = request();
     controller.reserve(request.clone()).unwrap();
     let child = Arc::new(Probe(Mutex::new(

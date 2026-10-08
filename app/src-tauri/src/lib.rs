@@ -1642,7 +1642,7 @@ async fn finish_main_close(
     }
     window
         .state::<capture_test::CaptureTests>()
-        .require_empty()?;
+        .require_exit_ready()?;
     if window.state::<exports::ExportController>().active() {
         return Err("Markdownの保存・取消が完了してから終了してください".into());
     }
@@ -1730,6 +1730,32 @@ fn get_capture_test_snapshot(
     window
         .state::<capture_test::CaptureTests>()
         .snapshot(run_id.as_deref())
+}
+#[tauri::command]
+fn get_capture_test_recovery(
+    window: WebviewWindow,
+) -> Result<capture_test::recovery::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("テスト音声の回復はメイン画面から確認してください".into());
+    }
+    window
+        .state::<capture_test::CaptureTests>()
+        .recovery_snapshot()
+}
+#[tauri::command]
+async fn retry_capture_test_recovery(
+    window: WebviewWindow,
+    expected_revision: u64,
+) -> Result<capture_test::recovery::Snapshot, String> {
+    if window.label() != "main" {
+        return Err("テスト音声の回復はメイン画面から操作してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        capture_test::CaptureTests::recover(&app, Some(expected_revision))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn start_capture_test(
@@ -2144,6 +2170,7 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             app.manage(Storage::open(root)?);
             ImportController::recover(app.handle())?;
+            capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 // Recovery can hash hours of audio, so never hold up window startup.
@@ -2215,6 +2242,8 @@ pub fn run() {
             get_recording_snapshot,
             get_recording_levels,
             get_capture_test_snapshot,
+            get_capture_test_recovery,
+            retry_capture_test_recovery,
             start_capture_test,
             cancel_capture_test,
             discard_capture_test,

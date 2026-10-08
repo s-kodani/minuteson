@@ -40,6 +40,7 @@ const suites = [
   ["recording-preparation", null, "recording-preparation-browser-check.js"],
   ["input-levels", null, "input-level-browser-check.js"],
   ["capture-test", null, "capture-test-browser-check.js"],
+  ["capture-test-recovery", null, "capture-test-recovery-browser-check.js"],
   ["workspace", "browser-fixture.js", "workspace-browser-check.js"],
   ["detail-tabs", "browser-fixture.js", "detail-tabs-browser-check.js"],
   ["speaker-panel", "browser-fixture.js", "speaker-panel-browser-check.js"],

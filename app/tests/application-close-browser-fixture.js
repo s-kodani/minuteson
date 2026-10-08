@@ -8,6 +8,7 @@ const data = window.dataFixture;
 const clone = value => structuredClone(value);
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const importing = { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
+const recoverySeed=sessionStorage.getItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");sessionStorage.removeItem("MON_CAPTURE_TEST_RECOVERY_FIXTURE");
 const f = window.closeFixture = {
   recording, importing, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system"}},
@@ -19,6 +20,7 @@ const f = window.closeFixture = {
   failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
   captureTest:null,testLost:false,testReadFailure:false,testAbsentStart:false,testCancelLost:false,testDiscardFailure:false,testDiscardLost:false,
+  captureRecovery:recoverySeed?JSON.parse(recoverySeed):{schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null},recoveryReadFailure:false,recoveryRetryLost:false,recoveryRetryKeepsAttention:false,recoveryRetryHoldAck:false,recoveryPendingReplies:[],
   testLevels:null,testPlayback:{reservations:{},tokens:{},hold:false,pending:[],failClose:false,losePrepare:false,loseReceipt:false},
   testChanged:patch=>{if(!f.captureTest)throw Error("模擬テストなし");f.captureTest={...f.captureTest,...patch,revision:f.captureTest.revision+1};},
   testReady:()=>f.testChanged({phase:"ready",busy:false,microphone:{frames:240000,sampleRate:48000,channels:1,durationMs:5000,hasGaps:false},system:{frames:192000,sampleRate:48000,channels:2,durationMs:4000,hasGaps:true}}),
@@ -46,11 +48,21 @@ mockIPC(async (command, args) => {
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
   if (command === "get_recording_snapshot") return clone(f.recording);
+  if(command==="get_capture_test_recovery"){
+    if(f.recoveryReadFailure)throw Error("模擬テスト回復状態読戻し失敗");return clone(f.captureRecovery);
+  }
+  if(command==="retry_capture_test_recovery"){
+    if(args.expectedRevision!==f.captureRecovery.revision||f.captureRecovery.phase!=="attention"||f.captureTest)throw Error("模擬回復状態変更／現在のテストあり");
+    f.captureRecovery={...f.captureRecovery,revision:f.captureRecovery.revision+1,...(f.recoveryRetryKeepsAttention?{}:{phase:"clear",runId:null,errorMessage:null})};
+    const result=clone(f.captureRecovery);if(f.recoveryRetryHoldAck)await new Promise(resolve=>f.recoveryPendingReplies.push(resolve));
+    if(f.recoveryRetryLost)throw Error("模擬回収応答喪失");return result;
+  }
   if(command==="get_capture_test_snapshot"){
     if(f.testReadFailure)throw Error("模擬テスト状態読戻し失敗");
     if(args?.runId&&args.runId!==f.captureTest?.runId)throw Error("模擬テスト所有変更");return clone(f.captureTest);
   }
   if(command==="start_capture_test"){
+    if(f.captureRecovery.phase!=="clear")throw Error("模擬テスト音声の回復が未完了");
     const r=args.request;
     if(f.captureTest||!["idle","error"].includes(f.recording.phase)||r.expectedImport.token!==f.importing.token||(!r.expectedImport.busy&&r.expectedImport.revision!==f.importing.revision))throw Error("模擬テスト開始条件変更");
     if(f.testAbsentStart)throw Error("模擬テスト受付結果不明");
@@ -138,6 +150,7 @@ mockIPC(async (command, args) => {
     return clone(data.snapshot);
   }
   if (command === "start_recording") {
+    if(f.captureRecovery.phase!=="clear")throw Error("模擬テスト音声の回復が未完了");
     if(f.captureTest)throw Error("模擬テスト所有が残っています");
     if (!["idle", "error"].includes(f.recording.phase)||f.startBeforeCommitFailure) throw Error("模擬録音対象変更・受付前失敗");
     if(!f.captureInputs.devices.some(d=>d.uid===args.microphoneUid)||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
@@ -156,6 +169,7 @@ mockIPC(async (command, args) => {
     return null;
   }
   if (command === "finish_main_close") {
+    if(f.captureRecovery.phase==="checking")throw Error("模擬テスト音声の起動時確認中");
     if(f.captureTest)throw Error("模擬テストを回収していません");
     // Mirror native last-hop guards without simulating process exit.
     if (args.expected && (args.expected.importToken !== f.importing.token || args.expected.dataToken !== data.snapshot.token)) throw Error("模擬終了対象変更");

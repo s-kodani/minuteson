@@ -79,10 +79,23 @@ pub(super) struct Registry {
     pin: File,
     proof: RootProof,
     expected_schema: Schema,
-    db: Mutex<Connection>,
+    db: Mutex<Option<Connection>>,
     // Keep the registry lock until the SQLite connection is closed. It is
     // CLOEXEC, so the capture helper does not inherit this global owner.
     _lock: File,
+}
+impl Drop for Registry {
+    fn drop(&mut self) {
+        // A concurrent fork can temporarily retain a CLOEXEC duplicate of the
+        // global description. Close SQLite first, then release this registry
+        // lock explicitly. Unlike a run's capture lease it is never delegated
+        // to a live writer, and must end with this registry's lifetime.
+        let db = self.db.get_mut().unwrap_or_else(|error| error.into_inner());
+        drop(db.take());
+        unsafe {
+            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
 }
 pub(super) struct Area {
     registry: Arc<Registry>,
@@ -310,7 +323,7 @@ impl Registry {
             pin,
             proof: actual,
             expected_schema,
-            db: Mutex::new(db),
+            db: Mutex::new(Some(db)),
             _lock: owner,
         });
         registry.with_db(|_| Ok(()))?;
@@ -341,7 +354,8 @@ impl Registry {
         action: impl FnOnce(&Connection) -> Result<T, String>,
     ) -> Result<T, String> {
         self.check_files()?;
-        let db = self.db.lock().map_err(|_| "テスト所有台帳のロック失敗")?;
+        let held = self.db.lock().map_err(|_| "テスト所有台帳のロック失敗")?;
+        let db = held.as_ref().ok_or("テスト所有台帳は終了しています")?;
         if schema(&db)? != self.expected_schema {
             return Err("テスト所有台帳の形式が変更されています".into());
         }
@@ -453,6 +467,14 @@ impl Registry {
     }
 }
 impl Area {
+    pub(super) fn release_parent_lease(&self) {
+        // Never LOCK_UN: a live helper or a pre-exec child can still retain
+        // the shared description. Future forks need not inherit this copy.
+        self.lease
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
     pub(super) fn pin_directory(&self) -> Result<File, String> {
         self.check_record()?;
         self.check_payload()?;
@@ -559,10 +581,7 @@ impl Area {
         self.check_record()?;
         self.check_payload()?;
         // Never explicitly unlock the description shared with the helper.
-        self.lease
-            .lock()
-            .map_err(|_| "テスト取得所有のロック失敗")?
-            .take();
+        self.release_parent_lease();
         let file = self.lease_file()?;
         lock(&file)?;
         self.check_payload()?;
