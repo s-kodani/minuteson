@@ -6,7 +6,9 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
-  func sample(frames: Int, value: Float, presentation: CMTime) throws -> CMSampleBuffer {
+  func sample(frames: Int, value: Float, presentation: CMTime, rightValue: Float? = nil) throws
+    -> CMSampleBuffer
+  {
     var format = AudioStreamBasicDescription(
       mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
       mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
@@ -18,7 +20,7 @@ final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
         allocator: kCFAllocatorDefault, asbd: &format, layoutSize: 0, layout: nil,
         magicCookieSize: 0, magicCookie: nil, extensions: nil,
         formatDescriptionOut: &description), noErr)
-    let samples = (0..<frames * 2).map { $0 % 2 == 0 ? value : -value }
+    let samples = (0..<frames * 2).map { $0 % 2 == 0 ? value : (rightValue ?? -value) }
     var block: CMBlockBuffer?
     XCTAssertEqual(
       CMBlockBufferCreateWithMemoryBlock(

@@ -595,6 +595,29 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false)
+    }
+
+    pub(in crate::storage) fn prepare_meeting_track_audio_cancellable(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedAudio, String> {
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true)
+    }
+
+    fn prepare_track_audio_mode(
+        &self,
+        meeting_id: &str,
+        track: &str,
+        start: i64,
+        end: i64,
+        cancelled: &impl Fn() -> bool,
+        whole_meeting: bool,
+    ) -> Result<PreparedAudio, String> {
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
         }
@@ -617,7 +640,7 @@ impl Storage {
                 "SELECT EXISTS(SELECT 1 FROM audio_gaps WHERE track_id = ?1 AND start_us < ?3 AND end_us > ?2 AND recovered = 0)",
                 params![track, start, end], |row| row.get(0),
             ).map_err(|e| e.to_string())?;
-            if gaps {
+            if gaps && !whole_meeting {
                 return Err("この発言の音声に欠損区間があります".into());
             }
             let mappings = super::transcription::read_clock_segments(&connection, track)?;
@@ -653,7 +676,7 @@ impl Storage {
         let mut spans = Vec::new();
         let mut position = start;
         let mut audio_format = None;
-        let layout = if mappings.is_empty() {
+        let layout = if mappings.is_empty() && !whole_meeting {
             None
         } else {
             if mappings
@@ -676,7 +699,13 @@ impl Storage {
                     .collect::<Vec<_>>(),
                 rate,
             )?;
-            layout.range(start, end, rate)?;
+            if whole_meeting {
+                if start != layout.start_us || end != layout.end_us {
+                    return Err("会議全体の保存音声範囲が一致しません".into());
+                }
+            } else {
+                layout.range(start, end, rate)?;
+            }
             Some(layout)
         };
         for chunk in chunks {
@@ -757,7 +786,13 @@ impl Storage {
             return Err("音声準備中に保存記録・時刻補正が変更されました".into());
         }
         let clock = layout
-            .map(|layout| ClockAudio::new(layout, start, end, sample_rate))
+            .map(|layout| {
+                if whole_meeting {
+                    ClockAudio::for_meeting(layout, sample_rate)
+                } else {
+                    ClockAudio::new(layout, start, end, sample_rate)
+                }
+            })
             .transpose()?;
         let alignment = config
             .clone()

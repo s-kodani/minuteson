@@ -131,14 +131,15 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     try await recorder.start(targetPID: nil)
     box.set(read(1_020_000_000))
     recorder.receive(
-      from: source, sampleBuffer: try sample(), observation: clock.observe(hostTicks: 1_005_000_000)
+      from: source, sampleBuffer: try sample(rightValue: 0.125),
+      observation: clock.observe(hostTicks: 1_005_000_000)
     )
     let fixture = CaptureClockFixtureTests()
     var mic = try await fixture.writeCAF(
       [
         fixture.sample(
           frames: 480, value: 0.125,
-          presentation: CMTime(value: 1, timescale: 1))
+          presentation: CMTime(value: 1, timescale: 1), rightValue: 0.0625)
       ], to: directory.appendingPathComponent("microphone.caf"))
     mic.recordSavedClock(clock.observe(hostTicks: 1_000_000_000), frames: 480, sourceFrame: 0)
     recorder.sourceEnded(source)
@@ -307,7 +308,9 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     }
     XCTAssertTrue(predicate(), "owned asynchronous operation did not reach the expected state")
   }
-  private func sample(frames: Int = 480, value: Float = 0.25, rate: Double = 48000) throws
+  private func sample(
+    frames: Int = 480, value: Float = 0.25, rate: Double = 48000, rightValue: Float? = nil
+  ) throws
     -> CMSampleBuffer
   {
     var format = AudioStreamBasicDescription(
@@ -321,7 +324,7 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
         allocator: kCFAllocatorDefault, asbd: &format, layoutSize: 0, layout: nil,
         magicCookieSize: 0, magicCookie: nil, extensions: nil,
         formatDescriptionOut: &description), noErr)
-    let values = (0..<frames * 2).map { $0 % 2 == 0 ? value : -value }
+    let values = (0..<frames * 2).map { $0 % 2 == 0 ? value : (rightValue ?? -value) }
     var block: CMBlockBuffer?
     XCTAssertEqual(
       CMBlockBufferCreateWithMemoryBlock(

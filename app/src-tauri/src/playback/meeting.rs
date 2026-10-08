@@ -1,4 +1,4 @@
-use super::PreparedAudio;
+use super::{PlaybackMissingRange, PreparedAudio};
 use crate::audio::PREVIEW_FRAMES;
 use crate::resampling::Filter;
 
@@ -23,10 +23,20 @@ pub(crate) struct MeetingAudio {
     pub(crate) end_us: i64,
     pub(crate) total_frames: u64,
     pub(crate) track_kind: String,
+    pub(crate) missing_ranges: Vec<PlaybackMissingRange>,
 }
 
 impl MeetingAudio {
+    #[cfg(test)]
     pub(crate) fn new(sources: Vec<PreparedAudio>, end_us: i64) -> Result<Self, String> {
+        Self::with_missing_ranges(sources, end_us, vec![])
+    }
+
+    pub(crate) fn with_missing_ranges(
+        sources: Vec<PreparedAudio>,
+        end_us: i64,
+        mut missing_ranges: Vec<PlaybackMissingRange>,
+    ) -> Result<Self, String> {
         if sources.is_empty() || sources.len() > 2 || end_us <= 0 {
             return Err("会議音声の構成が不正です".into());
         }
@@ -37,6 +47,42 @@ impl MeetingAudio {
             return Err("両方の再生にはマイクとPC音声が一つずつ必要です".into());
         }
         let total_frames = output_frame(end_us)?;
+        if missing_ranges.len() > 2048
+            || sources.iter().any(|source| {
+                missing_ranges
+                    .iter()
+                    .filter(|gap| gap.track_kind == source.track_kind)
+                    .count()
+                    > 1024
+            })
+            || missing_ranges.iter().any(|gap| {
+                gap.end_frame > total_frames
+                    || gap.end_frame <= gap.start_frame
+                    || PlaybackMissingRange::new(
+                        &gap.track_kind,
+                        gap.start_us,
+                        gap.end_us,
+                        &gap.reason_code,
+                        end_us,
+                    )
+                    .map_or(true, |verified| {
+                        verified.start_frame != gap.start_frame
+                            || verified.end_frame != gap.end_frame
+                    })
+                    || !sources
+                        .iter()
+                        .any(|source| source.track_kind == gap.track_kind)
+            })
+        {
+            return Err("会議音声の欠損構成が不正です".into());
+        }
+        missing_ranges.sort_by(|left, right| {
+            (left.start_frame, left.end_frame, &left.track_kind).cmp(&(
+                right.start_frame,
+                right.end_frame,
+                &right.track_kind,
+            ))
+        });
         let track_kind = if sources.len() == 2 {
             "both".into()
         } else {
@@ -101,6 +147,7 @@ impl MeetingAudio {
             end_us,
             total_frames,
             track_kind,
+            missing_ranges,
         })
     }
 
@@ -113,22 +160,44 @@ impl MeetingAudio {
         {
             return Err("会議音声の読出し範囲が不正です".into());
         }
+        if self.readable_frames(offset, frames)? != frames {
+            return Err("会議音声の読出しが欠損区間を横断しています".into());
+        }
         let mut mixed = vec![0_f64; frames as usize];
         // Constant headroom for both: no gain jump when one track starts/ends.
         let gain = 1.0 / self.sources.len() as f64;
         for source in &mut self.sources {
+            let mut known_start = 0_u64;
+            let mut known_end = self.total_frames;
+            for gap in self
+                .missing_ranges
+                .iter()
+                .filter(|gap| gap.track_kind == source.audio.track_kind)
+            {
+                if gap.end_frame <= offset {
+                    known_start = known_start.max(gap.end_frame);
+                }
+                if gap.start_frame >= offset + frames {
+                    known_end = known_end.min(gap.start_frame);
+                }
+            }
+            let has_gaps = self
+                .missing_ranges
+                .iter()
+                .any(|gap| gap.track_kind == source.audio.track_kind);
             let first = offset.max(source.first_output);
             let last = (offset + frames).min(source.last_output);
             if first >= last {
                 continue;
             }
             if let Some(clock) = &mut source.audio.clock {
-                let pcm = clock.read(
+                let pcm = clock.read_known(
                     &mut source.audio.spans,
                     source.audio.channels,
                     MEETING_RATE,
                     first,
                     last - first,
+                    has_gaps.then_some((known_start, known_end)),
                 )?;
                 for (index, frame) in pcm
                     .chunks_exact(source.audio.channels as usize * 4)
@@ -154,10 +223,28 @@ impl MeetingAudio {
                 .filter
                 .as_ref()
                 .map_or(0, |filter| filter.half as u64);
+            let known_first = if has_gaps {
+                position(known_start.max(source.first_output)).div_ceil(DENOMINATOR) as u64
+            } else {
+                0
+            };
+            let known_last = if has_gaps {
+                (position(known_end.min(source.last_output)) / DENOMINATOR) as u64
+            } else {
+                source.frames
+            };
+            let known_last = known_last.min(source.frames);
+            if known_first >= known_last {
+                return Err("欠損の外側に補間可能な保存音声がありません".into());
+            }
             let from = ((first_position / DENOMINATOR) as u64)
                 .saturating_sub(half)
+                .max(known_first)
                 .min(source.frames - 1);
-            let to = ((last_position / DENOMINATOR) as u64 + half + 1).min(source.frames);
+            let to = ((last_position / DENOMINATOR) as u64 + half + 1).min(known_last);
+            if from >= to {
+                return Err("欠損の外側に補間可能な保存音声がありません".into());
+            }
             let mut mono = Vec::with_capacity((to - from) as usize);
             let mut cursor = from;
             while cursor < to {
@@ -189,6 +276,21 @@ impl MeetingAudio {
             .into_iter()
             .flat_map(|sample| (sample.clamp(-1.0, 1.0) as f32).to_le_bytes())
             .collect())
+    }
+
+    pub(crate) fn readable_frames(&self, offset: u64, maximum: u64) -> Result<u64, String> {
+        let mut frames = maximum;
+        for gap in &self.missing_ranges {
+            if gap.start_frame <= offset && offset < gap.end_frame {
+                return Err(
+                    "現在位置の音声は欠損しています。保存済み区間へ移動してください".into(),
+                );
+            }
+            if gap.start_frame > offset {
+                frames = frames.min(gap.start_frame - offset);
+            }
+        }
+        Ok(frames)
     }
 }
 

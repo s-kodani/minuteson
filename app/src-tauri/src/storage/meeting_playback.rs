@@ -1,5 +1,5 @@
 use super::*;
-use crate::playback::MeetingAudio;
+use crate::playback::{MeetingAudio, PlaybackMissingRange};
 
 #[cfg(test)]
 mod tests;
@@ -48,7 +48,29 @@ struct Chunk {
 #[derive(Debug, PartialEq, Eq)]
 struct Gap {
     recovered: bool,
+    start: i64,
+    end: i64,
+    reason: String,
     stamp: String,
+}
+
+fn covers_missing(gaps: &[Gap], start: i64, end: i64) -> bool {
+    let mut missing: Vec<_> = gaps.iter().filter(|gap| !gap.recovered).collect();
+    missing.sort_by_key(|gap| (gap.start, gap.end));
+    let mut position = start;
+    for gap in missing {
+        if gap.end <= position {
+            continue;
+        }
+        if gap.start > position {
+            break;
+        }
+        position = position.max(gap.end);
+        if position >= end {
+            return true;
+        }
+    }
+    position >= end
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -84,6 +106,7 @@ impl Storage {
         };
         let end = before.end;
         let mut sources = Vec::with_capacity(kinds.len());
+        let mut missing_ranges = Vec::new();
         for kind in kinds {
             if cancelled() {
                 return Err("会議音声の準備を中止しました".into());
@@ -97,10 +120,8 @@ impl Storage {
                 return Err("指定した種類の確定済み音声が一つに定まりません".into());
             }
             let track = matches[0];
-            if track.chunks.iter().any(|chunk| !chunk.ready)
-                || track.gaps.iter().any(|gap| !gap.recovered)
-            {
-                return Err("指定した会議音声に欠損または破損があります".into());
+            if track.chunks.iter().any(|chunk| !chunk.ready) {
+                return Err("指定した会議音声の保存ファイルに欠損または破損があります".into());
             }
             let start = track
                 .chunks
@@ -112,7 +133,7 @@ impl Storage {
             // Uses the existing managed-path, content-hash, format, contiguous
             // coverage, deletion and clock-map admission checks over the WHOLE
             // source, including missing/corrupt chunks outside an utterance.
-            let audio = self.prepare_track_audio_cancellable(
+            let audio = self.prepare_meeting_track_audio_cancellable(
                 &request.meeting_id,
                 &track.id,
                 start,
@@ -123,6 +144,26 @@ impl Storage {
                 || i64::from(audio.channels) != track.channels
             {
                 return Err("会議音声の形式とトラック記録が一致しません".into());
+            }
+            let clock = audio
+                .clock
+                .as_ref()
+                .ok_or("会議音声の取得区間を確認できません")?;
+            for (first, last) in clock.missing_intervals() {
+                if !covers_missing(&track.gaps, first, last) {
+                    return Err("保存音声の空白に対応する欠損記録がありません".into());
+                }
+            }
+            for gap in &track.gaps {
+                if !gap.recovered {
+                    missing_ranges.push(PlaybackMissingRange::new(
+                        &track.kind,
+                        gap.start,
+                        gap.end,
+                        &gap.reason,
+                        end,
+                    )?);
+                }
             }
             sources.push(audio);
         }
@@ -135,7 +176,7 @@ impl Storage {
         if cancelled() {
             return Err("会議音声の準備を中止しました".into());
         }
-        MeetingAudio::new(sources, end)
+        MeetingAudio::with_missing_ranges(sources, end, missing_ranges)
     }
 
     fn meeting_audio_census(&self, meeting: &str) -> Result<Census, String> {
@@ -224,12 +265,15 @@ impl Storage {
             {
                 return Err("会議音声のセグメント番号に欠損があります".into());
             }
-            let mut gaps = db.prepare("SELECT recovered, json_object('id',id,'start',start_us,'end',end_us,'reason',reason_code,'recovered',recovered) FROM audio_gaps WHERE track_id = ?1 ORDER BY id LIMIT 1025").map_err(|e| e.to_string())?;
+            let mut gaps = db.prepare("SELECT recovered, start_us, end_us, reason_code, json_object('id',id,'start',start_us,'end',end_us,'reason',reason_code,'recovered',recovered) FROM audio_gaps WHERE track_id = ?1 ORDER BY id LIMIT 1025").map_err(|e| e.to_string())?;
             track.gaps = gaps
                 .query_map(params![track.id], |row| {
                     Ok(Gap {
                         recovered: row.get(0)?,
-                        stamp: row.get(1)?,
+                        start: row.get(1)?,
+                        end: row.get(2)?,
+                        reason: row.get(3)?,
+                        stamp: row.get(4)?,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -244,13 +288,26 @@ impl Storage {
             if track.gaps.len() > 1024 || track.mappings.len() > 1024 {
                 return Err("会議音声の時刻・欠損記録が多すぎます".into());
             }
+            for gap in &track.gaps {
+                PlaybackMissingRange::new(&track.kind, gap.start, gap.end, &gap.reason, duration)?;
+            }
         }
-        if tracks
+        let last = tracks
             .iter()
             .flat_map(|track| &track.chunks)
             .map(|chunk| chunk.end)
             .max()
-            != Some(duration)
+            .ok_or("会議の保存音声がありません")?;
+        if last > duration
+            || (last < duration
+                && tracks.iter().any(|track| {
+                    track
+                        .chunks
+                        .iter()
+                        .map(|chunk| chunk.end)
+                        .max()
+                        .is_none_or(|end| !covers_missing(&track.gaps, end, duration))
+                }))
         {
             return Err("会議全体の音声時間と保存区間が一致しません".into());
         }

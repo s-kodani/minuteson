@@ -59,6 +59,49 @@ impl PreparedAudio {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlaybackMissingRange {
+    pub track_kind: String,
+    pub start_us: i64,
+    pub end_us: i64,
+    pub start_frame: u64,
+    pub end_frame: u64,
+    pub reason_code: String,
+}
+
+impl PlaybackMissingRange {
+    pub(crate) fn new(
+        kind: &str,
+        start: i64,
+        end: i64,
+        reason: &str,
+        total_us: i64,
+    ) -> Result<Self, String> {
+        if !matches!(kind, "mic" | "system" | "imported")
+            || start < 0
+            || end <= start
+            || end > total_us
+            || reason.is_empty()
+            || reason.len() > 256
+            || reason.chars().any(char::is_control)
+        {
+            return Err("会議音声の欠損記録が不正です".into());
+        }
+        let start_frame =
+            u64::try_from(start as u128 * 48000 / 1000000).map_err(|_| "欠損位置が範囲外です")?;
+        let end_frame = crate::audio_clock::frame_at(end, meeting::MEETING_RATE)?;
+        Ok(Self {
+            track_kind: kind.into(),
+            start_us: start,
+            end_us: end,
+            start_frame,
+            end_frame,
+            reason_code: reason.into(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlaybackInfo {
     pub token: String,
     pub sample_rate: u32,
@@ -68,6 +111,8 @@ pub struct PlaybackInfo {
     pub end_us: i64,
     pub track_kind: String,
     pub alignment: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_ranges: Vec<PlaybackMissingRange>,
 }
 
 struct Playback {
@@ -103,6 +148,7 @@ impl PlaybackStore {
             end_us: audio.end_us,
             track_kind: audio.track_kind.clone(),
             alignment: audio.alignment.clone(),
+            missing_ranges: vec![],
         };
         self.insert_prepared(info, PreparedPlayback::Track(audio))
     }
@@ -118,6 +164,7 @@ impl PlaybackStore {
             track_kind: audio.track_kind.clone(),
             // Mixing/resampling is not evidence of physically synchronized capture.
             alignment: "unverified".into(),
+            missing_ranges: audio.missing_ranges.clone(),
         };
         self.insert_prepared(info, PreparedPlayback::Meeting(audio))
     }
@@ -158,7 +205,10 @@ impl PlaybackStore {
         if offset_frames >= session.info.total_frames {
             return Err("再生位置が範囲外です".into());
         }
-        let frames = PREVIEW_FRAMES.min(session.info.total_frames - offset_frames);
+        let mut frames = PREVIEW_FRAMES.min(session.info.total_frames - offset_frames);
+        if let PreparedPlayback::Meeting(audio) = &session.audio {
+            frames = audio.readable_frames(offset_frames, frames)?;
+        }
         let mut result =
             Vec::with_capacity(12 + frames as usize * session.info.channels as usize * 4);
         result.extend_from_slice(&session.info.sample_rate.to_le_bytes());

@@ -172,6 +172,7 @@ mod tests {
             end_us: 1,
             track_kind: "mic".into(),
             alignment: "unverified".into(),
+            missing_ranges: vec![],
         }
     }
     #[test]

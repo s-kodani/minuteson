@@ -1,9 +1,61 @@
 use super::tests::{corrected, unpublished, write};
+use crate::playback::PlaybackStore;
+use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
 use crate::storage::recordings::{load_session, RecordingConfig};
 use crate::storage::Storage;
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+
+fn assert_whole_gap_playback(storage: &Storage, meeting: &str, end: i64) {
+    let store = PlaybackStore::default();
+    for (mode, kind) in [
+        (MeetingPlaybackMode::Mic, "mic"),
+        (MeetingPlaybackMode::System, "system"),
+        (MeetingPlaybackMode::Both, "both"),
+    ] {
+        let info = store
+            .insert_meeting(
+                storage
+                    .prepare_meeting_audio(&MeetingPlaybackRequest {
+                        meeting_id: meeting.into(),
+                        mode,
+                    })
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                info.start_us,
+                info.end_us,
+                info.track_kind.as_str(),
+                info.alignment.as_str()
+            ),
+            (0, end, kind, "unverified")
+        );
+        assert_eq!(
+            info.total_frames,
+            crate::audio_clock::frame_at(end, 48000).unwrap()
+        );
+        assert!(!info.missing_ranges.is_empty());
+        for gap in &info.missing_ranges {
+            assert!(store.read(&info.token, gap.start_frame).is_err());
+        }
+        let mut first = 0;
+        for gap in &info.missing_ranges {
+            if gap.start_frame <= first && first < gap.end_frame {
+                first = gap.end_frame;
+            }
+        }
+        let packet = store.read(&info.token, first).unwrap();
+        let count = u32::from_le_bytes(packet[8..12].try_into().unwrap()) as u64;
+        assert!(count > 0);
+        assert!(info
+            .missing_ranges
+            .iter()
+            .all(|gap| first + count <= gap.start_frame || first >= gap.end_frame));
+    }
+}
 
 fn ending(storage: &Storage) -> (String, String, PathBuf, Value) {
     let (meeting, session, output, mut value) = corrected(storage);
@@ -65,6 +117,7 @@ fn capture_ending_preserves_physical_pcm_boundary_gaps_actual_end_and_commit_tim
         ),
     ];
     assert_eq!(gaps(&storage), expected);
+    assert_whole_gap_playback(&storage, &meeting, 1100000);
     let committed: i64 = storage
         .connection
         .lock()
@@ -115,6 +168,7 @@ fn capture_ending_preserves_physical_pcm_boundary_gaps_actual_end_and_commit_tim
         saved
     );
     assert_eq!(gaps(&reopened), expected);
+    assert_whole_gap_playback(&reopened, &meeting, 1100000);
     let after: i64 = reopened
         .connection
         .lock()
@@ -278,6 +332,7 @@ fn capture_ending_interior_and_boundary_gaps_coexist_without_padding_known_runs(
     assert!(storage
         .prepare_track_audio(&meeting, &mic, 0, 1300000)
         .is_err());
+    assert_whole_gap_playback(&storage, &meeting, 1300000);
 }
 
 #[test]
@@ -357,6 +412,7 @@ fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without
     assert_ne!(restored, &meeting);
     assert_eq!(meeting_duration(&target, restored), 1100000);
     assert_eq!(gaps(&target), gaps(&storage));
+    assert_whole_gap_playback(&target, restored, 1100000);
     let plan = target.recorded_audio_plan(restored).unwrap();
     for track in &plan.tracks {
         let mut audio = target
@@ -467,7 +523,7 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
         for (index, sample) in audio.read_pcm(0, 480).unwrap().chunks_exact(4).enumerate() {
             assert_eq!(
                 f32::from_le_bytes(sample.try_into().unwrap()),
-                if index % 2 == 0 { value } else { -value }
+                if index % 2 == 0 { value } else { value / 2.0 }
             );
         }
         assert!(storage
@@ -484,5 +540,32 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
         saved
     );
     assert!(reopened.finalize_recording(&session.id).is_err());
+    assert_whole_gap_playback(&reopened, &meeting.id, 50000);
+    let store = PlaybackStore::default();
+    for (mode, first, count, value) in [
+        (MeetingPlaybackMode::Mic, 0, 480, 0.09375_f32),
+        (MeetingPlaybackMode::System, 240, 480, 0.1875),
+        (MeetingPlaybackMode::Both, 240, 240, 0.140625),
+    ] {
+        let info = store
+            .insert_meeting(
+                reopened
+                    .prepare_meeting_audio(&MeetingPlaybackRequest {
+                        meeting_id: meeting.id.clone(),
+                        mode,
+                    })
+                    .unwrap(),
+            )
+            .unwrap();
+        let packet = store.read(&info.token, first).unwrap();
+        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), count);
+        // Stereo input is averaged to mono before constant two-input headroom.
+        // Unequal, same-sign channels ensure silence or a dropped channel fails.
+        assert_eq!(info.channels, 1);
+        assert_eq!(packet.len(), 12 + count as usize * 4);
+        for sample in packet[12..].chunks_exact(4) {
+            assert_eq!(f32::from_le_bytes(sample.try_into().unwrap()), value);
+        }
+    }
     assert_eq!(originals(&output), before);
 }

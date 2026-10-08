@@ -196,9 +196,17 @@ fn full_source_missing_corrupt_and_internal_gaps_are_not_padded_with_silence() {
     }
     let (_directory, storage, meeting) = fixture();
     storage.connection.lock().unwrap().execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code,recovered) VALUES ('gap','track',0,100000,'dropped',0)", []).unwrap();
-    assert!(storage
-        .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::Mic))
-        .is_err());
+    let store = PlaybackStore::default();
+    let missing = store
+        .insert_meeting(
+            storage
+                .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::Mic))
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(missing.missing_ranges.len(), 1);
+    assert!(store.read(&missing.token, 0).is_err());
+    assert_eq!(sample(&store.read(&missing.token, 4800).unwrap(), 0), 0.25);
     storage
         .connection
         .lock()
@@ -247,12 +255,37 @@ fn explicit_missing_leading_audio_is_not_ordinary_offset_padding() {
     let (_directory, storage, meeting) = fixture();
     add_system(&storage, &meeting);
     storage.connection.lock().unwrap().execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code,recovered) VALUES ('gap','system-track',0,200000,'dropped',0)", []).unwrap();
-    assert!(storage
-        .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::System))
-        .is_err());
-    assert!(storage
-        .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::Both))
-        .is_err());
+    let store = PlaybackStore::default();
+    for mode in [MeetingPlaybackMode::System, MeetingPlaybackMode::Both] {
+        let info = store
+            .insert_meeting(
+                storage
+                    .prepare_meeting_audio(&request(&meeting, mode))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(info.missing_ranges.len(), 1);
+        assert!(store.read(&info.token, 0).is_err());
+        let after = store.read(&info.token, 9600).unwrap();
+        assert_eq!(
+            sample(&after, 0),
+            if matches!(mode, MeetingPlaybackMode::System) {
+                0.0
+            } else {
+                0.125
+            }
+        );
+        assert!(
+            (sample(&after, 2400)
+                - if matches!(mode, MeetingPlaybackMode::System) {
+                    0.5
+                } else {
+                    0.375
+                })
+            .abs()
+                < 1e-6
+        );
+    }
     assert!(storage
         .prepare_meeting_audio(&request(&meeting, MeetingPlaybackMode::Mic))
         .is_ok());
@@ -470,3 +503,5 @@ fn request_never_accepts_paths_unknown_fields_or_unknown_modes() {
         assert!(serde_json::from_value::<MeetingPlaybackRequest>(value).is_err());
     }
 }
+
+mod missing_tests;

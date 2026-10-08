@@ -496,12 +496,32 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
         assert_eq!(audio.total_frames(), 24000);
         assert_eq!(audio.read_pcm(0, 32).unwrap().len(), 128);
     }
-    assert!(storage
+    let store = crate::playback::PlaybackStore::default();
+    let audio = storage
         .prepare_meeting_audio(&crate::storage::meeting_playback::MeetingPlaybackRequest {
-            meeting_id: meeting,
-            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both
+            meeting_id: meeting.clone(),
+            mode: crate::storage::meeting_playback::MeetingPlaybackMode::Both,
         })
-        .is_err());
+        .unwrap();
+    let info = store.insert_meeting(audio).unwrap();
+    assert_eq!(
+        (info.start_us, info.end_us, info.total_frames),
+        (0, 4000000, 192000)
+    );
+    assert_eq!(info.missing_ranges.len(), 1);
+    let gap = &info.missing_ranges[0];
+    assert_eq!(
+        (gap.track_kind.as_str(), gap.start_frame, gap.end_frame),
+        ("mic", 24000, 168000)
+    );
+    let known = store.read(&info.token, 0).unwrap();
+    assert_eq!(u32::from_le_bytes(known[8..12].try_into().unwrap()), 24000);
+    for offset in [24000, 100000, 167999] {
+        assert!(store.read(&info.token, offset).is_err());
+    }
+    let after = store.read(&info.token, 168000).unwrap();
+    assert_eq!(u32::from_le_bytes(after[8..12].try_into().unwrap()), 24000);
+    assert!(storage.recorded_audio_plan(&meeting).is_err());
 }
 
 #[test]
