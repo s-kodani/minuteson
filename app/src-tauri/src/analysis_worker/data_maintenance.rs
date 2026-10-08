@@ -11,11 +11,18 @@ pub(crate) struct DataMaintenanceLease {
 }
 
 pub(crate) struct ExportAdmissionLease(Arc<Mutex<State>>);
+pub(crate) struct NoticeStorageLease {
+    state: Arc<Mutex<State>>,
+    shutdown: Arc<AtomicBool>,
+    idle: Arc<Condvar>,
+    cancel: Arc<AtomicBool>,
+}
 
 impl AnalysisController {
     pub(crate) fn require_storage_restart(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.storage_restart_required = true;
+        state.cancel_notice_writers();
         state.wake = false;
     }
     // Informational only. Actual starts recheck all gates atomically.
@@ -38,6 +45,8 @@ impl AnalysisController {
             Some("AIモデルの検査・準備中")
         } else if state.export_intent {
             Some("Markdownの書き出し中")
+        } else if !state.notice_writers.is_empty() {
+            Some("録音通知履歴の保存中")
         } else if state.busy {
             Some("AI処理中")
         } else {
@@ -95,6 +104,7 @@ impl AnalysisController {
             || state.model_preparation.is_some()
             || state.data_maintenance.is_some()
             || state.export_intent
+            || !state.notice_writers.is_empty()
         {
             return Err("AI処理・録音・取り込み・モデル準備・書き出し・終了処理が停止してからバックアップ／復元してください".into());
         }
@@ -158,6 +168,62 @@ impl AnalysisController {
         }
         state.export_intent = true;
         Ok(ExportAdmissionLease(self.state.clone()))
+    }
+    // Companion-file writes may coexist with inference/recording, but not with
+    // data copying, deletion or root cutover. Never reuse the Markdown lease or
+    // make recording wait for a notification fsync.
+    pub(crate) fn begin_notice_storage(&self) -> Result<NoticeStorageLease, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "通知履歴の共有所有を取得できません")?;
+        if state.data_maintenance.is_some()
+            || state.storage_restart_required
+            || self.shutdown.load(Ordering::SeqCst)
+        {
+            return Err("データ操作・保存先切替・終了処理中は通知履歴を保存できません".into());
+        }
+        if state.notice_writers.len() >= 128 {
+            return Err("通知履歴の共有所有が上限に達しました".into());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        state.notice_writers.push(cancel.clone());
+        Ok(NoticeStorageLease {
+            state: self.state.clone(),
+            shutdown: self.shutdown.clone(),
+            idle: self.idle.clone(),
+            cancel,
+        })
+    }
+}
+
+impl NoticeStorageLease {
+    pub(crate) fn validate_active(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "通知履歴の共有所有を確認できません")?;
+        if self.cancel.load(Ordering::SeqCst)
+            || self.shutdown.load(Ordering::SeqCst)
+            || state.storage_restart_required
+            || state.data_maintenance.is_some()
+            || !state
+                .notice_writers
+                .iter()
+                .any(|c| Arc::ptr_eq(c, &self.cancel))
+        {
+            return Err("通知履歴の共有所有は終了しました".into());
+        }
+        Ok(())
+    }
+}
+impl Drop for NoticeStorageLease {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .notice_writers
+            .retain(|c| !Arc::ptr_eq(c, &self.cancel));
+        self.idle.notify_all();
     }
 }
 

@@ -23,6 +23,7 @@ struct State {
     data_maintenance: Option<std::sync::Arc<AtomicBool>>,
     export_intent: bool,
     storage_restart_required: bool,
+    notice_writers: Vec<std::sync::Arc<AtomicBool>>,
 }
 
 impl State {
@@ -36,6 +37,12 @@ impl State {
 
     fn cancel_model_preparation(&self) {
         if let Some(cancel) = &self.model_preparation {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn cancel_notice_writers(&self) {
+        for cancel in &self.notice_writers {
             cancel.store(true, Ordering::SeqCst);
         }
     }
@@ -303,12 +310,13 @@ impl AnalysisController {
                 app.state::<Storage>().pause_for_exit()?;
             }
             controller.shutdown.store(true, Ordering::SeqCst);
+            state.cancel_notice_writers();
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
                 cancel.store(true, Ordering::SeqCst);
             }
         }
-        let result = controller.wait_idle(Duration::from_secs(15));
+        let result = controller.wait_idle_inner(Duration::from_secs(15), &|| false, true);
         if result.is_err() {
             // The app remains open on timeout. Jobs stay explicitly paused;
             // clear the exit gate so their eventual stop can be inspected/retried.
@@ -338,6 +346,7 @@ impl AnalysisController {
             return Err("書き出し・録音開始・終了処理が進行中です".into());
         }
         self.shutdown.store(true, Ordering::SeqCst);
+        state.cancel_notice_writers();
         if cancel_work {
             state.cancel_model_preparation();
             if let Some(cancel) = &state.data_maintenance {
@@ -359,12 +368,24 @@ impl AnalysisController {
         timeout: Duration,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
+        self.wait_idle_inner(timeout, cancelled, false)
+    }
+    fn wait_idle_inner(
+        &self,
+        timeout: Duration,
+        cancelled: &impl Fn() -> bool,
+        include_notices: bool,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        while state.busy || state.model_preparation.is_some() || state.data_maintenance.is_some() {
+        while state.busy
+            || state.model_preparation.is_some()
+            || state.data_maintenance.is_some()
+            || (include_notices && !state.notice_writers.is_empty())
+        {
             if cancelled() {
                 return Err("解析停止の待機を取り消しました".into());
             }

@@ -9,12 +9,12 @@ use std::path::Path;
 
 const LIMIT: u64 = 65 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Record {
-    schema_version: u8,
-    sealed: bool,
-    report: Publication,
+pub(super) struct Record {
+    pub(super) schema_version: u8,
+    pub(super) sealed: bool,
+    pub(super) report: Publication,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -28,7 +28,7 @@ pub(crate) struct Retained {
     system_history: Option<History>,
 }
 
-fn parse(bytes: &[u8], owner: &str) -> Result<Record, String> {
+pub(super) fn parse(bytes: &[u8], owner: &str) -> Result<Record, String> {
     if bytes.is_empty() || bytes.len() as u64 > LIMIT {
         return Err("録音入力の保存履歴が容量範囲外です".into());
     }
@@ -64,7 +64,25 @@ impl Reader {
         })
     }
 
+    pub(super) fn pin_at(directory: &File) -> Result<Self, String> {
+        Ok(Self {
+            directory: directory.try_clone().map_err(|e| e.to_string())?,
+            previous: None,
+        })
+    }
+
     pub(crate) fn read(&mut self, owner: &str) -> Result<Retained, String> {
+        let record = self.read_record(owner)?;
+        Ok(Retained {
+            schema_version: 1,
+            owner_id: record.report.owner_id,
+            revision: record.report.revision,
+            sealed: record.sealed,
+            microphone_history: record.report.microphone_history.unwrap(),
+            system_history: record.report.system_history,
+        })
+    }
+    pub(super) fn read_record(&mut self, owner: &str) -> Result<Record, String> {
         let file = crate::input_levels::open_capture_file_at(&self.directory, "input-events.json")?;
         let before = file.metadata().map_err(|e| e.to_string())?;
         if !before.is_file() || before.len() > LIMIT {
@@ -142,14 +160,7 @@ impl Reader {
             }
         }
         self.previous = Some(record.clone());
-        Ok(Retained {
-            schema_version: 1,
-            owner_id: record.report.owner_id,
-            revision: record.report.revision,
-            sealed: record.sealed,
-            microphone_history: record.report.microphone_history.unwrap(),
-            system_history: record.report.system_history,
-        })
+        Ok(record)
     }
 }
 

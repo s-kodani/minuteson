@@ -141,7 +141,97 @@ pub struct RecordingSession {
     pub duration_us: i64,
 }
 
+pub(crate) struct ClosedInputRecording {
+    pub(crate) session_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) title: String,
+}
+
 impl Storage {
+    pub(crate) fn verify_closed_input_storage(&self) -> Result<(), String> {
+        self.require_data_writable()?;
+        #[cfg(unix)]
+        self.managed_anchor.verify()?;
+        if self.root.canonicalize().map_err(|e| e.to_string())? != self.root {
+            return Err("保存後通知の管理領域が変更されています".into());
+        }
+        Ok(())
+    }
+    /// Bounded discovery from the database, never a directory scan. Random UUID
+    /// order needs cursor wraparound by the caller to revisit newly closed rows.
+    pub(crate) fn closed_input_recordings(
+        &self,
+        after: Option<&str>,
+    ) -> Result<(Vec<ClosedInputRecording>, Option<String>), String> {
+        self.verify_closed_input_storage()?;
+        if after.is_some_and(|v| !crate::input_levels::valid_owner(v)) {
+            return Err("録音通知一覧の続き位置が不正です".into());
+        }
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut statement = db.prepare(
+            "SELECT r.id, r.meeting_id, m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('saved','interrupted','failed') AND (?1 IS NULL OR r.id > ?1) ORDER BY r.id LIMIT 33"
+        ).map_err(|e|e.to_string())?;
+        let mut rows = statement
+            .query_map(params![after], |row| {
+                Ok(ClosedInputRecording {
+                    session_id: row.get(0)?,
+                    meeting_id: row.get(1)?,
+                    title: row.get::<_, String>(2)?.chars().take(120).collect(),
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let next = if rows.len() > 32 {
+            rows.truncate(32);
+            rows.last().map(|r| r.session_id.clone())
+        } else {
+            None
+        };
+        drop(statement);
+        drop(db);
+        self.verify_closed_input_storage()?;
+        Ok((rows, next))
+    }
+
+    /// Authorize companion-file writes only for a closed DB-owned recording.
+    /// Return an anchored descriptor; release SQLite before file I/O/fsync.
+    pub(crate) fn closed_input_directory(
+        &self,
+        meeting: &str,
+        owner: &str,
+    ) -> Result<File, String> {
+        self.verify_closed_input_storage()?;
+        if !crate::input_levels::valid_owner(meeting) || !crate::input_levels::valid_owner(owner) {
+            return Err("保存後通知の会議または録音IDが不正です".into());
+        }
+        {
+            let db = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            let session = load_session(&db, owner)?.ok_or("録音セッションが見つかりません")?;
+            if session.meeting_id != meeting
+                || !matches!(session.state.as_str(), "saved" | "interrupted" | "failed")
+            {
+                return Err("保存後通知の対象が変更されたか録音が終了していません".into());
+            }
+        }
+        let directory = crate::input_levels::open_capture_directory(
+            &self
+                .root
+                .join("meetings")
+                .join(meeting)
+                .join("audio")
+                .join(owner),
+        )?;
+        self.verify_closed_input_storage()?;
+        Ok(directory)
+    }
+
     /// Read one DB-owned recording's retained producer suffix. No discovery,
     /// mutation, receipt adoption, telemetry freshening or audio replay.
     pub(crate) fn recording_input_history(

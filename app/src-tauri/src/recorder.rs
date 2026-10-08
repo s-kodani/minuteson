@@ -163,11 +163,19 @@ impl RecorderController {
         {
             return Err("通知の受付引数が不正です".into());
         }
+        app.state::<Storage>().require_data_writable()?;
+        // The recording intent can end while this dedicated reader is syncing.
+        // Keep companion-write admission until the actual I/O returns, without
+        // holding the capture/child/session mutexes or delaying recording stop.
+        let lease = app
+            .state::<crate::analysis_worker::AnalysisController>()
+            .begin_notice_storage()?;
         let (reader, child) = Self::input_owner(app, session_id)?;
         let mut input = reader
             .lock()
             .map_err(|_| "入力通知のロックを取得できません")?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
+        lease.validate_active()?;
         // Do not assign a new destination while confirming a previously offered
         // notice. Read the real current publication again before any mutation.
         let report = input.read(session_id, None)?;
@@ -175,6 +183,7 @@ impl RecorderController {
             crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
         });
         Self::verify_input_owner(app, session_id, &reader, &child)?;
+        lease.validate_active()?;
         let result = if crate::input_status::StatusReader::uses_queue(&report) {
             input.queued_action(
                 &report,
@@ -193,6 +202,8 @@ impl RecorderController {
         } else {
             Err("旧通知は表示確認キューに対応していません".into())
         }?;
+        lease.validate_active()?;
+        app.state::<Storage>().require_data_writable()?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
         app.state::<SessionStore>()
             .with_active_owner(session_id, || Ok(result))
@@ -201,6 +212,10 @@ impl RecorderController {
         app: &AppHandle,
         session_id: &str,
     ) -> Result<crate::input_status::Snapshot, String> {
+        app.state::<Storage>().require_data_writable()?;
+        let lease = app
+            .state::<crate::analysis_worker::AnalysisController>()
+            .begin_notice_storage()?;
         let (reader, child) = Self::input_owner(app, session_id)?;
         let mut input = reader
             .lock()
@@ -215,7 +230,10 @@ impl RecorderController {
             crate::input_status::notice_window_visible(w.is_visible().ok(), w.is_minimized().ok())
         });
         let target = crate::input_status::notice_target(main_visible, recorder_visible);
+        lease.validate_active()?;
         let result = input.read(session_id, target)?;
+        lease.validate_active()?;
+        app.state::<Storage>().require_data_writable()?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;
         app.state::<SessionStore>()
             .with_active_owner(session_id, || Ok(result))

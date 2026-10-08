@@ -2,6 +2,97 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn notice_storage_coexists_with_recording_and_inference_but_blocks_data_cutover() {
+    let controller = AnalysisController::default();
+    let first = controller.begin_notice_storage().unwrap();
+    let second = controller.begin_notice_storage().unwrap();
+    assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 2);
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_err());
+    {
+        let mut state = controller.state.lock().unwrap();
+        state.recording_intent = true;
+        state.busy = true;
+    }
+    assert!(first.validate_active().is_ok());
+    assert!(second.validate_active().is_ok());
+    controller.state.lock().unwrap().busy = false;
+    assert!(controller.wait_idle(Duration::from_millis(10)).is_ok());
+    // Recording stop clears its intent without waiting for the companion fsync.
+    // Backup/root cutover must still wait for the actual notification owner.
+    controller.state.lock().unwrap().recording_intent = false;
+    assert!(controller
+        .begin_data_maintenance(false, false, &|| false)
+        .is_err());
+    assert_eq!(
+        controller.data_operation_blocker().unwrap().as_deref(),
+        Some("録音通知履歴の保存中")
+    );
+    drop(first);
+    assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 1);
+    assert!(second.validate_active().is_ok());
+    controller.require_storage_restart();
+    assert!(second.validate_active().is_err());
+    assert!(controller.begin_notice_storage().is_err());
+    drop(second);
+    assert!(controller.state.lock().unwrap().notice_writers.is_empty());
+}
+
+#[test]
+fn notice_shutdown_waits_for_actual_worker_and_old_lease_never_revives_on_abort() {
+    let controller = AnalysisController::default();
+    let old = controller.begin_notice_storage().unwrap();
+    controller.seal_exit().unwrap();
+    assert!(old.validate_active().is_err());
+    assert!(controller.begin_notice_storage().is_err());
+    assert!(controller
+        .wait_idle_inner(Duration::from_millis(10), &|| false, true)
+        .is_err());
+    controller.abort_shutdown();
+    assert!(old.validate_active().is_err());
+    let fresh = controller.begin_notice_storage().unwrap();
+    assert!(fresh.validate_active().is_ok());
+    drop(old);
+    assert!(fresh.validate_active().is_ok());
+    drop(fresh);
+    controller
+        .wait_idle_inner(Duration::from_millis(10), &|| false, true)
+        .unwrap();
+    let maintenance = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    assert!(controller.begin_notice_storage().is_err());
+    drop(maintenance);
+    let cancelled = controller.begin_notice_storage().unwrap();
+    controller.begin_exit().unwrap();
+    controller.abort_shutdown();
+    assert!(cancelled.validate_active().is_err());
+}
+
+#[test]
+fn notice_storage_capacity_is_bounded_and_unwind_releases_just_its_lease() {
+    let controller = AnalysisController::default();
+    let mut leases = Vec::new();
+    for _ in 0..128 {
+        leases.push(controller.begin_notice_storage().unwrap());
+    }
+    assert!(controller.begin_notice_storage().is_err());
+    leases.pop();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _lease = controller.begin_notice_storage().unwrap();
+        panic!("injected companion worker unwind");
+    }))
+    .unwrap_err();
+    assert_eq!(controller.state.lock().unwrap().notice_writers.len(), 127);
+    assert!(leases[0].validate_active().is_ok());
+    drop(leases);
+    controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+}
+
+#[test]
 fn checked_close_seals_admission_without_cancelling_unverified_work() {
     let controller = AnalysisController::default();
     let lease = controller

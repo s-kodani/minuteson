@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 pub(crate) const LEASE_MS: u64 = 5000;
 mod ledger;
+pub(super) use ledger::archive::ArchiveQueue;
+pub(super) use ledger::archive::Batch as ArchivedBatch;
 pub(super) use ledger::Ledger;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -103,13 +105,26 @@ impl Queue {
         target: Option<&str>,
         now: Instant,
     ) -> Vec<Notice> {
+        self.observe_histories(
+            &p.owner_id,
+            [p.microphone_history.as_ref(), p.system_history.as_ref()],
+            age <= super::FRESH_MS,
+            target,
+            now,
+        )
+    }
+    fn observe_histories(
+        &mut self,
+        owner: &str,
+        histories: [Option<&super::history::History>; 2],
+        offer: bool,
+        target: Option<&str>,
+        now: Instant,
+    ) -> Vec<Notice> {
         let mut notices = Vec::new();
-        for (index, (name, history)) in [
-            ("microphone", p.microphone_history.as_ref()),
-            ("system", p.system_history.as_ref()),
-        ]
-        .into_iter()
-        .enumerate()
+        for (index, (name, history)) in [("microphone", histories[0]), ("system", histories[1])]
+            .into_iter()
+            .enumerate()
         {
             let Some(history) = history else { continue };
             let lane = &mut self.lanes[index];
@@ -147,8 +162,8 @@ impl Queue {
                     .is_some_and(|at| now.duration_since(at) >= Duration::from_millis(LEASE_MS))
                 {
                     if head.rendered {
-                        let notice = head.notice(&p.owner_id, name, now).unwrap();
-                        lane.closed = Some(receipt(&p.owner_id, &notice));
+                        let notice = head.notice(owner, name, now).unwrap();
+                        lane.closed = Some(receipt(owner, &notice));
                         lane.pending.pop_front();
                         continue;
                     }
@@ -163,7 +178,7 @@ impl Queue {
                     head.claimed = None;
                     head.receive_id = None;
                 }
-                if age <= super::FRESH_MS {
+                if offer {
                     if head.recipient.is_none() {
                         if let Some(target) = target.filter(|t| matches!(*t, "main" | "recorder")) {
                             if head.target.as_deref().is_some_and(|prior| prior != target) {
@@ -175,7 +190,7 @@ impl Queue {
                             head.target = Some(target.into());
                         }
                     }
-                    if let Some(notice) = head.notice(&p.owner_id, name, now) {
+                    if let Some(notice) = head.notice(owner, name, now) {
                         notices.push(notice);
                     }
                 }

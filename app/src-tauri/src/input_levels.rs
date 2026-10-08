@@ -46,12 +46,21 @@ pub(crate) fn open_capture_directory(directory: &Path) -> Result<File, String> {
 }
 #[cfg(unix)]
 pub(crate) fn open_capture_file_at(parent: &File, name: &str) -> Result<File, String> {
+    open_capture_file_at_optional(parent, name)?
+        .ok_or_else(|| "録音確認のファイルがありません".into())
+}
+#[cfg(unix)]
+pub(crate) fn open_capture_file_at_optional(
+    parent: &File,
+    name: &str,
+) -> Result<Option<File>, String> {
     use std::os::fd::{AsRawFd, FromRawFd};
     if !matches!(
         name,
         "input-levels.json"
             | "input-status.json"
             | "input-events.json"
+            | "input-notices.json"
             | "microphone.caf"
             | "system.caf"
     ) {
@@ -66,9 +75,14 @@ pub(crate) fn open_capture_file_at(parent: &File, name: &str) -> Result<File, St
         )
     };
     if fd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(error.to_string())
+        };
     }
-    Ok(unsafe { File::from_raw_fd(fd) })
+    Ok(Some(unsafe { File::from_raw_fd(fd) }))
 }
 #[cfg(not(unix))]
 pub(crate) fn open_capture_directory(_directory: &Path) -> Result<File, String> {
@@ -77,6 +91,13 @@ pub(crate) fn open_capture_directory(_directory: &Path) -> Result<File, String> 
 #[cfg(not(unix))]
 pub(crate) fn open_capture_file_at(_parent: &File, _name: &str) -> Result<File, String> {
     Err("このOSの入力レベル確認は未対応です".into())
+}
+#[cfg(not(unix))]
+pub(crate) fn open_capture_file_at_optional(
+    _parent: &File,
+    _name: &str,
+) -> Result<Option<File>, String> {
+    Err("このOSの録音確認は未対応です".into())
 }
 fn open_capture_file(directory: &Path, name: &str) -> Result<File, String> {
     open_capture_file_at(&open_capture_directory(directory)?, name)

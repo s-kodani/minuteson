@@ -5,6 +5,7 @@ use crate::input_status::{history::Event, Publication, SAFE};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 
+pub(super) mod archive;
 mod file;
 #[cfg(all(test, unix))]
 mod tests;
@@ -220,28 +221,7 @@ impl Ledger {
         Ok(())
     }
     pub(in crate::input_status) fn fence(&mut self, queue: &mut Queue) -> Result<(), String> {
-        for lane in &mut queue.lanes {
-            // No IPC from a prior application incarnation is idempotently
-            // accepted. Keep seen/loss so completed events are not recreated.
-            lane.closed = None;
-            if lane.pending.front().is_some_and(|h| h.rendered) {
-                lane.pending.pop_front();
-            }
-            if let Some(head) = lane.pending.front_mut() {
-                if head.target.is_some() || head.recipient.is_some() {
-                    head.generation = head
-                        .generation
-                        .checked_add(1)
-                        .filter(|v| *v <= SAFE)
-                        .ok_or("通知の受付世代が上限に達しました")?;
-                }
-                head.target = None;
-                head.recipient = None;
-                head.claimed = None;
-                head.receive_id = None;
-            }
-        }
-        Ok(())
+        fence_queue(queue)
     }
     pub(in crate::input_status) fn commit(
         &mut self,
@@ -277,4 +257,28 @@ impl Ledger {
         self.previous = Some(record);
         Ok(())
     }
+}
+fn fence_queue(queue: &mut Queue) -> Result<(), String> {
+    for lane in &mut queue.lanes {
+        // No IPC from a prior application incarnation is idempotently
+        // accepted. Keep seen/loss so completed events are not recreated.
+        lane.closed = None;
+        if lane.pending.front().is_some_and(|h| h.rendered) {
+            lane.pending.pop_front();
+        }
+        if let Some(head) = lane.pending.front_mut() {
+            if head.target.is_some() || head.recipient.is_some() {
+                head.generation = head
+                    .generation
+                    .checked_add(1)
+                    .filter(|v| *v <= SAFE)
+                    .ok_or("通知の受付世代が上限に達しました")?;
+            }
+            head.target = None;
+            head.recipient = None;
+            head.claimed = None;
+            head.receive_id = None;
+        }
+    }
+    Ok(())
 }
