@@ -19,6 +19,7 @@ final class SystemPCMWriter: @unchecked Sendable {
     lock.withLock {
       var result = savedStats
       result.rawSegments = rawSegments?.snapshot()
+      if result.captureFailure != nil { result.inputLevel.invalidate() }
       return result
     }
   }
@@ -27,10 +28,20 @@ final class SystemPCMWriter: @unchecked Sendable {
     self.outputURL = outputURL
     self.rawSegments = rawSegments
   }
-  var ready: Bool { lock.withLock { input?.isReadyForMoreMediaData ?? true } }
+  var ready: Bool {
+    lock.withLock {
+      !closed && (try? savedStats.requireWritable(raw: rawSegments?.snapshot())) != nil
+        && (input?.isReadyForMoreMediaData ?? true)
+    }
+  }
 
   func invalidateLevels() { lock.withLock { savedStats.inputLevel.invalidate() } }
-  func recordFailure() { lock.withLock { savedStats.appendFailures += 1 } }
+  func recordFailure() {
+    lock.withLock {
+      savedStats.appendFailures += 1
+      savedStats.inputLevel.invalidate()
+    }
+  }
 
   func append(
     _ sample: CMSampleBuffer, observation: CaptureClockObservation?, sourceEpoch: UInt64,
@@ -38,12 +49,27 @@ final class SystemPCMWriter: @unchecked Sendable {
   ) throws {
     lock.lock()
     defer { lock.unlock() }
+    do { try savedStats.requireWritable(raw: rawSegments?.snapshot()) } catch {
+      savedStats.inputLevel.invalidate()
+      throw error
+    }
+    var accepted = false
+    var formatChanged = false
+    defer {
+      if !accepted && !formatChanged {
+        savedStats.appendFailures += 1
+        savedStats.inputLevel.invalidate()
+      }
+    }
     guard !closed, sample.isValid, sample.numSamples > 0,
       let description = sample.formatDescription,
       let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
     else { throw ProbeError.capture("system audio format or writer is unavailable") }
     let format = AVAudioFormat(cmAudioFormatDescription: description)
-    if let sourceFormat, !sourceFormat.isEqual(format) { throw AppendError.formatChanged }
+    if let sourceFormat, !sourceFormat.isEqual(format) {
+      formatChanged = true
+      throw AppendError.formatChanged
+    }
     let contiguous = try continuousPCMSample(
       sample, frameOffset: savedStats.frames, sampleRate: asbd.mSampleRate)
     if writer == nil {
@@ -73,18 +99,17 @@ final class SystemPCMWriter: @unchecked Sendable {
       savedStats.firstPresentationTimeSeconds = sample.presentationTimeStamp.seconds
     }
     savedStats.callbackCount += 1
+    let frames = Int64(sample.numSamples)
+    try savedStats.prepareSavedClock(
+      observation, frames: frames, sourceFrame: nil, sourceEpoch: sourceEpoch)
     guard let input, input.isReadyForMoreMediaData, input.append(contiguous) else {
       throw ProbeError.capture("system audio writer is not ready or append failed")
     }
-    let frames = Int64(sample.numSamples)
     savedStats.frames += frames
     savedStats.lastPresentationTimeSeconds = sample.presentationTimeStamp.seconds
     if levelsEnabled { savedStats.inputLevel.receive(sample, at: receivedAt) }
-    if let observation {
-      savedStats.recordSavedClock(
-        observation, frames: frames, sourceFrame: nil, sourceEpoch: sourceEpoch)
-    }
     try rawSegments?.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
+    accepted = true
   }
 
   func finish() async throws {
@@ -119,6 +144,12 @@ final class SystemPCMWriter: @unchecked Sendable {
         savedStats.appendFailures += 1
       }
       throw error
+    }
+    try lock.withLock {
+      do { try savedStats.requireWritable() } catch {
+        finishFailure = "system audio storage or capture clock failed"
+        throw error
+      }
     }
   }
 }

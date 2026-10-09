@@ -127,9 +127,10 @@ final class CapturedClockMapTests: XCTestCase {
     var clock = try CapturedClockMap(sampleRate: 48000, maximumSegments: 1)
     try clock.append(
       frames: 48000, captureStartNanoseconds: 0, captureEndNanoseconds: 1_000_000_000)
-    try clock.append(
-      frames: 48000, captureStartNanoseconds: 2_000_000_000, captureEndNanoseconds: 3_000_000_000,
-      discontinuity: true)
+    XCTAssertThrowsError(
+      try clock.append(
+        frames: 48000, captureStartNanoseconds: 2_000_000_000,
+        captureEndNanoseconds: 3_000_000_000, discontinuity: true))
     XCTAssertThrowsError(try clock.finish(originNanoseconds: 0))
     var reversed = try CapturedClockMap(sampleRate: 48000)
     try reversed.append(

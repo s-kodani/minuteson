@@ -91,6 +91,11 @@ struct CapturedClockMap {
       } else {
         reset(point)
       }
+      // The pending buffer still needs a final segment. Refuse before its PCM
+      // is written rather than discovering there is no slot only at stop.
+      guard segments.count < maximumSegments else {
+        throw ProbeError.capture("capture clock segment capacity exceeded")
+      }
       pendingEnd = Point(frame: next, time: end)
       frames = next
     } catch {

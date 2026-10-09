@@ -21,6 +21,16 @@ struct RawSegmentStatus: Encodable {
 /// This is raw recovery evidence, NOT a successful acquisition closure or the
 /// final FLAC manifest. Never infer a missing tail or insert silence from it.
 final class RawRecordingSegments: @unchecked Sendable {
+  // Tests may inject storage faults; native defaults always write and fsync.
+  // No command-line or application setting can disable durability.
+  struct StorageIO: Sendable {
+    var write: @Sendable (Data, Int32) throws -> Void = {
+      try RawRecordingSegments.write($0, to: $1)
+    }
+    var synchronize: @Sendable (Int32) throws -> Void = {
+      guard fsync($0) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+  }
   static let maximumSegments = 32_768
   static let maximumPendingBytes = 16 * 1024 * 1024
   static let maximumPendingNanoseconds: Int64 = 500_000_000
@@ -88,6 +98,7 @@ final class RawRecordingSegments: @unchecked Sendable {
   private let directory: Int32
   private let pointer: InputEventJournalFile
   private let beforeAppend: @Sendable () -> Void
+  private let storageIO: StorageIO
   private let queue = DispatchQueue(label: "app.mon.capture.raw-segments")
   private let lock = NSLock()
   private var pendingBytes = 0
@@ -103,7 +114,7 @@ final class RawRecordingSegments: @unchecked Sendable {
 
   init(
     output: URL, owner: String, lane: String,
-    beforeAppend: @escaping @Sendable () -> Void = {}
+    beforeAppend: @escaping @Sendable () -> Void = {}, storageIO: StorageIO = StorageIO()
   ) throws {
     guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane) else {
       throw ProbeError.capture("raw segment owner or lane is invalid")
@@ -111,6 +122,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     self.owner = owner
     self.lane = lane
     self.beforeAppend = beforeAppend
+    self.storageIO = storageIO
     directory = try InputEventJournalFile.pin(output)
     do {
       let data = try Self.encode(
@@ -206,7 +218,9 @@ final class RawRecordingSegments: @unchecked Sendable {
           beforeAppend()
           guard lock.withLock({ failure == nil }) else { return }
           do { try append(payload) } catch {
-            lock.withLock { failure = "raw_segment_write_or_sync_failed" }
+            lock.withLock {
+              failure = Self.storageFailure(error, fallback: "raw_segment_write_or_sync_failed")
+            }
           }
         }
       } catch {
@@ -242,7 +256,9 @@ final class RawRecordingSegments: @unchecked Sendable {
         try pointer.replace(try tip(producerClosed: true))
         lock.withLock { closed = true }
       } catch {
-        lock.withLock { failure = "raw_segment_final_sync_failed" }
+        lock.withLock {
+          failure = Self.storageFailure(error, fallback: "raw_segment_final_sync_failed")
+        }
         throw error
       }
     }
@@ -285,7 +301,7 @@ final class RawRecordingSegments: @unchecked Sendable {
         guard fstat(descriptor, &identity) == 0 else {
           throw ProbeError.capture("raw segment identity is unavailable")
         }
-        try Self.write(Self.header(rate: rate, channels: channels, frames: 0), to: descriptor)
+        try storageIO.write(Self.header(rate: rate, channels: channels, frames: 0), descriptor)
         active = try Active(
           descriptor: descriptor, identity: identity, name: name, rate: rate, channels: channels,
           origin: origin, timing: CaptureTrackTiming(sampleRate: Double(rate)))
@@ -315,7 +331,7 @@ final class RawRecordingSegments: @unchecked Sendable {
           withUnsafeBytes(of: &bits) { bytes.append(contentsOf: $0) }
         }
       }
-      try Self.write(bytes, to: active.descriptor)
+      try storageIO.write(bytes, active.descriptor)
       active.pcmHash.update(data: bytes)
     }
     active.frames += frames
@@ -327,10 +343,11 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment header seek failed")
     }
-    try Self.write(header, to: segment.descriptor)
+    try storageIO.write(header, segment.descriptor)
     let size = Int64(header.count) + segment.frames * Int64(segment.channels) * 4
     try require(segment.descriptor, name: segment.name, identity: segment.identity, size: size)
-    guard fsync(segment.descriptor) == 0, lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
+    try storageIO.synchronize(segment.descriptor)
+    guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment sync failed")
     }
     var frozen = stat()
@@ -378,15 +395,14 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard fstat(descriptor, &identity) == 0 else {
       throw ProbeError.capture("raw segment entry identity is unavailable")
     }
-    try Self.write(entry, to: descriptor)
+    try storageIO.write(entry, descriptor)
     try require(descriptor, name: entryName, identity: identity, size: Int64(entry.count))
     var entryFrozen = stat()
     guard fstat(descriptor, &entryFrozen) == 0 else {
       throw ProbeError.capture("raw segment entry identity is unavailable")
     }
-    guard fsync(descriptor) == 0, fsync(directory) == 0 else {
-      throw ProbeError.capture("raw segment entry sync failed")
-    }
+    try storageIO.synchronize(descriptor)
+    try storageIO.synchronize(directory)
     let nextHash = Self.hex(SHA256.hash(data: entry))
     guard lseek(descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment entry seek failed")
@@ -434,7 +450,7 @@ final class RawRecordingSegments: @unchecked Sendable {
   private func create(_ name: String) throws -> Int32 {
     let descriptor = openat(
       directory, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else { throw ProbeError.capture("raw segment leaf already exists") }
+    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     return descriptor
   }
   private func requireUnmodified(_ descriptor: Int32, frozen: stat) throws {
@@ -482,9 +498,17 @@ final class RawRecordingSegments: @unchecked Sendable {
         let count = Darwin.write(
           descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
         if count < 0 && errno == EINTR { continue }
-        guard count > 0 else { throw ProbeError.capture("raw segment write failed") }
+        guard count > 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         offset += count
       }
+    }
+  }
+  private static func storageFailure(_ error: Error, fallback: String) -> String {
+    guard let error = error as? POSIXError else { return fallback }
+    switch error.code {
+    case .ENOSPC, .EDQUOT: return "raw_segment_storage_full"
+    case .EIO: return "raw_segment_storage_io_failed"
+    default: return fallback
     }
   }
   private static func header(rate: Int64, channels: Int, frames: Int64) -> Data {

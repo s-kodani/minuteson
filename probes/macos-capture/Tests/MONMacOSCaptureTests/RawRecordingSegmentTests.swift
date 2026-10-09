@@ -16,6 +16,44 @@ private final class RawSegmentGate: @unchecked Sendable {
   }
 }
 
+private final class StorageFault: @unchecked Sendable {
+  private let lock = NSLock()
+  private var armed = false
+  private var remaining = 0
+  func arm(skipping: Int = 0) {
+    lock.withLock {
+      armed = true
+      remaining = skipping
+    }
+  }
+  func active() -> Bool {
+    lock.withLock {
+      guard armed else { return false }
+      if remaining > 0 {
+        remaining -= 1
+        return false
+      }
+      return true
+    }
+  }
+  func io(code: POSIXErrorCode, sync: Bool = false) -> RawRecordingSegments.StorageIO {
+    let native = RawRecordingSegments.StorageIO()
+    return RawRecordingSegments.StorageIO(
+      write: { [self] data, descriptor in
+        if !sync, active() {
+          // A real short write can precede ENOSPC. Never advertise those bytes.
+          try native.write(Data(data.prefix(8)), descriptor)
+          throw POSIXError(code)
+        }
+        try native.write(data, descriptor)
+      },
+      synchronize: { [self] descriptor in
+        if sync, active() { throw POSIXError(code) }
+        try native.synchronize(descriptor)
+      })
+  }
+}
+
 final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
   private let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
   private let origin: Int64 = 9_000_000_000_000
@@ -286,6 +324,129 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(writer.snapshot().failure, "raw_segment_callback_rejected")
     XCTAssertEqual(try value(root)["sealedSegments"] as? Int, 0)
     XCTAssertFalse(writer.snapshot().producerClosed)
+  }
+
+  func testStorageFullQuotaAndSyncFailureKeepConfirmedPrefixAndRejectFurtherWrites() throws {
+    for code in [POSIXErrorCode.ENOSPC, .EDQUOT, .EIO] {
+      // PCM/header/entry writes, followed by audio/entry/directory fsync.
+      for (sync, skip, appendPCM) in [
+        (false, 0, true), (false, 0, false), (false, 1, false),
+        (true, 0, false), (true, 1, false), (true, 2, false),
+      ] {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fault = StorageFault()
+        let writer = try RawRecordingSegments(
+          output: root, owner: owner, lane: "microphone",
+          storageIO: fault.io(code: code, sync: sync))
+        try append(writer)
+        let names = [
+          "raw-microphone.json", "raw-microphone-00000001.json", "raw-microphone-00000001.caf",
+        ]
+        let originals = try names.map { try Data(contentsOf: root.appendingPathComponent($0)) }
+        fault.arm(skipping: skip)
+        if appendPCM {
+          try writer.enqueue(
+            buffer(), observation: .timestamp(origin + 4_250_000_000), sourceFrame: 34_000)
+          XCTAssertThrowsError(try writer.drainAcceptedPCM())
+        }
+        XCTAssertThrowsError(try writer.finish())
+        XCTAssertEqual(writer.snapshot().sealedFrames, 32_000)
+        XCTAssertFalse(writer.snapshot().producerClosed)
+        XCTAssertEqual(
+          writer.snapshot().failure,
+          code == .EIO ? "raw_segment_storage_io_failed" : "raw_segment_storage_full")
+        let active = root.appendingPathComponent("raw-microphone-00000002.caf")
+        let failedBytes = try Data(contentsOf: active)
+        XCTAssertThrowsError(
+          try writer.enqueue(
+            buffer(), observation: .timestamp(origin + 4_500_000_000), sourceFrame: 36_000))
+        XCTAssertThrowsError(try writer.finish())
+        XCTAssertEqual(try Data(contentsOf: active), failedBytes)
+        for (name, original) in zip(names, originals) {
+          XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), original)
+        }
+        var stats = TrackStats(frames: 34_000, sampleRate: 8000, channels: 2)
+        stats.rawSegments = writer.snapshot()
+        XCTAssertThrowsError(try stats.requireWritable())
+      }
+    }
+  }
+
+  func testSystemCAFStopsAfterAsynchronousStorageFailureWithoutGrowingConfirmedPrefix() async throws
+  {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fault = StorageFault()
+    let raw = try RawRecordingSegments(
+      output: root, owner: owner, lane: "system", storageIO: fault.io(code: .ENOSPC))
+    let writer = SystemPCMWriter(
+      outputURL: root.appendingPathComponent("system.caf"), rawSegments: raw)
+    let fixture = CaptureClockFixtureTests()
+    for index in 0..<18 {
+      if index == 17 { fault.arm() }
+      try writer.append(
+        fixture.sample(
+          frames: 12000, value: 0.25, presentation: .zero, rightValue: -0.5),
+        observation: .timestamp(origin + Int64(index) * 250_000_000), sourceEpoch: 0,
+        levelsEnabled: true, receivedAt: origin)
+      if index < 17 { try raw.drainAcceptedPCM() }
+    }
+    XCTAssertThrowsError(try raw.drainAcceptedPCM())
+    let frames = writer.stats.frames
+    XCTAssertEqual(frames, 216_000)
+    XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 192_000)
+    XCTAssertEqual(writer.stats.captureFailure, "raw_segment_storage_full")
+    XCTAssertFalse(writer.ready)
+    for _ in 0..<3 {
+      XCTAssertThrowsError(
+        try writer.append(
+          fixture.sample(frames: 12000, value: 0.75, presentation: .zero),
+          observation: .timestamp(origin + 4_500_000_000), sourceEpoch: 0,
+          levelsEnabled: true, receivedAt: origin))
+    }
+    XCTAssertEqual(writer.stats.frames, frames)
+    do {
+      try await writer.finish()
+      XCTFail("storage failure cannot finalize successfully")
+    } catch {}
+    XCTAssertFalse(try value(root, "raw-system.json")["producerClosed"] as? Bool ?? true)
+    try verifyAudio(root.appendingPathComponent("system.caf"), frames: frames, rate: 48000)
+    try verifyAudio(
+      root.appendingPathComponent("raw-system-00000001.caf"), frames: 192_000, rate: 48000)
+  }
+
+  func testSystemCAFRejectsClockCapacityBeforeUnmappedPCMAndCannotResume() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let writer = SystemPCMWriter(outputURL: root.appendingPathComponent("system.caf"))
+    let fixture = CaptureClockFixtureTests()
+    for index in 0..<1024 {
+      try writer.append(
+        fixture.sample(frames: 480, value: 0.25, presentation: .zero, rightValue: -0.5),
+        observation: .timestamp(origin + Int64(index) * 20_000_000), sourceEpoch: 0,
+        levelsEnabled: false, receivedAt: nil)
+    }
+    let frames = writer.stats.frames
+    XCTAssertEqual(frames, 491_520)
+    for index in 1024..<1027 {
+      XCTAssertThrowsError(
+        try writer.append(
+          fixture.sample(frames: 480, value: 0.75, presentation: .zero),
+          observation: .timestamp(origin + Int64(index) * 20_000_000), sourceEpoch: 0,
+          levelsEnabled: false, receivedAt: nil))
+      XCTAssertEqual(writer.stats.frames, frames)
+    }
+    XCTAssertNotNil(writer.stats.clockFailure)
+    XCTAssertFalse(writer.ready)
+    var stats = writer.stats
+    XCTAssertThrowsError(try stats.finishClock(originNanoseconds: origin))
+    XCTAssertNil(stats.clockSegments)
+    do {
+      try await writer.finish()
+      XCTFail("clock failure cannot finalize successfully")
+    } catch {}
+    try verifyAudio(root.appendingPathComponent("system.caf"), frames: frames, rate: 48000)
   }
 
   func testSIGKILLKeepsOnlyAdvertisedPrefixWithoutClaimingProducerOrAcquisitionClosed() throws {

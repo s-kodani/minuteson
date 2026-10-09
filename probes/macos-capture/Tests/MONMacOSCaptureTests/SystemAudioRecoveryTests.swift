@@ -112,6 +112,40 @@ private final class SilentSystemFactory: @unchecked Sendable {
 }
 
 final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  func testTerminalClockFailureRejectsPCMAndReconnectAndCannotMintStopClosure() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource()
+    let returned = SilentSystemSource()
+    let factory = SilentSystemFactory([source, returned])
+    let time = SystemTestTime()
+    let recorder = try recorder(output, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    let frames = recorder.snapshot().frames
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .invalid("missing hardware timestamp"))
+    XCTAssertEqual(recorder.snapshot().frames, frames)
+    XCTAssertEqual(recorder.snapshot().captureFailure, "capture_clock_failed")
+    XCTAssertFalse(recorder.readyForPCM)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_010_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, frames)
+    recorder.sourceEnded(source)
+    time.set(2_000_000_000)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1)
+    for _ in 0..<2 {
+      do {
+        _ = try await recorder.stopRecording()
+        XCTFail("failed clock cannot mint a closure")
+      } catch {}
+    }
+    let file = try AVAudioFile(forReading: output.appendingPathComponent("system.caf"))
+    XCTAssertEqual(file.length, frames)
+  }
+
   func testNormalRecorderCommitsLifecycleHistoryWithoutHeartbeatOrRealStream() async throws {
     let temporary = try directory()
     defer { try? FileManager.default.removeItem(at: temporary) }
@@ -132,7 +166,8 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       factory: { recorder, token in try factory.make(recorder, token) }, now: { time.read() },
       inputEventObserver: journal.observer(.system))
     try await recorder.start(targetPID: nil)
-    recorder.receive(from: source, sampleBuffer: try sample())
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
     recorder.sourceEnded(source)
     time.set(2_000_000_000)
     recorder.maintain()

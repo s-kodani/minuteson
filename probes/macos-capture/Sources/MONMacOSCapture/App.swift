@@ -250,6 +250,33 @@ struct TrackStats: Encodable {
 
   var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
 
+  // Input loss may be recoverable, but a broken storage/clock contract is not.
+  // This is derived from existing evidence, not a successful capture closure.
+  var captureFailure: String? {
+    if let failure = rawSegments?.failure { return failure }
+    if clockFailure != nil { return "capture_clock_failed" }
+    if appendFailures > 0 { return "capture_audio_write_failed" }
+    return nil
+  }
+
+  func requireWritable(raw: RawSegmentStatus? = nil) throws {
+    if let failure = raw?.failure ?? captureFailure { throw ProbeError.capture(failure) }
+  }
+
+  // Check clock bounds before writing the corresponding PCM. If writing later
+  // fails, the lane becomes terminal and cannot publish this timing as saved.
+  mutating func prepareSavedClock(
+    _ observation: CaptureClockObservation?, frames: Int64, sourceFrame: Int64?,
+    sourceEpoch: UInt64 = 0
+  ) throws {
+    try requireWritable()
+    if let observation {
+      recordSavedClock(
+        observation, frames: frames, sourceFrame: sourceFrame, sourceEpoch: sourceEpoch)
+      try requireWritable()
+    }
+  }
+
   mutating func recordSavedClock(
     _ observation: CaptureClockObservation, frames: Int64, sourceFrame: Int64?,
     sourceEpoch: UInt64 = 0
@@ -574,7 +601,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   }
 
   func maintain() {
-    guard retries, mayContinue(), lock.withLock({ !stopping }) else { return }
+    guard retries, mayContinue(), lock.withLock({ !stopping && pcm.stats.captureFailure == nil })
+    else { return }
     if let identity = lock.withLock({ applicationIdentity }) {
       do { try requireIdentity(identity) } catch {
         lock.withLock {
@@ -806,7 +834,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       pcm.invalidateLevels()
       if !retries { pcm.recordFailure() }
     } catch {
-      pcm.recordFailure()
+      if pcm.stats.captureFailure == nil { pcm.recordFailure() }
     }
   }
 
@@ -934,6 +962,10 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       self.lock.lock()
       defer { self.lock.unlock() }
       guard self.recovery?.accepts(token) == true, !self.configurationChanged else { return }
+      guard (try? self.stats.requireWritable(raw: self.rawSegments?.snapshot())) != nil else {
+        self.stats.inputLevel.invalidate()
+        return
+      }
       do {
         guard let unit = self.inputUnit, let device = self.selectedDeviceID else {
           throw ProbeError.capture("microphone selection is missing")
@@ -972,13 +1004,22 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         guard buffer.format.sampleRate == self.stats.sampleRate,
           buffer.format.channelCount == self.stats.channels,
           !when.isSampleTimeValid || when.sampleRate == self.stats.sampleRate
-        else { throw ProbeError.capture("microphone format changed during capture") }
+        else {
+          self.recovery?.interrupt("format_changed", unavailable: true)
+          self.configurationChanged = true
+          self.stats.inputLevel.invalidate()
+          if self.clock == nil || self.testWindow != nil { self.stats.appendFailures += 1 }
+          return
+        }
         var savedSourceFrame: Int64?
         if when.isSampleTimeValid {
           let (frame, overflow) = when.sampleTime.addingReportingOverflow(sourceFrameOffset)
           guard !overflow else { throw ProbeError.capture("microphone frame offset overflows") }
           savedSourceFrame = frame
         }
+        try self.stats.prepareSavedClock(
+          observation, frames: Int64(buffer.frameLength), sourceFrame: savedSourceFrame,
+          sourceEpoch: token.epoch)
         if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
         try file.write(from: buffer)
         self.stats.callbackCount += 1
@@ -990,15 +1031,11 @@ private final class MicrophoneRecorder: @unchecked Sendable {
           }
           self.stats.lastPresentationTimeSeconds = seconds
         }
-        if let observation {
-          self.stats.recordSavedClock(
-            observation, frames: Int64(buffer.frameLength),
-            sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
-        }
         try self.rawSegments?.enqueue(
           buffer, observation: observation, sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
       } catch {
         self.stats.appendFailures += 1
+        self.stats.inputLevel.invalidate()
       }
     }
     tapInstalled = true
@@ -1041,7 +1078,10 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     // Formal bounded probes and a private 5-second test retain their existing
     // fail/verify contract; only an active production recording retries inputs.
     guard clock != nil, testWindow == nil,
-      lock.withLock({ recovery?.status.state != "stopped" }), let uid = deviceUID
+      lock.withLock({
+        recovery?.status.state != "stopped"
+          && (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil
+      }), let uid = deviceUID
     else { return }
     let report: CaptureInputDevices
     do { report = try InputDevices.live() } catch {
@@ -1110,6 +1150,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     result.microphoneRecovery = recovery?.status
     result.inputEventHistory = recovery?.history
     result.rawSegments = rawSegments?.snapshot()
+    if result.captureFailure != nil { result.inputLevel.invalidate() }
     return result
   }
 }
@@ -1282,6 +1323,8 @@ private enum Main {
             if options.backend == "screencapturekit" { system.maintain() }
             let microphone = mic.snapshot()
             let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+            try microphone.requireWritable()
+            try systemStats.requireWritable()
             if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery
               || systemStats.systemRecovery != manifest.system.systemRecovery
             {
@@ -1322,7 +1365,13 @@ private enum Main {
           guard let duration = options.duration else {
             throw ProbeError.usage("recording without a duration requires a stop mechanism")
           }
-          try await Task.sleep(for: .seconds(duration))
+          let deadline = ContinuousClock.now.advanced(by: .seconds(duration))
+          while ContinuousClock.now < deadline {
+            try mic.snapshot().requireWritable()
+            try (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
+              .requireWritable()
+            try await Task.sleep(for: .milliseconds(100))
+          }
         }
         testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
@@ -1336,6 +1385,8 @@ private enum Main {
         }
         let micStats = mic.snapshot()
         let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+        try micStats.requireWritable()
+        try systemStats.requireWritable()
         if let testWindow, !testWindow.metadata().completed {
           throw ProbeError.capture("five-second test stopped before its window completed")
         }

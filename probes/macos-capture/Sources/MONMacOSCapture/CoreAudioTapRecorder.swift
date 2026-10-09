@@ -157,6 +157,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     lock.withLock {
       var result = stats
       result.rawSegments = rawSegments?.snapshot()
+      if result.captureFailure != nil { result.inputLevel.invalidate() }
       return result
     }
   }
@@ -207,6 +208,10 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     inputData: UnsafePointer<AudioBufferList>, inputTime: UnsafePointer<AudioTimeStamp>,
     format: AVAudioFormat
   ) {
+    guard lock.withLock({ (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil })
+    else {
+      return
+    }
     let receivedAt = levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
     let sources = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
     guard !sources.isEmpty, let first = sources.first, first.mData != nil else { return }
@@ -266,8 +271,15 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     writeQueue.async {
       defer { self.pendingBuffers.signal() }
       self.lock.withLock {
+        guard (try? self.stats.requireWritable(raw: self.rawSegments?.snapshot())) != nil else {
+          self.stats.inputLevel.invalidate()
+          return
+        }
         do {
           guard let file = self.file else { throw ProbeError.capture("tap CAF writer is closed") }
+          try self.stats.prepareSavedClock(
+            queuedBuffer.observation, frames: Int64(queuedBuffer.value.frameLength),
+            sourceFrame: queuedBuffer.sourceFrame)
           try file.write(from: queuedBuffer.value)
           self.stats.frames += Int64(queuedBuffer.value.frameLength)
           if let presentation = queuedBuffer.presentation, presentation.isFinite {
@@ -276,16 +288,12 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
             }
             self.stats.lastPresentationTimeSeconds = presentation
           }
-          if let observation = queuedBuffer.observation {
-            self.stats.recordSavedClock(
-              observation, frames: Int64(queuedBuffer.value.frameLength),
-              sourceFrame: queuedBuffer.sourceFrame)
-          }
           try self.rawSegments?.enqueue(
             queuedBuffer.value, observation: queuedBuffer.observation,
             sourceFrame: queuedBuffer.sourceFrame)
         } catch {
           self.stats.appendFailures += 1
+          self.stats.inputLevel.invalidate()
         }
       }
     }
