@@ -35,6 +35,7 @@ const suites = [
   ["model-preparation", "model-preparation-browser-fixture.js", "model-preparation-browser-check.js"],
   ["audio", "audio-deletion-browser-fixture.js", "audio-deletion-browser-check.js"],
   ["partial-recording", "partial-recording-browser-fixture.js", "partial-recording-browser-check.js"],
+  ["partial-startup", "partial-startup-browser-fixture.js", "partial-startup-browser-check.js"],
   ["info-production", "theme-browser-fixture.js", "info-production-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
@@ -104,6 +105,7 @@ const readiness = {
   "model-rebinding-browser-fixture.js": "rebindingFixture", "model-preparation-browser-fixture.js": "modelPreparationFixture",
   "audio-deletion-browser-fixture.js": "audioDeletionFixture", "theme-browser-fixture.js": "themeFixture",
   "partial-recording-browser-fixture.js": "partialRecordingFixture",
+  "partial-startup-browser-fixture.js": "partialStartupFixture",
   "toast-browser-fixture.tsx": "toastFixture",
   "capture-scope-browser-fixture.tsx": "scopeFixture",
 };

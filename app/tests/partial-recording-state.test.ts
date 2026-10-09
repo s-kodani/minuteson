@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   checkedPartialRecordingSummary, canRecoverPartialRecording, partialLaneLabel,
   partialLaneStateLabel, partialTimelineLabel,
+  assertPartialRecordingResults, checkedPartialRecordingResult,
 } from "../src/partial-recording-state.ts";
 const meeting = "735027d4-a03e-43d3-830a-21e767dfaf88";
 const session = "735027d4-a03e-43d3-830a-21e767dfaf89";
@@ -18,6 +19,32 @@ test("native sealed-prefix summary keeps unknown closure and tail and copies the
   assert.equal(canRecoverPartialRecording(result), true);
   assert.equal(result.acquisitionEndKnown, false); assert.equal(result.tailLossUs, null);
   input.lanes[0].state = "unreadable"; assert.equal(result.lanes[0].state, "available");
+});
+test("saved history validates the whole summary and contains no confirmation capability", () => {
+  const item = { title: "保存済み", summary: report() };
+  assert.doesNotThrow(() => assertPartialRecordingResults({ items: [item], next: null } as never));
+  for (const value of [null, { items: [item], next: session },
+    { items: [{ ...item, confirmationId: session }], next: null },
+    { items: [{ ...item, summary: { ...report(), acquisitionEndKnown: true } }], next: null },
+    { items: [{ ...item, summary: { ...report(), durationUs: 0, lanes: [{ ...absent(), lane: "microphone" }, absent()] } }], next: null },
+    { items: [item, item], next: null }]) assert.throws(() => assertPartialRecordingResults(value as never));
+});
+test("saved result reread must match both owners, review hash and all lane measurements", () => {
+  assert.deepEqual(checkedPartialRecordingResult(report(), report() as never), report());
+  for (const value of [null, { ...report(), sessionId: meeting }, { ...report(), meetingId: session },
+    { ...report(), reviewHash: "b".repeat(64) }, { ...report(), lanes: [{ ...available(), frames: 34001 }, absent()] },
+    { ...report(), tailLossUs: 0 }]) assert.throws(() => checkedPartialRecordingResult(value, report() as never));
+});
+test("saved history requires monotonic bounded pages and unique meeting owners", () => {
+  const items = Array.from({ length: 200 }, (_, n) => ({ title: `保存 ${n}`, summary: { ...report(),
+    sessionId: `${(n + 1).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111`,
+    meetingId: `${(n + 1001).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111` } }));
+  const next = items.at(-1)!.summary.sessionId;
+  assert.doesNotThrow(() => assertPartialRecordingResults({ items, next } as never));
+  for (const value of [{ items, next: items[0].summary.sessionId }, { items: [...items, items[0]], next: null },
+    { items: [items[1], items[0]], next: null }, { items: [items[0], { ...items[1], summary: { ...items[1].summary, meetingId: items[0].summary.meetingId } }], next: null }])
+    assert.throws(() => assertPartialRecordingResults(value as never));
+  assert.throws(() => assertPartialRecordingResults({ items: [items[0]], next: null } as never, next));
 });
 test("empty, missing and unreadable inputs remain distinct without fabricated measurements", () => {
   for (const state of ["empty", "missing", "unreadable"]) {

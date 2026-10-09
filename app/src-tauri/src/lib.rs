@@ -701,6 +701,21 @@ async fn get_partial_recording_result(
     .map_err(|e| e.to_string())?
 }
 
+#[cfg(unix)]
+#[tauri::command]
+async fn get_partial_recording_results(
+    window: WebviewWindow,
+    after: Option<String>,
+) -> Result<storage::recordings::partial::ResultListing, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .partial_recovery_listing(after.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DataAvailability {
@@ -2477,6 +2492,8 @@ pub fn run() {
             review_partial_recording,
             #[cfg(unix)]
             get_partial_recording_result,
+            #[cfg(unix)]
+            get_partial_recording_results,
             get_data_operation_availability,
             list_restored_meeting_ids,
             select_data_operation,

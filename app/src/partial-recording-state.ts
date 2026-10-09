@@ -24,6 +24,9 @@ export interface PartialRecordingPreview { confirmationId: string; summary: Part
 export interface PartialRecordingReceipt extends PartialRecordingPreview { recovered: boolean }
 export interface PartialRecordingItem { sessionId: string; meetingId: string; title: string; state: "interrupted" | "failed" }
 export interface PartialRecordingListing { items: PartialRecordingItem[]; next: string | null }
+// Commit history is not a recovery capability or a current playability check.
+export interface PartialRecordingResultItem { title: string; summary: PartialRecordingSummary }
+export interface PartialRecordingResults { items: PartialRecordingResultItem[]; next: string | null }
 const fail = () => { throw Error("部分救出の対象・確定範囲を確認できません。再確認してください。"); };
 const integer = (value: unknown, min: number, max = Number.MAX_SAFE_INTEGER): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
@@ -104,4 +107,28 @@ export function assertPartialRecordingListing(value: PartialRecordingListing, af
     prior = item.sessionId; meetings.add(item.meetingId);
   }
   if (r.next !== null && (r.items.length !== 200 || r.next !== prior)) return fail();
+}
+
+export function assertPartialRecordingResults(value: PartialRecordingResults, after: string | null = null): void {
+  const r = record(value, ["items", "next"]);
+  if (!Array.isArray(r.items) || r.items.length > 200 || after !== null && !owner(after) ||
+      r.next !== null && !owner(r.next)) return fail();
+  let prior = after ?? "";
+  const meetings = new Set<string>();
+  for (const value of r.items) {
+    const item = record(value, ["title", "summary"]);
+    if (typeof item.title !== "string" || !item.summary || typeof item.summary !== "object") return fail();
+    const input = item.summary as PartialRecordingSummary;
+    const summary = checkedPartialRecordingSummary(input, input.meetingId, input.sessionId);
+    if (!canRecoverPartialRecording(summary) || summary.sessionId <= prior || meetings.has(summary.meetingId)) return fail();
+    prior = summary.sessionId; meetings.add(summary.meetingId);
+  }
+  if (r.next !== null && (r.items.length !== 200 || r.next !== prior)) return fail();
+}
+
+export function checkedPartialRecordingResult(value: unknown, expected: PartialRecordingSummary): PartialRecordingSummary {
+  const summary = checkedPartialRecordingSummary(value, expected.meetingId, expected.sessionId);
+  if (!canRecoverPartialRecording(summary) || JSON.stringify(summary) !==
+      JSON.stringify(checkedPartialRecordingSummary(expected, expected.meetingId, expected.sessionId))) return fail();
+  return summary;
 }

@@ -12,7 +12,9 @@ f.meetings[0].title = "部分救出の合成会議";
 f.meetings[0].sourceType = "recording"; f.meetings[0].lifecycle = "recording";
 const d = window.partialRecordingFixture = { mode: "success", empty: false, oneLane: false, unreadable: false,
   listFail: false, reviewLost: false, reviewFail: false, cancelFail: false, cancelLost: false, suppressEvents: false,
-  count: 1, recovered: 0, kept: 0, last: null, complete: () => {}, committed: null };
+  count: 1, recovered: 0, kept: 0, last: null, complete: () => {}, committed: null,
+  historyCount: 0, resultListFail: false, resultListForged: false, resultMissing: false, resultFail: false,
+  resultForeign: false, resultChanged: false, resultDelay: false, finishRead: () => {}, resultPageFail: false, resultPageDuplicate: false };
 const available = lane => ({ lane, state: "available", sealedSegments: 2, frames: 34000, startUs: lane === "microphone" ? 0 : 50_000,
   endUs: lane === "microphone" ? 4_950_000 : 5_000_000, sampleRate: 8000, channels: 2 });
 const absent = (lane, state) => ({ lane, state, sealedSegments: 0, frames: 0, startUs: null, endUs: null, sampleRate: null, channels: null });
@@ -21,15 +23,42 @@ const summary = () => ({ sessionId: session, meetingId: f.meetings[0].id, review
   acquisitionEndKnown: false, tailLossUs: null });
 const listingItems = () => Array.from({ length: d.recovered ? 0 : d.count }, (_, n) => ({ sessionId: n === 0 ? session : `${(n + 2).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111`,
   meetingId: n === 0 ? f.meetings[0].id : `${(n + 1000).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111`, title: n === 0 ? f.meetings[0].title : `中断した合成会議 ${n + 1}`, state: "interrupted" })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+const historyItems = () => Array.from({ length: d.historyCount || (d.committed ? 1 : 0) }, (_, n) => ({
+  title: n === 0 ? f.meetings[0].title : `保存済みの合成会議 ${n + 1}`,
+  summary: { ...structuredClone(d.committed ?? summary()),
+    sessionId: n === 0 ? session : `${(n + 2).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111`,
+    meetingId: n === 0 ? f.meetings[0].id : `${(n + 1000).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111` },
+})).sort((a, b) => a.summary.sessionId.localeCompare(b.summary.sessionId));
+if (window.partialStartupFixture) {
+  d.recovered = 1; d.historyCount = 1; d.committed = summary(); f.meetings[0].lifecycle = "recorded";
+  Object.assign(window.partialStartupFixture, { data: d });
+}
 mockIPC(async (command, args) => {
-  if (["get_partial_recording_items", "review_partial_recording", "get_partial_recording_result"].includes(command) ||
+  if (["get_partial_recording_items", "get_partial_recording_results", "review_partial_recording", "get_partial_recording_result"].includes(command) ||
     ["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "partial_recording") f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_partial_recording_items") {
     if (d.listFail) throw Error("模擬部分救出一覧失敗");
     const all = listingItems().filter(i => !args.after || i.sessionId > args.after), items = all.slice(0, 200);
     return { items, next: all.length > 200 ? items.at(-1).sessionId : null };
   }
-  if (command === "get_partial_recording_result") return d.committed && args.sessionId === d.committed.sessionId && args.reviewHash === d.committed.reviewHash ? structuredClone(d.committed) : null;
+  if (command === "get_partial_recording_results") {
+    if (d.resultListFail) throw Error("模擬保存済み結果一覧失敗");
+    if (args.after && d.resultPageFail) throw Error("模擬保存済み結果の次ページ失敗");
+    const all = historyItems().filter(i => !args.after || i.summary.sessionId > args.after), items = all.slice(0, 200);
+    if (d.resultListForged && items[0]) items[0].summary.acquisitionEndKnown = true;
+    if (args.after && d.resultPageDuplicate && items[0]) items[0].summary.meetingId = f.meetings[0].id;
+    return { items, next: all.length > 200 ? items.at(-1).summary.sessionId : null };
+  }
+  if (command === "get_partial_recording_result") {
+    if (d.resultDelay) await new Promise(resolve => { d.finishRead = resolve; });
+    if (d.resultFail) throw Error("模擬保存済み結果読込失敗");
+    if (d.resultMissing) return null;
+    const item = historyItems().find(i => i.summary.sessionId === args.sessionId && i.summary.reviewHash === args.reviewHash);
+    const value = item ? structuredClone(item.summary) : null;
+    if (value && d.resultForeign) value.meetingId = "00009999-1111-4111-8111-111111111111";
+    if (value && d.resultChanged) value.lanes[0].frames++;
+    return value;
+  }
   if (command === "review_partial_recording") {
     if (f.snapshot.busy || f.blocker || args.sessionId !== session) throw Error("部分救出の対象または実行排他が不正です");
     d.last = null;

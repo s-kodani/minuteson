@@ -1318,7 +1318,7 @@ fn partial_recovery_failed_commit_keeps_all_audio_and_resumes_same_checkpoint_id
 }
 
 #[test]
-fn partial_recovery_backup_additive_restore_keeps_interruption_unknown_tail_and_known_audio() {
+fn partial_startup_backup_additive_restore_and_audio_deletion_keep_history_not_authority() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
@@ -1366,6 +1366,19 @@ fn partial_recovery_backup_additive_restore_keeps_interruption_unknown_tail_and_
     assert_eq!(state, "interrupted");
     assert_eq!(ended, None);
     assert!(target.review_partial_recording(&id).is_err());
+    let history = target.partial_recovery_listing(None).unwrap();
+    assert_eq!(history.items.len(), 1);
+    let saved = &history.items[0].summary;
+    assert_eq!(&saved.meeting_id, meeting);
+    assert_eq!(saved.session_id, id);
+    assert!(!saved.acquisition_end_known);
+    assert_eq!(saved.tail_loss_us, None);
+    assert_eq!(
+        target
+            .partial_recovery_result(&id, &saved.review_hash)
+            .unwrap(),
+        Some(saved.clone())
+    );
     assert!(target.get_meeting(&existing).unwrap().is_some());
     let path: String = target
         .connection
@@ -1384,10 +1397,170 @@ fn partial_recovery_backup_additive_restore_keeps_interruption_unknown_tail_and_
     assert!(manifest["partialRecovery"]["tailLossUs"].is_null());
     assert_eq!(remove_reviewed_audio(&target, meeting), 2);
     assert!(target.recorded_analysis_input(meeting).is_err());
+    assert_eq!(target.partial_recovery_listing(None).unwrap(), history);
+    assert_eq!(
+        target
+            .partial_recovery_result(&id, &saved.review_hash)
+            .unwrap(),
+        Some(saved.clone())
+    );
+    assert!(target.review_partial_recording(&id).is_err());
     assert!(fixture
         .storage
         .recorded_analysis_input(&fixture.session.meeting_id)
         .is_ok());
+}
+
+#[test]
+fn partial_startup_cold_read_lists_only_commits_without_adopting_raw_or_reopening_capture() {
+    let fixture = partial_fixture();
+    assert!(fixture
+        .storage
+        .partial_recovery_listing(None)
+        .unwrap()
+        .items
+        .is_empty());
+    let review = fixture
+        .storage
+        .review_partial_recording(&fixture.session.id)
+        .unwrap();
+    assert!(fixture
+        .storage
+        .partial_recovery_listing(None)
+        .unwrap()
+        .items
+        .is_empty());
+    fixture
+        .storage
+        .recover_partial_recording(&review, true)
+        .unwrap();
+    let raw = std::fs::read(fixture.base.join("raw-system-00000003.caf")).unwrap();
+    let history = fixture.storage.partial_recovery_listing(None).unwrap();
+    assert_eq!(history.items.len(), 1);
+    assert_eq!(history.items[0].summary, review.summary);
+    drop(fixture.storage);
+    let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
+    assert_eq!(reopened.partial_recovery_listing(None).unwrap(), history);
+    assert_eq!(
+        std::fs::read(fixture.base.join("raw-system-00000003.caf")).unwrap(),
+        raw
+    );
+    assert!(reopened
+        .partial_recording_listing(None)
+        .unwrap()
+        .items
+        .is_empty());
+    assert!(reopened
+        .review_partial_recording(&fixture.session.id)
+        .is_err());
+    assert!(reopened.partial_recovery_listing(Some("invalid")).is_err());
+}
+
+#[test]
+fn partial_startup_contradictory_saved_metadata_fails_closed_instead_of_disappearing() {
+    let fixture = partial_fixture();
+    let review = fixture
+        .storage
+        .review_partial_recording(&fixture.session.id)
+        .unwrap();
+    fixture
+        .storage
+        .recover_partial_recording(&review, true)
+        .unwrap();
+    let original: String = fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT processing_config_json FROM audio_tracks WHERE session_id=?1 AND kind='system'",
+            [&fixture.session.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for change in [
+        "json_set(processing_config_json,'$.partial_recovery.lanes[0].frames',1)",
+        "json_set(processing_config_json,'$.partial_recovery',NULL)",
+        "json_set(processing_config_json,'$.partial_recovery.reviewHash','invalid')",
+        "json_set(processing_config_json,'$.padding',printf('%.*c',4194305,'x'))",
+    ] {
+        fixture.storage.connection.lock().unwrap().execute(&format!(
+            "UPDATE audio_tracks SET processing_config_json={change} WHERE session_id=?1 AND kind='system'"), [&fixture.session.id]).unwrap();
+        assert!(
+            fixture.storage.partial_recovery_listing(None).is_err(),
+            "{change}"
+        );
+        fixture.storage.connection.lock().unwrap().execute(
+            "UPDATE audio_tracks SET processing_config_json=?1 WHERE session_id=?2 AND kind='system'",
+            rusqlite::params![original, fixture.session.id]).unwrap();
+    }
+    fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE audio_tracks SET channels=1 WHERE session_id=?1 AND kind='system'",
+            [&fixture.session.id],
+        )
+        .unwrap();
+    assert!(fixture.storage.partial_recovery_listing(None).is_err());
+    assert!(fixture
+        .storage
+        .partial_recovery_result(&fixture.session.id, &review.summary.review_hash)
+        .is_err());
+    fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE audio_tracks SET channels=2,kind='mic' WHERE session_id=?1 AND kind='system'",
+            [&fixture.session.id],
+        )
+        .unwrap();
+    assert!(fixture.storage.partial_recovery_listing(None).is_err());
+}
+
+#[test]
+fn partial_startup_history_paginates_201_registered_metadata_rows_without_claiming_bodies() {
+    let fixture = partial_fixture();
+    let review = fixture
+        .storage
+        .review_partial_recording(&fixture.session.id)
+        .unwrap();
+    fixture
+        .storage
+        .recover_partial_recording(&review, true)
+        .unwrap();
+    // Metadata-only pagination fixture, not 200 additional capture/conversion claims.
+    let mut db = fixture.storage.connection.lock().unwrap();
+    let tx = db.transaction().unwrap();
+    for _ in 0..200 {
+        let meeting = Uuid::new_v4().to_string();
+        let session = Uuid::new_v4().to_string();
+        tx.execute("INSERT INTO meetings(id,title,duration_us,lifecycle,source_type,created_at,updated_at) SELECT ?1,title,duration_us,lifecycle,source_type,created_at,updated_at FROM meetings WHERE id=?2", rusqlite::params![meeting, fixture.session.meeting_id]).unwrap();
+        tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) SELECT ?1,?2,state,capture_mode,capture_config_json,?3,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at FROM recording_sessions WHERE id=?4", rusqlite::params![session,meeting,Uuid::new_v4().to_string(),fixture.session.id]).unwrap();
+        tx.execute("INSERT INTO file_assets(id,meeting_id,storage_scope,relative_path,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at) SELECT ?1,?2,storage_scope,?3,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at FROM file_assets WHERE meeting_id=?4 AND media_type='application/json'", rusqlite::params![Uuid::new_v4().to_string(),meeting,format!("meetings/{meeting}/history.json"),fixture.session.meeting_id]).unwrap();
+        for kind in ["mic", "system"] {
+            tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) SELECT ?1,?2,?3,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at FROM audio_tracks WHERE session_id=?4 AND kind=?5", rusqlite::params![Uuid::new_v4().to_string(),meeting,session,fixture.session.id,kind]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    drop(db);
+    let first = fixture.storage.partial_recovery_listing(None).unwrap();
+    assert_eq!(first.items.len(), 200);
+    assert_eq!(
+        first.next.as_deref(),
+        Some(first.items.last().unwrap().summary.session_id.as_str())
+    );
+    let last = fixture
+        .storage
+        .partial_recovery_listing(first.next.as_deref())
+        .unwrap();
+    assert_eq!(last.items.len(), 1);
+    assert_eq!(last.next, None);
+    assert!(last.items[0].summary.session_id > first.next.unwrap());
 }
 
 #[test]

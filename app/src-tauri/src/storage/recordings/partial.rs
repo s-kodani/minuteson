@@ -46,6 +46,19 @@ pub(crate) struct Listing {
     pub next: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResultItem {
+    pub title: String,
+    pub summary: Summary,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResultListing {
+    pub items: Vec<ResultItem>,
+    pub next: Option<String>,
+}
+
 /// Only Storage inspection can mint this exact-generation capability. The UI
 /// controller must retain it until explicit consent; a client summary is not
 /// authority to recover a guessed path or an updated prefix.
@@ -101,43 +114,51 @@ impl Storage {
         review_hash: &str,
     ) -> Result<Option<Summary>, String> {
         self.managed_anchor.verify()?;
-        if !crate::input_levels::valid_owner(session_id)
-            || review_hash.len() != 64
-            || !review_hash
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !crate::input_levels::valid_owner(session_id) || !valid_result_hash(review_hash) {
             return Err("部分救出の結果照合条件が不正です".into());
         }
         let db = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let Some(session) = load_session(&db, session_id)? else {
-            return Ok(None);
-        };
-        if !super::super::transcription::partial_recording_committed(&db, &session.meeting_id)? {
-            return Ok(None);
+        read_result(&db, session_id, Some(review_hash))
+    }
+
+    /// Startup notification/history only, including restored logical records
+    /// and intentionally deleted audio. Never mints a native review or reads
+    /// original PCM. A listed commit must validate, rather than silently vanish.
+    pub(crate) fn partial_recovery_listing(
+        &self,
+        after: Option<&str>,
+    ) -> Result<ResultListing, String> {
+        self.managed_anchor.verify()?;
+        if after.is_some_and(|id| !crate::input_levels::valid_owner(id)) {
+            return Err("保存済み部分救出の続き位置が不正です".into());
         }
-        let config: String = db.query_row("SELECT processing_config_json FROM audio_tracks WHERE session_id=?1 AND kind IN ('mic','system') ORDER BY kind LIMIT 1",[session_id],|row|row.get(0)).map_err(|e|e.to_string())?;
-        let value: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
-        let recovery = &value["partial_recovery"];
-        if recovery["reviewHash"].as_str() != Some(review_hash) {
-            return Ok(None);
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = db.prepare("SELECT r.id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE EXISTS(SELECT 1 FROM audio_tracks t WHERE t.session_id=r.id AND t.kind IN ('mic','system') AND json_type(t.processing_config_json,'$.partial_recovery') IS NOT NULL) AND (?1 IS NULL OR r.id>?1) ORDER BY r.id LIMIT 201").map_err(|e|e.to_string())?;
+        let rows = query
+            .query_map([after], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let more = rows.len() > 200;
+        let mut items = Vec::new();
+        for (id, title) in rows.into_iter().take(200) {
+            if !crate::input_levels::valid_owner(&id) {
+                return Err("保存済み部分救出の録音IDが不正です".into());
+            }
+            let summary = read_result(&db, &id, None)?
+                .ok_or("保存済み部分救出の登録・範囲を確認できません")?;
+            items.push(ResultItem { title, summary });
         }
-        let lanes: Vec<LaneReview> =
-            serde_json::from_value(recovery["lanes"].clone()).map_err(|e| e.to_string())?;
-        let summary = Summary {
-            session_id: session.id,
-            meeting_id: session.meeting_id,
-            review_hash: review_hash.into(),
-            duration_us: session.duration_us,
-            lanes,
-            acquisition_end_known: false,
-            tail_loss_us: None,
-        };
-        summary.validate()?;
-        Ok(Some(summary))
+        let next = more.then(|| items.last().unwrap().summary.session_id.clone());
+        Ok(ResultListing { items, next })
     }
 
     #[cfg(test)]
@@ -405,6 +426,107 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
     }
+}
+
+fn valid_result_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn read_result(
+    db: &Connection,
+    session_id: &str,
+    expected_hash: Option<&str>,
+) -> Result<Option<Summary>, String> {
+    let Some(session) = load_session(db, session_id)? else {
+        return Ok(None);
+    };
+    if !crate::input_levels::valid_owner(&session.meeting_id) {
+        return Err("保存済み部分救出の会議IDが不正です".into());
+    }
+    let mut query = db.prepare("SELECT kind,sample_rate,channels,CASE WHEN length(CAST(processing_config_json AS BLOB))<=4194304 THEN processing_config_json ELSE NULL END FROM audio_tracks WHERE session_id=?1 AND kind IN ('mic','system') ORDER BY kind LIMIT 3").map_err(|e|e.to_string())?;
+    let tracks = query
+        .query_map([session_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u32>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if tracks.is_empty() {
+        return Ok(None);
+    }
+    if tracks.len() > 2 || tracks.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("保存済み部分救出の入力数が不正です".into());
+    }
+    let configs = tracks
+        .iter()
+        .map(|t| {
+            let text =
+                t.3.as_deref()
+                    .ok_or("保存済み部分救出の記録上限を超えています")?;
+            serde_json::from_str::<serde_json::Value>(text).map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let recovery = &configs[0]["partial_recovery"];
+    let Some(hash) = recovery["reviewHash"]
+        .as_str()
+        .filter(|v| valid_result_hash(v))
+    else {
+        return Ok(None);
+    };
+    if expected_hash.is_some_and(|expected| expected != hash) {
+        return Ok(None);
+    }
+    if !super::super::transcription::partial_recording_committed(db, &session.meeting_id)? {
+        return Ok(None);
+    }
+    if configs
+        .iter()
+        .any(|value| &value["partial_recovery"] != recovery)
+    {
+        return Err("保存済み部分救出の入力ごとの記録が一致しません".into());
+    }
+    let lanes: Vec<LaneReview> =
+        serde_json::from_value(recovery["lanes"].clone()).map_err(|e| e.to_string())?;
+    let summary = Summary {
+        session_id: session.id,
+        meeting_id: session.meeting_id,
+        review_hash: hash.into(),
+        duration_us: session.duration_us,
+        lanes,
+        acquisition_end_known: false,
+        tail_loss_us: None,
+    };
+    summary.validate()?;
+    if summary
+        .lanes
+        .iter()
+        .filter(|lane| lane.state == "available")
+        .count()
+        != tracks.len()
+        || tracks.iter().any(|(kind, rate, channels, _)| {
+            !summary.lanes.iter().any(|lane| {
+                lane.state == "available"
+                    && lane.lane
+                        == if kind == "mic" {
+                            "microphone"
+                        } else {
+                            "system"
+                        }
+                    && lane.sample_rate == Some(*rate)
+                    && lane.channels == Some(*channels)
+            })
+        })
+    {
+        return Err("保存済み部分救出の入力・形式が登録と一致しません".into());
+    }
+    Ok(Some(summary))
 }
 
 impl Summary {

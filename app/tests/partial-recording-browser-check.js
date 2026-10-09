@@ -43,10 +43,20 @@ async page => {
     check((await dialog().innerText()).includes(unreadable ? "確定範囲を検証できません" : "確定範囲の記録なし"), "missing or corrupt input not explained");
     await consent().check(); await recover().click(); await success();
     check(await page.evaluate(() => window.partialRecordingFixture.recovered) === 1, "verified input not recovered exactly once"); results.push(unreadable ? "unreadable lane remains excluded" : "missing lane remains excluded");
+    const history = page.getByRole("region", { name: "保存済み部分救出の結果", exact: true });
+    await history.waitFor();
+    const starts = (await calls("start_data_operation")).length, cancels = (await calls("cancel_data_operation")).length;
+    await history.getByRole("button", { name: "保存時の確定範囲を確認", exact: true }).click();
+    const saved = page.getByRole("dialog", { name: "保存済み部分救出の記録", exact: true }); await saved.waitFor();
+    check((await saved.innerText()).includes(unreadable ? "救出時に検証できず対象外" : "救出時に確定範囲の記録なし"), "saved missing/unreadable lane became recoverable");
+    await page.keyboard.press("Escape"); await saved.waitFor({ state: "hidden" });
+    check((await calls("start_data_operation")).length === starts && (await calls("cancel_data_operation")).length === cancels, "reading committed history replayed or cancelled recovery");
+    results.push(unreadable ? "runtime committed history retains excluded unreadable lane without replay" : "runtime committed history retains missing lane without replay");
   }
   await boot({ empty: true }); await review(); await consent().check(); check(await recover().isDisabled(), "empty prefixes recoverable");
   await dialog().getByRole("button", { name: "救出せず保持", exact: true }).click(); await terminal("completed");
   check(await page.evaluate(() => window.partialRecordingFixture.kept === 1 && window.partialRecordingFixture.recovered === 0 && window.partialRecordingFixture.count === 1), "keep changed audio or removed candidate"); results.push("empty prefixes allow only non-destructive keep");
+  check(await page.getByRole("region", { name: "保存済み部分救出の結果", exact: true }).count() === 0, "keep fabricated a committed history");
 
   await boot({ mode: "delay" }); await review(); await consent().check(); await recover().click();
   await region().getByRole("button", { name: "部分救出の安全な停止を要求", exact: true }).waitFor();

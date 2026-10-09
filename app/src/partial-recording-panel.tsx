@@ -7,6 +7,7 @@ import { dataRequest, dataPhaseLabel, type DataRequest, type DataSnapshot } from
 import { assertPartialRecordingListing, canRecoverPartialRecording, type PartialRecordingItem, type PartialRecordingListing } from "./partial-recording-state";
 import { partialCancelObserved, partialChoiceObserved, partialRequestObserved, type PartialCancel, type PartialChoice, type PartialPending } from "./partial-recording-operation";
 import { PartialRecordingSummary } from "./partial-recording-summary";
+import { PartialRecordingResultsPanel } from "./partial-recording-results";
 import { stopAllPlayback } from "./playback-barrier";
 import { useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
@@ -21,6 +22,7 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
   latest.current = { operation, locked, withSavedEdits, onProtectionChange, onRecovered };
   const running = useRef(false), [rpcBusy, setRpcBusy] = useState(false);
   const [unknown, setUnknown] = useState(false), [open, setOpen] = useState(false), [error, setError] = useState("");
+  const [savedActive, setSavedActive] = useState(false);
   const [understood, setUnderstood] = useState<string | null>(null);
   const pending = useRef<PartialPending | null>(null), choice = useRef<PartialChoice | null>(null);
   const stopping = useRef<PartialCancel | null>(null);
@@ -32,7 +34,7 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
   const confirm = useActionConfirmation(false);
   const s = operation.snapshot, active = s?.kind === "partial_recording";
   const preview = active ? s.partialRecordingPreview : null, receipt = active ? s.partialRecordingReceipt : null;
-  const protectedNow = rpcBusy || unknown || confirm.pending;
+  const protectedNow = rpcBusy || unknown || confirm.pending || savedActive;
   const canAct = isTauri() && operation.partialRecordingSupported && operation.connected && !!operation.availability?.available &&
     !locked && !protectedNow && !s?.busy && !s?.restartRequired;
   const resolveUnknown = (now: DataSnapshot | null) => {
@@ -145,7 +147,7 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
     if (!active) { setOpen(false); return; }
     if (s.busy || receipt) setOpen(false);
     if (unknown && resolveUnknown(s)) setError("");
-    if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && !confirm.pending && opened.current !== preview.confirmationId) {
+    if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && !confirm.pending && !savedActive && opened.current !== preview.confirmationId) {
       opened.current = preview.confirmationId; setOpen(true);
     }
     if (receipt && notified.current !== s.token) {
@@ -154,7 +156,7 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
       if (receipt.recovered) void latest.current.onRecovered(receipt.summary.meetingId).catch(cause => setError(`救出は保存済みです。会議一覧を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
-  }, [s, rpcBusy, locked, unknown, confirm.pending]);
+  }, [s, rpcBusy, locked, unknown, confirm.pending, savedActive]);
   const items = [...(operation.partialRecordingListing?.items ?? []), ...(extra?.items ?? [])];
   const next = extra ? extra.next : operation.partialRecordingListing?.next;
   const canRecover = canAct && s?.phase === "ready" && !!preview && !!s.retryAllowed && understood === preview.confirmationId && canRecoverPartialRecording(preview.summary);
@@ -176,6 +178,7 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
       {unknown && <button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ部分救出操作の結果を確認</button>}
       <IssueNotice scope="partial-recording" type="operation" label="部分救出" message={error || (active ? s.errorMessage : "")} />
     </section>}
+    <PartialRecordingResultsPanel operation={operation} locked={locked || rpcBusy || unknown || confirm.pending || open || !!s?.busy || !!s?.restartRequired} onProtectionChange={setSavedActive} />
     <CommonModal ref={dialog} open={open} blocked={protectedNow || !!s?.busy} onDismiss={cancel}
       restoreReady={!rpcBusy && !s?.busy && operation.connected} restoreTarget={() => opener.current?.isConnected && !opener.current.matches(":disabled") ? opener.current : document.getElementById("partial-recording-heading")}
       className="import-dialog data-dialog" aria-labelledby="partial-recording-title">

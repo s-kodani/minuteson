@@ -5,7 +5,7 @@ import { acceptDataSnapshot, type DataAvailability, type DataSnapshot } from "./
 import { assertDeletionListing, type DeletionListing } from "./deletion-state";
 import { assertModelBodyDeletionListing, type ModelBodyDeletionListing } from "./model-deletion-operation-state";
 import { assertAudioDeletionListing, type AudioDeletionListing } from "./audio-deletion-operation-state";
-import { assertPartialRecordingListing, type PartialRecordingListing } from "./partial-recording-state";
+import { assertPartialRecordingListing, assertPartialRecordingResults, type PartialRecordingListing, type PartialRecordingResults } from "./partial-recording-state";
 
 export function useDataOperation() {
   const current = useRef<DataSnapshot | null>(null);
@@ -21,6 +21,7 @@ export function useDataOperation() {
   const [audioDeletionSupported, setAudioDeletionSupported] = useState(false);
   const [partialRecordingListing, setPartialRecordingListing] = useState<PartialRecordingListing | null>(null);
   const [partialRecordingSupported, setPartialRecordingSupported] = useState(false);
+  const [partialRecordingResults, setPartialRecordingResults] = useState<PartialRecordingResults | null>(null);
   const readEpoch = useRef(0);
   const accept = (next: DataSnapshot) => {
     const value = acceptDataSnapshot(current.current, next);
@@ -45,7 +46,9 @@ export function useDataOperation() {
       const partialSupported = Object.hasOwn(next, "partialRecordingPreview");
       const partialListing = partialSupported ? await invoke<PartialRecordingListing>("get_partial_recording_items", { after: null }) : null;
       if (partialListing) assertPartialRecordingListing(partialListing);
-      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setPartialRecordingSupported(partialSupported); setPartialRecordingListing(partialListing); setConnected(true); setError(""); }
+      const partialResults = partialSupported ? await invoke<PartialRecordingResults>("get_partial_recording_results", { after: null }) : null;
+      if (partialSupported) assertPartialRecordingResults(partialResults!);
+      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setPartialRecordingSupported(partialSupported); setPartialRecordingListing(partialListing); setPartialRecordingResults(partialResults); setConnected(true); setError(""); }
     } catch (cause) {
       if (epoch === readEpoch.current) { setAvailability(null); setConnected(false); setError(String(cause)); }
       throw cause;
@@ -72,6 +75,6 @@ export function useDataOperation() {
     window.addEventListener("focus", poll);
     return () => { disposed = true; unlisten?.(); window.clearInterval(timer); window.removeEventListener("focus", poll); };
   }, []);
-  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, audioDeletionListing, audioDeletionSupported, partialRecordingListing, partialRecordingSupported, error, accept, refresh, getSnapshot: () => current.current };
+  return { snapshot, connected, availability, deletionListing, deletionSupported, modelDeletionListing, modelDeletionSupported, audioDeletionListing, audioDeletionSupported, partialRecordingListing, partialRecordingSupported, partialRecordingResults, error, accept, refresh, getSnapshot: () => current.current };
 }
 export type DataOperation = ReturnType<typeof useDataOperation>;
