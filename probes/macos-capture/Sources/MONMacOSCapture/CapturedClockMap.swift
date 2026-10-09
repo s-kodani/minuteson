@@ -87,7 +87,9 @@ struct CapturedClockMap {
     }
   }
 
-  mutating func finish(originNanoseconds origin: Int64) throws -> [CapturedClockSegment] {
+  mutating func finish(originNanoseconds origin: Int64, measuredEndNanoseconds: Int64? = nil)
+    throws -> [CapturedClockSegment]
+  {
     guard !sealed, !invalid, let pendingEnd, let first = firstCaptureNanoseconds,
       origin >= 0, origin <= first
     else {
@@ -95,7 +97,10 @@ struct CapturedClockMap {
     }
     sealed = true
     do {
-      try accept(pendingEnd)
+      // A live segment is sealed only after the next continuous callback has
+      // supplied its measured boundary. Never rewrite a published endpoint.
+      let endpoint = Point(frame: pendingEnd.frame, time: measuredEndNanoseconds ?? pendingEnd.time)
+      try accept(endpoint)
       try emit()
       return try segments.map { segment in
         let firstUs = (segment.first.time - origin) / 1000

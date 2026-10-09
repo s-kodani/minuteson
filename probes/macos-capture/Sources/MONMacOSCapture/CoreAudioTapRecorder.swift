@@ -64,11 +64,16 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
+  private let rawSegments: RawRecordingSegments?
 
-  init(outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false) {
+  init(
+    outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false,
+    rawSegments: RawRecordingSegments? = nil
+  ) {
     self.outputURL = outputURL
     self.clock = clock
     self.levelsEnabled = levelsEnabled
+    self.rawSegments = rawSegments
   }
 
   func start(targetPIDs: [pid_t]) throws {
@@ -148,7 +153,13 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     return captureClosure
   }
 
-  func snapshot() -> TrackStats { lock.withLock { stats } }
+  func snapshot() -> TrackStats {
+    lock.withLock {
+      var result = stats
+      result.rawSegments = rawSegments?.snapshot()
+      return result
+    }
+  }
 
   private var captureClosure: CaptureClosure?
 
@@ -167,6 +178,10 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
       self.ioProcID = nil
     }
     writeQueue.sync {}
+    do { try rawSegments?.finish() } catch {
+      failures.append("raw tap audio finalization failed")
+      lock.withLock { stats.appendFailures += 1 }
+    }
     if proveEnding, failures.isEmpty, captureClosure == nil {
       do {
         guard let clock else { throw ProbeError.capture("tap capture clock is missing") }
@@ -266,6 +281,9 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
               observation, frames: Int64(queuedBuffer.value.frameLength),
               sourceFrame: queuedBuffer.sourceFrame)
           }
+          try self.rawSegments?.enqueue(
+            queuedBuffer.value, observation: queuedBuffer.observation,
+            sourceFrame: queuedBuffer.sourceFrame)
         } catch {
           self.stats.appendFailures += 1
         }

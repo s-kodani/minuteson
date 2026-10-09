@@ -9,6 +9,8 @@ final class InputEventJournalFile {
   enum Leaf: String {
     case journal = "input-events.json"
     case status = "input-journal-status.json"
+    case rawMicrophone = "raw-microphone.json"
+    case rawSystem = "raw-system.json"
   }
   private let directory: Int32
   private let leaf: Leaf
@@ -16,7 +18,7 @@ final class InputEventJournalFile {
   private var expected: stat
 
   init(output: URL, initial: Data, leaf: Leaf = .journal, synchronizes: Bool = true) throws {
-    guard leaf != .journal || synchronizes else {
+    guard leaf == .status || synchronizes else {
       throw ProbeError.capture("retained input history requires synced writes")
     }
     self.leaf = leaf
@@ -143,7 +145,7 @@ final class InputEventJournalFile {
     }
   }
 
-  private static func pin(_ output: URL) throws -> Int32 {
+  static func pin(_ output: URL) throws -> Int32 {
     guard let canonical = realpath(output.path, nil) else {
       throw ProbeError.capture("input event journal directory is unavailable")
     }

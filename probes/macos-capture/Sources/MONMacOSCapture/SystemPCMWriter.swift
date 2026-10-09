@@ -14,9 +14,19 @@ final class SystemPCMWriter: @unchecked Sendable {
   private var closed = false
   private var finishFailure: String?
   private var savedStats = TrackStats()
-  var stats: TrackStats { lock.withLock { savedStats } }
+  private let rawSegments: RawRecordingSegments?
+  var stats: TrackStats {
+    lock.withLock {
+      var result = savedStats
+      result.rawSegments = rawSegments?.snapshot()
+      return result
+    }
+  }
 
-  init(outputURL: URL) { self.outputURL = outputURL }
+  init(outputURL: URL, rawSegments: RawRecordingSegments? = nil) {
+    self.outputURL = outputURL
+    self.rawSegments = rawSegments
+  }
   var ready: Bool { lock.withLock { input?.isReadyForMoreMediaData ?? true } }
 
   func invalidateLevels() { lock.withLock { savedStats.inputLevel.invalidate() } }
@@ -74,6 +84,7 @@ final class SystemPCMWriter: @unchecked Sendable {
       savedStats.recordSavedClock(
         observation, frames: frames, sourceFrame: nil, sourceEpoch: sourceEpoch)
     }
+    try rawSegments?.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
   }
 
   func finish() async throws {
@@ -101,6 +112,13 @@ final class SystemPCMWriter: @unchecked Sendable {
         "system CAF finalization failed: \(writer.error?.localizedDescription ?? String(describing: writer.status))"
       lock.withLock { finishFailure = failure }
       throw ProbeError.capture(failure)
+    }
+    do { try rawSegments?.finish() } catch {
+      lock.withLock {
+        finishFailure = "raw system audio finalization failed"
+        savedStats.appendFailures += 1
+      }
+      throw error
     }
   }
 }

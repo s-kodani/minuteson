@@ -303,4 +303,29 @@ struct CaptureTrackTiming {
     }
     return try map.finish(originNanoseconds: originNanoseconds)
   }
+
+  /// Check the next callback using the same source/epoch/gap rules as ordinary
+  /// capture. Its measured start seals a continuous boundary; a real hole keeps
+  /// the old nominal end. This does not append the new PCM to the old segment.
+  mutating func finishBeforeNext(
+    frames: Int64, observation: CaptureClockObservation, sourceFrame: Int64?,
+    sourceEpoch epoch: UInt64, originNanoseconds: Int64, expectedFrames: Int64
+  ) throws -> [CapturedClockSegment] {
+    guard map.frames == expectedFrames, case .timestamp(let start) = observation,
+      let previousCaptureEnd
+    else { throw ProbeError.capture("raw segment boundary lacks saved capture evidence") }
+    var validated = self
+    try validated.recordSaved(
+      frames: frames, observation: observation, sourceFrame: sourceFrame, sourceEpoch: epoch)
+    let gap: Bool
+    if let sourceEpoch, sourceEpoch != epoch {
+      gap = start > previousCaptureEnd
+    } else if let previousSourceEnd, let sourceFrame {
+      gap = sourceFrame > previousSourceEnd
+    } else {
+      gap = start > previousCaptureEnd && start - previousCaptureEnd > map.maximumErrorNanoseconds
+    }
+    return try map.finish(
+      originNanoseconds: originNanoseconds, measuredEndNanoseconds: gap ? nil : start)
+  }
 }

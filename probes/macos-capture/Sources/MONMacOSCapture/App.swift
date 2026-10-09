@@ -239,11 +239,13 @@ struct TrackStats: Encodable {
   // Snapshot under the same policy lock. Never mix a newer event suffix with
   // an older current state, and do not add telemetry to the audio manifest.
   var inputEventHistory: InputEventHistory?
+  var rawSegments: RawSegmentStatus?
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
     case appendFailures, sampleRate, channels, clockSegments, clockFailure
     case microphoneRecovery, systemRecovery
+    case rawSegments
   }
 
   var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
@@ -387,10 +389,11 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void =
       CaptureApplications.current,
     mayContinue: @escaping @Sendable () -> Bool = { true },
-    inputEventObserver: InputEventJournal.Observer? = nil
+    inputEventObserver: InputEventJournal.Observer? = nil,
+    rawSegments: RawRecordingSegments? = nil
   ) {
     self.outputURL = outputURL
-    self.pcm = SystemPCMWriter(outputURL: outputURL)
+    self.pcm = SystemPCMWriter(outputURL: outputURL, rawSegments: rawSegments)
     self.clock = clock
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
@@ -829,13 +832,15 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private let requestedUID: String?
   private let inputEventObserver: InputEventJournal.Observer?
   private var inputUnit: AudioUnit?
+  private let rawSegments: RawRecordingSegments?
   private var selectedDeviceID: AudioObjectID?
   private(set) var deviceUID: String?
 
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
     levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil,
-    inputEventObserver: InputEventJournal.Observer? = nil
+    inputEventObserver: InputEventJournal.Observer? = nil,
+    rawSegments: RawRecordingSegments? = nil
   ) {
     self.outputURL = outputURL
     self.clock = clock
@@ -843,6 +848,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
     self.inputEventObserver = inputEventObserver
+    self.rawSegments = rawSegments
   }
 
   func start() async throws {
@@ -989,6 +995,8 @@ private final class MicrophoneRecorder: @unchecked Sendable {
             observation, frames: Int64(buffer.frameLength),
             sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
         }
+        try self.rawSegments?.enqueue(
+          buffer, observation: observation, sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
       } catch {
         self.stats.appendFailures += 1
       }
@@ -1090,6 +1098,9 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       }
       file = nil
     }
+    do { try rawSegments?.finish() } catch {
+      lock.withLock { stats.appendFailures += 1 }
+    }
   }
 
   func snapshot() -> TrackStats {
@@ -1098,6 +1109,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     var result = stats
     result.microphoneRecovery = recovery?.status
     result.inputEventHistory = recovery?.history
+    result.rawSegments = rawSegments?.snapshot()
     return result
   }
 }
@@ -1178,10 +1190,19 @@ private enum Main {
           output: options.output, owner: options.inputLevelOwner!, initial: $0.persistence())
       }
       defer { journalStatus?.removeIfOwned() }
+      let rawMic =
+        options.publishesInputStatus
+        ? try RawRecordingSegments(
+          output: options.output, owner: options.inputLevelOwner!, lane: "microphone") : nil
+      let rawSystem =
+        options.publishesInputStatus
+        ? try RawRecordingSegments(
+          output: options.output, owner: options.inputLevelOwner!, lane: "system") : nil
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
-        testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone))
+        testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone),
+        rawSegments: rawMic)
       let systemStopRequest = options.output.appendingPathComponent("stop.request")
       let systemParentPID = options.parentPID
       let systemControlled = options.stopOnFile
@@ -1193,10 +1214,10 @@ private enum Main {
           !systemControlled
             || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
               && !parentHasExited(systemParentPID))
-        }, inputEventObserver: inputEvents?.observer(.system))
+        }, inputEventObserver: inputEvents?.observer(.system), rawSegments: rawSystem)
       let tap = CoreAudioTapRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
-        levelsEnabled: options.inputLevelOwner != nil)
+        levelsEnabled: options.inputLevelOwner != nil, rawSegments: rawSystem)
       var manifest = Manifest(
         schemaVersion: clock == nil ? 1 : 2,
         scenario: options.scenario,
