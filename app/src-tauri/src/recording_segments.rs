@@ -404,6 +404,15 @@ impl Prefix {
             .map_err(|e| e.to_string())?,
         ))
     }
+    /// Content evidence only, never a review/consent capability. The complete
+    /// validated tip binds closure, counts and the entry/audio hash chain, but
+    /// deliberately does not bind transport-dependent inode generations.
+    pub(crate) fn content_hash(&self) -> Result<String, String> {
+        Ok(hash(
+            &serde_json::to_vec(&serde_json::json!({"version":1,"tip":self.tip}))
+                .map_err(|e| e.to_string())?,
+        ))
+    }
     pub(crate) fn first_capture_nanoseconds(&self) -> Result<i64, String> {
         self.entries
             .first()

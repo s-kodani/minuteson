@@ -74,6 +74,48 @@ pub(crate) struct Review {
     prefixes: Vec<Prefix>,
 }
 
+impl Review {
+    /// Stable input evidence for a qualified native move, not IPC authority.
+    /// Fresh Summary comparison and explicit consent remain mandatory.
+    pub(super) fn content_hash(&self) -> Result<String, String> {
+        let generations = self
+            .prefixes
+            .iter()
+            .map(Prefix::content_hash)
+            .collect::<Result<Vec<_>, _>>()?;
+        let proof = serde_json::to_vec(&serde_json::json!({"version":1,
+            "session":self.session,"config":self.config_text,
+            "meetingVersion":self.meeting_version,"meetingState":self.meeting_state,
+            "origin":self.origin,"lanes":self.summary.lanes,"generations":generations}))
+        .map_err(|e| e.to_string())?;
+        Ok(format!("{:x}", Sha256::digest(&proof)))
+    }
+    pub(super) fn input_hash(&self) -> Result<String, String> {
+        input_hash(&self.summary.review_hash, self.origin, &self.prefixes)
+    }
+    pub(super) fn document(&self) -> serde_json::Value {
+        serde_json::json!({"schemaVersion":1,"state":"interrupted",
+            "captureMode":self.config.mode,"backend":self.config.backend,
+            "targetPIDs":self.config.target_pids,"recordingOwnerId":self.session.id,
+            "errors":[],"partialRecovery":{
+                "schemaVersion":1,"kind":"sealed_prefix",
+                "reviewHash":self.summary.review_hash,"acquisitionEndKnown":false,
+                "tailLossUs":null,"timelineUtcOriginKnown":false,
+                "originalState":self.session.state,
+                "originalObservedEndUtcMs":self.session.ended_at_utc_ms,
+                "originalDurationUs":self.session.duration_us,
+                "timelineOriginNanoseconds":self.origin,"lanes":self.summary.lanes}})
+    }
+}
+pub(super) fn input_hash(review: &str, origin: i64, prefixes: &[Prefix]) -> Result<String, String> {
+    let proof = serde_json::to_vec(&serde_json::json!({
+        "version":1,"mode":"sealed_prefix","review":review,"origin":origin,
+        "lanes":prefixes.iter().map(|p|p.lane().name()).collect::<Vec<_>>()
+    }))
+    .map_err(|e| e.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(&proof)))
+}
+
 impl Storage {
     /// DB-owned unresolved native sessions only; never scan the filesystem or
     /// turn restored provenance into authority. Pagination never hides a tail.
@@ -171,8 +213,36 @@ impl Storage {
         session_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Review, String> {
-        check_cancel(cancelled)?;
         self.require_data_writable()?;
+        let review = self.inspect_partial_recording(session_id, cancelled)?;
+        self.require_data_writable()?;
+        Ok(review)
+    }
+
+    /// Read-only recapture across source retirement, only behind the held
+    /// native snapshot. Public review/recovery still requires writable data.
+    #[cfg(target_os = "macos")]
+    pub(super) fn inspect_partial_for_relocation(
+        &self,
+        snapshot: &super::super::backup::relocation::NativeSnapshot<'_>,
+        session_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Review, String> {
+        if self.root != snapshot.source_root() {
+            return Err("部分救出の検査先と保持中の移動元が一致しません".into());
+        }
+        snapshot.verify_source(cancelled)?;
+        let review = self.inspect_partial_recording(session_id, cancelled)?;
+        snapshot.verify_source(cancelled)?;
+        Ok(review)
+    }
+
+    fn inspect_partial_recording(
+        &self,
+        session_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Review, String> {
+        check_cancel(cancelled)?;
         self.managed_anchor.verify()?;
         if !crate::input_levels::valid_owner(session_id) {
             return Err("部分救出の録音IDが不正です".into());
@@ -272,7 +342,6 @@ impl Storage {
             "origin":origin,"lanes":lanes,"generations":generations}))
         .map_err(|e| e.to_string())?;
         let review_hash = format!("{:x}", Sha256::digest(&proof));
-        self.require_data_writable()?;
         self.managed_anchor.verify()?;
         for prefix in &prefixes {
             prefix.verify_at(&self.root.join(&base), cancelled)?;
@@ -326,25 +395,18 @@ impl Storage {
         if reviewed.prefixes.is_empty() || reviewed.summary.duration_us <= 0 {
             return Err("部分救出できる確定済み音声がありません".into());
         }
+        let document = reviewed.document();
         let mut publication = flac::Publication::prepare_recovery(
             self,
             &reviewed.base,
             &reviewed.summary.review_hash,
+            &reviewed.content_hash()?,
+            &document,
             reviewed.origin,
             &reviewed.prefixes,
             cancelled,
         )?;
-        let recovery = serde_json::json!({"schemaVersion":1,"kind":"sealed_prefix",
-            "reviewHash":reviewed.summary.review_hash,"acquisitionEndKnown":false,
-            "tailLossUs":null,"timelineUtcOriginKnown":false,
-            "originalState":reviewed.session.state,
-            "originalObservedEndUtcMs":reviewed.session.ended_at_utc_ms,
-            "originalDurationUs":reviewed.session.duration_us,
-            "timelineOriginNanoseconds":reviewed.origin,"lanes":reviewed.summary.lanes});
-        let document = serde_json::json!({"schemaVersion":1,"state":"interrupted",
-            "captureMode":reviewed.config.mode,"backend":reviewed.config.backend,
-            "targetPIDs":reviewed.config.target_pids,"recordingOwnerId":reviewed.session.id,
-            "errors":[],"partialRecovery":recovery});
+        let recovery = &document["partialRecovery"];
         let manifest = publication.recovery_document(self, &document)?;
         let config =
             serde_json::json!({"timeline_alignment":"unverified","partial_recovery":recovery})

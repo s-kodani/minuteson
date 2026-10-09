@@ -85,6 +85,8 @@ pub(super) struct Publication {
     plan_name: &'static str,
     documents: Vec<(String, Stamp)>,
     tracks: Vec<Track>,
+    #[cfg(target_os = "macos")]
+    recovery_rebind: Option<relocation::RecoveryRebind>,
 }
 const PLAN: &str = "final-flac.json";
 const PARTIAL_PLAN: &str = "partial-flac.json";
@@ -233,6 +235,8 @@ impl Publication {
             prefixes,
             all_groups,
             &|| false,
+            #[cfg(target_os = "macos")]
+            None,
         )
     }
 
@@ -240,6 +244,8 @@ impl Publication {
         storage: &Storage,
         base: &Path,
         review_hash: &str,
+        content_hash: &str,
+        document: &serde_json::Value,
         origin: i64,
         prefixes: &[Prefix],
         cancelled: &impl Fn() -> bool,
@@ -271,13 +277,23 @@ impl Publication {
                 return Err("部分救出の時刻対応が保存・読戻しの容量上限を超えています".into());
             }
         }
-        let input_hash = hash(
-            &serde_json::to_vec(&serde_json::json!({
-                "version":1,"mode":"sealed_prefix","review":review_hash,"origin":origin,
-                "lanes":prefixes.iter().map(|p|p.lane().name()).collect::<Vec<_>>()
-            }))
-            .map_err(|e| e.to_string())?,
-        );
+        let input_hash = partial::input_hash(review_hash, origin, prefixes)?;
+        #[cfg(target_os = "macos")]
+        let recovery_rebind = relocation::recovery_input(storage, base, content_hash)?;
+        #[cfg(target_os = "macos")]
+        if let Some(proof) = &recovery_rebind {
+            proof.verify_document_before_conversion(
+                &Directory::open(&storage.root.join(base))?,
+                document,
+            )?;
+        }
+        #[cfg(target_os = "macos")]
+        let input_hash = recovery_rebind
+            .as_ref()
+            .map(|p| p.input_hash().to_owned())
+            .unwrap_or(input_hash);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (content_hash, document);
         Self::prepare_groups(
             storage,
             base,
@@ -286,6 +302,8 @@ impl Publication {
             prefixes,
             all_groups,
             cancelled,
+            #[cfg(target_os = "macos")]
+            recovery_rebind,
         )
     }
 
@@ -297,6 +315,7 @@ impl Publication {
         prefixes: &[Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
         cancelled: &impl Fn() -> bool,
+        #[cfg(target_os = "macos")] recovery_rebind: Option<relocation::RecoveryRebind>,
     ) -> Result<Self, String> {
         partial::check_cancel(cancelled)?;
         storage.require_data_writable()?;
@@ -335,6 +354,10 @@ impl Publication {
         let (plan_bytes, plan_stamp) = root
             .read_json(plan_name)?
             .ok_or("FLAC確定計画がありません")?;
+        #[cfg(target_os = "macos")]
+        if let Some(proof) = &recovery_rebind {
+            proof.verify_plan(&plan_bytes)?;
+        }
         let mut plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
         #[cfg(target_os = "macos")]
         relocation::effective_plan(storage, &root.path, plan_name, &plan_bytes, &mut plan)?;
@@ -397,6 +420,8 @@ impl Publication {
             plan_name,
             documents: Vec::new(),
             tracks,
+            #[cfg(target_os = "macos")]
+            recovery_rebind,
         };
         result.verify(storage)?;
         Ok(result)
@@ -413,11 +438,29 @@ impl Publication {
         if self.root.read_json(name)?.is_none() {
             self.root.json(name, value, None)?;
         }
-        let (current, stamp) = self
+        let (current, mut stamp) = self
             .root
             .read_json(name)?
             .ok_or("部分救出の記録がありません")?;
         if current != bytes {
+            #[cfg(target_os = "macos")]
+            if let Some(proof) = &self.recovery_rebind {
+                proof.require_document(&self.root, &current, value)?;
+                self.root.json(name, value, Some(&stamp))?;
+                #[cfg(test)]
+                crash_point("partial-relocation-document");
+                let (saved, saved_stamp) = self
+                    .root
+                    .read_json(name)?
+                    .ok_or("部分救出の移動後記録がありません")?;
+                if saved != bytes {
+                    return Err("部分救出の移動後記録が一致しません".into());
+                }
+                stamp = saved_stamp;
+            } else {
+                return Err("部分救出の記録と確認済み範囲が一致しません".into());
+            }
+            #[cfg(not(target_os = "macos"))]
             return Err("部分救出の記録と確認済み範囲が一致しません".into());
         }
         self.documents.push((name.into(), stamp));

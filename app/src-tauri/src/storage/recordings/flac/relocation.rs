@@ -8,6 +8,9 @@ use crate::storage::backup::relocation::NativeSnapshot;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod recovery;
+pub(super) use recovery::{recovery_input, RecoveryRebind};
+
 const MAX_WORKSPACES: usize = 4096;
 const MAX_CLAIMS: usize = 32768;
 const MAX_BYTES: usize = 32 * 1024 * 1024;
@@ -39,6 +42,8 @@ struct Workspace {
     recorded: Identity,
     observed: Identity,
     tracks: Vec<TrackFacts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<recovery::Facts>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +73,8 @@ struct BoundWorkspace {
     name: String,
     recording: Identity,
     tracks: Vec<BoundTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery_document: Option<Identity>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -138,6 +145,13 @@ fn valid_source(source: &SourceFacts) -> Result<(), String> {
             || workspace.tracks.len() > 2
         {
             return Err("FLAC移動履歴の計画が不正です".into());
+        }
+        if let Some(proof) = &workspace.recovery {
+            if workspace.name != PARTIAL_PLAN {
+                return Err("通常変換へ部分救出の入力証拠を適用しません".into());
+            }
+            proof.validate()?;
+            claims += usize::from(proof.document.is_some());
         }
         claims += 1;
         for track in &workspace.tracks {
@@ -366,7 +380,12 @@ impl Source {
                     });
                 }
                 stamp.require(&root.required(name, false)?)?;
-                count += 1;
+                let recovery = if name == PARTIAL_PLAN {
+                    recovery::capture(storage, snapshot, &base, &original, &bytes, cancelled)?
+                } else {
+                    None
+                };
+                count += 1 + usize::from(recovery.as_ref().is_some_and(|p| p.document.is_some()));
                 if count > MAX_CLAIMS || workspaces.len() >= MAX_WORKSPACES {
                     return Err("FLAC移動元の所有記録が安全上限を超えています".into());
                 }
@@ -374,6 +393,7 @@ impl Source {
                     base: base.clone(),
                     name: name.into(),
                     plan_hash: hash(&bytes),
+                    recovery,
                     recorded: original.recording_directory,
                     observed: root.identity.clone(),
                     tracks,
@@ -448,6 +468,12 @@ impl Source {
                 name: workspace.name.clone(),
                 recording: copied(&workspace.base, true)?,
                 tracks,
+                recovery_document: workspace
+                    .recovery
+                    .as_ref()
+                    .and_then(|p| p.document.as_ref())
+                    .map(|_| copied(&format!("{}/partial-recovery.json", workspace.base), false))
+                    .transpose()?,
             });
         }
         let destination = DestinationFacts {
@@ -571,6 +597,7 @@ pub(in crate::storage) fn admitted_history(
         {
             return Err("FLAC計画の移動先は配置した所有対象ではありません".into());
         }
+        recovery::admit(admission, &workspace, &bound)?;
         for (track, bound_track) in workspace.tracks.iter().zip(&bound.tracks) {
             bound_track.directory.validate(true)?;
             let track_path = track_base(&workspace.base, &track.id)?;
