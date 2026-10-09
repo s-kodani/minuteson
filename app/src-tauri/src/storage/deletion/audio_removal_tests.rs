@@ -41,6 +41,108 @@ fn resume(f: &Fixture, op: &str) -> DataMaintenanceLease {
         .begin_audio_deletion_maintenance(&f.storage, op, false, false, &|| false)
         .unwrap()
 }
+
+#[test]
+fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fixed_metadata() {
+    for boundary in [
+        "audioRenamed",
+        "audioStaged",
+        "audioUnlinked",
+        "audioAdvanced",
+    ] {
+        let fixture = crate::storage::recordings::partial_test_fixture();
+        let review = fixture
+            .storage
+            .review_partial_recording(&fixture.session.id)
+            .unwrap();
+        fixture.reject_partial_commit(true);
+        assert!(fixture
+            .storage
+            .recover_partial_recording(&review, true)
+            .is_err());
+        fixture.reject_partial_commit(false);
+        let original = std::fs::read(fixture.base.join("partial-flac.json")).unwrap();
+        let census = crate::storage::deletion::audio::Census::capture(
+            &fixture.storage,
+            &fixture.session.meeting_id,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(
+            census
+                .preview(&uuid::Uuid::new_v4().to_string())
+                .unwrap()
+                .audio_files,
+            10
+        );
+        let lease = owner();
+        let operation = uuid::Uuid::new_v4().to_string();
+        prepare(
+            &fixture.storage,
+            &operation,
+            &census,
+            Policy {
+                include_unregistered_audio: true,
+                retain_unclassified: true,
+            },
+            &lease,
+            &|| false,
+        )
+        .unwrap();
+        start(&fixture.storage, &operation, &lease, &|| false).unwrap();
+        let cancel = Cell::new(false);
+        assert!(run_inner(
+            &fixture.storage,
+            &operation,
+            &lease,
+            &|| cancel.get(),
+            &|event| if event == boundary {
+                cancel.set(true)
+            }
+        )
+        .is_err());
+        assert!(cancel.get());
+        assert_eq!(
+            std::fs::read(fixture.base.join("partial-flac.json")).unwrap(),
+            original
+        );
+        drop(lease);
+        let root = fixture.storage.root().to_owned();
+        let base = fixture.base.clone();
+        let meeting = fixture.session.meeting_id.clone();
+        let temp = fixture.temp;
+        drop(fixture.storage);
+        let storage = Storage::open(root).unwrap();
+        let lease = AnalysisController::default()
+            .begin_audio_deletion_maintenance(&storage, &operation, false, false, &|| false)
+            .unwrap();
+        assert!(run(&storage, &operation, &lease, &|| false)
+            .unwrap()
+            .files_removed());
+        assert!(completion::finish(&storage, &operation, &lease, &|| false)
+            .unwrap()
+            .completed());
+        assert_eq!(
+            std::fs::read(base.join("partial-flac.json")).unwrap(),
+            original
+        );
+        assert!(storage.get_meeting(&meeting).unwrap().is_some());
+        assert!(storage.restart_required());
+        let restarted_root = storage.root().to_owned();
+        drop(lease);
+        drop(storage);
+        let storage = Storage::open(restarted_root).unwrap();
+        assert_eq!(
+            crate::storage::deletion::audio::Census::capture(&storage, &meeting, &|| false)
+                .unwrap()
+                .preview(&uuid::Uuid::new_v4().to_string())
+                .unwrap()
+                .audio_files,
+            0
+        );
+        drop(temp);
+    }
+}
 #[test]
 fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neighbor_files() {
     let f = Fixture::new();

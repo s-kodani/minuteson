@@ -5,7 +5,7 @@ use std::fs::File;
 
 mod clock;
 #[cfg(unix)]
-mod flac;
+pub(in crate::storage) mod flac;
 #[cfg(unix)]
 pub(crate) mod partial;
 use clock::{CaptureClock, CaptureEnd};

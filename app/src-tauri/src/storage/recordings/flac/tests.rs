@@ -2,6 +2,8 @@ use super::*;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
+#[path = "workspace_tests.rs"]
+mod workspace;
 
 pub(crate) struct Fixture {
     pub(crate) temp: tempfile::TempDir,

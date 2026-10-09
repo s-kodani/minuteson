@@ -141,7 +141,12 @@ fn raw_recording_sequence(leaf: &str, suffix: &str) -> Option<u32> {
 fn raw_recording_metadata_name(leaf: &str) -> bool {
     matches!(
         leaf,
-        "raw-microphone.json" | "raw-system.json" | "final-flac.json" | ".final-flac.lock"
+        "raw-microphone.json"
+            | "raw-system.json"
+            | "final-flac.json"
+            | "partial-flac.json"
+            | "partial-recovery.json"
+            | ".final-flac.lock"
     ) || raw_recording_sequence(leaf, ".json").is_some()
 }
 pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
@@ -196,6 +201,7 @@ struct Records {
     sessions: BTreeSet<String>,
     imports: BTreeSet<String>,
     jobs: BTreeMap<String, String>,
+    flac_files: crate::storage::recordings::flac::WorkspaceFiles,
 }
 impl Records {
     fn read(db: &Connection, meeting: &str) -> Result<Self, String> {
@@ -253,6 +259,7 @@ impl Records {
             sessions: ids("recording_sessions")?,
             imports: ids("audio_imports")?,
             jobs,
+            flac_files: Default::default(),
         })
     }
     fn hint(&self, path: &str) -> Option<String> {
@@ -439,7 +446,10 @@ fn walk(
                     proof: Some(before),
                     sha256: Some(format!("{:x}", digest.finalize())),
                     registered: records.assets.get(&child_path).cloned(),
-                    stage_hint: records.hint(&child_path),
+                    stage_hint: records
+                        .flac_files
+                        .hint(&child_path, &file)?
+                        .or_else(|| records.hint(&child_path)),
                 },
             );
         }
@@ -642,8 +652,22 @@ impl Census {
             reserved,
             reservation_roots,
             None,
+            false,
             &|| Scope::capture(db, meeting, omitted_operation, check),
         )
+    }
+    // Whole-meeting removal deletes sidecars too. Its classification must not
+    // depend on checkpoints that legitimately disappear during that removal.
+    pub(super) fn capture_audio_locked(
+        storage: &Storage,
+        db: &Connection,
+        meeting: &str,
+        omitted_operation: &str,
+        check: &impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        Self::capture_scoped_locked(storage, db, meeting, check, None, &[], None, true, &|| {
+            Scope::capture(db, meeting, omitted_operation, check)
+        })
     }
     pub(super) fn capture_audio_reconfirmation_locked(
         storage: &Storage,
@@ -663,6 +687,7 @@ impl Census {
             reserved,
             &[],
             Some(&long),
+            true,
             &|| {
                 Scope::capture_audio_reconfirmation(
                     db,
@@ -698,6 +723,7 @@ impl Census {
             reserved,
             &[],
             Some(&long),
+            true,
             &|| match &source {
                 Some(source) => Scope::capture_audio_reconfirmation(
                     db,
@@ -719,6 +745,7 @@ impl Census {
         reserved: Option<&str>,
         reservation_roots: &[String],
         long_audio: Option<&LongAudioPaths>,
+        inspect_flac: bool,
         capture_scope: &impl Fn() -> Result<Scope, String>,
     ) -> Result<Self, String> {
         if reserved.is_some_and(|s| s.len() > 512 || s.contains(['\\', '\0'])) {
@@ -735,7 +762,15 @@ impl Census {
         }
         let (root, database) = storage.managed_anchor.identity()?;
         let scope = capture_scope()?;
-        let records = Records::read(db, meeting)?;
+        let mut records = Records::read(db, meeting)?;
+        if inspect_flac {
+            records.flac_files = crate::storage::recordings::flac::inspect_workspaces(
+                storage,
+                meeting,
+                &records.sessions,
+                check,
+            )?;
+        }
         // Enumerate through the startup descriptor, never reopen a path and
         // temporarily treat its replacement as the original root.
         let root_directory = storage.managed_anchor.directory_ref()?;
@@ -757,6 +792,13 @@ impl Census {
             reservation_roots,
             long_audio,
         )? != entries
+            || (inspect_flac
+                && crate::storage::recordings::flac::inspect_workspaces(
+                    storage,
+                    meeting,
+                    &records.sessions,
+                    check,
+                )? != records.flac_files)
             || capture_scope()? != scope
             || storage.managed_anchor.identity()? != (root.clone(), database.clone())
         {

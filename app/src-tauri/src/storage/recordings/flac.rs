@@ -9,7 +9,9 @@ use std::io::Seek;
 use std::os::fd::AsRawFd;
 
 mod files;
+mod inventory;
 use files::{Directory, Identity, Stamp};
+pub(in crate::storage) use inventory::{inspect_workspaces, WorkspaceFiles};
 #[cfg(test)]
 pub(super) mod tests;
 

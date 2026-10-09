@@ -368,6 +368,7 @@ fn disposition(entry: &FileEntry, records: &Records) -> Result<Disposition, Stri
         .next()
         .ok_or("音声対象のパスが不正です")?;
     match entry.stage_hint.as_deref() {
+        Some("recording_flac") => Ok(Disposition::ProducerAudioLeftover),
         Some("recording")
             if matches!(leaf, "microphone.caf" | "system.caf")
                 || super::files::raw_recording_audio_name(leaf) =>
@@ -444,7 +445,8 @@ impl Census {
         )? {
             return Err("未完了の保存領域操作があります。音声の対象確認を開始できません".into());
         }
-        let census = MeetingCensus::capture_locked(storage, db, meeting, omitted_operation, check)?;
+        let census =
+            MeetingCensus::capture_audio_locked(storage, db, meeting, omitted_operation, check)?;
         let records = records(db, meeting, check)?;
         let mut entries = Vec::new();
         for entry in &census.manifest().entries {
@@ -504,7 +506,7 @@ impl Census {
             external_export_records: rows("export_records")?,
         };
         let current =
-            MeetingCensus::capture_locked(storage, db, meeting, omitted_operation, check)?;
+            MeetingCensus::capture_audio_locked(storage, db, meeting, omitted_operation, check)?;
         if current.hash()? != census.hash()?
             || current.scope() != census.scope()
             || self::records(db, meeting, check)? != records

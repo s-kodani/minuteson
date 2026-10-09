@@ -166,7 +166,12 @@ impl PathRow {
         if observed.stage_hint.as_deref().is_some_and(|s| {
             !matches!(
                 s,
-                "recording" | "import" | "transcription" | "diarization" | "minutes_generation"
+                "recording"
+                    | "recording_flac"
+                    | "import"
+                    | "transcription"
+                    | "diarization"
+                    | "minutes_generation"
             )
         }) {
             return Err("削除対象の由来候補が不正です".into());
