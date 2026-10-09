@@ -91,6 +91,34 @@ impl HistoricalFinal {
         }
         Ok(())
     }
+
+    /// The immutable imported diagnostic is not a commit receipt. Confirmed
+    /// requires the independently retained, sealed producer journal to agree;
+    /// a later matching journal must not erase an unconfirmed stop timeout.
+    pub(in crate::input_status) fn archived_issue(
+        &self,
+        source: Option<&super::journal::Record>,
+    ) -> Result<Option<&'static str>, String> {
+        self.validate(&self.owner_id)?;
+        if let Some(p) = &self.persistence {
+            match p.state {
+                State::Invalid => return Ok(Some("invalid")),
+                State::Failed => return Ok(Some("failed")),
+                State::Pending => return Ok(Some("unconfirmed")),
+                State::Confirmed if !self.unconfirmed_at_stop => {
+                    let source = source.ok_or("停止時の履歴診断に保存済み履歴がありません")?;
+                    if !source.sealed
+                        || source.report.owner_id != self.owner_id
+                        || source.report.revision != p.committed_revision
+                    {
+                        return Err("停止時の履歴保存診断と保存済み履歴が一致しません".into());
+                    }
+                }
+                State::Confirmed => {}
+            }
+        }
+        Ok(self.unconfirmed_at_stop.then_some("unconfirmed"))
+    }
 }
 
 /// Preserve the writer's final result as historical producer evidence, while

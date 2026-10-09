@@ -164,7 +164,7 @@ fn final_writer_failure_survives_archive_restart_without_a_queue_or_an_audio_fai
     for _ in 0..2 {
         let controller = ArchivedInputs::default();
         let result = page(&controller, &storage, &lease, true);
-        assert_eq!(result["schemaVersion"], 2);
+        assert_eq!(result["schemaVersion"], 3);
         assert_eq!(result["recordings"][0]["historySaveIssue"], "failed");
         assert!(result["recordings"][0]["batch"].is_null());
         assert!(!output.join("input-notices.json").exists());

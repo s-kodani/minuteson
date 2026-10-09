@@ -1,5 +1,5 @@
 // Local CLI-first browser verification. Start Vite and a named CLI browser
-// first; --cli selects an already installed CLI (no implicit npm download).
+// first; --cli selects an installed CLI or the explicitly supplied skill wrapper.
 // All fixture IPC is synthetic. This does not run Tauri, CI or real recording.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -9,6 +9,10 @@ const tests = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 if (!args.includes("--cli") || !args.includes("--session")) throw Error("Provide --cli PATH and --session NAME for an existing local Playwright CLI browser.");
 const cli = resolve(option("--cli")), session = option("--session"), output = resolve(option("--output") ?? resolve(tests, "../../output/playwright/regression"));
+const portText = option("--port") ?? "1420";
+if (!/^[0-9]{1,5}$/u.test(portText) || Number(portText) < 1 || Number(portText) > 65535) throw Error("Provide a valid local server port.");
+const port = Number(portText), origin = `http://127.0.0.1:${port}`;
+const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
   ["common", "common-modal-browser-fixture.tsx", "common-modal-browser-check.js"],
@@ -88,7 +92,7 @@ const suites = [
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");
 mkdirSync(output, { recursive: true });
 let total = 0;
-const indexRoute = /^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/;
+const indexRoute = new RegExp(localPort(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/.source));
 const entryScript = /<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u;
 const readiness = {
   "common-modal-browser-fixture.tsx": "modalFixture", "action-confirmation-browser-fixture.tsx": "actionFixture",
@@ -102,9 +106,9 @@ const readiness = {
   "capture-scope-browser-fixture.tsx": "scopeFixture",
 };
 for (const [name, fixture, source] of suites) {
-  const check = readFileSync(resolve(tests, source), "utf8");
-  const setup = fixture === "minutes-init" ? `await page.goto("http://127.0.0.1:1420/"); await (${readFileSync(resolve(tests, "minutes-browser-fixture.js"), "utf8")})(page);`
-    : fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("http://127.0.0.1:1420/");` : "";
+  const check = localPort(readFileSync(resolve(tests, source), "utf8"));
+  const setup = fixture === "minutes-init" ? `await page.goto("${origin}/"); await (${localPort(readFileSync(resolve(tests, "minutes-browser-fixture.js"), "utf8"))})(page);`
+    : fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("${origin}/");` : "";
   const ready = readiness[fixture] ? `await page.waitForFunction(name=>!!window[name],${JSON.stringify(readiness[fixture])});` : "";
   // The browser daemon's cwd can differ from this runner's cwd. Always route
   // generated captures to the explicit output directory, not the repo root.
@@ -113,7 +117,8 @@ for (const [name, fixture, source] of suites) {
   // never forcing hidden controls visible or replacing the application's UI.
   const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const waitSpeakerLayout=()=>page.waitForFunction(()=>{const panel=document.querySelector(".workspace-panel-shell");return !panel||panel.dataset.narrow===String(matchMedia("(max-width: 1119px)").matches);});const detailUI={openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:()=>openDetails(".transcript-workspace-tools"),openSpeakerPanel:async()=>{await waitSpeakerLayout();const button=page.getByRole("button",{name:"話者一覧を開く",exact:true});if(await button.isVisible()&&await button.getAttribute("aria-expanded")!=="true")await button.click();},closeSpeakerPanel:async()=>{await waitSpeakerLayout();const dialog=page.locator(".workspace-drawer[open]");if(await dialog.count())await dialog.getByRole("button",{name:"話者一覧を閉じる",exact:true}).click();},openDiarization:async()=>{const tools=page.locator(".speaker-diarization-tools");if(await tools.count()){await detailUI.openSpeakerPanel();await openDetails(".speaker-diarization-tools");}},openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
   const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
-  const run = spawnSync(process.execPath, [cli, `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
+  const wrapper = cli.endsWith(".sh");
+  const run = spawnSync(wrapper ? cli : process.execPath, [...(wrapper ? [] : [cli]), `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
   const log = (run.stdout ?? "") + (run.stderr ?? "");
   writeFileSync(resolve(output, `${name}.log`), log);
   const match = /^### Result\r?\n([^\r\n]+)/m.exec(log);

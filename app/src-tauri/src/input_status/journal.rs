@@ -5,6 +5,7 @@ use super::{history::History, Publication};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;
+#[cfg(test)]
 use std::path::Path;
 
 const LIMIT: u64 = 65 * 1024;
@@ -26,6 +27,21 @@ pub(crate) struct Retained {
     sealed: bool,
     microphone_history: History,
     system_history: Option<History>,
+}
+
+impl Record {
+    /// Historical producer ownership is retained even when the containing DB
+    /// recording has been restored under a different logical session ID.
+    pub(in crate::input_status) fn retained(&self) -> Retained {
+        Retained {
+            schema_version: 1,
+            owner_id: self.report.owner_id.clone(),
+            revision: self.report.revision,
+            sealed: self.sealed,
+            microphone_history: self.report.microphone_history.clone().unwrap(),
+            system_history: self.report.system_history.clone(),
+        }
+    }
 }
 
 pub(super) fn parse(bytes: &[u8], owner: &str) -> Result<Record, String> {
@@ -57,6 +73,7 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
+    #[cfg(test)]
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
         Ok(Self {
             directory: crate::input_levels::open_capture_directory(directory)?,
@@ -64,7 +81,7 @@ impl Reader {
         })
     }
 
-    pub(super) fn pin_at(directory: &File) -> Result<Self, String> {
+    pub(crate) fn pin_at(directory: &File) -> Result<Self, String> {
         Ok(Self {
             directory: directory.try_clone().map_err(|e| e.to_string())?,
             previous: None,
@@ -73,14 +90,7 @@ impl Reader {
 
     pub(crate) fn read(&mut self, owner: &str) -> Result<Retained, String> {
         let record = self.read_record(owner)?;
-        Ok(Retained {
-            schema_version: 1,
-            owner_id: record.report.owner_id,
-            revision: record.report.revision,
-            sealed: record.sealed,
-            microphone_history: record.report.microphone_history.unwrap(),
-            system_history: record.report.system_history,
-        })
+        Ok(record.retained())
     }
     pub(super) fn read_record(&mut self, owner: &str) -> Result<Record, String> {
         let file = crate::input_levels::open_capture_file_at(&self.directory, "input-events.json")?;

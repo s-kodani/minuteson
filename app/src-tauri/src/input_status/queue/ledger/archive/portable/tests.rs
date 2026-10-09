@@ -31,6 +31,76 @@ fn manifest(state: &str, committed: u64, error: bool) -> Vec<u8> {
         "inputEventJournalPersistence":{"requestedRevision":201,"committedRevision":committed,"state":state,"closed":true},
         "inputEventJournalError":error.then_some("secret /Users/private/person/recording.json")}))
 }
+
+#[test]
+fn retained_diagnostic_projection_checks_independent_commit_without_offering_receipts_or_freshness()
+{
+    for state in ["confirmed", "pending", "failed", "invalid"] {
+        for error in [false, true] {
+            for source in [
+                None,
+                Some((true, 201)),
+                Some((false, 201)),
+                Some((true, 200)),
+            ] {
+                let journal =
+                    source.map(|(sealed, revision)| bytes(&retained(66, revision, sealed)));
+                let final_report =
+                    manifest(state, if state == "confirmed" { 201 } else { 200 }, error);
+                let snapshot =
+                    Snapshot::from_evidence(OWNER, journal.as_deref(), None, Some(&final_report))
+                        .unwrap()
+                        .unwrap();
+                let before = snapshot.encode().unwrap();
+                let expected = match state {
+                    "invalid" => Some("invalid"),
+                    "failed" => Some("failed"),
+                    "pending" => Some("unconfirmed"),
+                    _ if error => Some("unconfirmed"),
+                    _ => None,
+                };
+                let issue = snapshot.history_save_issue();
+                if state == "confirmed" && !error && source != Some((true, 201)) {
+                    assert!(issue.is_err(), "{state}/{error}/{source:?}");
+                } else {
+                    assert_eq!(issue.unwrap(), expected, "{state}/{error}/{source:?}");
+                }
+                let retained = snapshot.retained_history().unwrap();
+                assert_eq!(retained.is_some(), source.is_some());
+                if let Some(retained) = retained {
+                    let dto = serde_json::to_value(retained).unwrap();
+                    assert_eq!(dto["ownerId"], OWNER);
+                    assert_eq!(dto["revision"], source.unwrap().1);
+                    assert_eq!(dto["sealed"], source.unwrap().0);
+                    assert!(dto.get("reportAgeMs").is_none());
+                    assert!(dto.get("microphone").is_none());
+                }
+                let (batch, pending) = snapshot.retained_diagnostics(OTHER).unwrap();
+                assert_eq!(pending, source.is_some());
+                assert_eq!(batch.is_some(), source.is_some());
+                if let Some(batch) = batch {
+                    let dto = serde_json::to_value(batch).unwrap();
+                    assert_eq!(dto["ownerId"], OTHER);
+                    assert_eq!(dto["notices"], json!([]));
+                    assert_eq!(dto["noticeLoss"], json!({"microphone":2,"system":2}));
+                    assert!(dto.get("reportAgeMs").is_none());
+                }
+                assert_eq!(snapshot.encode().unwrap(), before);
+                assert!(snapshot.retained_diagnostics("../foreign").is_err());
+            }
+        }
+    }
+    for sealed in [true, false] {
+        let source = bytes(&retained(66, 201, sealed));
+        let snapshot = Snapshot::from_evidence(OWNER, Some(&source), None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            snapshot.history_save_issue().unwrap(),
+            (!sealed).then_some("unconfirmed")
+        );
+    }
+}
 fn value(snapshot: &Snapshot) -> Value {
     serde_json::from_slice(&snapshot.encode().unwrap()).unwrap()
 }

@@ -16,6 +16,51 @@ const page=(recordings:ArchivedInputRow[]=[row()],nextCursor:string|null=null)=>
 const own=(request:ArchivedAttempt,rendered=false):InputNotice=>({...request.attempt.notice,recipientId:recipient,delivery:{...request.attempt.notice.delivery!,leaseAgeMs:0,receiveId:request.attempt.receiveId,rendered}});
 const receipt=(r:ArchivedAttempt,rendered=r.attempt.action!=="receive")=>({schemaVersion:2,ownerId:r.attempt.sessionId,noticeId:r.attempt.noticeId,target:"main",recipientId:recipient,delivery:own(r,rendered).delivery});
 const create=()=>new ArchivedInputController(recipient);
+test("version 3 separates readable imported diagnosis from unavailable delivery without transferred claims",()=>{
+  const diagnostic={...row(batch([],1)),issue:"deliveryUnavailable" as const,historySaveIssue:"failed" as const};
+  diagnostic.batch!.noticeLoss={microphone:2,system:2};
+  const value={schemaVersion:3,recordings:[diagnostic],nextCursor:null};
+  assert.deepEqual(checkedArchivedInputPage(value,null),value);
+  for(const schemaVersion of [1,2])assert.throws(()=>checkedArchivedInputPage({...value,schemaVersion},null));
+  for(const invalid of [
+    {...diagnostic,batch:null},
+    {...diagnostic,batch:batch()},
+    {...diagnostic,batch:batch([notice(1,1,recipient,true)])},
+    {...diagnostic,batch:{...diagnostic.batch!,ownerId:meeting}},
+    {...diagnostic,issue:"unavailable"},
+    {...diagnostic,issue:"confirmed"},
+  ])assert.throws(()=>checkedArchivedInputPage({...value,recordings:[invalid]},null));
+  const c=create();
+  c.acceptPage(value,null,0);
+  for(const at of [0,100,2000,6000]){
+    const {views,attempts}=c.paint(at);
+    assert.deepEqual(attempts,[]);assert.deepEqual(views[0].notices,[]);
+    assert.equal(views[0].unavailable,false);assert.equal(views[0].deliveryUnavailable,true);
+    assert.equal(views[0].historySaveIssue,"failed");
+    assert.deepEqual(views[0].loss,{microphone:2,system:2});
+    c.rendered(owner,notice().id,1,at);c.dismiss(owner,"microphone");
+  }
+  c.pause(true);c.paint(6001);c.pause(false);
+  c.acceptPage(value,null,6002);
+  assert.deepEqual(c.paint(6002).attempts,[]);
+  c.failedRead();
+  const state=c.paint(6003);
+  assert.equal(state.views[0].unavailable,true);
+  assert.equal(state.views[0].deliveryUnavailable,true);
+  assert.deepEqual(state.views[0].loss,{microphone:2,system:2});
+  assert.equal(state.views[0].historySaveIssue,"failed");
+});
+test("native version 3 delivery still receives normally and diagnostic-only imports do not suppress it",()=>{
+  const native={...row(),historySaveIssue:null};
+  const restored={...row(batch([])),sessionId:id(2),batch:{...batch([]),ownerId:id(2),noticeLoss:{microphone:2,system:0}},issue:"deliveryUnavailable" as const,historySaveIssue:"unconfirmed" as const};
+  const c=create();c.acceptPage({schemaVersion:3,recordings:[native,restored],nextCursor:null},null,0);
+  const state=c.paint(0);
+  assert.equal(state.attempts.length,1);assert.equal(state.attempts[0].attempt.sessionId,owner);
+  assert.equal(state.views[0].deliveryUnavailable,false);
+  assert.equal(state.views[1].deliveryUnavailable,true);
+  assert.deepEqual(state.views[1].notices,[]);assert.equal(state.views[1].historySaveIssue,"unconfirmed");
+  assert.equal(c.complete(state.attempts[0],receipt(state.attempts[0]),1),true);
+});
 test("archive DTO is closed and has historical events, never current capture or report age",()=>{
   assert.deepEqual(checkedArchivedInputBatch(batch(),owner),batch());
   for(const extra of ["reportAgeMs","microphone","sealed","currentInputs"]){assert.throws(()=>checkedArchivedInputBatch({...batch(),[extra]:0},owner));}

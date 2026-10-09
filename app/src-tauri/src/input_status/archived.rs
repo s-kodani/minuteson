@@ -179,6 +179,43 @@ impl ArchivedInputs {
         let mut recordings = Vec::with_capacity(rows.len());
         let mut batch_times = Vec::with_capacity(rows.len());
         for row in rows {
+            let imported = match storage.closed_input_snapshot(&row.meeting_id, &row.session_id) {
+                Ok(imported) => imported,
+                Err(_) => {
+                    recordings.push(Row {
+                        meeting_id: row.meeting_id,
+                        session_id: row.session_id,
+                        title: row.title,
+                        batch: None,
+                        issue: Some("unavailable".into()),
+                        history_save_issue: Some("unavailable".into()),
+                    });
+                    batch_times.push(Instant::now());
+                    lease.validate_active()?;
+                    continue;
+                }
+            };
+            if let Some(snapshot) = imported {
+                // Read diagnostics even without any restored audio assets.
+                // Immutable pending events are not an acknowledgement store:
+                // no notices/old claims are offered from this projection.
+                let (batch, pending) = snapshot.retained_diagnostics(&row.session_id)?;
+                let history_save_issue = snapshot
+                    .history_save_issue()
+                    .unwrap_or(Some("unavailable"))
+                    .map(str::to_owned);
+                recordings.push(Row {
+                    meeting_id: row.meeting_id,
+                    session_id: row.session_id,
+                    title: row.title,
+                    batch,
+                    issue: pending.then(|| "deliveryUnavailable".into()),
+                    history_save_issue,
+                });
+                batch_times.push(Instant::now());
+                lease.validate_active()?;
+                continue;
+            }
             // Independent from the delivery ledger and its revision. A readable
             // retained suffix does not prove that the final writer committed.
             let history_save_issue = Self::entry(
@@ -247,7 +284,7 @@ impl ArchivedInputs {
             }
         }
         Ok(Page {
-            schema_version: 2,
+            schema_version: 3,
             recordings,
             next_cursor,
         })

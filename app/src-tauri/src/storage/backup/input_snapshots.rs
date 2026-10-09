@@ -6,7 +6,7 @@ use crate::input_status::queue::PortableInputSnapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub(super) const MAX_BYTES: usize = 513 * 1024;
+pub(in crate::storage) const MAX_BYTES: usize = 513 * 1024;
 const MAX_RECORDINGS: usize = 10_000;
 const MAX_TOTAL_BYTES: usize = 128 * 1024 * 1024;
 
@@ -19,6 +19,10 @@ pub(in crate::storage) struct Bound {
     snapshot: PortableInputSnapshot,
 }
 impl Bound {
+    pub(in crate::storage) fn into_snapshot(self) -> PortableInputSnapshot {
+        self.snapshot
+    }
+
     fn validate(&self, meeting: &str, session: &str) -> Result<(), String> {
         if self.schema_version != 1
             || self.meeting_id != meeting

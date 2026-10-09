@@ -82,10 +82,37 @@ async page=>{
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.rows.unshift(f.newArchivedRow({sessionId:"00000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa",title:"後から終了した会議"}));});
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
+    await seed({title:"復元された点検会議",both:true,loss:2,historySaveIssue:"failed",deliveryUnavailable:true});
+    await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した未表示通知の受付は未対応です"));
+    // The previous source can remain until the bounded cursor traversal wraps
+    // and completes an authoritative new cycle. Wait for its normal removal;
+    // never dismiss a card or delete a receipt to make this check pass.
+    await card().waitFor({state:"hidden"});await card("PC音声").waitFor({state:"hidden"});
+    const imported=page.locator(".archived-input-notices details");
+    if(!await imported.evaluate(e=>e.open))await imported.locator(":scope > summary").click();
+    let importedText=await imported.innerText();
+    check(importedText.includes("取得履歴の書込みを確定できません")&&importedText.includes("マイク通知の保持不足 2件")&&importedText.includes("PC音声通知の保持不足 2件"),"imported diagnosis/loss did not reach production review UI");
+    check(!importedText.includes("通知履歴を読めません"),"readable imported diagnosis was labelled unreadable");
+    const importedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
+    check((await calls()).every(c=>c.sessionId!==importedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"immutable imported state started reception or rendering");
+    results.push("imported diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
+    await reload();await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した未表示通知の受付は未対応です"));
+    const reopened=page.locator(".archived-input-notices details");if(!await reopened.evaluate(e=>e.open))await reopened.locator(":scope > summary").click();
+    importedText=await reopened.innerText();
+    check(importedText.includes("書込みを確定できません")&&importedText.includes("保持不足 2件")&&(await calls()).every(c=>c.sessionId!==importedOwner),"reload removed immutable import issues or adopted receipt authority");
+    results.push("imported failed persistence and retained loss survive WebView replacement without acknowledgement requests");
+    for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
+      await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
+      check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`imported diagnosis UI overflows ${width} ${theme}`);
+      await page.screenshot({path:`imported-${theme}-${width}.png`});
+    }}
+    results.push("readable imported diagnostics retain bounded 960/360px light/dark layouts");
+    await page.setViewportSize({width:1200,height:900});
     const visualTitle="終了済み録音の通知を確認するための点検会議";
     await seed({title:visualTitle,both:true,loss:4,issue:"invalid"});await card().filter({hasText:visualTitle}).waitFor();
     await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0]?.delivery.rendered));
-    await page.locator(".archived-input-notices details summary").click();
+    const visualDetails=page.locator(".archived-input-notices details");
+    if(!await visualDetails.evaluate(e=>e.open))await visualDetails.locator(":scope > summary").click();
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
       await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
       check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`archive UI overflows ${width} ${theme}`);

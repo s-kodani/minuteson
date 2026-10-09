@@ -5,7 +5,7 @@ import type {NoticeReception} from "./recording-input-receipts.ts";
 
 type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
-export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"]};
+export type ArchivedInputView={meetingId:string;sessionId:string;title:string;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:NoticeLoss;historyIssue:null|"missing"|"invalid";unavailable:boolean;deliveryUnavailable:boolean;historySaveIssue:ArchivedInputRow["historySaveIssue"]};
 
 /** Main WebView lifetime, independent of the selected meeting. One paginated
  * traversal, bounded owners and identity-fenced asynchronous acknowledgements. */
@@ -39,7 +39,7 @@ export class ArchivedInputController {
       // An old API's absent field is unknown, not evidence that a previously
       // reported final writer failure has been resolved.
       entry.row={...row,...(row.historySaveIssue===undefined&&entry.row.historySaveIssue!==undefined?{historySaveIssue:entry.row.historySaveIssue}:{})};
-      try{entry.fresh=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.error=row.issue!==null;}
+      try{const accepted=row.batch!==null&&entry.session.accept(row.batch,requestedAt);entry.fresh=accepted&&row.issue===null;entry.error=row.issue==="unavailable";}
       catch{entry.fresh=false;entry.error=true;}
     }
     this.cursor=page.nextCursor;
@@ -54,7 +54,7 @@ export class ArchivedInputController {
       for(const attempt of entry.queue.observe(raw,at))attempts.push({entry,meetingId:entry.row.meetingId,attempt});
       const queued=entry.queue.read(at),diagnostic=entry.session.diagnostics();
       views.push({meetingId:entry.row.meetingId,sessionId:entry.row.sessionId,title:entry.row.title,...queued,
-        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,historySaveIssue:entry.row.historySaveIssue??null});
+        loss:diagnostic?.loss??{microphone:0,system:0},historyIssue:diagnostic?.issue??null,unavailable:entry.error,deliveryUnavailable:entry.row.issue==="deliveryUnavailable",historySaveIssue:entry.row.historySaveIssue??null});
     }
     return {views,attempts};
   }

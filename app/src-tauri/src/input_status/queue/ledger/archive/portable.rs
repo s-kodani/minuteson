@@ -126,6 +126,57 @@ impl Snapshot {
     pub(crate) fn source_owner_id(&self) -> &str {
         &self.source_owner_id
     }
+
+    /// Only the independently saved producer journal is returned. A delivery
+    /// publication must not be relabelled as that journal or as current input.
+    pub(crate) fn retained_history(&self) -> Result<Option<journal::Retained>, String> {
+        self.validate(&self.source_owner_id)?;
+        Ok(self.source_journal.as_ref().map(journal::Record::retained))
+    }
+
+    pub(crate) fn history_save_issue(&self) -> Result<Option<&'static str>, String> {
+        self.validate(&self.source_owner_id)?;
+        match &self.final_diagnostic {
+            Some(final_report) => final_report.archived_issue(self.source_journal.as_ref()),
+            None => Ok(self
+                .source_journal
+                .as_ref()
+                .filter(|r| !r.sealed)
+                .map(|_| "unconfirmed")),
+        }
+    }
+
+    /// Diagnostic-only view of immutable retention. There is no writable
+    /// destination queue yet: NEVER offer a notice or a transferred receipt.
+    /// The caller must report pending delivery as unavailable until that queue
+    /// has been durably bound to the logical destination owner.
+    pub(crate) fn retained_diagnostics(
+        &self,
+        logical_owner: &str,
+    ) -> Result<(Option<super::Batch>, bool), String> {
+        self.validate(&self.source_owner_id)?;
+        if !crate::input_levels::valid_owner(logical_owner) {
+            return Err("復元先の録音入力診断の所属が不正です".into());
+        }
+        Ok(match &self.delivery {
+            Some(record) => (
+                Some(super::Batch {
+                    schema_version: 1,
+                    owner_id: logical_owner.into(),
+                    revision: record.revision,
+                    notices: vec![],
+                    notice_loss: record.queue.loss(),
+                    history_issue: record.history_issue.clone(),
+                }),
+                record
+                    .queue
+                    .lanes
+                    .iter()
+                    .any(|lane| !lane.pending.is_empty()),
+            ),
+            None => (None, false),
+        })
+    }
     /// Inputs must be bounded bytes read under the caller's DB/source ownership
     /// and data-maintenance fence. No file open or mutable writer is performed.
     /// Reject malformed original bytes before any Value conversion erases keys.

@@ -16,7 +16,7 @@ fn row(
 ) -> Value {
     let page =
         serde_json::to_value(controller.page(storage, lease, None, &|| true).unwrap()).unwrap();
-    assert_eq!(page["schemaVersion"], 2);
+    assert_eq!(page["schemaVersion"], 3);
     page["recordings"]
         .as_array()
         .unwrap()

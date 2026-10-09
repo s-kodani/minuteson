@@ -217,6 +217,7 @@ fn failed_recording_actual_backup_additive_restore_rebackup_second_restore_prese
         assert!(target
             .closed_input_directory(&new_meeting, &new_session)
             .is_err());
+        assert_imported_reads(&target, &new_meeting, &new_session, &f.session, &f.journal);
         let path2 = output.path().join("rebackup.monbackup");
         target.create_backup_archive(&path2, &|| false).unwrap();
         let again =
@@ -239,9 +240,355 @@ fn failed_recording_actual_backup_additive_restore_rebackup_second_restore_prese
         assert_eq!(twice["meetingId"], third_meeting);
         assert_eq!(twice["sessionId"], third_session);
         assert_eq!(twice["snapshot"], original["snapshot"]);
+        assert_imported_reads(
+            &third,
+            &third_meeting,
+            &third_session,
+            &f.session,
+            &f.journal,
+        );
         drop(maintenance);
         assert!(f.storage.create_meeting("SOURCE STILL WRITABLE").is_ok());
     }
+}
+
+fn assert_imported_reads(
+    target: &Storage,
+    meeting: &str,
+    session: &str,
+    original_owner: &str,
+    original_journal: &[u8],
+) {
+    let before = payload(&target.connection.lock().unwrap(), session);
+    let retained =
+        serde_json::to_value(target.recording_input_history(meeting, session).unwrap()).unwrap();
+    let original: Value = serde_json::from_slice(original_journal).unwrap();
+    assert_eq!(retained["ownerId"], original_owner);
+    assert_eq!(retained["revision"], original["report"]["revision"]);
+    assert_eq!(retained["sealed"], original["sealed"]);
+    for lane in ["microphoneHistory", "systemHistory"] {
+        assert_eq!(retained[lane], original["report"][lane]);
+    }
+    assert!(retained.get("reportAgeMs").is_none());
+    assert!(retained.get("microphone").is_none());
+    assert!(target
+        .recording_input_history(&Uuid::new_v4().to_string(), session)
+        .is_err());
+    let admission = AnalysisController::default();
+    let lease = admission.begin_notice_storage().unwrap();
+    let notices = ArchivedInputs::default();
+    for visible in [true, false] {
+        let page =
+            serde_json::to_value(notices.page(target, &lease, None, &|| visible).unwrap()).unwrap();
+        let row = &page["recordings"][0];
+        assert_eq!(row["sessionId"], session);
+        assert_eq!(row["meetingId"], meeting);
+        assert_eq!(row["historySaveIssue"], "failed");
+        // Reading loss is possible now, but delivery remains explicitly pending.
+        assert_eq!(row["issue"], "deliveryUnavailable");
+        let batch = &row["batch"];
+        assert_eq!(batch["ownerId"], session);
+        assert_eq!(batch["notices"], json!([]));
+        assert_eq!(batch["noticeLoss"], json!({"microphone":2,"system":2}));
+        assert!(batch["historyIssue"].is_null());
+        assert!(batch.get("reportAgeMs").is_none());
+        assert!(batch.get("microphone").is_none());
+    }
+    for notice_owner in [original_owner, session] {
+        for action in ["receive", "render", "close"] {
+            let request = serde_json::from_value(json!({
+                "meetingId":meeting,"sessionId":session,
+                "noticeId":format!("{notice_owner}:microphone:2:interrupted"),
+                "recipientId":Uuid::new_v4().to_string(),"generation":1,
+                "action":action,"receiveId":(action=="receive").then(||Uuid::new_v4().to_string())
+            }))
+            .unwrap();
+            assert!(notices
+                .acknowledge(target, &lease, request, &|| true)
+                .is_err());
+        }
+    }
+    assert_eq!(payload(&target.connection.lock().unwrap(), session), before);
+    assert!(!target
+        .root()
+        .join(format!(
+            "meetings/{meeting}/audio/{session}/input-notices.json"
+        ))
+        .exists());
+}
+
+#[test]
+fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_write_ownership() {
+    let original = fixture();
+    let source_root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(source_root.path().into()).unwrap();
+    let (meeting, session, directory, mut manifest) =
+        crate::storage::recordings::tests::saved_probe_fixture(&storage);
+    let mut journal: Value = serde_json::from_slice(&original.journal).unwrap();
+    journal["report"]["ownerId"] = json!(session);
+    let journal_bytes = serde_json::to_vec(&journal).unwrap();
+    manifest["recordingOwnerId"] = json!(session);
+    manifest["inputEventJournalPersistence"] = json!({
+        "requestedRevision":201,"committedRevision":201,"state":"confirmed","closed":true
+    });
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    for (name, data) in [
+        ("input-events.json", &journal_bytes),
+        ("manifest.json", &manifest_bytes),
+    ] {
+        std::fs::write(directory.join(name), data).unwrap();
+        std::fs::set_permissions(directory.join(name), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+    }
+    storage.finalize_recording(&session).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("saved-inputs.monbackup");
+    storage.create_backup_archive(&path, &|| false).unwrap();
+    let archive = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let (target, new_meeting, new_session) = restore(
+        &archive,
+        output.path(),
+        target_root.path(),
+        &meeting,
+        &session,
+    );
+    let before = payload(&target.connection.lock().unwrap(), &new_session);
+    let assets: Vec<(String, String)> = target.connection.lock().unwrap().prepare(
+        "SELECT relative_path,content_hash FROM file_assets WHERE meeting_id=?1 AND state='ready' ORDER BY id"
+    ).unwrap().query_map(params![new_meeting], |r| Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    assert_eq!(assets.len(), 3); // Actual registered synthetic CAFs and manifest.
+    for (relative, hash) in &assets {
+        assert_eq!(
+            digest_file(&target.root().join(relative), &|| false)
+                .unwrap()
+                .1,
+            *hash
+        );
+    }
+    let expected =
+        serde_json::to_value(storage.recording_input_history(&meeting, &session).unwrap()).unwrap();
+    let decoy = target
+        .root()
+        .join(format!("meetings/{new_meeting}/audio/{new_session}"));
+    let admission = AnalysisController::default();
+    let lease = admission.begin_notice_storage().unwrap();
+    let controller = ArchivedInputs::default();
+    for place_decoy in [false, true] {
+        if place_decoy {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&decoy)
+                .unwrap();
+            // A valid destination-looking journal and an invalid ledger must
+            // BOTH be ignored; neither is part of the immutable DB source.
+            let mut local = journal.clone();
+            local["report"]["ownerId"] = json!(new_session);
+            std::fs::write(
+                decoy.join("input-events.json"),
+                serde_json::to_vec(&local).unwrap(),
+            )
+            .unwrap();
+            std::fs::set_permissions(
+                decoy.join("input-events.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            std::fs::write(
+                decoy.join("input-notices.json"),
+                b"DO NOT ADOPT OR OVERWRITE",
+            )
+            .unwrap();
+            std::fs::write(decoy.join("manifest.json"), b"DO NOT READ AS PRODUCER").unwrap();
+        }
+        assert_eq!(
+            serde_json::to_value(
+                target
+                    .recording_input_history(&new_meeting, &new_session)
+                    .unwrap()
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(target
+            .closed_input_directory(&new_meeting, &new_session)
+            .is_err());
+        let page = serde_json::to_value(controller.page(&target, &lease, None, &|| true).unwrap())
+            .unwrap();
+        let row = &page["recordings"][0];
+        assert!(row["historySaveIssue"].is_null());
+        assert_eq!(
+            row["batch"]["noticeLoss"],
+            json!({"microphone":2,"system":2})
+        );
+        assert_eq!(row["batch"]["notices"], json!([]));
+        assert_eq!(row["issue"], "deliveryUnavailable");
+        let request = serde_json::from_value(json!({
+            "meetingId":new_meeting,"sessionId":new_session,
+            "noticeId":format!("{new_session}:microphone:2:interrupted"),
+            "recipientId":Uuid::new_v4().to_string(),"generation":1,
+            "action":"receive","receiveId":Uuid::new_v4().to_string()
+        }))
+        .unwrap();
+        assert!(controller
+            .acknowledge(&target, &lease, request, &|| true)
+            .is_err());
+    }
+    assert_eq!(
+        std::fs::read(decoy.join("input-notices.json")).unwrap(),
+        b"DO NOT ADOPT OR OVERWRITE"
+    );
+    assert_eq!(
+        std::fs::read(decoy.join("manifest.json")).unwrap(),
+        b"DO NOT READ AS PRODUCER"
+    );
+    assert_eq!(
+        payload(&target.connection.lock().unwrap(), &new_session),
+        before
+    );
+    for (relative, hash) in &assets {
+        assert_eq!(
+            digest_file(&target.root().join(relative), &|| false)
+                .unwrap()
+                .1,
+            *hash
+        );
+    }
+    drop(lease);
+    drop(controller);
+    drop(target);
+    let reopened = Storage::open(target_root.path().into()).unwrap();
+    assert_eq!(
+        serde_json::to_value(
+            reopened
+                .recording_input_history(&new_meeting, &new_session)
+                .unwrap()
+        )
+        .unwrap(),
+        expected
+    );
+    assert!(reopened
+        .closed_input_directory(&new_meeting, &new_session)
+        .is_err());
+    assert_eq!(
+        payload(&reopened.connection.lock().unwrap(), &new_session),
+        before
+    );
+}
+
+#[test]
+fn diagnostic_only_and_corrupt_imports_never_fall_back_to_destination_looking_history() {
+    let f = fixture();
+    std::fs::remove_file(f.directory.join("input-events.json")).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let path = output.path().join("diagnostic-only.monbackup");
+    f.storage.create_backup_archive(&path, &|| false).unwrap();
+    let archive = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let (target, meeting, session) = restore(
+        &archive,
+        output.path(),
+        target_root.path(),
+        &f.meeting,
+        &f.session,
+    );
+    let before = payload(&target.connection.lock().unwrap(), &session);
+    let directory = target
+        .root()
+        .join(format!("meetings/{meeting}/audio/{session}"));
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    let mut decoy: Value = serde_json::from_slice(&f.journal).unwrap();
+    decoy["report"]["ownerId"] = json!(session);
+    let decoy_bytes = serde_json::to_vec(&decoy).unwrap();
+    std::fs::write(directory.join("input-events.json"), &decoy_bytes).unwrap();
+    std::fs::set_permissions(
+        directory.join("input-events.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let admission = AnalysisController::default();
+    let lease = admission.begin_notice_storage().unwrap();
+    let controller = ArchivedInputs::default();
+    assert!(target.recording_input_history(&meeting, &session).is_err());
+    assert!(target.closed_input_directory(&meeting, &session).is_err());
+    let page =
+        serde_json::to_value(controller.page(&target, &lease, None, &|| true).unwrap()).unwrap();
+    let row = &page["recordings"][0];
+    assert_eq!(row["historySaveIssue"], "failed");
+    assert!(row["batch"].is_null());
+    assert!(row["issue"].is_null()); // No transferred notice exists in this source.
+    assert_eq!(
+        payload(&target.connection.lock().unwrap(), &session),
+        before
+    );
+    // Controlled damaged-DB fixture: bypass immutable update protection only
+    // here. The public reader must reject, not adopt the valid decoy journal.
+    target
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER recording_input_snapshot_fixed;")
+        .unwrap();
+    for corrupt in [
+        "{}".to_string(),
+        before.replace(&meeting, &Uuid::new_v4().to_string()),
+        before.replacen(
+            "\"schemaVersion\":1",
+            "\"schemaVersion\":1,\"schemaVersion\":1",
+            1,
+        ),
+    ] {
+        target
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE recording_sessions SET input_history_snapshot_json=?1 WHERE id=?2",
+                params![corrupt, session],
+            )
+            .unwrap();
+        assert!(target.recording_input_history(&meeting, &session).is_err());
+        assert!(target.closed_input_directory(&meeting, &session).is_err());
+        let page = serde_json::to_value(controller.page(&target, &lease, None, &|| true).unwrap())
+            .unwrap();
+        let row = &page["recordings"][0];
+        assert!(row["batch"].is_null());
+        assert_eq!(row["issue"], "unavailable");
+        assert_eq!(row["historySaveIssue"], "unavailable");
+        assert_eq!(
+            std::fs::read(directory.join("input-events.json")).unwrap(),
+            decoy_bytes
+        );
+        assert!(!directory.join("input-notices.json").exists());
+    }
+    target
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("PRAGMA ignore_check_constraints=ON;")
+        .unwrap();
+    let oversized = format!("{{\"padding\":\"{}\"}}", "x".repeat(MAX_BYTES));
+    target
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE recording_sessions SET input_history_snapshot_json=?1 WHERE id=?2",
+            params![oversized, session],
+        )
+        .unwrap();
+    assert!(target.closed_input_snapshot(&meeting, &session).is_err());
+    assert!(target.recording_input_history(&meeting, &session).is_err());
+    assert!(target.closed_input_directory(&meeting, &session).is_err());
+    assert_eq!(
+        std::fs::read(directory.join("input-events.json")).unwrap(),
+        decoy_bytes
+    );
 }
 
 #[test]
