@@ -21,6 +21,11 @@ mod local_engine;
 mod minutes_document;
 mod model_application;
 mod model_compatibility;
+// Download transport/staging is not exposed as IPC until durable provenance,
+// operation readback and the explicit UI review are connected.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+mod model_download;
 mod model_inspection;
 mod model_placement;
 mod model_rebinding;
