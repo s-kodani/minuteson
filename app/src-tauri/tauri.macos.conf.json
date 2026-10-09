@@ -6,7 +6,8 @@
     "active": true,
     "targets": ["app"],
     "resources": {
-      "../../probes/macos-capture/.build/MONCaptureProbe.app": "MONCaptureProbe.app"
+      "../../probes/macos-capture/.build/MONCaptureProbe.app": "MONCaptureProbe.app",
+      "../../probes/speaker-embedding/.build/mon-speaker-embedding": "mon-speaker-embedding"
     },
     "macOS": {
       "minimumSystemVersion": "15.0",

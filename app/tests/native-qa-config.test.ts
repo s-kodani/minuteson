@@ -30,3 +30,11 @@ test("QA script builds with the QA flavor without launching or invoking CI", () 
   assert.equal(pkg.scripts["tauri:qa:build"], "tauri build --config src-tauri/tauri.qa.conf.json");
   assert.equal(pkg.scripts.tauri, "tauri");
 });
+
+test("native macOS packaging includes the generated headless embedding helper at the runtime resource path", () => {
+  assert.equal(macos.bundle.resources["../../probes/speaker-embedding/.build/mon-speaker-embedding"], "mon-speaker-embedding");
+  const build = readFileSync(new URL("../build-macos.sh", import.meta.url), "utf8");
+  assert.ok(build.includes('probes/speaker-embedding/build.sh" --out-dir "$app_dir/../probes/speaker-embedding/.build"'));
+  const runtime = readFileSync(new URL("../src-tauri/src/diarization/known.rs", import.meta.url), "utf8");
+  assert.ok(runtime.includes('contents.join("Resources/mon-speaker-embedding")'));
+});
