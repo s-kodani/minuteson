@@ -154,6 +154,8 @@ pub struct Storage {
     managed_anchor: deletion::fs::RootAnchor,
     #[cfg(unix)]
     native_models_root: PathBuf,
+    #[cfg(target_os = "macos")]
+    flac_history: Option<std::sync::Arc<recordings::flac::relocation::Aliases>>,
 }
 
 #[cfg(test)]
@@ -222,6 +224,8 @@ impl Storage {
                 None,
                 #[cfg(target_os = "macos")]
                 None,
+                #[cfg(target_os = "macos")]
+                None,
             )
         }
         #[cfg(not(unix))]
@@ -240,6 +244,8 @@ impl Storage {
             Some(models_root),
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         )
     }
 
@@ -248,11 +254,13 @@ impl Storage {
         admission: &crate::bootstrap::placement::NativeHistoryAdmission<'_, '_>,
     ) -> Result<Self, String> {
         admission.verify()?;
+        let flac_history = recordings::flac::relocation::admitted_history(admission)?;
         let history = deletion::relocation::receiver::admitted_history(admission)?;
         let storage = Self::open_inner(
             admission.root().to_owned(),
             Some(admission.models_root().to_owned()),
             history,
+            flac_history,
         )
         .map_err(|e| e.to_string())?;
         admission.verify()?;
@@ -264,6 +272,9 @@ impl Storage {
         #[cfg(unix)] models_root: Option<PathBuf>,
         #[cfg(target_os = "macos")] history: Option<
             std::sync::Arc<deletion::relocation::receiver::Aliases>,
+        >,
+        #[cfg(target_os = "macos")] flac_history: Option<
+            std::sync::Arc<recordings::flac::relocation::Aliases>,
         >,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
@@ -341,6 +352,8 @@ impl Storage {
             managed_anchor,
             #[cfg(unix)]
             native_models_root,
+            #[cfg(target_os = "macos")]
+            flac_history,
         })
     }
 

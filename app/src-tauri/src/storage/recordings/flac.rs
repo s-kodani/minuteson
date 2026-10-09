@@ -10,12 +10,14 @@ use std::os::fd::AsRawFd;
 
 mod files;
 mod inventory;
+#[cfg(target_os = "macos")]
+pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
 pub(in crate::storage) use inventory::{inspect_workspaces, WorkspaceFiles};
 #[cfg(test)]
 pub(super) mod tests;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
     schema_version: u32,
@@ -23,7 +25,7 @@ struct Plan {
     recording_directory: Identity,
     tracks: Vec<TrackPlan>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrackPlan {
     id: String,
@@ -50,7 +52,7 @@ impl From<SavedFlac> for AudioProof {
         }
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Checkpoint {
     schema_version: u32,
@@ -333,7 +335,9 @@ impl Publication {
         let (plan_bytes, plan_stamp) = root
             .read_json(plan_name)?
             .ok_or("FLAC確定計画がありません")?;
-        let plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
+        let mut plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        relocation::effective_plan(storage, &root.path, plan_name, &plan_bytes, &mut plan)?;
         if plan.schema_version != 1
             || plan.input_hash != input_hash
             || plan.recording_directory != root.identity
@@ -537,10 +541,49 @@ fn convert(
     let receipt_name = format!(".{id}.json");
     let (mut receipt, mut receipt_stamp) =
         if let Some((bytes, stamp)) = directory.read_json(&receipt_name)? {
-            (
-                serde_json::from_slice::<Checkpoint>(&bytes).map_err(|e| e.to_string())?,
-                stamp,
-            )
+            let mut checkpoint: Checkpoint =
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            #[cfg(target_os = "macos")]
+            if relocation::effective_checkpoint(
+                storage,
+                &directory.path,
+                &receipt_name,
+                &bytes,
+                &mut checkpoint,
+            )? {
+                // A copied checkpoint still names the old inode. Persist the
+                // new, independently placed identity before any truncation,
+                // encoding or rename so another crash needs no JSON adoption.
+                let staging = directory.optional(&checkpoint.staging_name, false)?;
+                let published = directory.optional(&final_name, false)?;
+                if staging.is_some() && published.is_some() {
+                    return Err("移動したFLACの途中名と最終名が重複しています".into());
+                }
+                let file = staging
+                    .or_else(|| published.filter(|_| checkpoint.audio.is_some()))
+                    .ok_or("移動したFLACの所有実体がありません")?;
+                checkpoint
+                    .staging_identity
+                    .as_ref()
+                    .ok_or("移動したFLACの実体記録がありません")?
+                    .require(&file)?;
+                stamp.require(&directory.required(&receipt_name, false)?)?;
+                storage.require_data_writable()?;
+                directory.json(&receipt_name, &checkpoint, Some(&stamp))?;
+                #[cfg(test)]
+                crash_point("relocation-rebound");
+                (
+                    checkpoint,
+                    directory
+                        .read_json(&receipt_name)?
+                        .ok_or("移動したFLACの記録がありません")?
+                        .1,
+                )
+            } else {
+                (checkpoint, stamp)
+            }
+            #[cfg(not(target_os = "macos"))]
+            (checkpoint, stamp)
         } else {
             if directory.optional(&final_name, false)?.is_some() {
                 return Err("所有証拠のない最終FLACは採用できません".into());

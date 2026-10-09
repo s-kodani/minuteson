@@ -2,6 +2,9 @@ use super::*;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "macos")]
+#[path = "relocation_tests.rs"]
+mod relocation;
 #[path = "workspace_tests.rs"]
 mod workspace;
 

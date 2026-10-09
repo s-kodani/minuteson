@@ -34,7 +34,8 @@ impl WorkspaceFiles {
 }
 
 // Never create a lock, directory, checkpoint or audio file while inspecting.
-// A copied plan's old directory identity cannot mint ownership on a new root.
+// Plain copied JSON cannot mint ownership. A selected native placement can
+// supply qualified aliases for its own new inodes, never unknown leftovers.
 pub(in crate::storage) fn inspect_workspaces(
     storage: &Storage,
     meeting: &str,
@@ -80,12 +81,14 @@ pub(in crate::storage) fn inspect_workspaces(
             let Some((bytes, stamp)) = root.read_json(name).unwrap_or(None) else {
                 continue;
             };
-            let Ok(plan) = serde_json::from_slice::<Plan>(&bytes) else {
+            let Ok(mut plan) = serde_json::from_slice::<Plan>(&bytes) else {
                 // Damaged/unproven metadata stays retained. Neither output
                 // names nor this failure grant ownership of intermediate PCM.
                 continue;
             };
-            // Backup/relocation preserves bytes, not local physical ownership.
+            #[cfg(target_os = "macos")]
+            relocation::effective_plan(storage, &root.path, name, &bytes, &mut plan)?;
+            // Backup or an unadmitted copy preserves bytes, not ownership.
             // Registered audio is still classified separately by the DB.
             if plan.recording_directory != root.identity {
                 continue;
@@ -132,8 +135,16 @@ pub(in crate::storage) fn inspect_workspaces(
                     let Some((bytes, stamp)) = directory.read_json(&checkpoint_name)? else {
                         continue;
                     };
-                    let checkpoint: Checkpoint =
+                    let mut checkpoint: Checkpoint =
                         serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    #[cfg(target_os = "macos")]
+                    relocation::effective_checkpoint(
+                        storage,
+                        &directory.path,
+                        &checkpoint_name,
+                        &bytes,
+                        &mut checkpoint,
+                    )?;
                     if checkpoint.schema_version != 1
                         || checkpoint.input_hash != plan.input_hash
                         || checkpoint.chunk_id != *chunk
@@ -192,13 +203,13 @@ pub(in crate::storage) fn inspect_workspaces(
     storage.managed_anchor.verify()?;
     Ok(found)
 }
-fn valid_hash(hash: &str) -> bool {
+pub(super) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn valid_staging(name: &str, chunk: &str) -> bool {
+pub(super) fn valid_staging(name: &str, chunk: &str) -> bool {
     name.strip_prefix(&format!(".{chunk}."))
         .and_then(|s| s.strip_suffix(".part"))
         .is_some_and(input_levels::valid_owner)

@@ -18,7 +18,7 @@ pub(super) struct Identity {
     birth: (u64, u32),
 }
 impl Identity {
-    fn read(metadata: &Metadata) -> Result<Self, String> {
+    pub(super) fn read(metadata: &Metadata) -> Result<Self, String> {
         let birth = metadata
             .created()
             .map_err(|e| e.to_string())?
@@ -31,6 +31,34 @@ impl Identity {
             mode: metadata.mode(),
             birth: (birth.as_secs(), birth.subsec_nanos()),
         })
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn registered(&self) -> Result<(u64, u64, u64), String> {
+        self.validate(self.mode & libc::S_IFMT as u32 == libc::S_IFDIR as u32)?;
+        Ok((
+            self.device,
+            self.inode,
+            self.birth
+                .0
+                .checked_mul(1_000_000_000)
+                .and_then(|n| n.checked_add(self.birth.1.into()))
+                .ok_or("FLAC実体の時刻が範囲外です")?,
+        ))
+    }
+    #[cfg(target_os = "macos")]
+    pub(super) fn validate(&self, directory: bool) -> Result<(), String> {
+        let kind = if directory {
+            libc::S_IFDIR
+        } else {
+            libc::S_IFREG
+        };
+        if self.birth.1 >= 1_000_000_000
+            || self.mode & libc::S_IFMT as u32 != kind as u32
+            || self.uid != unsafe { libc::geteuid() }
+        {
+            return Err("FLAC実体の所有記録が不正です".into());
+        }
+        Ok(())
     }
     pub(super) fn file(file: &File) -> Result<Self, String> {
         let m = file.metadata().map_err(|e| e.to_string())?;

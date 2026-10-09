@@ -77,6 +77,28 @@ impl NativeHistoryAdmission<'_, '_> {
         history::admitted_control(self.placement, self.control_hash())
     }
     pub(crate) fn owned_directory(&self, path: &str) -> Result<(u64, u64, u64), String> {
+        self.owned_path(path, true)
+    }
+    pub(crate) fn copied_file_hash(&self, path: &str) -> Result<&str, String> {
+        self.placement.guard()?;
+        let node = self
+            .placement
+            .nodes
+            .get(path)
+            .ok_or("履歴の記録は配置対象ではありません")?;
+        if node.entry.directory || node.state != "copied" {
+            return Err("履歴の記録の配置が未完了です".into());
+        }
+        node.entry
+            .hash
+            .as_deref()
+            .ok_or("履歴の記録のSHAがありません".into())
+    }
+    pub(crate) fn owned_path(
+        &self,
+        path: &str,
+        directory: bool,
+    ) -> Result<(u64, u64, u64), String> {
         // The complete selected admission is checked at both parser boundaries.
         // Keep each inventory lookup tied to this live owner without rescanning
         // the whole destination registry once per directory.
@@ -86,7 +108,7 @@ impl NativeHistoryAdmission<'_, '_> {
             .nodes
             .get(path)
             .ok_or("履歴の親は配置台帳の所有対象ではありません")?;
-        if !node.entry.directory || node.state != "copied" {
+        if node.entry.directory != directory || node.state != "copied" {
             return Err("履歴の親の配置が未完了です".into());
         }
         let id = node

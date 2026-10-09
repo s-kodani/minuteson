@@ -177,6 +177,8 @@ pub(in crate::storage::backup) fn write_image(
     history: &transfer::Bundle,
     deletion_history: Option<&crate::storage::deletion::relocation::Source>,
     deletion_binding: Option<&crate::storage::deletion::relocation::Destination>,
+    flac_history: Option<&crate::storage::recordings::flac::relocation::Source>,
+    flac_binding: Option<&crate::storage::recordings::flac::relocation::Destination>,
     bindings: &[binding::Record],
 ) -> Result<(), String> {
     let proof = serde_json::to_string(&Identity::read(&private_directory(target)?)?)
@@ -223,7 +225,7 @@ pub(in crate::storage::backup) fn write_image(
     if deletion_history.is_some() != deletion_binding.is_some() {
         return Err("削除履歴とコピー先の所有対応が揃っていません".into());
     }
-    let local_json = match deletion_history {
+    let mut local_json = match deletion_history {
         None => history.local_json()?,
         Some(deletion) => {
             let mut local: serde_json::Value =
@@ -246,6 +248,24 @@ pub(in crate::storage::backup) fn write_image(
             serde_json::to_string(&local).map_err(|e| e.to_string())?
         }
     };
+    if flac_history.is_some() != flac_binding.is_some() {
+        return Err("FLAC履歴とコピー先の所有対応が揃っていません".into());
+    }
+    if let Some(source) = flac_history {
+        let mut local: serde_json::Value =
+            serde_json::from_str(&local_json).map_err(|e| e.to_string())?;
+        let object = local.as_object_mut().ok_or("元のFLAC移動履歴が不正です")?;
+        object.insert(
+            "flac_history".into(),
+            serde_json::to_value(source).map_err(|e| e.to_string())?,
+        );
+        object.insert(
+            "flac_binding".into(),
+            serde_json::to_value(flac_binding.ok_or("FLACのコピー先がありません")?)
+                .map_err(|e| e.to_string())?,
+        );
+        local_json = serde_json::to_string(&local).map_err(|e| e.to_string())?;
+    }
     let prior_json = serde_json::to_string(
         &history
             .origins

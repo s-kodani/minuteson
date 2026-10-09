@@ -299,6 +299,8 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
         )
         .unwrap(),
         scratch: None,
+        #[cfg(target_os = "macos")]
+        flac_history: None,
         #[cfg(unix)]
         native_models_root: root.path().join("models"),
         maintenance: std::sync::atomic::AtomicBool::new(false),

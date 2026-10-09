@@ -21,6 +21,7 @@ check-recording-raw-prefix:
 	python3 tools/mon_rust_tests.py final_flac_owned_sigkill_checkpoints_recover_without_registering_partial_audio -- --ignored
 	python3 tools/mon_rust_tests.py partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh_consent -- --ignored
 	python3 tools/mon_rust_tests.py flac_workspace_owned_sigkill_audio_deletion_keeps_pre_identity_files_and_all_receipts -- --ignored
+	python3 tools/mon_rust_tests.py flac_relocation_owned_sigkill_cold_resume_keeps_receipts_and_unknown_files -- --ignored
 
 check-input-journal:
 	@mon_journal_dir=$$(mktemp -d /tmp/mon-input-journal.XXXXXX) || exit 1; \

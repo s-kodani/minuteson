@@ -139,6 +139,8 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         )
         .unwrap(),
         scratch: None,
+        #[cfg(target_os = "macos")]
+        flac_history: None,
         #[cfg(unix)]
         native_models_root: work.stage.path().join("models"),
         root: work.stage.path().canonicalize().unwrap(),
