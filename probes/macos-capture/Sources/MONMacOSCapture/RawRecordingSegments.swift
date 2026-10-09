@@ -120,6 +120,7 @@ final class RawRecordingSegments: @unchecked Sendable {
   init(
     output: URL, owner: String, lane: String,
     beforeAppend: @escaping @Sendable () -> Void = {}, storageIO: StorageIO = StorageIO(),
+    tipStorageIO: InputEventJournalFile.StorageIO = InputEventJournalFile.StorageIO(),
     maximumTotalClockSegments: Int = CapturedClockMap.maximumTrackSegments
   ) throws {
     guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane),
@@ -139,9 +140,14 @@ final class RawRecordingSegments: @unchecked Sendable {
           ownerId: owner, lane: lane, sealedSegments: 0, sealedFrames: 0,
           lastEntrySHA256: nil, producerClosed: false))
       pointer = try InputEventJournalFile(
-        output: output, initial: data, leaf: lane == "microphone" ? .rawMicrophone : .rawSystem)
+        output: output, initial: data, leaf: lane == "microphone" ? .rawMicrophone : .rawSystem,
+        storageIO: tipStorageIO)
     } catch {
       close(directory)
+      if let posix = error as? POSIXError, [.ENOSPC, .EDQUOT, .EIO].contains(posix.code) {
+        let code = Self.storageFailure(error, fallback: "raw_segment_write_or_sync_failed")
+        throw ProbeError.capture(CaptureFailureGuide.message(code))
+      }
       throw error
     }
   }
@@ -245,7 +251,9 @@ final class RawRecordingSegments: @unchecked Sendable {
   /// declare successful acquisition or advertise PCM without a synced entry.
   func drainAcceptedPCM() throws {
     try queue.sync {
-      if let failure = lock.withLock({ failure }) { throw ProbeError.capture(failure) }
+      if let failure = lock.withLock({ failure }) {
+        throw ProbeError.capture(CaptureFailureGuide.message(failure))
+      }
     }
   }
 
@@ -254,7 +262,9 @@ final class RawRecordingSegments: @unchecked Sendable {
   func finish() throws {
     lock.withLock { accepting = false }
     try queue.sync {
-      if let failure = lock.withLock({ failure }) { throw ProbeError.capture(failure) }
+      if let failure = lock.withLock({ failure }) {
+        throw ProbeError.capture(CaptureFailureGuide.message(failure))
+      }
       if lock.withLock({ closed }) { return }
       do {
         if let active {
@@ -265,10 +275,10 @@ final class RawRecordingSegments: @unchecked Sendable {
         try pointer.replace(try tip(producerClosed: true))
         lock.withLock { closed = true }
       } catch {
-        lock.withLock {
-          failure = Self.storageFailure(error, fallback: "raw_segment_final_sync_failed")
-        }
-        throw error
+        let code = Self.storageFailure(error, fallback: "raw_segment_final_sync_failed")
+        lock.withLock { failure = code }
+        if code == "raw_segment_final_sync_failed" { throw error }
+        throw ProbeError.capture(CaptureFailureGuide.message(code))
       }
     }
   }

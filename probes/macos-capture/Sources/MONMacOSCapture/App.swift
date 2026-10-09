@@ -261,7 +261,9 @@ struct TrackStats: Encodable {
   }
 
   func requireWritable(raw: RawSegmentStatus? = nil) throws {
-    if let failure = raw?.failure ?? captureFailure { throw ProbeError.capture(failure) }
+    if let failure = raw?.failure ?? captureFailure {
+      throw ProbeError.capture(CaptureFailureGuide.message(failure))
+    }
   }
 
   // Check clock bounds before writing the corresponding PCM. If writing later

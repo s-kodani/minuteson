@@ -397,6 +397,99 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  func testTipStorageFaultsAtSegmentAndClosureKeepAudioAndTerminalStateDespiteVisibleRename() throws
+  {
+    for code in [POSIXErrorCode.ENOSPC, .EDQUOT, .EIO] {
+      for point in TipStorageFault.Point.allCases {
+        for closure in [false, true] {
+          let root = try directory()
+          defer { try? FileManager.default.removeItem(at: root) }
+          let fault = TipStorageFault()
+          let writer = try RawRecordingSegments(
+            output: root, owner: owner, lane: "microphone", tipStorageIO: fault.io())
+          try append(writer)
+          let tipPath = root.appendingPathComponent("raw-microphone.json")
+          let beforeTip = try Data(contentsOf: tipPath)
+          let confirmed = ["raw-microphone-00000001.caf", "raw-microphone-00000001.json"]
+          let beforeAudio = try confirmed.map {
+            try Data(contentsOf: root.appendingPathComponent($0))
+          }
+          // finish first seals the tail with producerClosed=false, then writes
+          // the closed tip. Skip exactly one matched operation for closure.
+          fault.arm(point, code: code, skipping: closure ? 1 : 0)
+          let failureCode =
+            code == .EIO ? "raw_segment_storage_io_failed" : "raw_segment_storage_full"
+          XCTAssertThrowsError(try writer.finish()) {
+            XCTAssertEqual(String(describing: $0), CaptureFailureGuide.message(failureCode))
+          }
+          let snapshot = writer.snapshot()
+          XCTAssertEqual(snapshot.failure, failureCode)
+          XCTAssertFalse(snapshot.producerClosed)
+          XCTAssertEqual(snapshot.sealedFrames, closure ? 34_000 : 32_000)
+          let visible = try value(root)
+          XCTAssertEqual(
+            visible["sealedFrames"] as? Int, closure || point == .directorySync ? 34_000 : 32_000)
+          XCTAssertEqual(visible["producerClosed"] as? Bool, closure && point == .directorySync)
+          if !closure && point != .directorySync {
+            XCTAssertEqual(try Data(contentsOf: tipPath), beforeTip)
+          }
+          for (name, bytes) in zip(confirmed, beforeAudio) {
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), bytes)
+          }
+          try verifyAudio(
+            root.appendingPathComponent("raw-microphone-00000001.caf"), frames: 32_000)
+          // Clearing an injected syscall failure must not clear the native
+          // writer's terminal failure or retroactively confirm the visible tip.
+          let retained = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+          let retainedBytes = try retained.map {
+            try Data(contentsOf: root.appendingPathComponent($0))
+          }
+          fault.disarm()
+          XCTAssertThrowsError(try writer.finish())
+          XCTAssertThrowsError(
+            try writer.enqueue(
+              buffer(), observation: .timestamp(origin + 4_250_000_000), sourceFrame: 34_000))
+          XCTAssertEqual(writer.snapshot().failure, failureCode)
+          XCTAssertFalse(writer.snapshot().producerClosed)
+          XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(), retained)
+          for (name, bytes) in zip(retained, retainedBytes) {
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), bytes)
+          }
+        }
+      }
+    }
+  }
+
+  func testInitialTipStorageCauseIsLocalizedWithoutCreatingRecoveryOrOverwritingExistingAudio()
+    throws
+  {
+    for code in [POSIXErrorCode.ENOSPC, .EDQUOT, .EIO, .EACCES, .EEXIST] {
+      let root = try directory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let marker = Data("existing audio is not a cache".utf8)
+      let audio = root.appendingPathComponent("unowned.caf")
+      try marker.write(to: audio)
+      let fault = TipStorageFault()
+      fault.arm(.create, code: code)
+      XCTAssertThrowsError(
+        try RawRecordingSegments(
+          output: root, owner: owner, lane: "microphone", tipStorageIO: fault.io())
+      ) {
+        if [.ENOSPC, .EDQUOT, .EIO].contains(code) {
+          let failureCode =
+            code == .EIO ? "raw_segment_storage_io_failed" : "raw_segment_storage_full"
+          XCTAssertEqual(String(describing: $0), CaptureFailureGuide.message(failureCode))
+        } else {
+          XCTAssertEqual(($0 as? POSIXError)?.code, code)
+        }
+      }
+      XCTAssertEqual(try Data(contentsOf: audio), marker)
+      XCTAssertEqual(
+        try FileManager.default.contentsOfDirectory(atPath: root.path), ["unowned.caf"])
+    }
+  }
+
   func testSystemCAFStopsAfterAsynchronousStorageFailureWithoutGrowingConfirmedPrefix() async throws
   {
     let root = try directory()

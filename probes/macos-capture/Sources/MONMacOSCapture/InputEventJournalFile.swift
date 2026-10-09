@@ -5,6 +5,27 @@ import Foundation
 /// An unexpected file/link is retained, not truncated, adopted or removed.
 /// The pin never follows a later replacement of an ancestor directory.
 final class InputEventJournalFile {
+  // Internal fault injection only. Native operations always write and sync;
+  // no application option replaces durability or the identity checks below.
+  struct StorageIO: Sendable {
+    var create: @Sendable (Int32, String) throws -> Int32 = { directory, name in
+      let fd = openat(
+        directory, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+      guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+      return fd
+    }
+    var write: @Sendable (Data, Int32) throws -> Void = {
+      try InputEventJournalFile.write($0, to: $1)
+    }
+    var synchronize: @Sendable (Int32) throws -> Void = {
+      guard fsync($0) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+    var replace: @Sendable (Int32, String, String) throws -> Void = { directory, source, target in
+      guard renameat(directory, source, directory, target) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+      }
+    }
+  }
   static let name = "input-events.json"
   enum Leaf: String {
     case journal = "input-events.json"
@@ -12,23 +33,28 @@ final class InputEventJournalFile {
     case rawMicrophone = "raw-microphone.json"
     case rawSystem = "raw-system.json"
   }
-  private let directory: Int32
+  private var directory: Int32
   private let leaf: Leaf
   private let synchronizes: Bool
+  private let storageIO: StorageIO
   private var expected: stat
 
-  init(output: URL, initial: Data, leaf: Leaf = .journal, synchronizes: Bool = true) throws {
+  init(
+    output: URL, initial: Data, leaf: Leaf = .journal, synchronizes: Bool = true,
+    storageIO: StorageIO = StorageIO()
+  ) throws {
     guard leaf == .status || synchronizes else {
       throw ProbeError.capture("retained input history requires synced writes")
     }
     self.leaf = leaf
     self.synchronizes = synchronizes
+    self.storageIO = storageIO
     directory = try Self.pin(output)
-    let descriptor = openat(
-      directory, leaf.rawValue, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else {
+    let descriptor: Int32
+    do { descriptor = try storageIO.create(directory, leaf.rawValue) } catch {
       close(directory)
-      throw ProbeError.capture("input event journal already exists or cannot be created")
+      directory = -1
+      throw error
     }
     defer { close(descriptor) }
     expected = stat()
@@ -36,20 +62,22 @@ final class InputEventJournalFile {
       guard fstat(descriptor, &expected) == 0, Self.regular(expected) else {
         throw ProbeError.capture("input event journal file is invalid")
       }
-      try Self.write(initial, to: descriptor)
-      guard !synchronizes || (fsync(descriptor) == 0 && fsync(directory) == 0) else {
-        throw ProbeError.capture("input event journal initial sync failed")
+      try storageIO.write(initial, descriptor)
+      if synchronizes {
+        try storageIO.synchronize(descriptor)
+        try storageIO.synchronize(directory)
       }
       guard fstat(descriptor, &expected) == 0, Self.regular(expected) else {
         throw ProbeError.capture("input event journal initial identity is unavailable")
       }
     } catch {
       close(directory)
+      directory = -1
       throw error
     }
   }
 
-  deinit { close(directory) }
+  deinit { if directory >= 0 { close(directory) } }
 
   /// Only the ephemeral diagnostic leaf may be removed. Pinning also keeps a
   /// replacement ancestor outside this cleanup; an altered leaf is retained.
@@ -63,9 +91,7 @@ final class InputEventJournalFile {
   func replace(_ data: Data) throws {
     try requireExpected()
     let temporary = ".\(leaf.rawValue)-\(UUID().uuidString.lowercased()).tmp"
-    let descriptor = openat(
-      directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-    guard descriptor >= 0 else { throw ProbeError.capture("input event journal staging failed") }
+    let descriptor = try storageIO.create(directory, temporary)
     var owned = stat()
     var renamed = false
     defer {
@@ -81,18 +107,16 @@ final class InputEventJournalFile {
     guard fstat(descriptor, &owned) == 0, Self.regular(owned) else {
       throw ProbeError.capture("input event journal staging identity is invalid")
     }
-    try Self.write(data, to: descriptor)
-    guard !synchronizes || fsync(descriptor) == 0 else {
-      throw ProbeError.capture("input event journal sync failed")
-    }
+    try storageIO.write(data, descriptor)
+    if synchronizes { try storageIO.synchronize(descriptor) }
     try requireExpected()
     var staged = stat()
     var current = stat()
     guard fstat(descriptor, &staged) == 0, Self.same(staged, owned), Self.regular(staged),
       fstatat(directory, temporary, &current, AT_SYMLINK_NOFOLLOW) == 0,
-      Self.same(staged, current), Self.regular(current),
-      renameat(directory, temporary, directory, leaf.rawValue) == 0
+      Self.same(staged, current), Self.regular(current)
     else { throw ProbeError.capture("input event journal atomic replacement failed") }
+    try storageIO.replace(directory, temporary, leaf.rawValue)
     renamed = true
     // Keep the identity even if directory sync fails after rename. A subsequent
     // attempt can commit the same owned leaf, but this attempt is not a receipt.
@@ -100,9 +124,7 @@ final class InputEventJournalFile {
     else {
       throw ProbeError.capture("input event journal committed identity is unavailable")
     }
-    guard !synchronizes || fsync(directory) == 0 else {
-      throw ProbeError.capture("input event journal directory sync is unconfirmed")
-    }
+    if synchronizes { try storageIO.synchronize(directory) }
     try requireExpected()
   }
 
@@ -139,7 +161,9 @@ final class InputEventJournalFile {
       while offset < data.count {
         let count = Darwin.write(descriptor, base.advanced(by: offset), data.count - offset)
         if count < 0 && errno == EINTR { continue }
-        guard count > 0 else { throw ProbeError.capture("input event journal write failed") }
+        guard count > 0 else {
+          throw POSIXError(POSIXErrorCode(rawValue: count == 0 ? EIO : errno) ?? .EIO)
+        }
         offset += count
       }
     }
