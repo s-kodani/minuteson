@@ -1,5 +1,5 @@
 // Synthetic IPC only: no real model directory, process or user data is opened.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 const hash = "a".repeat(64), packageId = "11111111-1111-4111-8111-111111111111";

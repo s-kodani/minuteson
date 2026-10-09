@@ -1,7 +1,7 @@
 // Synthetic panel-only IPC fixture. Not imported by the shipped application.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { ModelInspectionPanel } from "../src/model-inspection.tsx";
 import { ToastHost } from "../src/toast.tsx";
 import "../src/style.css";

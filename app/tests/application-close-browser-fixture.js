@@ -1,5 +1,5 @@
 // Synthetic IPC only: production MainWindow, no device or audio access.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 import { registerPendingEdits } from "../src/draft-save.ts";
 import { queuedProjection, queuedAction } from "./input-notice-queue-browser-fixture.js";

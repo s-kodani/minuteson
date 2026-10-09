@@ -1,6 +1,6 @@
 // Development-only browser fixture. Not imported by the application or build.
 // Playwright routes index.html to this bootstrap for manual UI verification.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { toasts } from "../src/toast";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";

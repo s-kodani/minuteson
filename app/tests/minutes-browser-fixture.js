@@ -83,6 +83,11 @@ async (page) => {
       transformCallback: fn => { const id=++sequence; callbacks.set(id,fn); return id; }, unregisterCallback: id=>callbacks.delete(id),
       invoke: async (cmd,args={}) => {
         data.calls.push({cmd,args:copy(args)});
+        if(cmd==="get_startup_report") return {schemaVersion:1,phase:"ready",failure:null};
+        if(cmd==="get_recorder_operation_notices") {
+          const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");
+          return dataIdleRead(cmd);
+        }
         if(["get_transcript_edit_recovery","save_transcript_edit_recovery","discard_transcript_edit_recovery","list_transcript_edit_recoveries"].includes(cmd)) {
           const { recoveryFixture } = await import("/tests/transcript-recovery-browser-fixture.js");
           data.recovery ??= recoveryFixture({ drafts: () => [data.td],current: () => data.td });

@@ -1,5 +1,5 @@
 // Isolated product component with synthetic metadata; no capture or TCC.
-import {mockIPC,mockWindows} from "@tauri-apps/api/mocks";
+import {mockIPC,mockWindows} from "./startup-ready-mocks.ts";
 import {createRoot} from "react-dom/client";
 import {useState} from "react";
 import {CaptureApplicationSelection,useCaptureScope} from "../src/capture-applications";

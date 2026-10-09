@@ -1,5 +1,5 @@
 // Actual production window components, synthetic IPC only; no native capture.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const label = new URLSearchParams(location.search).get("window") ?? "main";

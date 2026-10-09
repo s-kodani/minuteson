@@ -37,6 +37,7 @@ mod resampling;
 mod restored_processing;
 mod saved_artifact;
 mod session;
+mod startup_attention;
 mod storage;
 mod transcription;
 
@@ -2401,6 +2402,7 @@ fn undo_transcript_edit(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(startup_attention::Startup::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
         .manage(input_status::archived::ArchivedInputs::default())
@@ -2416,16 +2418,52 @@ pub fn run() {
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
-            let root = app.path().app_data_dir()?;
+            let root = match app.path().app_data_dir() {
+                Ok(root) => root,
+                Err(error) => {
+                    app.state::<startup_attention::Startup>().block(
+                        startup_attention::Failure::new(
+                            startup_attention::Stage::Directories,
+                            error.to_string(),
+                            None,
+                            None,
+                        ),
+                    )?;
+                    startup_attention::show(app.handle());
+                    return Ok(());
+                }
+            };
             #[cfg(target_os = "macos")]
             {
-                let selection = bootstrap::Bootstrap::open(&app.path().app_config_dir()?, &root)?;
-                let storage = selection.open_storage()?;
-                app.manage(storage);
-                app.manage(selection);
+                let admission = app
+                    .path()
+                    .app_config_dir()
+                    .map_err(|error| {
+                        startup_attention::Failure::new(
+                            startup_attention::Stage::Directories,
+                            error.to_string(),
+                            None,
+                            None,
+                        )
+                    })
+                    .and_then(|config| startup_attention::admit_storage(&config, &root));
+                match admission {
+                    Ok((storage, selection)) => {
+                        app.manage(storage);
+                        app.manage(selection);
+                    }
+                    Err(failure) => {
+                        // No Storage registration, import/capture initialization,
+                        // recording recovery or analysis worker after refusal.
+                        app.state::<startup_attention::Startup>().block(failure)?;
+                        startup_attention::show(app.handle());
+                        return Ok(());
+                    }
+                }
             }
             #[cfg(not(target_os = "macos"))]
             app.manage(Storage::open(root)?);
+            app.state::<startup_attention::Startup>().ready()?;
             ImportController::recover(app.handle())?;
             capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
             let handle = app.handle().clone();
@@ -2443,176 +2481,196 @@ pub fn run() {
             AnalysisController::kick(app.handle())?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            inspect_model_package,
-            preview_model_deletion,
-            cancel_model_inspection,
-            get_model_placements,
-            get_model_profiles,
-            get_model_catalog_history,
-            preview_model_profile_application,
-            apply_model_profile_application,
-            preview_job_model_rebinding,
-            apply_job_model_rebinding,
-            get_job_model_rebinding_result,
-            check_model_compatibility,
-            place_model_package,
-            get_audio_import,
-            select_audio_import,
-            start_audio_import,
-            cancel_audio_import,
-            get_data_operation,
-            #[cfg(unix)]
-            get_deletion_items,
-            #[cfg(unix)]
-            review_meeting_deletion,
-            #[cfg(unix)]
-            review_pending_deletion,
-            #[cfg(unix)]
-            get_deletion_paths,
-            #[cfg(unix)]
-            get_model_deletion_items,
-            #[cfg(unix)]
-            review_model_body_deletion,
-            #[cfg(unix)]
-            review_pending_model_deletion,
-            #[cfg(unix)]
-            get_model_deletion_paths,
-            #[cfg(unix)]
-            get_audio_deletion_items,
-            #[cfg(unix)]
-            review_meeting_audio_deletion,
-            #[cfg(unix)]
-            review_pending_audio_deletion,
-            #[cfg(unix)]
-            get_audio_deletion_paths,
-            #[cfg(target_os = "macos")]
-            get_storage_bootstrap,
-            review_storage_move,
-            get_recovery_items,
-            review_recovery_item,
-            #[cfg(unix)]
-            get_partial_recording_items,
-            #[cfg(unix)]
-            review_partial_recording,
-            #[cfg(unix)]
-            get_partial_recording_result,
-            #[cfg(unix)]
-            get_partial_recording_results,
-            get_data_operation_availability,
-            list_restored_meeting_ids,
-            select_data_operation,
-            start_data_operation,
-            cancel_data_operation,
-            get_recording_snapshot,
-            get_recording_levels,
-            get_recording_writes,
-            get_recording_input_status,
-            get_recording_input_history_status,
-            get_recording_input_history,
-            get_archived_recording_input_notices,
-            acknowledge_archived_recording_input_notice,
-            receive_recording_input_notice,
-            render_recording_input_notice,
-            close_recording_input_notice,
-            get_capture_test_snapshot,
-            get_capture_test_recovery,
-            retry_capture_test_recovery,
-            start_capture_test,
-            cancel_capture_test,
-            discard_capture_test,
-            get_capture_test_levels,
-            prepare_capture_test_playback,
-            get_application_close_activity,
-            capture_available,
-            get_capture_inputs,
-            get_capture_applications,
-            start_recording,
-            stop_recording,
-            get_recording_confirmation,
-            request_recording_confirmation,
-            decide_recording_confirmation,
-            show_recorder_preview,
-            hide_recorder_preview,
-            open_main_window,
-            recorder_info::get_recorder_info,
-            recorder_operation_notices::get_recorder_operation_notices,
-            recorder_operation_notices::publish_recorder_operation_notice,
-            recorder_operation_notices::dismiss_recorder_operation_notice,
-            recorder_info::show_recorder_info,
-            recorder_info::close_recorder_info,
-            create_meeting,
-            list_meetings,
-            get_meeting,
-            rename_meeting,
-            get_current_analysis,
-            get_transcript_draft,
-            begin_transcript_draft,
-            get_transcript_edit_recovery,
-            list_transcript_edit_recoveries,
-            discard_transcript_edit_recovery,
-            save_transcript_edit_recovery,
-            save_transcript_draft,
-            undo_transcript_edit,
-            prepare_utterance_playback,
-            register_playback_preparation,
-            cancel_playback_preparation,
-            finish_playback_preparation,
-            prepare_meeting_playback,
-            prepare_draft_utterance_playback,
-            get_minutes_evidence_source,
-            get_minutes_transcript_page,
-            prepare_minutes_transcript_playback,
-            prepare_minutes_evidence_playback,
-            read_playback_chunk,
-            close_playback,
-            finish_main_close,
-            start_transcription,
-            get_analysis_flow,
-            start_analysis_flow,
-            continue_analysis_flow,
-            start_diarization,
-            retry_diarization,
-            get_diarization_tracks,
-            start_minutes_generation,
-            get_minutes_versions,
-            get_minutes_exports,
-            get_minutes_export_status,
-            export_minutes_markdown,
-            get_minutes_preferences,
-            save_minutes_preferences,
-            get_minutes_preview,
-            get_minutes_draft,
-            create_minutes_draft,
-            save_minutes_draft,
-            undo_minutes_edit,
-            adopt_minutes_candidate,
-            restore_minutes_version,
-            get_analysis_jobs,
-            get_analysis_notification_jobs,
-            get_analysis_notification_output,
-            retry_transcription,
-            retry_minutes_generation,
-            pause_analysis_job,
-            resume_analysis_job,
-            cancel_analysis_job,
-            get_analysis_preferences,
-            get_ui_preferences,
-            save_ui_preferences,
-            get_diarization_preferences,
-            save_diarization_preferences,
-            get_speaker_reviews,
-            get_vocabulary_book,
-            get_meeting_vocabulary,
-            save_vocabulary_book,
-            save_analysis_preferences,
-            get_analysis_versions,
-            get_analysis_preview,
-            get_analysis_version_draft,
-            adopt_analysis_candidate,
-            restore_analysis_version
-        ])
+        .invoke_handler(|invoke| {
+            let webview = invoke.message.webview();
+            if let Err(error) = webview
+                .state::<startup_attention::Startup>()
+                .admit_command(webview.label(), invoke.message.command())
+            {
+                invoke.resolver.reject(error);
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                startup_attention::get_startup_report,
+                startup_attention::quit_blocked_startup,
+                inspect_model_package,
+                preview_model_deletion,
+                cancel_model_inspection,
+                get_model_placements,
+                get_model_profiles,
+                get_model_catalog_history,
+                preview_model_profile_application,
+                apply_model_profile_application,
+                preview_job_model_rebinding,
+                apply_job_model_rebinding,
+                get_job_model_rebinding_result,
+                check_model_compatibility,
+                place_model_package,
+                get_audio_import,
+                select_audio_import,
+                start_audio_import,
+                cancel_audio_import,
+                get_data_operation,
+                #[cfg(unix)]
+                get_deletion_items,
+                #[cfg(unix)]
+                review_meeting_deletion,
+                #[cfg(unix)]
+                review_pending_deletion,
+                #[cfg(unix)]
+                get_deletion_paths,
+                #[cfg(unix)]
+                get_model_deletion_items,
+                #[cfg(unix)]
+                review_model_body_deletion,
+                #[cfg(unix)]
+                review_pending_model_deletion,
+                #[cfg(unix)]
+                get_model_deletion_paths,
+                #[cfg(unix)]
+                get_audio_deletion_items,
+                #[cfg(unix)]
+                review_meeting_audio_deletion,
+                #[cfg(unix)]
+                review_pending_audio_deletion,
+                #[cfg(unix)]
+                get_audio_deletion_paths,
+                #[cfg(target_os = "macos")]
+                get_storage_bootstrap,
+                review_storage_move,
+                get_recovery_items,
+                review_recovery_item,
+                #[cfg(unix)]
+                get_partial_recording_items,
+                #[cfg(unix)]
+                review_partial_recording,
+                #[cfg(unix)]
+                get_partial_recording_result,
+                #[cfg(unix)]
+                get_partial_recording_results,
+                get_data_operation_availability,
+                list_restored_meeting_ids,
+                select_data_operation,
+                start_data_operation,
+                cancel_data_operation,
+                get_recording_snapshot,
+                get_recording_levels,
+                get_recording_writes,
+                get_recording_input_status,
+                get_recording_input_history_status,
+                get_recording_input_history,
+                get_archived_recording_input_notices,
+                acknowledge_archived_recording_input_notice,
+                receive_recording_input_notice,
+                render_recording_input_notice,
+                close_recording_input_notice,
+                get_capture_test_snapshot,
+                get_capture_test_recovery,
+                retry_capture_test_recovery,
+                start_capture_test,
+                cancel_capture_test,
+                discard_capture_test,
+                get_capture_test_levels,
+                prepare_capture_test_playback,
+                get_application_close_activity,
+                capture_available,
+                get_capture_inputs,
+                get_capture_applications,
+                start_recording,
+                stop_recording,
+                get_recording_confirmation,
+                request_recording_confirmation,
+                decide_recording_confirmation,
+                show_recorder_preview,
+                hide_recorder_preview,
+                open_main_window,
+                recorder_info::get_recorder_info,
+                recorder_operation_notices::get_recorder_operation_notices,
+                recorder_operation_notices::publish_recorder_operation_notice,
+                recorder_operation_notices::dismiss_recorder_operation_notice,
+                recorder_info::show_recorder_info,
+                recorder_info::close_recorder_info,
+                create_meeting,
+                list_meetings,
+                get_meeting,
+                rename_meeting,
+                get_current_analysis,
+                get_transcript_draft,
+                begin_transcript_draft,
+                get_transcript_edit_recovery,
+                list_transcript_edit_recoveries,
+                discard_transcript_edit_recovery,
+                save_transcript_edit_recovery,
+                save_transcript_draft,
+                undo_transcript_edit,
+                prepare_utterance_playback,
+                register_playback_preparation,
+                cancel_playback_preparation,
+                finish_playback_preparation,
+                prepare_meeting_playback,
+                prepare_draft_utterance_playback,
+                get_minutes_evidence_source,
+                get_minutes_transcript_page,
+                prepare_minutes_transcript_playback,
+                prepare_minutes_evidence_playback,
+                read_playback_chunk,
+                close_playback,
+                finish_main_close,
+                start_transcription,
+                get_analysis_flow,
+                start_analysis_flow,
+                continue_analysis_flow,
+                start_diarization,
+                retry_diarization,
+                get_diarization_tracks,
+                start_minutes_generation,
+                get_minutes_versions,
+                get_minutes_exports,
+                get_minutes_export_status,
+                export_minutes_markdown,
+                get_minutes_preferences,
+                save_minutes_preferences,
+                get_minutes_preview,
+                get_minutes_draft,
+                create_minutes_draft,
+                save_minutes_draft,
+                undo_minutes_edit,
+                adopt_minutes_candidate,
+                restore_minutes_version,
+                get_analysis_jobs,
+                get_analysis_notification_jobs,
+                get_analysis_notification_output,
+                retry_transcription,
+                retry_minutes_generation,
+                pause_analysis_job,
+                resume_analysis_job,
+                cancel_analysis_job,
+                get_analysis_preferences,
+                get_ui_preferences,
+                save_ui_preferences,
+                get_diarization_preferences,
+                save_diarization_preferences,
+                get_speaker_reviews,
+                get_vocabulary_book,
+                get_meeting_vocabulary,
+                save_vocabulary_book,
+                save_analysis_preferences,
+                get_analysis_versions,
+                get_analysis_preview,
+                get_analysis_version_draft,
+                adopt_analysis_candidate,
+                restore_analysis_version
+            ];
+            handler(invoke)
+        })
         .on_window_event(|window, event| {
+            if window.state::<startup_attention::Startup>().blocked() {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
+                return;
+            }
             if window.label() == recorder_info::LABEL {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
@@ -2653,6 +2711,9 @@ pub fn run() {
         .expect("failed to start mon desktop")
         .run(|app, event| {
             if let RunEvent::ExitRequested { api, .. } = event {
+                if app.state::<startup_attention::Startup>().blocked() {
+                    return;
+                }
                 if !app.state::<ExitGuard>().0.load(Ordering::SeqCst) {
                     api.prevent_exit();
                     if app.state::<StopDecisionStore>().snapshot().visible() {

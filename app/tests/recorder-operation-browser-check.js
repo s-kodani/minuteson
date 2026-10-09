@@ -46,6 +46,7 @@ async (page, capturePath = path => path) => {
     check(await page.getByText("要対応", { exact: true }).isVisible(), "attention lacks visible short text");
     await info.getByText(failure, { exact: false }).waitFor();
     check(await page.locator(".mini-shell").evaluate(e => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1), "long error clipped mini controls");
+    check(await page.locator('[data-input-kind="microphone"]').evaluate(e => e.clientWidth >= 75) && await page.locator('[data-input-kind="system"]').evaluate(e => e.clientWidth >= 65), "help/operation marker squeezed input labels");
     check(await page.getByRole("button", { name: "停止", exact: true }).isEnabled(), "diagnostic disabled actual stop");
     check(calls.filter(c => c.command === "open_main_window").length === 1, "window action automatically replayed");
     check(entries[0].message.includes(failure), "shared cause lost detail");

@@ -5,6 +5,7 @@ import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderInfoTrigger, RecorderInfoWindow } from "./recorder-info";
 import { RecorderOperationProvider, RecorderOperationNotifications, useRecorderOperationPublisher, useRecorderOperations } from "./recorder-operation-notices";
+import { StartupAttentionWindow, StartupGate } from "./startup-attention";
 import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
@@ -54,6 +55,7 @@ import { assertCloseContext, assertCloseImport, assertCloseRecording, assertClos
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
 const isRecordingConfirmation = new URLSearchParams(window.location.search).get("window") === "recording-confirmation";
 const isRecorderInfo = new URLSearchParams(window.location.search).get("window") === "recorder-info";
+const isStartupAttention = new URLSearchParams(window.location.search).get("window") === "startup-attention";
 
 interface Meeting {
   id: string;
@@ -736,4 +738,5 @@ function MainWindow() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecorderOperationProvider>{isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</RecorderOperationProvider>}</ThemeProvider>);
+const desktopWindow = <ThemeProvider>{isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecorderOperationProvider>{isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</RecorderOperationProvider>}</ThemeProvider>;
+createRoot(document.getElementById("root")!).render(isStartupAttention ? <StartupAttentionWindow /> : isRecorderPanel || isRecordingConfirmation || isRecorderInfo ? desktopWindow : <StartupGate>{desktopWindow}</StartupGate>);

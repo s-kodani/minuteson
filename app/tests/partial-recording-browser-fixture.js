@@ -1,5 +1,5 @@
 // Development-only synthetic IPC. No native files, device capture or real data.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "./startup-ready-mocks.ts";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const f = window.dataFixture;

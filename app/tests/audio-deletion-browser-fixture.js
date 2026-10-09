@@ -1,5 +1,5 @@
 // Development-only IPC simulation. Never invokes native audio/file operations.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "./startup-ready-mocks.ts";
 import { recoveryFixture,stampFixtureDraft } from "./transcript-recovery-browser-fixture.js";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");

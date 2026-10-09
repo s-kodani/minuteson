@@ -28,3 +28,8 @@ test("native confirmation dismisses explanation without restoring recorder focus
   const native = source("../src-tauri/src/recorder_info.rs");
   assert.doesNotMatch(native, /RecorderController|state::<Storage>|SessionStore/);
 });
+test("mini explanation button reserves readable widths for both input labels", () => {
+  const css = source("../src/style.css");
+  assert.ok(css.includes(".mini-top:has(.mini-inputs) { gap:2px; }"));
+  assert.ok(css.includes("grid-template-columns:minmax(75px,1.15fr) minmax(65px,1fr)"));
+});

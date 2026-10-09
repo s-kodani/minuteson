@@ -1,6 +1,6 @@
 // Dedicated simulated backend. localStorage is fixture storage ONLY, never
 // production preference persistence. No native microphone/files/models used.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 window.skipAudioDeletionFixtureMain = true;
 const { audioDeletionIPC } = await import("./audio-deletion-browser-fixture.js");

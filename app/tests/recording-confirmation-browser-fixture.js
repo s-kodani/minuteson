@@ -1,6 +1,6 @@
 // Synthetic IPC forwarded to the single test controller in Playwright.
 // No microphone, native process, user filesystem or persistent browser data.
-import {mockIPC,mockWindows} from "@tauri-apps/api/mocks";
+import {mockIPC,mockWindows} from "./startup-ready-mocks.ts";
 window.skipDataFixtureMain=true;
 const {dataSaveIPC}=await import("./data-save-browser-fixture.js");
 const label=new URLSearchParams(location.search).get("window")??"main";

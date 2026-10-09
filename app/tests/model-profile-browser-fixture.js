@@ -1,5 +1,5 @@
 // Development-only mocked IPC. Not imported by the application or its build.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 const engines = ["whisper.cpp", "sherpa-onnx", "llama.cpp"];
 const role = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };

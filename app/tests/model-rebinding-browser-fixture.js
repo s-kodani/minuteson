@@ -1,5 +1,5 @@
 // Development-only mocked IPC; never imported by the application build.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 import { rebindingFixture, meetingId } from "./model-rebinding-fixture.ts";
 const fixtures = ["transcription", "diarization", "minutes_generation"].map(rebindingFixture);

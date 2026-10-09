@@ -1,5 +1,5 @@
 // Development-only simulated IPC. No real audio, meeting files or settings.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "./startup-ready-mocks.ts";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const f = window.dataFixture;

@@ -1,5 +1,5 @@
 // Development-only IPC simulation. No files, recording or real meetings changed.
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { emit } from "@tauri-apps/api/event";
 import { dataIdleRead } from "./data-idle-browser-fixture.js";
 const idle = dataIdleRead("get_data_operation");
