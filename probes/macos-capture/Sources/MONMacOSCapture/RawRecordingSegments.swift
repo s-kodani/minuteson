@@ -5,11 +5,12 @@ import Darwin
 import Foundation
 
 struct RawSegmentStatus: Encodable {
-  let schemaVersion = 1
+  let schemaVersion = 2
   let ownerId: String
   let lane: String
   let sealedSegments: Int
   let sealedFrames: Int64
+  let lastEntrySHA256: String?
   let producerClosed: Bool
   let failure: String?
 }
@@ -32,7 +33,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     let durationNanoseconds: Int64
   }
   private struct Tip: Encodable {
-    let schemaVersion = 1
+    let schemaVersion = 2
     let ownerId: String
     let lane: String
     let sealedSegments: Int
@@ -41,7 +42,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     let producerClosed: Bool
   }
   private struct Entry: Encodable {
-    let schemaVersion = 1
+    let schemaVersion = 2
     let ownerId: String
     let lane: String
     let sequence: Int
@@ -52,6 +53,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     let channels: Int
     let captureOriginNanoseconds: Int64
     let clockSegments: [CapturedClockSegment]
+    let clockNanoseconds: [CapturedClockEndpoints]
     let audioBytes: Int64
     let audioSHA256: String
     let previousEntrySHA256: String?
@@ -128,7 +130,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     lock.withLock {
       RawSegmentStatus(
         ownerId: owner, lane: lane, sealedSegments: sealedCount, sealedFrames: sealedFrames,
-        producerClosed: closed, failure: failure)
+        lastEntrySHA256: previousHash, producerClosed: closed, failure: failure)
     }
   }
 
@@ -366,6 +368,7 @@ final class RawRecordingSegments: @unchecked Sendable {
         sourceFrameStart: lock.withLock { sealedFrames }, frames: segment.frames,
         sampleRate: segment.rate, channels: segment.channels,
         captureOriginNanoseconds: segment.origin, clockSegments: maps,
+        clockNanoseconds: try segment.timing.finalizedEndpoints(),
         audioBytes: size, audioSHA256: Self.hex(whole.finalize()),
         previousEntrySHA256: previousHash))
     let entryName = String(format: "raw-%@-%08d.json", lane, sequence)
@@ -413,8 +416,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     try require(segment.descriptor, name: segment.name, identity: segment.identity, size: size)
     try requireUnmodified(descriptor, frozen: entryFrozen)
     try requireUnmodified(segment.descriptor, frozen: frozen)
-    previousHash = nextHash
     lock.withLock {
+      previousHash = nextHash
       sealedCount = sequence
       sealedFrames += segment.frames
     }

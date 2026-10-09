@@ -346,6 +346,56 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     while true { Thread.sleep(forTimeInterval: 0.05) }
   }
 
+  func testNativePrefixFixtureExportsBoundManifestForRustWithoutCaptureDevices() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    let external = environment["MON_RAW_SEGMENT_FIXTURE_DIR"]
+    let root = try external.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? directory()
+    defer { if external == nil { try? FileManager.default.removeItem(at: root) } }
+    let recordingOwner = environment["MON_RAW_SEGMENT_FIXTURE_OWNER"] ?? owner
+    let reference = { (time: Int64) in
+      CaptureClockReading(
+        hostBeforeNs: time, continuousNs: time + 10,
+        utcMs: 1_700_000_000_000, hostAfterNs: time + 20)
+    }
+    let readings = ReadingBox(reference(origin))
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      readings.read()
+    }
+    readings.set(reference(origin + 5_000_000_000))
+    let fixture = CaptureClockFixtureTests()
+    var tracks: [TrackStats] = []
+    for lane in ["microphone", "system"] {
+      let raw = try RawRecordingSegments(output: root, owner: recordingOwner, lane: lane)
+      let writer = SystemPCMWriter(
+        outputURL: root.appendingPathComponent("\(lane).caf"), rawSegments: raw)
+      for index in 0..<17 {
+        let sample = try fixture.sample(
+          frames: 12000, value: 0.25,
+          presentation: CMTime(value: Int64(index), timescale: 4), rightValue: -0.5)
+        try writer.append(
+          sample,
+          observation: clock.observe(hostTicks: UInt64(origin + Int64(index) * 250_000_000)),
+          sourceEpoch: 0, levelsEnabled: false, receivedAt: nil)
+        try raw.drainAcceptedPCM()
+      }
+      try await writer.finish()
+      tracks.append(writer.stats)
+    }
+    let micClosure = try clock.close(.microphone)
+    let systemClosure = try clock.close(.system)
+    var manifest = Manifest(
+      schemaVersion: 2, scenario: "synthetic-raw-prefix", captureMode: "system",
+      backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
+      requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: tracks[0], system: tracks[1], errors: [], recordingOwnerId: recordingOwner)
+    try manifest.finalizeStoppedClock(
+      clock, microphoneClosure: micClosure, systemClosure: systemClosure)
+    try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
+    XCTAssertEqual(manifest.schemaVersion, 3)
+    XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, 204_000)
+    XCTAssertNotNil(manifest.microphone.rawSegments?.lastEntrySHA256)
+  }
+
   private func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
     digest.map { String(format: "%02x", $0) }.joined()
   }

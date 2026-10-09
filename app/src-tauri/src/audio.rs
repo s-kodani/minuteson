@@ -21,6 +21,15 @@ pub struct PcmFormat {
     little_endian: bool,
 }
 
+impl PcmFormat {
+    pub(crate) fn is_raw_recording_segment(&self) -> bool {
+        self.data_offset == 68
+            && self.bytes_per_frame == self.channels * 4
+            && self.float
+            && self.little_endian
+    }
+}
+
 pub struct VerifiedAudio {
     file: File,
     size: u64,
@@ -124,6 +133,42 @@ impl VerifiedAudio {
             output.extend_from_slice(&value.to_le_bytes());
         }
         Ok(output)
+    }
+
+    /// The raw recording-to-FLAC path must not use playback's sample clamp.
+    /// Keep original finite Float32 values so the codec can reject overrange
+    /// samples without publishing silently modified captured audio.
+    pub(crate) fn read_raw_recording_frames(
+        &mut self,
+        offset: u64,
+        frames: u64,
+    ) -> Result<Vec<u8>, String> {
+        if !self.format.is_raw_recording_segment()
+            || self.flac.is_some()
+            || frames == 0
+            || frames > PREVIEW_FRAMES
+            || offset
+                .checked_add(frames)
+                .is_none_or(|end| end > self.format.frames)
+        {
+            return Err("原音声PCMの読出し形式または範囲が不正です".into());
+        }
+        self.check_unchanged()?;
+        let position = self.format.data_offset + offset * u64::from(self.format.bytes_per_frame);
+        self.file
+            .seek(SeekFrom::Start(position))
+            .map_err(|e| e.to_string())?;
+        let mut input = vec![0_u8; frames as usize * self.format.bytes_per_frame as usize];
+        self.file
+            .read_exact(&mut input)
+            .map_err(|e| e.to_string())?;
+        self.check_unchanged()?;
+        for sample in input.chunks_exact(4) {
+            if !f32::from_le_bytes(sample.try_into().unwrap()).is_finite() {
+                return Err("原音声に非有限のPCM値が含まれています".into());
+            }
+        }
+        Ok(input)
     }
 }
 

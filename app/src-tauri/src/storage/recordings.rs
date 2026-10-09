@@ -39,6 +39,9 @@ struct CaptureTrack {
     append_failures: i64,
     #[serde(default)]
     clock_segments: Option<Vec<crate::audio_clock::ClockSegment>>,
+    #[cfg(unix)]
+    #[serde(default)]
+    raw_segments: Option<crate::recording_segments::Status>,
 }
 
 impl CaptureTrack {
@@ -478,6 +481,48 @@ impl Storage {
         load_session(&connection, session_id)?.ok_or("録音セッションが見つかりません".into())
     }
 
+    #[cfg(unix)]
+    fn verify_completed_raw_prefixes(
+        &self,
+        base: &Path,
+        manifest: &CaptureManifest,
+        owner: &str,
+    ) -> Result<Vec<crate::recording_segments::Prefix>, String> {
+        use crate::recording_segments::{Lane, Prefix};
+        self.require_data_writable()?;
+        self.managed_anchor.verify()?;
+        let directory = crate::input_levels::open_capture_directory(&self.root.join(base))?;
+        let mut prefixes = Vec::new();
+        for (lane, track) in [
+            (Lane::Microphone, &manifest.microphone),
+            (Lane::System, &manifest.system),
+        ] {
+            let prefix = Prefix::read_optional(
+                directory.try_clone().map_err(|e| e.to_string())?,
+                owner,
+                lane,
+                &|| false,
+            )?;
+            match (prefix, &track.raw_segments) {
+                (None, None) => {} // Native recordings made before raw segment support.
+                (Some(prefix), Some(status))
+                    if manifest.schema_version == 3
+                        && manifest.recording_owner_id.as_deref() == Some(owner)
+                        && status.agrees_with_completed(&prefix, track.frames as u64) =>
+                {
+                    prefixes.push(prefix);
+                }
+                _ => return Err("録音manifestと原音声の確定範囲・保存完了が一致しません".into()),
+            }
+        }
+        if !prefixes.is_empty() && prefixes.len() != 2 {
+            return Err("原音声の確定証拠が両入力で揃っていません".into());
+        }
+        self.require_data_writable()?;
+        self.managed_anchor.verify()?;
+        Ok(prefixes)
+    }
+
     #[allow(dead_code)]
     pub fn finalize_recording(&self, session_id: &str) -> Result<RecordingSession, String> {
         let session = {
@@ -575,6 +620,8 @@ impl Storage {
             self.checked_capture_file(&base.join("microphone.caf"), Some(&manifest.microphone))?;
         let system_file =
             self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?;
+        #[cfg(unix)]
+        let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
         let mut connection = self
             .connection
             .lock()
@@ -588,6 +635,10 @@ impl Storage {
             return Err("録音状態が検証中に変わりました".into());
         }
         let now = now_ms()?;
+        #[cfg(unix)]
+        for prefix in &raw_prefixes {
+            prefix.verify_at(&self.root.join(&base), &|| false)?;
+        }
         insert_capture_asset(
             &transaction,
             &session.meeting_id,
@@ -639,6 +690,10 @@ impl Storage {
         let saved =
             load_session(&transaction, session_id)?.ok_or("録音セッションを読み込めません")?;
         super::analysis_flows::ensure_flow(&transaction, &session.meeting_id)?;
+        #[cfg(unix)]
+        for prefix in &raw_prefixes {
+            prefix.verify_at(&self.root.join(&base), &|| false)?;
+        }
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(saved)
     }
@@ -846,6 +901,8 @@ pub(in crate::storage) mod tests {
             channels: Some(1),
             append_failures: 0,
             clock_segments: None,
+            #[cfg(unix)]
+            raw_segments: None,
         };
         assert_eq!(track.validated_format().unwrap(), (8000, 1, 14_460_000_000));
         track.frames = 8_000 * 86_400;

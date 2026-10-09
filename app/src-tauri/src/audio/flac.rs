@@ -385,12 +385,31 @@ pub(crate) struct FlacWriteError {
     pub message: String,
 }
 
+/// Bounded PCM access also supports a verified sequence of native raw files.
+/// Physical concatenation here never changes capture-time maps or adds silence.
+pub(crate) trait PcmSource {
+    fn format(&self) -> &PcmFormat;
+    fn read_frames(&mut self, first: u64, frames: u64) -> Result<Vec<u8>, String>;
+    fn verify_unchanged(&self) -> Result<(), String>;
+}
+impl PcmSource for VerifiedAudio {
+    fn format(&self) -> &PcmFormat {
+        &self.format
+    }
+    fn read_frames(&mut self, first: u64, frames: u64) -> Result<Vec<u8>, String> {
+        VerifiedAudio::read_frames(self, first, frames)
+    }
+    fn verify_unchanged(&self) -> Result<(), String> {
+        self.check_unchanged()
+    }
+}
+
 // Streaming writer usable for both captured PCM and imported decoded audio.
 // f32 input is explicitly quantized to signed 24-bit PCM. This is lossless
 // relative to that PCM, not a claim of bit-identical floating-point storage.
 #[allow(dead_code)] // Recording/import orchestration follows this shared codec.
 pub(crate) fn write_segment(
-    source: &mut VerifiedAudio,
+    source: &mut impl PcmSource,
     first: u64,
     frames: u64,
     path: &Path,
@@ -415,7 +434,7 @@ pub(crate) fn write_segment(
 }
 
 fn write_segment_with_sync(
-    source: &mut VerifiedAudio,
+    source: &mut impl PcmSource,
     first: u64,
     frames: u64,
     path: &Path,
@@ -426,10 +445,10 @@ fn write_segment_with_sync(
     let mut published = false;
     let result = (|| -> Result<SavedFlac, String> {
         if frames == 0
-            || frames > u64::from(source.format.sample_rate) * MAX_SECONDS
+            || frames > u64::from(source.format().sample_rate) * MAX_SECONDS
             || first
                 .checked_add(frames)
-                .is_none_or(|end| end > source.format.frames)
+                .is_none_or(|end| end > source.format().frames)
         {
             return Err("FLAC保存区間が不正です".into());
         }
@@ -440,8 +459,8 @@ fn write_segment_with_sync(
             .suffix(".part")
             .tempfile_in(parent)
             .map_err(|e| e.to_string())?;
-        let rate = source.format.sample_rate;
-        let channels = source.format.channels;
+        let rate = source.format().sample_rate;
+        let channels = source.format().channels;
         let mut info =
             StreamInfo::new(rate as usize, channels as usize, 24).map_err(|e| e.to_string())?;
         info.set_block_sizes(BLOCK, BLOCK)
@@ -534,7 +553,7 @@ fn write_segment_with_sync(
         }
         drop(validated);
         check_cancelled(cancelled)?;
-        source.check_unchanged()?;
+        source.verify_unchanged()?;
         temporary
             .persist_noclobber(path)
             .map_err(|e| e.to_string())?;

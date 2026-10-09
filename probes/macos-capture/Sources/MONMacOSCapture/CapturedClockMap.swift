@@ -8,6 +8,11 @@ struct CapturedClockSegment: Encodable, Equatable {
   let mappingJson = "{\"schema_version\":1,\"method\":\"linear\"}"
 }
 
+struct CapturedClockEndpoints: Encodable, Equatable {
+  let startNanoseconds: Int64
+  let endNanoseconds: Int64
+}
+
 /// Compress capture-time observations, never callback-arrival times. Callers
 /// must supply timestamps in one shared, sleep-aware monotonic clock domain.
 /// Each append represents successfully stored PCM frames. An explicit missing
@@ -36,6 +41,13 @@ struct CapturedClockMap {
   private var invalid = false
   private(set) var frames: Int64 = 0
   var firstCaptureNanoseconds: Int64? { segments.first?.first.time ?? anchor?.time }
+
+  func finalizedEndpoints() throws -> [CapturedClockEndpoints] {
+    guard sealed, !invalid else { throw ProbeError.capture("capture clock is not finalized") }
+    return segments.map {
+      CapturedClockEndpoints(startNanoseconds: $0.first.time, endNanoseconds: $0.last.time)
+    }
+  }
 
   init(sampleRate: Int64, maximumSegments: Int = 1024) throws {
     guard (8000...384000).contains(sampleRate), (1...1024).contains(maximumSegments) else {

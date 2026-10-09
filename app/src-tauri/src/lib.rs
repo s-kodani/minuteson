@@ -27,6 +27,8 @@ mod playback;
 mod recorder;
 mod recording_confirmation;
 mod recording_confirmation_window;
+#[cfg(unix)]
+mod recording_segments;
 mod recording_writes;
 mod resampling;
 mod restored_processing;
@@ -34,6 +36,18 @@ mod saved_artifact;
 mod session;
 mod storage;
 mod transcription;
+
+#[cfg(test)]
+mod test_profile_guards {
+    #[test]
+    fn efficient_test_profile_preserves_debug_assertions_and_overflow_panics() {
+        assert!(cfg!(debug_assertions));
+        assert!(std::panic::catch_unwind(|| {
+            std::hint::black_box(u64::MAX) + std::hint::black_box(1_u64)
+        })
+        .is_err());
+    }
+}
 
 use analysis_worker::AnalysisController;
 use data_controller::DataController;

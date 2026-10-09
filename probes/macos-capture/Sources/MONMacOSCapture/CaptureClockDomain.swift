@@ -234,6 +234,7 @@ struct CaptureTrackTiming {
   private var previousCaptureEnd: Int64?
   private var sourceEpoch: UInt64?
   var firstCaptureNanoseconds: Int64? { map.firstCaptureNanoseconds }
+  func finalizedEndpoints() throws -> [CapturedClockEndpoints] { try map.finalizedEndpoints() }
 
   init(sampleRate: Double) throws {
     guard sampleRate.isFinite, sampleRate.rounded() == sampleRate,
