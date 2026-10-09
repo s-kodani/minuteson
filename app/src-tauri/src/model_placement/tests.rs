@@ -76,6 +76,39 @@ fn placement(
     )
 }
 #[test]
+fn manual_v1_record_keeps_legacy_serialized_bytes_hash_and_no_download_origin() {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Legacy<'a> {
+        schema_version: u32,
+        package_id: &'a str,
+        manifest: &'a PackageManifest,
+        source_manifest_hash: &'a str,
+        review_hash: &'a str,
+        files: &'a [FileReport],
+    }
+    let f = fixture();
+    let token = uuid::Uuid::new_v4().to_string();
+    let record = PlacementRecord::from_report(&token, &f.report);
+    let old = serde_json::to_vec(&Legacy {
+        schema_version: 1,
+        package_id: &token,
+        manifest: &f.report.manifest,
+        source_manifest_hash: &f.report.manifest_hash,
+        review_hash: &f.report.review_hash,
+        files: &f.report.files,
+    })
+    .unwrap();
+    let new = serde_json::to_vec(&record).unwrap();
+    assert_eq!(new, old);
+    assert_eq!(Sha256::digest(&new), Sha256::digest(&old));
+    assert!(record.download.is_none());
+    assert_eq!(record.source_type(), "manual_import");
+    let decoded: PlacementRecord = serde_json::from_slice(&old).unwrap();
+    decoded.validate().unwrap();
+    assert_eq!(decoded, record);
+}
+#[test]
 fn verified_copy_is_separate_private_persistent_idempotent_and_not_ai_ready() {
     let f = fixture();
     let token = uuid::Uuid::new_v4().to_string();

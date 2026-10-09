@@ -35,6 +35,443 @@ fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+// IO-only staging fixture: uses the production durable pipeline and physical
+// hashes, but no socket, external download or executable model.
+fn synthetic_stage(root: &Path, operation: &str) -> DownloadReceipt {
+    let recipe = recipe();
+    stage(
+        root,
+        operation,
+        &recipe,
+        &recipe.hash().unwrap(),
+        &|| false,
+        &mut |_, _| {},
+        &mut |url, _, _, output, _, notify| {
+            let body = if url.ends_with("/bin") { BIN } else { MODEL };
+            output.write_all(body).unwrap();
+            notify(body.len() as u64);
+            Ok(())
+        },
+    )
+    .unwrap()
+}
+fn read(root: &Path, operation: &str) -> Result<Readback, String> {
+    readback(root, operation, &recipe().hash().unwrap(), &|| false)
+}
+
+#[test]
+fn readback_repeated_after_lost_response_is_physical_read_only_and_never_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let intent = root.join(&operation).join(INTENT);
+    let before = std::fs::read(&intent).unwrap();
+    let modified = intent.metadata().unwrap().modified().unwrap();
+    for _ in 0..3 {
+        let recovered = read(&root, &operation).unwrap();
+        assert_eq!(recovered.state, "complete");
+        assert_eq!(recovered.review.recipe_hash, receipt.recipe_hash);
+        let recovered = recovered.receipt.unwrap();
+        assert_eq!(recovered.report.review_hash, receipt.report.review_hash);
+        assert!(!recovered.ready && !recovered.installed);
+    }
+    assert_eq!(before, std::fs::read(&intent).unwrap());
+    assert_eq!(modified, intent.metadata().unwrap().modified().unwrap());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+}
+
+#[test]
+fn readback_missing_marker_preserves_partial_and_does_not_create_missing_or_unknown_operations() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    assert!(read(&root, &operation).is_err());
+    assert!(!root.exists());
+    let recipe = recipe();
+    assert!(stage(
+        &root,
+        &operation,
+        &recipe,
+        &recipe.hash().unwrap(),
+        &|| false,
+        &mut |_, _| {},
+        &mut |_, _, _, file, _, _| {
+            file.write_all(b"part").unwrap();
+            Err("offline".into())
+        }
+    )
+    .is_err());
+    let bytes = std::fs::read(root.join(&operation).join("payload/bin/whisper")).unwrap();
+    let recovered = read(&root, &operation).unwrap();
+    assert_eq!(recovered.state, "incomplete");
+    assert!(recovered.receipt.is_none());
+    assert_eq!(
+        bytes,
+        std::fs::read(root.join(&operation).join("payload/bin/whisper")).unwrap()
+    );
+    let unknown = id();
+    std::fs::create_dir(root.join(&unknown)).unwrap();
+    std::fs::write(root.join(&unknown).join("keep"), b"foreign").unwrap();
+    assert!(read(&root, &unknown).is_err());
+    assert_eq!(
+        std::fs::read(root.join(unknown).join("keep")).unwrap(),
+        b"foreign"
+    );
+}
+
+#[test]
+fn readback_rejects_changed_intent_and_completion_not_empty_or_success() {
+    for (name, field, value) in [
+        (INTENT, "schemaVersion", json!(2)),
+        (INTENT, "operationId", json!(id())),
+        (INTENT, "recipeHash", json!("a".repeat(64))),
+        (INTENT, "unknown", json!(true)),
+        (COMPLETE, "schemaVersion", json!(2)),
+        (COMPLETE, "operationId", json!(id())),
+        (COMPLETE, "recipeHash", json!("a".repeat(64))),
+        (COMPLETE, "reviewHash", json!("a".repeat(64))),
+        (COMPLETE, "totalBytes", json!(1)),
+        (COMPLETE, "unknown", json!(true)),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = private_root(&temp);
+        let operation = id();
+        synthetic_stage(&root, &operation);
+        let file = root.join(&operation).join(name);
+        let mut record: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        record[field] = value;
+        let altered = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&file, &altered).unwrap();
+        assert!(read(&root, &operation).is_err(), "{name}/{field}");
+        assert_eq!(std::fs::read(file).unwrap(), altered);
+    }
+}
+
+#[test]
+fn readback_rejects_truncated_oversized_markers_changed_models_and_relabelled_manifest() {
+    for name in [
+        INTENT,
+        COMPLETE,
+        "payload/bin/whisper",
+        "payload/models/model.gguf",
+        "payload/model-package.json",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = private_root(&temp);
+        let operation = id();
+        let receipt = synthetic_stage(&root, &operation);
+        let file = if name.ends_with("model-package.json") {
+            receipt.directory.join(model_inspection::MANIFEST)
+        } else {
+            root.join(&operation).join(name)
+        };
+        let bytes = if name.ends_with("model-package.json") {
+            let mut manifest = recipe().manifest;
+            manifest.license_ref = "changed license".into();
+            serde_json::to_vec(&manifest).unwrap()
+        } else {
+            b"broken".to_vec()
+        };
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(read(&root, &operation).is_err(), "{name}");
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    }
+    for name in [INTENT, COMPLETE] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = private_root(&temp);
+        let operation = id();
+        synthetic_stage(&root, &operation);
+        let file = root.join(&operation).join(name);
+        std::fs::write(&file, vec![b' '; MAX_RECIPE + 1025]).unwrap();
+        assert!(read(&root, &operation).is_err());
+    }
+}
+
+#[test]
+fn readback_rejects_links_wrong_confirmation_cancel_and_parent_substitution() {
+    use std::os::unix::fs::symlink;
+    for relative in [INTENT, COMPLETE, "payload", "payload/bin/whisper"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = private_root(&temp);
+        let operation = id();
+        synthetic_stage(&root, &operation);
+        let path = root.join(&operation).join(relative);
+        let saved = temp.path().join("saved");
+        std::fs::rename(&path, &saved).unwrap();
+        symlink(&saved, &path).unwrap();
+        assert!(read(&root, &operation).is_err(), "{relative}");
+        assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    synthetic_stage(&root, &operation);
+    assert!(readback(&root, &operation, &"a".repeat(64), &|| false).is_err());
+    assert!(readback(&root, &operation, &recipe().hash().unwrap(), &|| true).is_err());
+    assert!(read(&root, "../outside").is_err());
+    let recovered = read(&root, &operation).unwrap();
+    std::fs::rename(root.join(&operation), root.join("saved")).unwrap();
+    symlink(root.join("saved"), root.join(&operation)).unwrap();
+    assert!(recovered.verify().is_err());
+}
+
+#[test]
+fn downloaded_placement_is_distinct_idempotent_private_and_persistent_without_execution() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    storage.create_meeting("retain").unwrap();
+    let before = storage.analysis_preferences().unwrap().payload;
+    let models = temp.path().canonicalize().unwrap().join("models");
+    let package = id();
+    for _ in 0..2 {
+        let placed = place(
+            &storage,
+            &models,
+            &root,
+            &operation,
+            &receipt.recipe_hash,
+            &package,
+            &receipt.report.review_hash,
+            &|| false,
+        )
+        .unwrap();
+        assert!(placed.placement_recorded && !placed.ready);
+    }
+    assert_eq!(std::fs::read_dir(&models).unwrap().count(), 1);
+    assert_eq!(storage.analysis_preferences().unwrap().payload, before);
+    let row = storage.list_model_placements().unwrap().remove(0);
+    assert_eq!(row.source_type, "download");
+    assert!(row.placement_recorded && !row.ready && row.compatibility.is_none());
+    assert_eq!(
+        models
+            .join(&package)
+            .join("bin/whisper")
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        receipt
+            .directory
+            .join("bin/whisper")
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    drop(storage);
+    let db = rusqlite::Connection::open(meetings.path().join("meetings.sqlite3")).unwrap();
+    let json: String = db
+        .query_row(
+            "SELECT manifest_json FROM model_packages WHERE id=?1",
+            [&package],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let record: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(record["schemaVersion"], 2);
+    assert_eq!(record["download"]["operationId"], operation);
+    assert_eq!(record["download"]["recipeHash"], receipt.recipe_hash);
+    assert_eq!(record["download"]["sources"], recipe_value()["sources"]);
+    drop(db);
+    let reopened = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    assert_eq!(
+        reopened.list_model_placements().unwrap()[0].source_type,
+        "download"
+    );
+    assert_eq!(reopened.list_meetings().unwrap().len(), 1);
+    assert!(reopened.prepare_backup_snapshot(&|| false).is_ok());
+}
+
+#[test]
+fn incomplete_download_or_stale_review_never_creates_placement_intent() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let models = temp.path().canonicalize().unwrap().join("models");
+    assert!(place(
+        &storage,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &id(),
+        &"a".repeat(64),
+        &|| false
+    )
+    .is_err());
+    // Simulate a missing marker after process interruption, not a resume.
+    std::fs::rename(
+        root.join(&operation).join(COMPLETE),
+        root.join(&operation).join("saved-marker"),
+    )
+    .unwrap();
+    assert!(place(
+        &storage,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &id(),
+        &receipt.report.review_hash,
+        &|| false
+    )
+    .is_err());
+    assert!(!models.exists());
+    assert!(storage.list_model_placements().unwrap().is_empty());
+}
+
+#[test]
+fn download_record_rejects_origin_schema_hash_and_database_source_relabel() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let record = crate::model_placement::PlacementRecord::downloaded(
+        &id(),
+        &receipt.report,
+        recipe().origin(&operation).unwrap(),
+    )
+    .unwrap();
+    for field in [
+        "schema", "missing", "hash", "id", "url", "unknown", "manifest",
+    ] {
+        let mut value = serde_json::to_value(&record).unwrap();
+        match field {
+            "schema" => value["schemaVersion"] = json!(1),
+            "missing" => {
+                value.as_object_mut().unwrap().remove("download");
+            }
+            "hash" => value["download"]["recipeHash"] = json!("a".repeat(64)),
+            "id" => value["download"]["operationId"] = json!("../x"),
+            "url" => {
+                value["download"]["sources"][0]["url"] = json!("https://user:secret@example.com/x")
+            }
+            "unknown" => value["download"]["ready"] = json!(true),
+            _ => value["sourceManifestHash"] = json!("a".repeat(64)),
+        }
+        let decoded = serde_json::from_value::<crate::model_placement::PlacementRecord>(value);
+        assert!(
+            decoded.is_err() || decoded.unwrap().validate_portable().is_err(),
+            "{field}"
+        );
+    }
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    storage.begin_model_placement(&record).unwrap();
+    storage.interrupt_model_placement(&record).unwrap();
+    // Storage owns its SQLite locking mode. Inject corruption only after
+    // closing that connection, then exercise the cold native readers.
+    drop(storage);
+    let db = rusqlite::Connection::open(meetings.path().join("meetings.sqlite3")).unwrap();
+    db.execute(
+        "UPDATE model_packages SET source_type='manual_import' WHERE id=?1",
+        [&record.package_id],
+    )
+    .unwrap();
+    drop(db);
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    assert!(storage.list_model_placements().is_err());
+    assert!(storage.prepare_backup_snapshot(&|| false).is_err());
+}
+
+#[test]
+fn interrupted_downloaded_copy_remains_unavailable_after_restart_and_preserves_partial() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let models = temp.path().canonicalize().unwrap().join("models");
+    let package = id();
+    let file = models.join(&package).join("bin/whisper");
+    assert!(place(
+        &storage,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &package,
+        &receipt.report.review_hash,
+        &|| file.metadata().is_ok_and(|m| m.len() > 0)
+    )
+    .is_err());
+    let bytes = std::fs::read(&file).unwrap();
+    drop(storage);
+    let reopened = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let entry = &reopened.list_model_placements().unwrap()[0];
+    assert_eq!(entry.source_type, "download");
+    assert!(!entry.placement_recorded && !entry.ready);
+    assert!(place(
+        &reopened,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &package,
+        &receipt.report.review_hash,
+        &|| false
+    )
+    .is_err());
+    assert_eq!(bytes, std::fs::read(file).unwrap());
+}
+
+#[test]
+fn downloaded_copy_rechecks_intent_evidence_before_committing() {
+    use std::cell::Cell;
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let models = temp.path().canonicalize().unwrap().join("models");
+    let package = id();
+    let changed = Cell::new(false);
+    let result = place(
+        &storage,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &package,
+        &receipt.report.review_hash,
+        &|| {
+            if !changed.get()
+                && models
+                    .join(&package)
+                    .join("bin/whisper")
+                    .metadata()
+                    .is_ok_and(|m| m.len() > 0)
+            {
+                std::fs::write(root.join(&operation).join(INTENT), b"changed during copy").unwrap();
+                changed.set(true);
+            }
+            false
+        },
+    );
+    assert!(changed.get() && result.is_err());
+    let row = &storage.list_model_placements().unwrap()[0];
+    assert_eq!(row.source_type, "download");
+    assert!(!row.placement_recorded && !row.ready);
+    assert!(models.join(&package).exists());
+}
+
 // Only loopback, tiny synthetic bodies, and this owned fixture thread. Drop
 // stops/joins even after assertion failure. No external network or user model.
 struct Server {

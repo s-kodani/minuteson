@@ -12,6 +12,85 @@ fn decode(value: Value) -> Result<Catalog, String> {
 }
 
 #[test]
+fn portable_catalog_retains_download_origin_without_availability_or_current_host_execution() {
+    let mut f = Fixture::new();
+    let index = f.add(Engine::Whisper, false, false);
+    let mut record = f.packages[index].record.clone();
+    record.package_id = Uuid::new_v4().to_string();
+    for (declared, actual) in record.manifest.files.iter_mut().zip(&mut record.files) {
+        declared.expected_size = Some(actual.actual_size);
+        declared.expected_hash = Some(actual.actual_hash.clone());
+        actual.expected_size_checked = true;
+        actual.expected_hash_checked = true;
+    }
+    record.source_manifest_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&record.manifest).unwrap())
+    );
+    record.review_hash = crate::model_inspection::review_hash(
+        &record.manifest,
+        &record.source_manifest_hash,
+        &record.files,
+    )
+    .unwrap();
+    let recipe = crate::model_download_recipe::Recipe {
+        schema_version: 1,
+        manifest: record.manifest.clone(),
+        sources: record
+            .manifest
+            .files
+            .iter()
+            .map(|file| crate::model_download_recipe::DownloadSource {
+                relative_path: file.relative_path.clone(),
+                url: format!("https://example.com/{}", file.relative_path),
+            })
+            .collect(),
+    };
+    record.schema_version = 2;
+    record.download = Some(recipe.origin(&Uuid::new_v4().to_string()).unwrap());
+    record.validate().unwrap();
+    // Persist synthetic intent only. No model execution or completed copy is
+    // asserted here; portable export retains even interrupted provenance.
+    f.storage.begin_model_placement(&record).unwrap();
+    f.storage.interrupt_model_placement(&record).unwrap();
+    let exported = catalog(&f);
+    let value = serde_json::to_value(&exported).unwrap();
+    let package = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["packageId"] == record.package_id)
+        .unwrap();
+    assert_eq!(
+        package["download"],
+        serde_json::to_value(&record.download).unwrap()
+    );
+    assert_eq!(decode(value.clone()).unwrap(), exported);
+    let text = serde_json::to_string(package).unwrap();
+    assert!(!text.contains("modelsRoot") && !text.contains("ready") && !text.contains("installed"));
+    let mut historical = record.clone();
+    historical.manifest.target = match record.manifest.target {
+        Target::MacosAarch64 => Target::WindowsX86_64,
+        Target::WindowsX86_64 => Target::MacosAarch64,
+    };
+    let mut other_recipe = recipe.clone();
+    other_recipe.manifest = historical.manifest.clone();
+    historical.download = Some(other_recipe.origin(&Uuid::new_v4().to_string()).unwrap());
+    historical.source_manifest_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&historical.manifest).unwrap())
+    );
+    historical.review_hash = crate::model_inspection::review_hash(
+        &historical.manifest,
+        &historical.source_manifest_hash,
+        &historical.files,
+    )
+    .unwrap();
+    historical.validate_portable().unwrap();
+    assert!(historical.validate().is_err());
+}
+
+#[test]
 fn portable_model_catalog_preserves_unused_packages_all_versions_and_both_numeric_profiles_without_paths_or_execution(
 ) {
     let mut f = Fixture::new();

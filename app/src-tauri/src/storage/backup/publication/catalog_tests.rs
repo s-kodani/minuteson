@@ -7,6 +7,102 @@ fn source() -> (tempfile::TempDir, tempfile::TempDir, Storage, String) {
 }
 
 #[test]
+fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installing_or_selecting_models(
+) {
+    let (_root, _models, storage, _) = source();
+    let mut record = {
+        let db = storage.connection.lock().unwrap();
+        let id: String = db
+            .query_row(
+                "SELECT id FROM model_packages ORDER BY id LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        crate::storage::model_placements::load_history(&db, &id)
+            .unwrap()
+            .unwrap()
+            .0
+    };
+    record.package_id = Uuid::new_v4().to_string();
+    for (declared, actual) in record.manifest.files.iter_mut().zip(&mut record.files) {
+        declared.expected_size = Some(actual.actual_size);
+        declared.expected_hash = Some(actual.actual_hash.clone());
+        actual.expected_size_checked = true;
+        actual.expected_hash_checked = true;
+    }
+    record.source_manifest_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&record.manifest).unwrap())
+    );
+    record.review_hash = crate::model_inspection::review_hash(
+        &record.manifest,
+        &record.source_manifest_hash,
+        &record.files,
+    )
+    .unwrap();
+    let recipe = crate::model_download_recipe::Recipe {
+        schema_version: 1,
+        manifest: record.manifest.clone(),
+        sources: record
+            .manifest
+            .files
+            .iter()
+            .map(|file| crate::model_download_recipe::DownloadSource {
+                relative_path: file.relative_path.clone(),
+                url: format!("https://example.com/{}", file.relative_path),
+            })
+            .collect(),
+    };
+    record.schema_version = 2;
+    record.download = Some(recipe.origin(&Uuid::new_v4().to_string()).unwrap());
+    storage.begin_model_placement(&record).unwrap();
+    storage.interrupt_model_placement(&record).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let original = archive(&storage, output.path(), "download.monbackup");
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let before_preferences = target.analysis_preferences().unwrap().payload;
+    restore(
+        &original,
+        &target,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+    );
+    assert!(target.list_model_placements().unwrap().is_empty());
+    assert_eq!(
+        target.analysis_preferences().unwrap().payload,
+        before_preferences
+    );
+    let history = target.model_catalog_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].state, "unavailable");
+    let value = serde_json::to_value(&history[0].catalog).unwrap();
+    let saved = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["packageId"] == record.package_id)
+        .unwrap();
+    assert_eq!(saved, &serde_json::to_value(&record).unwrap());
+    let rebacked = archive(&target, output.path(), "rebacked.monbackup");
+    let final_root = tempfile::tempdir().unwrap();
+    let final_storage = Storage::open(final_root.path().into()).unwrap();
+    restore(
+        &rebacked,
+        &final_storage,
+        output.path(),
+        &Uuid::new_v4().to_string(),
+    );
+    assert!(final_storage.list_model_placements().unwrap().is_empty());
+    assert!(final_storage
+        .model_catalog_history()
+        .unwrap()
+        .iter()
+        .any(|entry| serde_json::to_value(&entry.catalog).unwrap() == value));
+}
+
+#[test]
 fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availability_and_unlisted_model_fingerprints_without_live_writes(
 ) {
     let (_root, _models, storage, _) = source();

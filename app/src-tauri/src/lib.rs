@@ -26,6 +26,8 @@ mod model_compatibility;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod model_download;
+#[allow(dead_code)]
+mod model_download_recipe;
 mod model_inspection;
 mod model_placement;
 mod model_rebinding;

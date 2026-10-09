@@ -291,7 +291,7 @@ pub(in crate::storage) fn export(
         check()?;
         match source.as_str() {
             "historical_snapshot" => {}
-            "manual_import" => {
+            "manual_import" | "download" => {
                 let (record, _) = super::super::model_placements::load(db, &id)?
                     .ok_or("持ち運び用のモデル配置記録が欠損しています")?;
                 budget(&record, &mut used_bytes)?;

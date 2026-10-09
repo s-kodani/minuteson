@@ -65,7 +65,7 @@ pub(super) fn load_history(
     };
     if json.len() > 65_536
         || format!("{:x}", Sha256::digest(json.as_bytes())) != hash
-        || source_type != "manual_import"
+        || !matches!(source_type.as_str(), "manual_import" | "download")
         || !matches!(
             state.as_str(),
             "preparing" | "unavailable" | "ready" | "incompatible"
@@ -78,6 +78,7 @@ pub(super) fn load_history(
     let expected_engine =
         serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
     if record.package_id != id
+        || source_type != record.source_type()
         || expected_engine.as_str() != Some(&engine)
         || name != record.manifest.model_name
         || version != record.manifest.model_version
@@ -170,7 +171,7 @@ impl Storage {
             return Err("モデル配置IDが予約済みデータと衝突しています".into());
         }
         let engine = serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO model_packages(id,engine,model_name,model_version,quantization,source_type,manifest_json,manifest_hash,license_ref,state) VALUES(?1,?2,?3,?4,?5,'manual_import',?6,?7,?8,'preparing')",params![record.package_id,engine.as_str(),record.manifest.model_name,record.manifest.model_version,record.manifest.quantization,json,hash,record.manifest.license_ref]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO model_packages(id,engine,model_name,model_version,quantization,source_type,manifest_json,manifest_hash,license_ref,state) VALUES(?1,?2,?3,?4,?5,?9,?6,?7,?8,'preparing')",params![record.package_id,engine.as_str(),record.manifest.model_name,record.manifest.model_version,record.manifest.quantization,json,hash,record.manifest.license_ref,record.source_type()]).map_err(|e|e.to_string())?;
         for (declared, actual) in record.manifest.files.iter().zip(&record.files) {
             let role = serde_json::to_value(actual.role).map_err(|e| e.to_string())?;
             let file_id = loop {
@@ -211,7 +212,11 @@ impl Storage {
             ],
         )
         .map_err(|e| e.to_string())?;
-        tx.execute("UPDATE model_packages SET state='unavailable' WHERE id=?1 AND source_type='manual_import'",params![record.package_id]).map_err(|e|e.to_string())?;
+        tx.execute(
+            "UPDATE model_packages SET state='unavailable' WHERE id=?1 AND source_type=?2",
+            params![record.package_id, record.source_type()],
+        )
+        .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
     }
     pub(crate) fn list_model_placements(&self) -> Result<Vec<CatalogEntry>, String> {
@@ -219,7 +224,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let ids = db.prepare("SELECT id FROM model_packages WHERE source_type='manual_import' ORDER BY rowid DESC").map_err(|e|e.to_string())?.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        let ids = db.prepare("SELECT id FROM model_packages WHERE source_type IN ('manual_import','download') ORDER BY rowid DESC").map_err(|e|e.to_string())?.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
         ids.into_iter()
             .map(|id| {
                 let (record, placed) =
@@ -235,6 +240,7 @@ impl Storage {
                     super::model_checks::latest(&db, &id)?.map(|check| check.summary);
                 Ok(CatalogEntry {
                     package_id: id,
+                    source_type: record.source_type().into(),
                     model_name: record.manifest.model_name,
                     model_version: record.manifest.model_version,
                     engine: engine.as_str().ok_or("モデルエンジンが不正です")?.into(),

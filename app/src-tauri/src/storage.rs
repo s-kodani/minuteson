@@ -335,8 +335,8 @@ impl Storage {
             connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
             // A copy or compatibility check is never resumed or executed on startup.
             // Retain intent/fingerprints and partial files for explicit inspection.
-            connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type='manual_import' AND state='preparing')", [])?;
-            connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type='manual_import' AND state='preparing'", [])?;
+            connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type IN ('manual_import','download') AND state='preparing')", [])?;
+            connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type IN ('manual_import','download') AND state='preparing'", [])?;
         } else {
             scratch = None;
         }

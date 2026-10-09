@@ -11,6 +11,22 @@ pub(crate) struct Directory {
 
 #[cfg(unix)]
 impl Directory {
+    /// Read-only opening: no mkdir, chmod or synchronization of unknown entries.
+    pub(crate) fn open_existing(path: &Path) -> Result<Self, String> {
+        use std::os::unix::ffi::OsStrExt;
+        if !path.is_absolute() || path.canonicalize().map_err(|e| e.to_string())? != path {
+            return Err("モデル管理領域の読戻し先にリンクがあります".into());
+        }
+        let name =
+            std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let fd = unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        Self::from_fd(fd, path.to_path_buf())
+    }
     fn name(value: &str) -> Result<std::ffi::CString, String> {
         if value.is_empty() || matches!(value, "." | "..") || value.contains('/') {
             return Err("配置先のパス要素が不正です".into());

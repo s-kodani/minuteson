@@ -18,6 +18,9 @@ pub(crate) struct PlacementRecord {
     pub source_manifest_hash: String,
     pub review_hash: String,
     pub files: Vec<FileReport>,
+    // Omit entirely for v1: preserve its serialized bytes and all old hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<crate::model_download_recipe::DownloadOrigin>,
 }
 impl PlacementRecord {
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -29,10 +32,15 @@ impl PlacementRecord {
         self.validate_for(self.manifest.target)
     }
     fn validate_for(&self, target: Target) -> Result<(), String> {
-        if self.schema_version != 1 || !uuid(&self.package_id) {
+        if !uuid(&self.package_id) {
             return Err("モデル配置記録の形式版・操作IDが不正です".into());
         }
         self.manifest.validate(target)?;
+        match (self.schema_version, &self.download) {
+            (1, None) => {}
+            (2, Some(origin)) => origin.validate(&self.manifest, &self.source_manifest_hash)?,
+            _ => return Err("モデル配置記録の形式版と由来が一致しません".into()),
+        }
         if self.source_manifest_hash.len() != 64
             || !self
                 .source_manifest_hash
@@ -80,6 +88,25 @@ impl PlacementRecord {
             source_manifest_hash: report.manifest_hash.clone(),
             review_hash: report.review_hash.clone(),
             files: report.files.clone(),
+            download: None,
+        }
+    }
+    pub(crate) fn downloaded(
+        package_id: &str,
+        report: &Report,
+        origin: crate::model_download_recipe::DownloadOrigin,
+    ) -> Result<Self, String> {
+        let mut record = Self::from_report(package_id, report);
+        record.schema_version = 2;
+        record.download = Some(origin);
+        record.validate()?;
+        Ok(record)
+    }
+    pub(crate) fn source_type(&self) -> &'static str {
+        if self.download.is_some() {
+            "download"
+        } else {
+            "manual_import"
         }
     }
 }
@@ -97,6 +124,7 @@ pub(crate) struct PlacementReceipt {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CatalogEntry {
     pub package_id: String,
+    pub source_type: String,
     pub model_name: String,
     pub model_version: String,
     pub engine: String,
@@ -153,71 +181,105 @@ pub(crate) fn place(
             );
         }
         let record = PlacementRecord::from_report(package_id, &report);
-        record.validate()?;
-        // Serialize/check limits before creating a package or writing DB intent.
-        let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-        if json.len() > 65_536 {
-            return Err(
-                "配置記録が64KiBを超えています。構成や長いファイル名を見直してください".into(),
-            );
+        place_reviewed(
+            storage,
+            models_root,
+            source,
+            &report,
+            &record,
+            cancelled,
+            &|| Ok(()),
+        )
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn place_reviewed(
+    storage: &Storage,
+    models_root: &Path,
+    source: &Path,
+    report: &Report,
+    record: &PlacementRecord,
+    cancelled: &impl Fn() -> bool,
+    verify_origin: &impl Fn() -> Result<(), String>,
+) -> Result<PlacementReceipt, String> {
+    let package_id = &record.package_id;
+    record.validate()?;
+    check(cancelled)?;
+    verify_origin()?;
+    if report.review_hash != record.review_hash
+        || report.manifest != record.manifest
+        || report.files != record.files
+        || report.manifest_hash != record.source_manifest_hash
+    {
+        return Err("モデル配置の検査内容と由来が一致しません".into());
+    }
+    // Serialize/check limits before creating a package or writing DB intent.
+    let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    if json.len() > 65_536 {
+        return Err("配置記録が64KiBを超えています。構成や長いファイル名を見直してください".into());
+    }
+    let root = fs::Directory::root(models_root)?;
+    let required = report
+        .total_bytes
+        .checked_add(65_536 + 16 * 1024 * 1024)
+        .ok_or("モデル配置容量が範囲外です")?;
+    if root.available()? < required {
+        return Err("モデル管理領域の空き容量が不足しています".into());
+    }
+    check(cancelled)?;
+    if let Some(saved) = storage.model_placement_receipt(record)? {
+        // Lost-response retry never creates or overwrites another package.
+        if saved.placement_recorded {
+            root.verify()?;
+            let existing = model_inspection::inspect(&root.path().join(package_id), cancelled)?;
+            if existing.review_hash != record.review_hash {
+                return Err("配置済みモデルが欠損・変更されています。既存物は保全します".into());
+            }
+            verify_origin()?;
+            return Ok(saved);
         }
-        let root = fs::Directory::root(models_root)?;
-        let required = report
-            .total_bytes
-            .checked_add(65_536 + 16 * 1024 * 1024)
-            .ok_or("モデル配置容量が範囲外です")?;
-        if root.available()? < required {
-            return Err("モデル管理領域の空き容量が不足しています".into());
+        return Err(
+            "この操作は未完了です。途中配置を上書きせず、新しい取り込み操作で再試行してください"
+                .into(),
+        );
+    }
+    storage.begin_model_placement(record)?;
+    let result = (|| {
+        check(cancelled)?;
+        // UUID directory is created after durable intent, never adopted.
+        let destination = root.child(package_id, true)?;
+        copy_package(source, report, &destination, cancelled)?;
+        root.verify()?;
+        destination.sync()?;
+        let copied = model_inspection::inspect(destination.path(), cancelled)?;
+        if copied.review_hash != record.review_hash {
+            return Err("配置先の全ファイルが検査済み素材と一致しません".into());
         }
         check(cancelled)?;
-        if let Some(saved) = storage.model_placement_receipt(&record)? {
-            // Lost-response retry never creates or overwrites another package.
-            if saved.placement_recorded {
-                root.verify()?;
-                let existing = model_inspection::inspect(&root.path().join(package_id), cancelled)?;
-                if existing.review_hash != record.review_hash {
-                    return Err("配置済みモデルが欠損・変更されています。既存物は保全します".into());
-                }
-                return Ok(saved);
-            }
-            return Err("この操作は未完了です。途中配置を上書きせず、新しい取り込み操作で再試行してください".into());
+        root.verify()?;
+        destination.verify()?;
+        verify_origin()?;
+        storage.finish_model_placement(record)?;
+        Ok(PlacementReceipt {
+            package_id: package_id.clone(),
+            review_hash: record.review_hash.clone(),
+            total_bytes: report.total_bytes,
+            placement_recorded: true,
+            engine_compatibility: "not_verified".into(),
+            ready: false,
+        })
+    })();
+    if result.is_err() {
+        // Keep partial files and foreign/unknown objects. No guessed cleanup,
+        // chmod of existing entries, recursive deletion, or automatic retry.
+        if let Err(error) = storage.interrupt_model_placement(record) {
+            return Err(format!(
+                "配置失敗後の未完了記録を確定できません。再起動して確認してください: {error}"
+            ));
         }
-        storage.begin_model_placement(&record)?;
-        let result = (|| {
-            check(cancelled)?;
-            // UUID directory is created after durable intent, never adopted.
-            let destination = root.child(package_id, true)?;
-            copy_package(source, &report, &destination, cancelled)?;
-            root.verify()?;
-            destination.sync()?;
-            let copied = model_inspection::inspect(destination.path(), cancelled)?;
-            if copied.review_hash != record.review_hash {
-                return Err("配置先の全ファイルが検査済み素材と一致しません".into());
-            }
-            check(cancelled)?;
-            root.verify()?;
-            destination.verify()?;
-            storage.finish_model_placement(&record)?;
-            Ok(PlacementReceipt {
-                package_id: package_id.into(),
-                review_hash: record.review_hash.clone(),
-                total_bytes: report.total_bytes,
-                placement_recorded: true,
-                engine_compatibility: "not_verified".into(),
-                ready: false,
-            })
-        })();
-        if result.is_err() {
-            // Keep partial files and foreign/unknown objects. No guessed cleanup,
-            // chmod of existing entries, recursive deletion, or automatic retry.
-            if let Err(error) = storage.interrupt_model_placement(&record) {
-                return Err(format!(
-                    "配置失敗後の未完了記録を確定できません。再起動して確認してください: {error}"
-                ));
-            }
-        }
-        result
     }
+    result
 }
 
 #[cfg(unix)]

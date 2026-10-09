@@ -3,133 +3,18 @@
 //! lease for the whole operation (including child teardown and durable IO).
 //! Download recipes are explicit untrusted input, not an authenticated catalog.
 mod transport;
-use crate::model_inspection::{self, PackageManifest, Report, Target};
+#[cfg(test)]
+use crate::model_download_recipe::MAX_TOTAL;
+use crate::model_download_recipe::{validate_url, Recipe, Review, MAX_RECIPE};
+use crate::model_inspection::{self, Report, Source};
 use crate::model_placement::fs::Directory;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const MAX_RECIPE: usize = 65_536;
-const MAX_TOTAL: u64 = 32 * 1024 * 1024 * 1024;
 const INTENT: &str = "download-intent.json";
 const COMPLETE: &str = "download-complete.json";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Recipe {
-    schema_version: u32,
-    manifest: PackageManifest,
-    sources: Vec<DownloadSource>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DownloadSource {
-    relative_path: String,
-    url: String,
-}
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Review {
-    recipe_hash: String,
-    manifest: PackageManifest,
-    sources: Vec<DownloadSource>,
-    total_bytes: u64,
-    publisher_authenticity: &'static str,
-    installed: bool,
-    ready: bool,
-}
-impl Recipe {
-    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.is_empty() || bytes.len() > MAX_RECIPE {
-            return Err("ダウンロード定義は64KiB以内で指定してください".into());
-        }
-        let recipe: Self =
-            serde_json::from_slice(bytes).map_err(|_| "ダウンロード定義の形式が不正です")?;
-        recipe.validate()?;
-        Ok(recipe)
-    }
-    pub(crate) fn review(&self) -> Result<Review, String> {
-        let total_bytes = self.validate()?;
-        Ok(Review {
-            recipe_hash: self.hash()?,
-            manifest: self.manifest.clone(),
-            sources: self.sources.clone(),
-            total_bytes,
-            publisher_authenticity: "not_verified",
-            installed: false,
-            ready: false,
-        })
-    }
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        let bytes = serde_json::to_vec(self).map_err(|_| "ダウンロード定義を符号化できません")?;
-        if bytes.len() > MAX_RECIPE {
-            return Err("ダウンロード定義が64KiBを超えています".into());
-        }
-        Ok(bytes)
-    }
-    fn hash(&self) -> Result<String, String> {
-        Ok(format!("{:x}", Sha256::digest(self.bytes()?)))
-    }
-    fn validate(&self) -> Result<u64, String> {
-        if self.schema_version != 1 {
-            return Err("ダウンロード定義の形式版が未対応です".into());
-        }
-        self.manifest.validate(Target::current()?)?;
-        if self.sources.len() != self.manifest.files.len() {
-            return Err("モデルファイルと配布元の構成が一致しません".into());
-        }
-        let mut total = 0_u64;
-        for (file, source) in self.manifest.files.iter().zip(&self.sources) {
-            if file.relative_path != source.relative_path
-                || file.expected_size.is_none()
-                || file.expected_hash.is_none()
-            {
-                return Err("全ダウンロードファイルに同順の配布元・容量・SHA-256が必要です".into());
-            }
-            validate_url(&source.url)?;
-            total = total
-                .checked_add(file.expected_size.unwrap())
-                .filter(|n| *n <= MAX_TOTAL)
-                .ok_or("ダウンロード合計容量の上限は32GiBです")?;
-        }
-        self.bytes()?;
-        Ok(total)
-    }
-}
-
-fn validate_url(value: &str) -> Result<(), String> {
-    // Do not silently normalize a pasted credential, whitespace or backslash.
-    // Query strings (often access tokens) are not accepted in initial recipes;
-    // HTTPS-only server redirects may supply signed CDN query strings internally.
-    let invalid = || "配布元は認証情報・query・fragmentを含まないHTTPS URLで指定してください";
-    if value.len() > 4096
-        || !value.starts_with("https://")
-        || value
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
-    {
-        return Err(invalid().into());
-    }
-    let authority = value["https://".len()..]
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
-    if authority.is_empty() || authority.contains('@') {
-        return Err(invalid().into());
-    }
-    let parsed = tauri::Url::parse(value).map_err(|_| invalid())?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(invalid().into());
-    }
-    Ok(())
-}
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
         return Err("モデルダウンロードを中断しました。途中ファイルは保全します".into());
@@ -163,6 +48,163 @@ struct Completion {
     recipe_hash: String,
     review_hash: String,
     total_bytes: u64,
+}
+
+/// A readback is never a resume or an engine-readiness grant. Malformed or
+/// changed evidence is an error, not a projection to an empty/successful state.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Readback {
+    pub(crate) state: &'static str,
+    pub(crate) review: Review,
+    pub(crate) receipt: Option<DownloadReceipt>,
+    #[serde(skip)]
+    recipe: Recipe,
+    #[serde(skip)]
+    evidence: Vec<Source>,
+    #[serde(skip)]
+    directories: Vec<Directory>,
+}
+impl Readback {
+    fn verify(&self) -> Result<(), String> {
+        for source in &self.evidence {
+            source.verify()?;
+        }
+        for directory in &self.directories {
+            directory.verify()?;
+        }
+        Ok(())
+    }
+}
+
+fn read_record<T: serde::de::DeserializeOwned>(
+    directory: &Path,
+    name: &str,
+    limit: usize,
+) -> Result<(T, Source), String> {
+    let mut source = Source::open(directory, name)?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut source.file)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "ダウンロード記録を読み戻せません")?;
+    source.verify()?;
+    if bytes.is_empty() || bytes.len() > limit {
+        return Err("ダウンロード記録の容量が不正です".into());
+    }
+    let record = serde_json::from_slice(&bytes).map_err(|_| "ダウンロード記録の形式が不正です")?;
+    Ok((record, source))
+}
+
+pub(crate) fn readback(
+    staging_root: &Path,
+    operation_id: &str,
+    expected_recipe_hash: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Readback, String> {
+    check(cancelled)?;
+    if !uuid::Uuid::parse_str(operation_id).is_ok_and(|id| id.to_string() == operation_id) {
+        return Err("ダウンロード操作IDが不正です".into());
+    }
+    let root = Directory::open_existing(staging_root)?;
+    let operation = Directory::open_existing(&staging_root.join(operation_id))?;
+    // Intent adds bounded metadata to the <=64KiB canonical recipe.
+    let (intent, source): (Intent, _) = read_record(operation.path(), INTENT, MAX_RECIPE + 1024)?;
+    let review = intent.recipe.review()?;
+    if intent.schema_version != 1
+        || intent.operation_id != operation_id
+        || intent.recipe_hash != review.recipe_hash
+        || intent.recipe_hash != expected_recipe_hash
+    {
+        return Err("ダウンロード意図が確認済みの操作・定義と一致しません".into());
+    }
+    let mut result = Readback {
+        state: "incomplete",
+        review,
+        receipt: None,
+        recipe: intent.recipe,
+        evidence: vec![source],
+        directories: vec![root, operation],
+    };
+    match std::fs::symlink_metadata(staging_root.join(operation_id).join(COMPLETE)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            check(cancelled)?;
+            result.verify()?;
+            // No marker: preserve the intent and any payload. Do not contact
+            // servers, adopt partial bytes, copy or guess that this succeeded.
+            return Ok(result);
+        }
+        Err(_) => return Err("ダウンロード完了記録を確認できません".into()),
+        Ok(_) => {}
+    }
+    let (completion, source): (Completion, _) =
+        read_record(result.directories[1].path(), COMPLETE, 1024)?;
+    result.evidence.push(source);
+    if completion.schema_version != 1
+        || completion.operation_id != operation_id
+        || completion.recipe_hash != expected_recipe_hash
+        || completion.total_bytes != result.review.total_bytes
+    {
+        return Err("ダウンロード完了記録が意図と一致しません".into());
+    }
+    let payload = Directory::open_existing(&staging_root.join(operation_id).join("payload"))?;
+    let report = model_inspection::inspect(payload.path(), cancelled)?;
+    let manifest_bytes = serde_json::to_vec(&result.recipe.manifest).map_err(|e| e.to_string())?;
+    if report.manifest_hash != format!("{:x}", Sha256::digest(manifest_bytes))
+        || report.review_hash != completion.review_hash
+        || report.total_bytes != completion.total_bytes
+    {
+        return Err("ダウンロード実体が意図・完了記録と一致しません".into());
+    }
+    check(cancelled)?;
+    result.receipt = Some(DownloadReceipt {
+        operation_id: operation_id.into(),
+        recipe_hash: completion.recipe_hash,
+        directory: payload.path().to_path_buf(),
+        report,
+        installed: false,
+        ready: false,
+    });
+    result.directories.push(payload);
+    result.verify()?;
+    result.state = "complete";
+    Ok(result)
+}
+
+/// Separate explicit managed copy, after readback of native-owned staging.
+/// It does not probe/execute a downloaded file or apply an engine profile.
+pub(crate) fn place(
+    storage: &crate::storage::Storage,
+    models_root: &Path,
+    staging_root: &Path,
+    operation_id: &str,
+    expected_recipe_hash: &str,
+    package_id: &str,
+    expected_review_hash: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<crate::model_placement::PlacementReceipt, String> {
+    let recovered = readback(staging_root, operation_id, expected_recipe_hash, cancelled)?;
+    let receipt = recovered
+        .receipt
+        .as_ref()
+        .ok_or("ダウンロードが未完了です。途中ファイルは保全します")?;
+    if receipt.report.review_hash != expected_review_hash {
+        return Err("ダウンロード実体の確認内容が変更されています".into());
+    }
+    let record = crate::model_placement::PlacementRecord::downloaded(
+        package_id,
+        &receipt.report,
+        recovered.recipe.origin(operation_id)?,
+    )?;
+    crate::model_placement::place_reviewed(
+        storage,
+        models_root,
+        &receipt.directory,
+        &receipt.report,
+        &record,
+        cancelled,
+        &|| recovered.verify(),
+    )
 }
 
 /// Explicit staging only. Never runs downloaded executables, mutates settings,
