@@ -68,7 +68,7 @@ impl CaptureManifest {
 pub(super) struct CaptureTimeline<'a> {
     pub(super) start_us: i64,
     pub(super) end_us: i64,
-    segments: &'a [ClockSegment],
+    pub(super) segments: &'a [ClockSegment],
 }
 
 impl CaptureTrack {

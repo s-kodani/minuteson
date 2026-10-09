@@ -459,99 +459,14 @@ fn write_segment_with_sync(
             .suffix(".part")
             .tempfile_in(parent)
             .map_err(|e| e.to_string())?;
-        let rate = source.format().sample_rate;
-        let channels = source.format().channels;
-        let mut info =
-            StreamInfo::new(rate as usize, channels as usize, 24).map_err(|e| e.to_string())?;
-        info.set_block_sizes(BLOCK, BLOCK)
-            .map_err(|e| e.to_string())?;
-        let config = flacenc::config::Encoder::default()
-            .into_verified()
-            .map_err(|(_, e)| e.to_string())?;
-        let mut fb = FrameBuf::with_size(channels as usize, BLOCK).map_err(|e| e.to_string())?;
-        // Fixed-size metadata can be replaced after the last frame is complete.
-        let header = stream_header(&info)?;
-        temporary.write_all(&header).map_err(|e| e.to_string())?;
-        let mut md5 = Md5::new();
-        let mut offset = 0;
-        let mut frame_number = 0;
-        while offset < frames {
-            check_cancelled(cancelled)?;
-            let count = (frames - offset).min(BLOCK as u64);
-            let pcm = source.read_frames(first + offset, count)?;
-            let mut samples = Vec::with_capacity(pcm.len() / 4);
-            for sample in pcm.chunks_exact(4) {
-                let value = f32::from_le_bytes(sample.try_into().unwrap());
-                if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
-                    return Err("FLAC保存PCMの値が不正です".into());
-                }
-                let quantized = (f64::from(value) * 8_388_608.0)
-                    .round()
-                    .clamp(-8_388_608.0, 8_388_607.0) as i32;
-                md5.update(&quantized.to_le_bytes()[..3]);
-                samples.push(quantized);
-            }
-            fb.fill_interleaved(&samples).map_err(|e| e.to_string())?;
-            let frame = flacenc::encode_fixed_size_frame(&config, &fb, frame_number, &info)
-                .map_err(|e| e.to_string())?;
-            info.update_frame_info(&frame);
-            let mut sink = flacenc::bitsink::ByteSink::new();
-            frame.write(&mut sink).map_err(|e| e.to_string())?;
-            temporary
-                .write_all(sink.as_slice())
-                .map_err(|e| e.to_string())?;
-            offset += count;
-            frame_number += 1;
-            progress(offset);
-        }
-        // Fixed-block STREAMINFO must report the nominal size, excluding the
-        // short last block, as required by RFC 9639 section 8.2.
-        info.set_block_sizes(BLOCK, BLOCK)
-            .map_err(|e| e.to_string())?;
-        info.set_md5_digest(&md5.finalize().into());
-        info.set_total_samples(frames as usize);
-        temporary
-            .as_file_mut()
-            .rewind()
-            .map_err(|e| e.to_string())?;
-        temporary
-            .write_all(&stream_header(&info)?)
-            .map_err(|e| e.to_string())?;
-        temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-        temporary
-            .as_file_mut()
-            .rewind()
-            .map_err(|e| e.to_string())?;
-        let mut hash = Sha256::new();
-        let mut buffer = [0; 65536];
-        loop {
-            check_cancelled(cancelled)?;
-            let count = temporary.read(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            hash.update(&buffer[..count]);
-        }
-        let sha256 = format!("{:x}", hash.finalize());
-        let size = temporary
-            .as_file()
-            .metadata()
-            .map_err(|e| e.to_string())?
-            .len();
-        // Validate complete decoding, sample count, CRC and MD5 before publishing.
-        let validated = VerifiedAudio::open_cancellable(
-            temporary.as_file().try_clone().map_err(|e| e.to_string())?,
-            size,
-            &sha256,
+        let saved = encode_segment_file(
+            source,
+            first,
+            frames,
+            temporary.as_file_mut(),
             cancelled,
+            progress,
         )?;
-        if validated.format.frames != frames
-            || validated.format.sample_rate != rate
-            || validated.format.channels != channels
-        {
-            return Err("FLAC保存結果が入力区間と一致しません".into());
-        }
-        drop(validated);
         check_cancelled(cancelled)?;
         source.verify_unchanged()?;
         temporary
@@ -559,16 +474,125 @@ fn write_segment_with_sync(
             .map_err(|e| e.to_string())?;
         published = true;
         sync_parent(parent)?;
-        Ok(SavedFlac {
-            size,
-            sha256,
-            frames,
-            sample_rate: rate,
-            channels,
-            bits_per_sample: 24,
-        })
+        Ok(saved)
     })();
     result.map_err(|message| FlacWriteError { published, message })
+}
+
+/// Encode into a caller-owned, already bound staging descriptor. The caller
+/// retains responsibility for exclusive publication, directory sync and its
+/// durable ownership checkpoint. No path is resolved by this codec.
+pub(crate) fn encode_segment_file(
+    source: &mut impl PcmSource,
+    first: u64,
+    frames: u64,
+    temporary: &mut File,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u64),
+) -> Result<SavedFlac, String> {
+    if frames == 0
+        || frames > u64::from(source.format().sample_rate) * MAX_SECONDS
+        || first
+            .checked_add(frames)
+            .is_none_or(|end| end > source.format().frames)
+        || temporary.metadata().map_err(|e| e.to_string())?.len() != 0
+    {
+        return Err("FLAC保存区間または一時実体が不正です".into());
+    }
+    check_cancelled(cancelled)?;
+    let rate = source.format().sample_rate;
+    let channels = source.format().channels;
+    let mut info =
+        StreamInfo::new(rate as usize, channels as usize, 24).map_err(|e| e.to_string())?;
+    info.set_block_sizes(BLOCK, BLOCK)
+        .map_err(|e| e.to_string())?;
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|(_, e)| e.to_string())?;
+    let mut fb = FrameBuf::with_size(channels as usize, BLOCK).map_err(|e| e.to_string())?;
+    // Fixed-size metadata can be replaced after the last frame is complete.
+    let header = stream_header(&info)?;
+    temporary.write_all(&header).map_err(|e| e.to_string())?;
+    let mut md5 = Md5::new();
+    let mut offset = 0;
+    let mut frame_number = 0;
+    while offset < frames {
+        check_cancelled(cancelled)?;
+        let count = (frames - offset).min(BLOCK as u64);
+        let pcm = source.read_frames(first + offset, count)?;
+        let mut samples = Vec::with_capacity(pcm.len() / 4);
+        for sample in pcm.chunks_exact(4) {
+            let value = f32::from_le_bytes(sample.try_into().unwrap());
+            if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+                return Err("FLAC保存PCMの値が不正です".into());
+            }
+            let quantized = (f64::from(value) * 8_388_608.0)
+                .round()
+                .clamp(-8_388_608.0, 8_388_607.0) as i32;
+            md5.update(&quantized.to_le_bytes()[..3]);
+            samples.push(quantized);
+        }
+        fb.fill_interleaved(&samples).map_err(|e| e.to_string())?;
+        let frame = flacenc::encode_fixed_size_frame(&config, &fb, frame_number, &info)
+            .map_err(|e| e.to_string())?;
+        info.update_frame_info(&frame);
+        let mut sink = flacenc::bitsink::ByteSink::new();
+        frame.write(&mut sink).map_err(|e| e.to_string())?;
+        temporary
+            .write_all(sink.as_slice())
+            .map_err(|e| e.to_string())?;
+        offset += count;
+        frame_number += 1;
+        progress(offset);
+    }
+    // Fixed-block STREAMINFO must report the nominal size, excluding the
+    // short last block, as required by RFC 9639 section 8.2.
+    info.set_block_sizes(BLOCK, BLOCK)
+        .map_err(|e| e.to_string())?;
+    info.set_md5_digest(&md5.finalize().into());
+    info.set_total_samples(frames as usize);
+    temporary.rewind().map_err(|e| e.to_string())?;
+    temporary
+        .write_all(&stream_header(&info)?)
+        .map_err(|e| e.to_string())?;
+    temporary.sync_all().map_err(|e| e.to_string())?;
+    temporary.rewind().map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        check_cancelled(cancelled)?;
+        let count = temporary.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    let sha256 = format!("{:x}", hash.finalize());
+    let size = temporary.metadata().map_err(|e| e.to_string())?.len();
+    // Validate complete decoding, sample count, CRC and MD5 before publishing.
+    let validated = VerifiedAudio::open_cancellable(
+        temporary.try_clone().map_err(|e| e.to_string())?,
+        size,
+        &sha256,
+        cancelled,
+    )?;
+    if validated.format.frames != frames
+        || validated.format.sample_rate != rate
+        || validated.format.channels != channels
+    {
+        return Err("FLAC保存結果が入力区間と一致しません".into());
+    }
+    drop(validated);
+    check_cancelled(cancelled)?;
+    source.verify_unchanged()?;
+    Ok(SavedFlac {
+        size,
+        sha256,
+        frames,
+        sample_rate: rate,
+        channels,
+        bits_per_sample: 24,
+    })
 }
 
 fn stream_header(info: &StreamInfo) -> Result<Vec<u8>, String> {

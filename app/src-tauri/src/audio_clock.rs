@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 const MICROS: u128 = 1_000_000;
 const MAX_SAFE_FRAMES: u128 = (1_u128 << 53) - 1;
+// Native raw segments retain independent affine fits. Bound a whole track's
+// metadata separately from the unchanged 1,024-map per-chunk admission.
+pub(crate) const MAX_CLOCK_SEGMENTS: usize = 65_536;
+pub(crate) const MAX_CLOCK_MAPPING_BYTES: usize = 4 * 1024 * 1024;
 
 /// Chunk-local frame endpoints. The enclosing chunk's immutable asset proof
 /// binds these to samples; database row IDs are not part of the affine transform.
@@ -70,6 +74,7 @@ impl ClockLayout {
         let mut spans = Vec::new();
         let mut raw_frames = 0_u64;
         let mut previous_end = None;
+        let mut mapping_bytes = 0_usize;
         for chunk in chunks {
             if chunk.frames <= 0
                 || chunk.start_us < 0
@@ -97,6 +102,10 @@ impl ClockLayout {
                 });
             } else {
                 for segment in chunk.segments {
+                    mapping_bytes = mapping_bytes
+                        .checked_add(segment.mapping_json.len())
+                        .filter(|count| *count <= MAX_CLOCK_MAPPING_BYTES)
+                        .ok_or("時刻補正の形式情報の合計容量が上限を超えています")?;
                     if segment.mapping_json.len() > 4096 {
                         return Err("時刻補正の形式情報が容量上限を超えています".into());
                     }
@@ -137,7 +146,7 @@ impl ClockLayout {
                     return Err("時刻補正の対応が音声区間全体を覆っていません".into());
                 }
             }
-            if spans.len() > 1024 {
+            if spans.len() > MAX_CLOCK_SEGMENTS {
                 return Err("時刻補正の対応区間が多すぎます".into());
             }
             raw_frames = raw_frames
@@ -369,5 +378,59 @@ pub(crate) mod tests {
         map.mapping_json = " ".repeat(4097);
         assert!(layout(&[map]).is_err());
         assert!(layout(&vec![segment(0, 48000, 100000, 1200000); 1025]).is_err());
+    }
+
+    #[test]
+    fn whole_track_map_budget_is_separate_from_bounded_chunk_metadata() {
+        let maps: Vec<Vec<ClockSegment>> = (0..65)
+            .map(|chunk| {
+                (0..1024)
+                    .map(|frame| {
+                        let start = (chunk * 1024 + frame) * 125;
+                        segment(frame, frame + 1, start, start + 125)
+                    })
+                    .collect()
+            })
+            .collect();
+        let chunks: Vec<_> = maps
+            .iter()
+            .enumerate()
+            .map(|(index, segments)| ClockChunk {
+                frames: 1024,
+                start_us: index as i64 * 128000,
+                end_us: (index as i64 + 1) * 128000,
+                segments,
+            })
+            .collect();
+        let valid = ClockLayout::new(&chunks[..64], 8000).unwrap();
+        assert_eq!(valid.spans.len(), MAX_CLOCK_SEGMENTS);
+        assert_eq!(valid.raw_frames, MAX_CLOCK_SEGMENTS as u64);
+        assert!(ClockLayout::new(&chunks, 8000).is_err());
+        assert!(ClockLayout::new(&chunks[..2], 8000)
+            .unwrap()
+            .range(0, 256000, 8000)
+            .is_ok());
+        let mut verbose = maps[..2].to_vec();
+        let json = format!(
+            "{}{{\"schema_version\":1,\"method\":\"linear\"}}",
+            " ".repeat(3000)
+        );
+        for map in verbose.iter_mut().flatten() {
+            map.mapping_json = json.clone();
+        }
+        let too_large: Vec<_> = verbose
+            .iter()
+            .enumerate()
+            .map(|(index, segments)| ClockChunk {
+                frames: 1024,
+                start_us: index as i64 * 128000,
+                end_us: (index as i64 + 1) * 128000,
+                segments,
+            })
+            .collect();
+        assert!(ClockLayout::new(&too_large, 8000)
+            .err()
+            .unwrap()
+            .contains("合計容量"));
     }
 }

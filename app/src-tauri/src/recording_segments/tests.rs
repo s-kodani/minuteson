@@ -633,7 +633,43 @@ fn swift_generated_recording_segments_bind_actual_storage_and_encode_flac_withou
         std::fs::read(audio_root.join("raw-microphone.json")).unwrap(),
         pointer
     );
-    // This check exercises the actual storage gate. The derivative is not yet
-    // registered in the DB; scalable finalization and explicit partial recovery
-    // remain separate work, not inferred from a successful codec roundtrip.
+    // The real Storage finalizer now publishes/admits its own FLAC, independently
+    // of the codec-only native-derived.flac above. Producer evidence stays raw.
+    let (plan, known) = storage.recorded_analysis_input(&meeting.id).unwrap();
+    assert_eq!(plan.tracks.len(), 2);
+    if let Some(known) = known {
+        assert_eq!(known.runs.len(), 2);
+    }
+    let publication: Value =
+        serde_json::from_slice(&std::fs::read(audio_root.join("final-flac.json")).unwrap())
+            .unwrap();
+    for track in &plan.tracks {
+        assert_eq!(track.chunks.len(), 1);
+        assert_eq!(track.chunks[0].frames, 204000);
+        assert!(storage.verify_asset(&track.chunks[0].asset_id).unwrap());
+        let published_track = publication["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|published| published["id"] == track.id)
+            .unwrap();
+        let chunk = published_track["chunks"][0].as_str().unwrap();
+        // Storage owns an exclusive DB connection. Use its admitted API and
+        // deterministic published UUID path, not a second SQLite connection.
+        let path = storage
+            .root()
+            .join("meetings")
+            .join(&meeting.id)
+            .join("audio")
+            .join(&track.id)
+            .join(format!("{chunk}.flac"));
+        let mut registered = VerifiedAudio::open(
+            File::open(path).unwrap(),
+            track.chunks[0].size as u64,
+            &track.chunks[0].hash,
+        )
+        .unwrap();
+        assert!(registered.is_flac());
+        assert_eq!(registered.read_frames(191999, 2).unwrap(), expected);
+    }
 }

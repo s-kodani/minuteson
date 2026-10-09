@@ -363,6 +363,15 @@ impl Entry {
 }
 
 impl Prefix {
+    pub(crate) fn first_capture_nanoseconds(&self) -> Result<i64, String> {
+        self.entries
+            .first()
+            .map(|bound| bound.entry.capture_origin_nanoseconds)
+            .ok_or("原音声の保存範囲が空です".into())
+    }
+    pub(crate) fn tip_hash(&self) -> &str {
+        self.tip.last_entry_sha256.as_deref().unwrap_or("")
+    }
     pub(crate) fn verify_at(
         &self,
         path: &std::path::Path,

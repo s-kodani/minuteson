@@ -49,33 +49,35 @@ pub(super) fn read_clock_segments(
 ) -> Result<BTreeMap<String, Vec<ClockSegment>>, String> {
     // Do not allocate an arbitrarily large archived JSON string before checking
     // the bound. SQLite tests UTF-8 byte length and returns only a bounded value.
-    let mut query = db.prepare("SELECT chunk_id, source_frame_start, source_frame_end, timeline_start_us, timeline_end_us, CASE WHEN length(CAST(mapping_json AS BLOB)) <= 4096 THEN mapping_json ELSE '' END, length(CAST(mapping_json AS BLOB)) <= 4096 FROM track_clock_segments WHERE track_id=?1 ORDER BY chunk_id, source_frame_start, id LIMIT 1025").map_err(|e| e.to_string())?;
-    let rows = query
-        .query_map(params![track], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                ClockSegment {
-                    source_frame_start: row.get(1)?,
-                    source_frame_end: row.get(2)?,
-                    timeline_start_us: row.get(3)?,
-                    timeline_end_us: row.get(4)?,
-                    mapping_json: row.get(5)?,
-                },
-                row.get::<_, bool>(6)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    if rows.len() > 1024 {
-        return Err("時刻補正の対応区間が多すぎます".into());
-    }
+    let mut query = db.prepare("SELECT chunk_id, source_frame_start, source_frame_end, timeline_start_us, timeline_end_us, CASE WHEN length(CAST(mapping_json AS BLOB)) <= 4096 THEN mapping_json ELSE '' END, length(CAST(mapping_json AS BLOB)) <= 4096 FROM track_clock_segments WHERE track_id=?1 ORDER BY chunk_id, source_frame_start, id LIMIT 65537").map_err(|e| e.to_string())?;
+    let mut rows = query.query(params![track]).map_err(|e| e.to_string())?;
     let mut segments = BTreeMap::<String, Vec<ClockSegment>>::new();
-    for (chunk, segment, bounded) in rows {
-        if !bounded {
+    let (mut count, mut bytes) = (0_usize, 0_usize);
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        count += 1;
+        if count > crate::audio_clock::MAX_CLOCK_SEGMENTS {
+            return Err("時刻補正の対応区間が多すぎます".into());
+        }
+        if !row.get::<_, bool>(6).map_err(|e| e.to_string())? {
             return Err("時刻補正の形式情報が容量上限を超えています".into());
         }
-        segments.entry(chunk).or_default().push(segment);
+        let chunk: String = row.get(0).map_err(|e| e.to_string())?;
+        let segment = ClockSegment {
+            source_frame_start: row.get(1).map_err(|e| e.to_string())?,
+            source_frame_end: row.get(2).map_err(|e| e.to_string())?,
+            timeline_start_us: row.get(3).map_err(|e| e.to_string())?,
+            timeline_end_us: row.get(4).map_err(|e| e.to_string())?,
+            mapping_json: row.get(5).map_err(|e| e.to_string())?,
+        };
+        bytes = bytes
+            .checked_add(segment.mapping_json.len())
+            .filter(|bytes| *bytes <= crate::audio_clock::MAX_CLOCK_MAPPING_BYTES)
+            .ok_or("時刻補正の形式情報の合計容量が上限を超えています")?;
+        let chunk_maps = segments.entry(chunk).or_default();
+        if chunk_maps.len() >= 1024 {
+            return Err("時刻補正の区間内対応数が上限を超えています".into());
+        }
+        chunk_maps.push(segment);
     }
     Ok(segments)
 }

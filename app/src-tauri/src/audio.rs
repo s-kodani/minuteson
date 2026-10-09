@@ -39,6 +39,9 @@ pub struct VerifiedAudio {
 }
 
 impl VerifiedAudio {
+    pub(crate) fn is_flac(&self) -> bool {
+        self.flac.is_some()
+    }
     #[cfg(test)]
     pub fn open(file: File, expected_size: u64, expected_hash: &str) -> Result<Self, String> {
         Self::open_cancellable(file, expected_size, expected_hash, &|| false)

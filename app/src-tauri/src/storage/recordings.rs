@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::fs::File;
 
 mod clock;
+#[cfg(unix)]
+mod flac;
 use clock::{CaptureClock, CaptureEnd};
 
 #[derive(Deserialize)]
@@ -622,6 +624,27 @@ impl Storage {
             self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?;
         #[cfg(unix)]
         let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
+        #[cfg(unix)]
+        let publication = if raw_prefixes.is_empty() {
+            None // Keep the admission rules for pre-segment native recordings.
+        } else {
+            Some(flac::Publication::prepare(
+                self,
+                &base,
+                &manifest_file.hash,
+                &manifest,
+                &raw_prefixes,
+            )?)
+        };
+        // Conversion can take time. Revalidate the manifest before the DB
+        // transition, and keep the conversion lease alive through commit.
+        let current_manifest = self.checked_capture_file(&manifest_file.relative, None)?;
+        if current_manifest.size_bytes != manifest_file.size_bytes
+            || current_manifest.hash != manifest_file.hash
+        {
+            return Err("録音manifestがFLAC変換中に変更されました".into());
+        }
+        self.require_data_writable()?;
         let mut connection = self
             .connection
             .lock()
@@ -639,6 +662,10 @@ impl Storage {
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
+        #[cfg(unix)]
+        if let Some(publication) = &publication {
+            publication.verify(self)?;
+        }
         insert_capture_asset(
             &transaction,
             &session.meeting_id,
@@ -646,37 +673,60 @@ impl Storage {
             "application/json",
             now,
         )?;
-        for (kind, file, format, timeline, frames) in [
-            (
-                "mic",
-                &mic_file,
-                mic_format,
-                &mic_timeline,
-                manifest.microphone.frames,
-            ),
-            (
-                "system",
-                &system_file,
-                system_format,
-                &system_timeline,
-                manifest.system.frames,
-            ),
-        ] {
-            let asset_id =
-                insert_capture_asset(&transaction, &session.meeting_id, file, "audio/x-caf", now)?;
-            let track_id = Uuid::new_v4().to_string();
-            transaction.execute(
+        #[cfg(unix)]
+        let converted = publication.is_some();
+        #[cfg(not(unix))]
+        let converted = false;
+        #[cfg(unix)]
+        if let Some(publication) = &publication {
+            publication.insert(
+                &transaction,
+                &session.meeting_id,
+                session_id,
+                &processing_config,
+                duration_us,
+                ending.is_some(),
+                now,
+            )?;
+        }
+        if !converted {
+            for (kind, file, format, timeline, frames) in [
+                (
+                    "mic",
+                    &mic_file,
+                    mic_format,
+                    &mic_timeline,
+                    manifest.microphone.frames,
+                ),
+                (
+                    "system",
+                    &system_file,
+                    system_format,
+                    &system_timeline,
+                    manifest.system.frames,
+                ),
+            ] {
+                let asset_id = insert_capture_asset(
+                    &transaction,
+                    &session.meeting_id,
+                    file,
+                    "audio/x-caf",
+                    now,
+                )?;
+                let track_id = Uuid::new_v4().to_string();
+                transaction.execute(
                 "INSERT INTO audio_tracks (id, meeting_id, session_id, kind, format, sample_rate, channels, state, processing_config_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'caf', ?5, ?6, 'ready', ?7, ?8, ?8)",
                 params![track_id, session.meeting_id, session_id, kind, format.0, format.1, processing_config, now],
             ).map_err(|error| error.to_string())?;
-            let chunk_id = Uuid::new_v4().to_string();
-            transaction.execute(
+                let chunk_id = Uuid::new_v4().to_string();
+                transaction.execute(
                 "INSERT INTO audio_chunks (id, meeting_id, track_id, file_asset_id, sequence, start_us, end_us, frame_count, sample_rate, channels, state, created_at) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9, 'ready', ?10)",
                 params![chunk_id, session.meeting_id, track_id, asset_id, timeline.start_us, timeline.end_us, frames, format.0, format.1, now],
             ).map_err(|error| error.to_string())?;
-            timeline.insert(&transaction, &track_id, &chunk_id)?;
-            if ending.is_some() {
-                timeline.insert_boundary_gaps(&transaction, &track_id, duration_us)?;
+                timeline.insert(&transaction, &track_id, &chunk_id)?;
+                if ending.is_some() {
+                    timeline.insert_boundary_gaps(&transaction, &track_id, duration_us)?;
+                }
             }
         }
         transaction.execute(
@@ -694,6 +744,16 @@ impl Storage {
         for prefix in &raw_prefixes {
             prefix.verify_at(&self.root.join(&base), &|| false)?;
         }
+        #[cfg(unix)]
+        if let Some(publication) = &publication {
+            publication.verify(self)?;
+        }
+        self.require_data_writable()?;
+        #[cfg(all(test, unix))]
+        if publication.is_some() {
+            flac::crash_point("before-db-commit");
+        }
+        self.read_capture_manifest(&manifest_file)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(saved)
     }
