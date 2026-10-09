@@ -28,6 +28,8 @@ mod generation_tests;
 pub(crate) mod imports;
 mod jobs;
 mod meeting_playback;
+#[cfg(test)]
+mod migration_update_tests;
 mod minutes;
 mod minutes_drafts;
 mod minutes_evidence;
@@ -640,20 +642,27 @@ impl Storage {
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
-    connection.execute_batch(
+    // Keep the entire pending upgrade (including first initialization) in one
+    // SQLite transaction. A later SQL/history/commit failure must not leave an
+    // earlier new schema version committed. Startup recovery runs only after
+    // this succeeds; no file, bootstrap or external model is migrated here.
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
     )?;
-    let applied = verify_migration_history(connection)?;
+    let applied = verify_migration_history(&transaction)?;
     for &(version, sql) in MIGRATIONS.iter().skip(applied) {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(sql)?;
+        transaction.execute_batch(sql).map_err(|error| {
+            format!("保存データの移行（段階{version}）に失敗しました。DB・台帳を削除せず保持して確認してください: {error}")
+        })?;
         let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
         transaction.execute(
             "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
             params![version, digest, now_ms()?],
         )?;
-        transaction.commit()?;
     }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -871,9 +880,15 @@ mod tests {
             )
             .unwrap();
         transaction.commit().unwrap();
+        connection.execute("INSERT INTO meetings(id,title,created_at,updated_at) VALUES ('legacy-meeting','移行前の会議',12,34)", []).unwrap();
         drop(connection);
 
         let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let old = storage.get_meeting("legacy-meeting").unwrap().unwrap();
+        assert_eq!(
+            (old.title.as_str(), old.created_at, old.updated_at),
+            ("移行前の会議", 12, 34)
+        );
         let created = storage.create_meeting("移行後の会議").unwrap();
         let count: i64 = storage
             .connection

@@ -47,4 +47,6 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 直前のQAは[録音パネルの操作通知と原因保持](m3-08-recorder-operation-notifications-2026-10-10.md)も含めて再構築し、`/private/tmp/mon-operation-notices-qa-artifact.oerdTa/MON QA.app`に保持した。
 
-最新QAは[保存先の起動拒否時の案内](storage-startup-attention-2026-10-10.md)とミニ画面の両入力ラベル幅の修正も含め、`/private/tmp/mon-startup-attention-final-qa-artifact.LbAFro/MON QA.app`に保持した。署名・識別子・両ヘルパーの確認済みだが、GUI起動・保存先分離・実録音・公証は未検証のままである。専用UIへの切替・通常IPCの拒否・OSの終了を実機で確認するためにも、本番と分離したQA領域を使う。
+直前のQAは[保存先の起動拒否時の案内](storage-startup-attention-2026-10-10.md)とミニ画面の両入力ラベル幅の修正も含め、`/private/tmp/mon-startup-attention-final-qa-artifact.LbAFro/MON QA.app`に保持した。
+
+最新QAは[手動更新時のDB移行の一括確定](manual-update-migration-2026-10-10.md)も含め、`/private/tmp/mon-migration-update-qa-artifact.V6THu6/MON QA.app`に保持した。署名・識別子・両ヘルパーの確認済みだが、GUI起動・保存先分離・実録音・公証は未検証のままである。専用UIへの切替・通常IPCの拒否・OSの終了とデータ移行を実機で確認するためにも、本番と分離したQA領域を使う。
