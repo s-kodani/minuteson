@@ -15,3 +15,5 @@ app/src-tauri/icons/android/
 app/src-tauri/icons/ios/
 .playwright-cli/
 output/playwright/
+.cache/rust-tests/
+.cache/rust-tests.lock

@@ -42,10 +42,20 @@ mod test_profile_guards {
     #[test]
     fn efficient_test_profile_preserves_debug_assertions_and_overflow_panics() {
         assert!(cfg!(debug_assertions));
+        assert!(std::panic::catch_unwind(|| debug_assert!(std::hint::black_box(false))).is_err());
         assert!(std::panic::catch_unwind(|| {
             std::hint::black_box(u64::MAX) + std::hint::black_box(1_u64)
         })
         .is_err());
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            format!("{:x}", Sha256::digest(vec![0x5a; 1024 * 1024])),
+            "bf63d8a95fcc2e64619813aae35fdcbe871fdd9264caa3f365eb3aed0f679129"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 }
 

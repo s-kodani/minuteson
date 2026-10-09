@@ -24,9 +24,9 @@ env MON_EMBEDDING_HELPER="$mon_embedding_check/mon-speaker-embedding" \
 # Exercise the actual parent runner too, including owned child kill/wait.
 env MON_EMBEDDING_HELPER="$mon_embedding_check/mon-speaker-embedding" \
   MON_EMBEDDING_FAKE_LIBRARY="$mon_embedding_check/fake-sherpa.dylib" \
-  cargo test --locked --offline --manifest-path "$mon_embedding_source/../../app/src-tauri/Cargo.toml" \
+  python3 "$mon_embedding_source/../../tools/mon_rust_tests.py" \
   diarization::embedding::tests::feature_child_verifies_fixed_inputs_and_reaps_on_cancellation_timeout_overflow_and_failure -- --ignored
 env MON_EMBEDDING_HELPER="$mon_embedding_check/mon-speaker-embedding" \
   MON_EMBEDDING_FAKE_LIBRARY="$mon_embedding_check/fake-sherpa.dylib" \
-  cargo test --locked --offline --manifest-path "$mon_embedding_source/../../app/src-tauri/Cargo.toml" \
+  python3 "$mon_embedding_source/../../tools/mon_rust_tests.py" \
   diarization::known::tests::saved_run_worker_ -- --ignored

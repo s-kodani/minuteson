@@ -31,17 +31,34 @@ libc = "0.2"
 [profile.test]
 strip = "symbols"
 debug = 0
-# Avoid growing incremental object caches across many native test builds.
-# Explicit partitioning limits individual code-generation units.
-incremental = false
+# Reuse one test cache through tools/mon_rust_tests.py. Its 10 GiB post-run
+# budget trims incremental state first, without retaining per-task caches.
+# Explicit partitioning still limits individual code-generation units.
+incremental = true
 codegen-units = 256
+# false still enables local ThinLTO. Disable its very large intermediate
+# bitcode in tests so the latest incremental generation fits the cache budget.
+lto = "off"
 debug-assertions = true
 overflow-checks = true
 
-# Reduce only the root package's oversized arm64 test text. Dependency,
-# production dev/release profiles, assertions and overflow checks stay intact.
+# Reduce the root package's oversized arm64 test text. All overrides here
+# remain test-only; production profiles and runtime checks stay intact.
 [profile.test.package.mon-desktop]
 opt-level = 1
+
+# Speed up repeated real SQLite work in tests. Bundled C compilation receives
+# this package's OPT_LEVEL too. WAL/FULL, migrations and Rust checks stay intact.
+[profile.test.package.libsqlite3-sys]
+opt-level = 2
+
+[profile.test.package.rusqlite]
+opt-level = 1
+
+# The default sha2 0.10 backend on this Apple Silicon build is software.
+# Keep every physical-byte hash check, but compile its compression rounds fast.
+[profile.test.package.sha2]
+opt-level = 3
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
