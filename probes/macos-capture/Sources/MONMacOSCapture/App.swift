@@ -266,6 +266,16 @@ struct TrackStats: Encodable {
     }
   }
 
+  // The callback must use the same full processing format as a rebind. Equal
+  // rates/channels alone do not prove sample representation or buffer layout.
+  func acceptsMicrophonePCM(
+    _ buffer: AVAudioPCMBuffer, at when: AVAudioTime, processingFormat: AVAudioFormat
+  ) -> Bool {
+    processingFormat.isEqual(buffer.format) && buffer.format.sampleRate == sampleRate
+      && buffer.format.channelCount == channels
+      && (!when.isSampleTimeValid || when.sampleRate == sampleRate)
+  }
+
   // Check clock bounds before writing the corresponding PCM. If writing later
   // fails, the lane becomes terminal and cannot publish this timing as saved.
   mutating func prepareSavedClock(
@@ -1014,9 +1024,9 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         guard let file = self.file else {
           throw ProbeError.capture("microphone CAF writer is closed")
         }
-        guard buffer.format.sampleRate == self.stats.sampleRate,
-          buffer.format.channelCount == self.stats.channels,
-          !when.isSampleTimeValid || when.sampleRate == self.stats.sampleRate
+        guard
+          self.stats.acceptsMicrophonePCM(
+            buffer, at: when, processingFormat: file.processingFormat)
         else {
           self.recovery?.interrupt("format_changed", unavailable: true)
           self.configurationChanged = true
