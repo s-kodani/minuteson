@@ -75,6 +75,13 @@ pub(crate) struct Receipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     delivery: Option<queue::Delivery>,
 }
+impl Receipt {
+    pub(crate) fn account_wait(&mut self, elapsed: std::time::Duration) {
+        if let Some(delivery) = &mut self.delivery {
+            delivery.account_persistence_time(elapsed);
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Snapshot {

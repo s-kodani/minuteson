@@ -305,6 +305,7 @@ fn migration_from_v12_preserves_existing_drafts_heads_and_job_hashes() {
         retired: std::sync::atomic::AtomicBool::new(false),
         root: root.path().to_owned(),
         connection: Mutex::new(connection),
+        restored_inputs: Mutex::default(),
     };
     let (request, original, draft) = fixture(&storage);
     let spec = JobSpec {

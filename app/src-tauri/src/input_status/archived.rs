@@ -196,10 +196,25 @@ impl ArchivedInputs {
                 }
             };
             if let Some(snapshot) = imported {
-                // Read diagnostics even without any restored audio assets.
-                // Immutable pending events are not an acknowledgement store:
-                // no notices/old claims are offered from this projection.
-                let (batch, pending) = snapshot.retained_diagnostics(&row.session_id)?;
+                // A DB-bound destination writer, not a producer-directory
+                // migration. On failure retain diagnostics but offer no claim.
+                let (batch, issue) = match storage.restored_input_page(
+                    &row.meeting_id,
+                    &row.session_id,
+                    lease,
+                    visible,
+                ) {
+                    Ok(batch) => (batch, None),
+                    Err(_) => {
+                        let (batch, pending) = snapshot.retained_diagnostics(&row.session_id)?;
+                        let issue = if pending {
+                            "deliveryUnavailable"
+                        } else {
+                            "unavailable"
+                        };
+                        (if pending { batch } else { None }, Some(issue.into()))
+                    }
+                };
                 let history_save_issue = snapshot
                     .history_save_issue()
                     .unwrap_or(Some("unavailable"))
@@ -209,7 +224,7 @@ impl ArchivedInputs {
                     session_id: row.session_id,
                     title: row.title,
                     batch,
-                    issue: pending.then(|| "deliveryUnavailable".into()),
+                    issue,
                     history_save_issue,
                 });
                 batch_times.push(Instant::now());
@@ -311,6 +326,27 @@ impl ArchivedInputs {
         {
             return Err("保存後通知の受付引数が不正です".into());
         }
+        let action = match request.action {
+            AckAction::Receive => Action::Receive,
+            AckAction::Render => Action::Render,
+            AckAction::Close => Action::Close,
+        };
+        if storage
+            .closed_input_snapshot(&request.meeting_id, &request.session_id)?
+            .is_some()
+        {
+            return storage.restored_input_acknowledge(
+                &request.meeting_id,
+                &request.session_id,
+                lease,
+                &request.notice_id,
+                &request.recipient_id,
+                request.generation,
+                action,
+                request.receive_id.as_deref(),
+                visible,
+            );
+        }
         let mut entries = self
             .0
             .lock()
@@ -329,11 +365,6 @@ impl ArchivedInputs {
             .as_mut()
             .ok_or("この録音には保存後通知がありません")?;
         queue.poll(source, issue, visible())?;
-        let action = match request.action {
-            AckAction::Receive => Action::Receive,
-            AckAction::Render => Action::Render,
-            AckAction::Close => Action::Close,
-        };
         let mut receipt = queue.act(
             &request.notice_id,
             &request.recipient_id,

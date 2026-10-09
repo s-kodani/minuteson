@@ -6,6 +6,8 @@ use crate::{
 use serde_json::{json, Value};
 use std::os::unix::fs::{symlink, DirBuilderExt, PermissionsExt};
 
+mod delivery;
+
 struct Fixture {
     _root: tempfile::TempDir,
     storage: Storage,
@@ -284,11 +286,17 @@ fn assert_imported_reads(
         assert_eq!(row["sessionId"], session);
         assert_eq!(row["meetingId"], meeting);
         assert_eq!(row["historySaveIssue"], "failed");
-        // Reading loss is possible now, but delivery remains explicitly pending.
-        assert_eq!(row["issue"], "deliveryUnavailable");
+        // Logical destination delivery is independent from producer evidence.
+        assert!(row["issue"].is_null());
         let batch = &row["batch"];
         assert_eq!(batch["ownerId"], session);
-        assert_eq!(batch["notices"], json!([]));
+        assert_eq!(
+            batch["notices"].as_array().unwrap().len(),
+            if visible { 2 } else { 0 }
+        );
+        for notice in batch["notices"].as_array().unwrap() {
+            assert!(notice["id"].as_str().unwrap().starts_with(session));
+        }
         assert_eq!(batch["noticeLoss"], json!({"microphone":2,"system":2}));
         assert!(batch["historyIssue"].is_null());
         assert!(batch.get("reportAgeMs").is_none());
@@ -299,7 +307,7 @@ fn assert_imported_reads(
             let request = serde_json::from_value(json!({
                 "meetingId":meeting,"sessionId":session,
                 "noticeId":format!("{notice_owner}:microphone:2:interrupted"),
-                "recipientId":Uuid::new_v4().to_string(),"generation":1,
+                "recipientId":Uuid::new_v4().to_string(),"generation":9_007_199_254_740_991_u64,
                 "action":action,"receiveId":(action=="receive").then(||Uuid::new_v4().to_string())
             }))
             .unwrap();
@@ -422,12 +430,12 @@ fn restored_registered_audio_and_native_looking_decoys_do_not_grant_companion_wr
             row["batch"]["noticeLoss"],
             json!({"microphone":2,"system":2})
         );
-        assert_eq!(row["batch"]["notices"], json!([]));
-        assert_eq!(row["issue"], "deliveryUnavailable");
+        assert_eq!(row["batch"]["notices"].as_array().unwrap().len(), 2);
+        assert!(row["issue"].is_null());
         let request = serde_json::from_value(json!({
             "meetingId":new_meeting,"sessionId":new_session,
             "noticeId":format!("{new_session}:microphone:2:interrupted"),
-            "recipientId":Uuid::new_v4().to_string(),"generation":1,
+            "recipientId":Uuid::new_v4().to_string(),"generation":9_007_199_254_740_991_u64,
             "action":"receive","receiveId":Uuid::new_v4().to_string()
         }))
         .unwrap();
@@ -791,7 +799,7 @@ fn legacy_twenty_eight_schema_has_no_snapshot_column_and_migrates_without_changi
     assert!(has_column(&db).unwrap());
     assert_eq!(
         super::super::super::verify_migration_history(&db).unwrap(),
-        29
+        30
     );
     drop(db);
     drop(storage);

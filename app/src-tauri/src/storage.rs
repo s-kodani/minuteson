@@ -42,6 +42,7 @@ mod playback;
 mod preferences;
 mod recording_preparation;
 mod recordings;
+mod restored_input;
 mod revisions;
 mod speaker_review;
 mod transcription;
@@ -114,6 +115,7 @@ const MIGRATION_26: &str = include_str!("migrations/0026_job_model_rebinding.sql
 const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.sql");
 const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
 const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
+const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -142,6 +144,7 @@ pub struct FileAsset {
 pub struct Storage {
     root: PathBuf,
     connection: Mutex<Connection>,
+    restored_inputs: Mutex<restored_input::Registry>,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
@@ -329,6 +332,7 @@ impl Storage {
         Ok(Self {
             root,
             connection: Mutex::new(connection),
+            restored_inputs: Mutex::new(restored_input::Registry::default()),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
@@ -670,6 +674,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (27, MIGRATION_27),
     (28, MIGRATION_28),
     (29, MIGRATION_29),
+    (30, MIGRATION_30),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

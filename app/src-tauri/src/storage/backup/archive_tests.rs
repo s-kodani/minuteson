@@ -96,11 +96,21 @@ pub(in crate::storage::backup) fn legacy_payloads_without_input_snapshot(
         .find(|table| table.name == "recording_sessions")
         .unwrap();
     let before = table.columns.clone();
-    let index = before
-        .iter()
-        .position(|column| column.name == "input_history_snapshot_json")
-        .unwrap();
-    table.columns.remove(index);
+    let indices: Vec<_> = [
+        "input_history_snapshot_json",
+        "input_delivery_transfer_json",
+    ]
+    .iter()
+    .map(|name| {
+        before
+            .iter()
+            .position(|column| column.name == *name)
+            .unwrap()
+    })
+    .collect();
+    for &index in indices.iter().rev() {
+        table.columns.remove(index);
+    }
     let historical = portable::tables(&portable::schema(manifest.schema_version).unwrap()).unwrap();
     let expected = historical
         .iter()
@@ -122,13 +132,17 @@ pub(in crate::storage::backup) fn legacy_payloads_without_input_snapshot(
             let cells = row["cells"].as_array_mut().unwrap();
             assert_eq!(cells.len(), before.len());
             // Do not discard real historical evidence to imitate an older
-            // format. These legacy fixtures must have only the new NULL cell.
-            assert_eq!(cells.remove(index), json!({"type": "null"}));
+            // format. Both new evidence cells must be NULL in these fixtures.
+            for &index in indices.iter().rev() {
+                assert_eq!(cells.remove(index), json!({"type": "null"}));
+            }
             let mut round_trip = row.clone();
-            round_trip["cells"]
-                .as_array_mut()
-                .unwrap()
-                .insert(index, json!({"type": "null"}));
+            for &index in &indices {
+                round_trip["cells"]
+                    .as_array_mut()
+                    .unwrap()
+                    .insert(index, json!({"type": "null"}));
+            }
             assert_eq!(round_trip, original);
             logical.extend(serde_json::to_vec(&row).unwrap());
             logical.push(b'\n');

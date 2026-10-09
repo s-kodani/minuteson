@@ -210,6 +210,20 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
                 &[]
             },
         )
+        .chain(
+            if db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=30)",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?
+            {
+                ["recording_input_delivery"].as_slice()
+            } else {
+                &[]
+            },
+        )
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {
@@ -609,11 +623,24 @@ pub(super) fn dump(
             } else {
                 None
             };
+            let input_transfer = if table.name == "recording_sessions" {
+                snapshot
+                    .input_snapshots
+                    .transfer(&text("meeting_id")?, &text("id")?)
+                    .map(str::to_owned)
+            } else {
+                None
+            };
             for (column, cell) in table.columns.iter().zip(&mut cells) {
                 if table.name == "recording_sessions"
                     && column.name == "input_history_snapshot_json"
                 {
                     *cell = input_snapshot.clone().map(Cell::Text).unwrap_or(Cell::Null);
+                }
+                if table.name == "recording_sessions"
+                    && column.name == "input_delivery_transfer_json"
+                {
+                    *cell = input_transfer.clone().map(Cell::Text).unwrap_or(Cell::Null);
                 }
                 if let Some((key, omitted)) = &file {
                     if column.name == "relative_path" {

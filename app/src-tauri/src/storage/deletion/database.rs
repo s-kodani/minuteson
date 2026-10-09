@@ -71,6 +71,7 @@ const TARGETS: &[(&str, &str)] = &[
     ),
     ("audio_import_commits", "meeting_id=?1"),
     ("audio_imports", "meeting_id=?1"),
+    ("recording_input_delivery", "meeting_id=?1"),
     ("recording_sessions", "meeting_id=?1"),
     ("restore_omitted_assets", "meeting_id=?1"),
     ("file_assets", "meeting_id=?1"),

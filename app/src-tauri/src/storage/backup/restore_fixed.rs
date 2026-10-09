@@ -150,6 +150,44 @@ impl<'p, 's> FixedData<'p, 's> {
                 if let Some(index) = table
                     .columns
                     .iter()
+                    .position(|c| c.name == "input_delivery_transfer_json")
+                {
+                    if let SqlValue::Text(text) = &row[index] {
+                        let snapshot_index = column("input_history_snapshot_json")?;
+                        // Relational IDs are already remapped, while immutable
+                        // bound JSON below still belongs to the archive row.
+                        let (old_meeting, old_session): (String, String) = self
+                            .ids
+                            .source()
+                            .database
+                            .query_row(
+                                "SELECT meeting_id,id FROM recording_sessions WHERE rowid=?1",
+                                params![rowid],
+                                |r| Ok((r.get(0)?, r.get(1)?)),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let source = super::input_snapshots::Bound::decode(
+                            row_text(&row, snapshot_index)?,
+                            &old_meeting,
+                            &old_session,
+                        )?
+                        .into_snapshot();
+                        let transfer = crate::storage::restored_input::Transfer::decode(
+                            text,
+                            &old_meeting,
+                            &old_session,
+                            &source,
+                        )?;
+                        row[index] = SqlValue::Text(transfer.rebind(
+                            row_text(&row, column("meeting_id")?)?,
+                            row_text(&row, column("id")?)?,
+                            &source,
+                        )?);
+                    }
+                }
+                if let Some(index) = table
+                    .columns
+                    .iter()
                     .position(|c| c.name == "input_history_snapshot_json")
                 {
                     if let SqlValue::Text(text) = &row[index] {

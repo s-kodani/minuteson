@@ -81,6 +81,7 @@ pub(super) fn validate_database(
     db: &Connection,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    super::super::restored_input::validate_database(db, cancelled)?;
     if !has_column(db)? {
         return Ok(());
     } // Trusted pre-29 schema has no evidence.
@@ -114,6 +115,7 @@ pub(super) fn validate_database(
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
+    super::super::restored_input::remove_schema_for_test(db);
     if db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=29)",
@@ -129,6 +131,7 @@ pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
 
 pub(super) struct Native {
     payloads: BTreeMap<(String, String), String>,
+    transfers: BTreeMap<(String, String), String>,
     #[cfg(unix)]
     root: File,
     #[cfg(unix)]
@@ -143,6 +146,7 @@ impl Native {
         validate_database(db, cancelled)?;
         let mut result = Self {
             payloads: BTreeMap::new(),
+            transfers: BTreeMap::new(),
             #[cfg(unix)]
             root: storage.managed_anchor.backup_input_root()?,
             #[cfg(unix)]
@@ -166,7 +170,22 @@ impl Native {
             let payload = if let Some(text) = old {
                 // A restored immutable snapshot is not permission to inspect
                 // guessed native audio paths or to create a capture owner.
-                Some(Bound::decode(&text, &meeting, &session)?.encode()?)
+                let bound = Bound::decode(&text, &meeting, &session)?;
+                if let Some(transfer) = super::super::restored_input::capture_transfer(
+                    db,
+                    &meeting,
+                    &session,
+                    &bound.snapshot,
+                )? {
+                    total = total
+                        .checked_add(transfer.len())
+                        .filter(|n| *n <= MAX_TOTAL_BYTES)
+                        .ok_or("録音入力の移送記録の総容量が安全上限を超えました")?;
+                    result
+                        .transfers
+                        .insert((meeting.clone(), session.clone()), transfer);
+                }
+                Some(bound.encode()?)
             } else {
                 #[cfg(unix)]
                 {
@@ -212,6 +231,11 @@ impl Native {
     }
     pub(super) fn payload(&self, meeting: &str, session: &str) -> Option<&str> {
         self.payloads
+            .get(&(meeting.into(), session.into()))
+            .map(String::as_str)
+    }
+    pub(super) fn transfer(&self, meeting: &str, session: &str) -> Option<&str> {
+        self.transfers
             .get(&(meeting.into(), session.into()))
             .map(String::as_str)
     }

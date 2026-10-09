@@ -741,16 +741,26 @@ fn audio_only_census_blocks_active_work_pending_maintenance_and_invalid_ids() {
 fn audio_only_census_cancellation_and_mid_inspection_mutation_leave_all_rows_and_files() {
     let f = Fixture::new();
     assert!(Census::capture(&f.storage, &f.meeting, &|| true).is_err());
+    // Measure the real first observation rather than assuming a fixed number
+    // of schema/FK cancellation checkpoints. Audio capture has two entry
+    // checks instead of MeetingCensus's one, then starts its record checks.
+    let first_pass_checks = Cell::new(0);
+    MeetingCensus::capture(&f.storage, &f.meeting, &|| {
+        first_pass_checks.set(first_pass_checks.get() + 1);
+        false
+    })
+    .unwrap();
+    let mutation_checkpoint = first_pass_checks.get() + 2;
     let calls = Cell::new(0);
     let check = || {
         calls.set(calls.get() + 1);
-        if calls.get() == 60 {
+        if calls.get() == mutation_checkpoint {
             std::fs::write(&f.path, b"CHANGED DURING CENSUS").unwrap();
         }
         false
     };
     assert!(Census::capture(&f.storage, &f.meeting, &check).is_err());
-    assert!(calls.get() >= 60);
+    assert!(calls.get() >= mutation_checkpoint);
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
     assert_eq!(std::fs::read(&f.path).unwrap(), b"CHANGED DURING CENSUS");
 }

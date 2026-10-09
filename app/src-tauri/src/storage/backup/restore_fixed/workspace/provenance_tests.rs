@@ -143,6 +143,7 @@ fn restore_provenance_survives_another_archive_and_restore_without_copying_local
         native_models_root: work.stage.path().join("models"),
         root: work.stage.path().canonicalize().unwrap(),
         connection: Mutex::new(owned_connection),
+        restored_inputs: Mutex::default(),
         maintenance: std::sync::atomic::AtomicBool::new(false),
         retired: std::sync::atomic::AtomicBool::new(false),
     };

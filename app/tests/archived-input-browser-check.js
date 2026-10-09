@@ -83,7 +83,7 @@ async page=>{
     await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.microphone[0].delivery.rendered);
     results.push("cyclic traversal discovers newly closed random UUIDs behind the prior cursor");
     await seed({title:"復元された点検会議",both:true,loss:2,historySaveIssue:"failed",deliveryUnavailable:true});
-    await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した未表示通知の受付は未対応です"));
+    await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した通知の受付を確認できません"));
     // The previous source can remain until the bounded cursor traversal wraps
     // and completes an authoritative new cycle. Wait for its normal removal;
     // never dismiss a card or delete a receipt to make this check pass.
@@ -96,7 +96,7 @@ async page=>{
     const importedOwner=await page.evaluate(()=>window.closeFixture.archived.rows[0].sessionId);
     check((await calls()).every(c=>c.sessionId!==importedOwner)&&await card().count()===0&&await card("PC音声").count()===0,"immutable imported state started reception or rendering");
     results.push("imported diagnosis reaches production review UI without pretending that pending delivery or current capture is available");
-    await reload();await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した未表示通知の受付は未対応です"));
+    await reload();await page.waitForFunction(()=>document.querySelector(".archived-input-notices details")?.textContent.includes("復元した通知の受付を確認できません"));
     const reopened=page.locator(".archived-input-notices details");if(!await reopened.evaluate(e=>e.open))await reopened.locator(":scope > summary").click();
     importedText=await reopened.innerText();
     check(importedText.includes("書込みを確定できません")&&importedText.includes("保持不足 2件")&&(await calls()).every(c=>c.sessionId!==importedOwner),"reload removed immutable import issues or adopted receipt authority");

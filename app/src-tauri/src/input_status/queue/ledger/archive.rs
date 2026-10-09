@@ -39,7 +39,7 @@ impl Batch {
     pub(in crate::input_status) fn hide_notices(&mut self) {
         self.notices.clear();
     }
-    pub(in crate::input_status) fn account_wait(&mut self, elapsed: std::time::Duration) {
+    pub(crate) fn account_wait(&mut self, elapsed: std::time::Duration) {
         for notice in &mut self.notices {
             if let Some(delivery) = &mut notice.delivery {
                 delivery.account_persistence_time(elapsed);

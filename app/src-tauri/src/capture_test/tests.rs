@@ -24,6 +24,24 @@ fn controller() -> (CaptureTests, tempfile::TempDir) {
     }
     (controller, fixture)
 }
+#[cfg(target_os = "macos")]
+fn cleanup_after_unrelated_forks(directory: &files::TestDirectory) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match directory.cleanup() {
+            Err(error)
+                if error.ends_with("Resource temporarily unavailable (os error 35)")
+                    && Instant::now() < deadline =>
+            {
+                // Other parallel tests can fork before their CLOEXEC copies
+                // close. Each attempt still requires the real exclusive lease;
+                // never unlock the shared description or ignore other errors.
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
 #[test]
 #[cfg(target_os = "macos")]
 fn startup_checking_and_attention_reject_new_capture_but_attention_can_exit_without_deleting() {
@@ -74,7 +92,65 @@ fn production_owned_directory_passes_only_its_explicit_lease_to_the_helper_comma
     let mut helper = launch.spawn().unwrap();
     drop(launch);
     assert!(helper.wait().unwrap().success());
-    directory.cleanup().unwrap();
+    cleanup_after_unrelated_forks(&directory).unwrap();
+}
+#[test]
+#[cfg(target_os = "macos")]
+fn unrelated_fork_before_exec_keeps_cleanup_fenced_until_its_cloexec_copy_closes() {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::{net::UnixStream, process::CommandExt};
+
+    let (controller, _fixture) = controller();
+    let request = request();
+    controller.reserve(request.clone()).unwrap();
+    let directory = controller
+        .lock()
+        .unwrap()
+        .ownership
+        .allocate(request)
+        .unwrap();
+    let (mut parent_ready, child_ready) = UnixStream::pair().unwrap();
+    let (mut parent_release, child_release) = UnixStream::pair().unwrap();
+    parent_ready
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut unrelated = Command::new("/usr/bin/true");
+    unsafe {
+        unrelated.pre_exec(move || {
+            // Only async-signal-safe syscalls in the forked child. This child
+            // has no delegated capture lease; it briefly retains CLOEXEC FDs.
+            let mut byte = [1_u8];
+            if libc::write(child_ready.as_raw_fd(), byte.as_ptr().cast(), 1) != 1
+                || libc::read(child_release.as_raw_fd(), byte.as_mut_ptr().cast(), 1) != 1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let worker = std::thread::spawn(move || {
+        let child = unrelated.spawn();
+        drop(unrelated);
+        child
+    });
+    let ready = parent_ready.read_exact(&mut [0_u8]);
+    let rejected = ready.is_ok().then(|| directory.cleanup());
+    let kept = directory.path.exists();
+    let released = parent_release.write_all(&[1_u8]);
+    drop(parent_release);
+    let mut child = worker.join().unwrap().unwrap();
+    let exited = child.wait().unwrap();
+    ready.unwrap();
+    released.unwrap();
+    assert!(exited.success());
+    assert!(rejected
+        .unwrap()
+        .unwrap_err()
+        .ends_with("Resource temporarily unavailable (os error 35)"));
+    assert!(kept);
+    cleanup_after_unrelated_forks(&directory).unwrap();
+    assert!(!directory.path.exists());
 }
 #[test]
 fn test_admission_is_single_owner_one_shot_and_has_no_meeting_identity() {

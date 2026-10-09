@@ -50,7 +50,23 @@ fn validate(record: &Record) -> Result<(), String> {
     {
         return Err("通知台帳の所有または取得履歴が不正です".into());
     }
-    for (index, lane) in record.queue.lanes.iter().enumerate() {
+    validate_queue(p, &record.queue, &record.owner_id)
+}
+
+// Producer evidence and delivery ownership are separate for additive restores.
+// The native Record above STILL requires identical owners. A destination must
+// independently bind its logical owner and immutable source before using this.
+fn validate_queue(p: &Publication, queue: &Queue, delivery_owner: &str) -> Result<(), String> {
+    if !crate::input_levels::valid_owner(delivery_owner)
+        || p.schema_version != 3
+        || crate::input_status::parse(
+            &serde_json::to_vec(p).map_err(|e| e.to_string())?,
+            &p.owner_id,
+        )? != *p
+    {
+        return Err("通知台帳の配送所有または元の取得履歴が不正です".into());
+    }
+    for (index, lane) in queue.lanes.iter().enumerate() {
         let name = if index == 0 { "microphone" } else { "system" };
         let history = if index == 0 {
             p.microphone_history.as_ref()
@@ -121,11 +137,11 @@ fn validate(record: &Record) -> Result<(), String> {
                 status: delivery.status.clone(),
             };
             if done.schema_version != 2
-                || done.owner_id != record.owner_id
+                || done.owner_id != delivery_owner
                 || done.notice_id
                     != format!(
                         "{}:{name}:{}:{kind}",
-                        record.owner_id, event.status.interruptions
+                        delivery_owner, event.status.interruptions
                     )
                 || !matches!(done.target.as_str(), "main" | "recorder")
                 || !crate::input_levels::valid_owner(&done.recipient_id)

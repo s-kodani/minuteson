@@ -414,3 +414,231 @@ fn closed_input_companions_two_owned_moves_keep_loss_and_diagnostics_and_fence_o
             .unwrap();
     }
 }
+
+#[test]
+fn restored_input_delivery_two_owned_moves_keep_display_progress_and_original_proof() {
+    for rendered in [false, true] {
+        let mut f = NativeFixture::new(false, false);
+        let (_, original_owner, original_dir, journal, manifest) =
+            seed(f.storage.as_ref().unwrap());
+        let storage = f.storage.as_ref().unwrap();
+        let archive = f._base.path().join("restored-notice-input.monbackup");
+        storage.create_backup_archive(&archive, &|| false).unwrap();
+        let selected = storage
+            .prepare_additive_restore(&archive, &|| false, &|_| {})
+            .unwrap();
+        selected
+            .publish(
+                storage,
+                &selected.preview().confirmation_id,
+                &|| false,
+                &|_| {},
+            )
+            .unwrap();
+        drop(selected);
+        let imported = storage
+            .closed_input_recordings(None)
+            .unwrap()
+            .0
+            .into_iter()
+            .find(|r| r.session_id != original_owner)
+            .unwrap();
+        let meeting = imported.meeting_id;
+        let owner = imported.session_id;
+        let snapshot = storage
+            .closed_input_snapshot(&meeting, &owner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.source_owner_id(), original_owner);
+        let source_proof = snapshot.encode().unwrap();
+        let admission = AnalysisController::default();
+        let controller = ArchivedInputs::default();
+        let lease = admission.begin_notice_storage().unwrap();
+        let initial = row(&controller, storage, &lease, &owner);
+        let loss = initial["batch"]["noticeLoss"].clone();
+        let first = notice(&initial, "microphone");
+        let recipient = Uuid::new_v4().to_string();
+        let nonce = Uuid::new_v4().to_string();
+        controller
+            .acknowledge(
+                storage,
+                &lease,
+                request(
+                    &meeting,
+                    &owner,
+                    &first,
+                    &recipient,
+                    Some(&nonce),
+                    "receive",
+                ),
+                &|| true,
+            )
+            .unwrap();
+        if rendered {
+            controller
+                .acknowledge(
+                    storage,
+                    &lease,
+                    request(&meeting, &owner, &first, &recipient, None, "render"),
+                    &|| true,
+                )
+                .unwrap();
+        }
+        drop(lease);
+        let maintenance = admission
+            .begin_data_maintenance(false, false, &|| false)
+            .unwrap();
+        f.select();
+        drop(maintenance);
+        let (b, storage) = f.open();
+        let lease = admission.begin_notice_storage().unwrap();
+        let current = ArchivedInputs::default();
+        let after = row(&current, &storage, &lease, &owner);
+        let second = notice(&after, "microphone");
+        assert_eq!(second["delivery"]["sequence"], if rendered { 4 } else { 3 });
+        assert_eq!(after["historySaveIssue"], "failed");
+        assert_eq!(after["batch"]["noticeLoss"], loss);
+        assert_eq!(
+            storage
+                .closed_input_snapshot(&meeting, &owner)
+                .unwrap()
+                .unwrap()
+                .encode()
+                .unwrap(),
+            source_proof
+        );
+        for action in ["receive", "render", "close"] {
+            assert!(current
+                .acknowledge(
+                    &storage,
+                    &lease,
+                    request(
+                        &meeting,
+                        &owner,
+                        &first,
+                        &recipient,
+                        (action == "receive").then_some(nonce.as_str()),
+                        action
+                    ),
+                    &|| true
+                )
+                .is_err());
+        }
+        let second_nonce = Uuid::new_v4().to_string();
+        current
+            .acknowledge(
+                &storage,
+                &lease,
+                request(
+                    &meeting,
+                    &owner,
+                    &second,
+                    &recipient,
+                    Some(&second_nonce),
+                    "receive",
+                ),
+                &|| true,
+            )
+            .unwrap();
+        drop(lease);
+        let maintenance = admission
+            .begin_data_maintenance(false, false, &|| false)
+            .unwrap();
+        let next = f
+            ._base
+            .path()
+            .join(format!("restored-notice-second-move-{}", Uuid::new_v4()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&next)
+            .unwrap();
+        let next = next.canonicalize().unwrap();
+        repeated::select_current(&b, &storage, &next);
+        drop(maintenance);
+        let lease = admission.begin_notice_storage().unwrap();
+        assert!(storage.restart_required());
+        assert!(current.page(&storage, &lease, None, &|| true).is_err());
+        assert!(current
+            .acknowledge(
+                &storage,
+                &lease,
+                request(&meeting, &owner, &second, &recipient, None, "render"),
+                &|| true
+            )
+            .is_err());
+        drop(lease);
+        drop(storage);
+        drop(b);
+        let (_b, storage) = f.open();
+        assert_eq!(storage.root(), next);
+        let lease = admission.begin_notice_storage().unwrap();
+        let final_controller = ArchivedInputs::default();
+        let final_row = row(&final_controller, &storage, &lease, &owner);
+        let final_notice = notice(&final_row, "microphone");
+        assert_eq!(
+            final_notice["delivery"]["sequence"],
+            second["delivery"]["sequence"]
+        );
+        assert!(
+            final_notice["delivery"]["generation"].as_u64().unwrap()
+                > second["delivery"]["generation"].as_u64().unwrap()
+        );
+        assert!(final_notice["recipientId"].is_null());
+        assert_eq!(final_row["historySaveIssue"], "failed");
+        assert_eq!(final_row["batch"]["noticeLoss"], loss);
+        for action in ["receive", "render", "close"] {
+            assert!(final_controller
+                .acknowledge(
+                    &storage,
+                    &lease,
+                    request(
+                        &meeting,
+                        &owner,
+                        &second,
+                        &recipient,
+                        (action == "receive").then_some(second_nonce.as_str()),
+                        action
+                    ),
+                    &|| true
+                )
+                .is_err());
+        }
+        let final_nonce = Uuid::new_v4().to_string();
+        for action in ["receive", "render", "close"] {
+            final_controller
+                .acknowledge(
+                    &storage,
+                    &lease,
+                    request(
+                        &meeting,
+                        &owner,
+                        &final_notice,
+                        &recipient,
+                        (action == "receive").then_some(final_nonce.as_str()),
+                        action,
+                    ),
+                    &|| true,
+                )
+                .unwrap();
+        }
+        let final_snapshot = storage
+            .closed_input_snapshot(&meeting, &owner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(final_snapshot.source_owner_id(), original_owner);
+        assert_eq!(final_snapshot.encode().unwrap(), source_proof);
+        assert!(storage.closed_input_directory(&meeting, &owner).is_err());
+        assert!(!storage
+            .root()
+            .join(format!("meetings/{meeting}/audio/{owner}"))
+            .exists());
+        assert_eq!(
+            std::fs::read(original_dir.join("input-events.json")).unwrap(),
+            journal
+        );
+        assert_eq!(
+            std::fs::read(original_dir.join("manifest.json")).unwrap(),
+            manifest
+        );
+    }
+}

@@ -86,7 +86,7 @@ export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;lock
       <p>現在の機器接続・取得・保存の状態ではありません。通知を閉じても履歴の診断は残ります。欠損の有無と範囲は保存された音声の情報で確認してください。</p>
       <ul>{problems.slice(shownPage*16,(shownPage+1)*16).map(view=><li key={view.sessionId}><span>「{view.title}」：{[
         view.unavailable?"通知履歴を読めません":"",view.historyIssue==="missing"?"取得履歴がありません":view.historyIssue==="invalid"?"取得履歴を照合できません":"",
-        view.deliveryUnavailable?"復元した未表示通知の受付は未対応です":"",
+        view.deliveryUnavailable?"復元した通知の受付を確認できません":"",
         view.historySaveIssue?({failed:"取得履歴の書込みを確定できません",invalid:"取得履歴の保存を停止しました",unconfirmed:"停止時の取得履歴保存が未確定です",unavailable:"停止時の履歴保存診断を確認できません"}[view.historySaveIssue]):"",
         view.loss.microphone>0?`マイク通知の保持不足 ${view.loss.microphone}件`:"",view.loss.system>0?`PC音声通知の保持不足 ${view.loss.system}件`:"",
         lanes.some(input=>view.reception[input]==="unconfirmed")?"通知処理の結果確認待ち":""].filter(Boolean).join(" / ")}</span>

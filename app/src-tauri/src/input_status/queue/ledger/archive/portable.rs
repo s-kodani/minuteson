@@ -6,6 +6,8 @@ use crate::input_status::{journal, persistence, queue::Queue};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+pub(crate) mod restored;
+
 // Original ledger proof and inert pending-delivery state are separate. Their
 // individual bounds remain 128KiB each, plus the independent 65KiB journal.
 const LIMIT: usize = 512 * 1024;
