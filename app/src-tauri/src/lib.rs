@@ -661,6 +661,46 @@ fn review_recovery_item(
     DataController::review_recovery(&data_app(&window)?, source, operation_id)
 }
 
+#[cfg(unix)]
+#[tauri::command]
+async fn get_partial_recording_items(
+    window: WebviewWindow,
+    after: Option<String>,
+) -> Result<storage::recordings::partial::Listing, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .partial_recording_listing(after.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(unix)]
+#[tauri::command]
+fn review_partial_recording(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<data_controller::Snapshot, String> {
+    DataController::review_partial_recording(&data_app(&window)?, session_id)
+}
+
+#[cfg(unix)]
+#[tauri::command]
+async fn get_partial_recording_result(
+    window: WebviewWindow,
+    session_id: String,
+    review_hash: String,
+) -> Result<Option<storage::recordings::partial::Summary>, String> {
+    let app = data_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>()
+            .partial_recovery_result(&session_id, &review_hash)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DataAvailability {
@@ -2431,6 +2471,12 @@ pub fn run() {
             review_storage_move,
             get_recovery_items,
             review_recovery_item,
+            #[cfg(unix)]
+            get_partial_recording_items,
+            #[cfg(unix)]
+            review_partial_recording,
+            #[cfg(unix)]
+            get_partial_recording_result,
             get_data_operation_availability,
             list_restored_meeting_ids,
             select_data_operation,

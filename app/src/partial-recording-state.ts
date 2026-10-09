@@ -20,6 +20,10 @@ export interface PartialRecordingSummary {
   acquisitionEndKnown: false;
   tailLossUs: null;
 }
+export interface PartialRecordingPreview { confirmationId: string; summary: PartialRecordingSummary }
+export interface PartialRecordingReceipt extends PartialRecordingPreview { recovered: boolean }
+export interface PartialRecordingItem { sessionId: string; meetingId: string; title: string; state: "interrupted" | "failed" }
+export interface PartialRecordingListing { items: PartialRecordingItem[]; next: string | null }
 const fail = () => { throw Error("部分救出の対象・確定範囲を確認できません。再確認してください。"); };
 const integer = (value: unknown, min: number, max = Number.MAX_SAFE_INTEGER): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
@@ -70,4 +74,34 @@ export const canRecoverPartialRecording = (summary: PartialRecordingSummary) =>
 export function partialTimelineLabel(us: number): string {
   if (!integer(us, 0)) return fail();
   return `${Math.floor(us / 1_000_000)}.${String(us % 1_000_000).padStart(6, "0")}秒`;
+}
+
+export function assertPartialRecordingPreview(value: PartialRecordingPreview): void {
+  const p = record(value, ["confirmationId", "summary"]);
+  if (!owner(p.confirmationId) || !p.summary || typeof p.summary !== "object") return fail();
+  const s = p.summary as PartialRecordingSummary;
+  checkedPartialRecordingSummary(s, s.meetingId, s.sessionId);
+}
+export function assertPartialRecordingReceipt(value: PartialRecordingReceipt, preview?: PartialRecordingPreview | null): void {
+  const r = record(value, ["confirmationId", "summary", "recovered"]);
+  if (typeof r.recovered !== "boolean") return fail();
+  assertPartialRecordingPreview({ confirmationId: value.confirmationId, summary: value.summary });
+  if (r.recovered && !canRecoverPartialRecording(value.summary)) return fail();
+  if (preview && (value.confirmationId !== preview.confirmationId ||
+    JSON.stringify(checkedPartialRecordingSummary(value.summary, preview.summary.meetingId, preview.summary.sessionId)) !==
+    JSON.stringify(checkedPartialRecordingSummary(preview.summary, preview.summary.meetingId, preview.summary.sessionId)))) return fail();
+}
+export function assertPartialRecordingListing(value: PartialRecordingListing, after: string | null = null): void {
+  const r = record(value, ["items", "next"]);
+  if (!Array.isArray(r.items) || r.items.length > 200 || after !== null && !owner(after) ||
+      r.next !== null && !owner(r.next)) return fail();
+  let prior = after ?? "";
+  const meetings = new Set<string>();
+  for (const value of r.items) {
+    const item = record(value, ["sessionId", "meetingId", "title", "state"]);
+    if (!owner(item.sessionId) || !owner(item.meetingId) || item.sessionId <= prior || meetings.has(item.meetingId) ||
+        typeof item.title !== "string" || !["interrupted", "failed"].includes(String(item.state))) return fail();
+    prior = item.sessionId; meetings.add(item.meetingId);
+  }
+  if (r.next !== null && (r.items.length !== 200 || r.next !== prior)) return fail();
 }

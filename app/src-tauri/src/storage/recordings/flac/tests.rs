@@ -3,11 +3,11 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 
-struct Fixture {
-    temp: tempfile::TempDir,
-    storage: Storage,
-    session: RecordingSession,
-    base: PathBuf,
+pub(crate) struct Fixture {
+    pub(crate) temp: tempfile::TempDir,
+    pub(crate) storage: Storage,
+    pub(crate) session: RecordingSession,
+    pub(crate) base: PathBuf,
 }
 fn write(path: &Path, bytes: &[u8]) {
     let mut file = std::fs::OpenOptions::new()
@@ -38,6 +38,17 @@ fn caf(frames: u64) -> Vec<u8> {
     bytes
 }
 impl Fixture {
+    pub(crate) fn registered_tracks(&self) -> i64 {
+        self.storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM audio_tracks", [], |r| r.get(0))
+            .unwrap()
+    }
+    pub(crate) fn reject_partial_commit(&self, reject: bool) {
+        self.storage.connection.lock().unwrap().execute_batch(if reject {"CREATE TRIGGER reject_partial_controller BEFORE UPDATE OF audio_manifest_hash ON recording_sessions BEGIN SELECT RAISE(ABORT,'synthetic controller rollback'); END"} else {"DROP TRIGGER reject_partial_controller"}).unwrap();
+    }
     fn new(count: usize, last_frames: u64, gap: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
@@ -978,7 +989,7 @@ fn database_clock_loading_streams_whole_track_maps_with_per_chunk_and_json_budge
     );
 }
 
-fn partial_fixture() -> Fixture {
+pub(crate) fn partial_fixture() -> Fixture {
     interrupt_fixture(Fixture::new(2, 2000, true))
 }
 fn interrupt_fixture(fixture: Fixture) -> Fixture {

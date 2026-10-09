@@ -11,7 +11,7 @@ use std::os::fd::AsRawFd;
 mod files;
 use files::{Directory, Identity, Stamp};
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -221,7 +221,15 @@ impl Publication {
             "origin":origin, "groups":descriptions}))
             .map_err(|e| e.to_string())?,
         );
-        Self::prepare_groups(storage, base, PLAN, input_hash, prefixes, all_groups)
+        Self::prepare_groups(
+            storage,
+            base,
+            PLAN,
+            input_hash,
+            prefixes,
+            all_groups,
+            &|| false,
+        )
     }
 
     pub(super) fn prepare_recovery(
@@ -230,7 +238,9 @@ impl Publication {
         review_hash: &str,
         origin: i64,
         prefixes: &[Prefix],
+        cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        partial::check_cancel(cancelled)?;
         if prefixes.is_empty() || prefixes.len() > 2 {
             return Err("部分救出の原音声がありません".into());
         }
@@ -271,6 +281,7 @@ impl Publication {
             input_hash,
             prefixes,
             all_groups,
+            cancelled,
         )
     }
 
@@ -281,7 +292,9 @@ impl Publication {
         input_hash: String,
         prefixes: &[Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
+        cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
+        partial::check_cancel(cancelled)?;
         storage.require_data_writable()?;
         storage.managed_anchor.verify()?;
         let root = Directory::open(&storage.root.join(base))?;
@@ -349,7 +362,7 @@ impl Publication {
                 root.verify()?;
                 lock_stamp.require(&root.required(LOCK, false)?)?;
                 plan_stamp.require(&root.required(plan_name, false)?)?;
-                prefixes[lane].verify_at(&root.path, &|| false)?;
+                prefixes[lane].verify_at(&root.path, cancelled)?;
                 chunks.push(convert(
                     storage,
                     &directory,
@@ -357,6 +370,7 @@ impl Publication {
                     group,
                     &input_hash,
                     id,
+                    cancelled,
                 )?);
             }
             tracks.push(Track {
@@ -513,7 +527,10 @@ fn convert(
     group: &FlacGroup,
     input_hash: &str,
     id: String,
+    requested_cancel: &impl Fn() -> bool,
 ) -> Result<Chunk, String> {
+    let cancelled = || requested_cancel() || storage.data_write_blocked();
+    partial::check_cancel(&cancelled)?;
     let final_name = format!("{id}.flac");
     let receipt_name = format!(".{id}.json");
     let (mut receipt, mut receipt_stamp) =
@@ -585,7 +602,6 @@ fn convert(
         storage.require_data_writable()?;
         file.set_len(0).map_err(|e| e.to_string())?;
         file.rewind().map_err(|e| e.to_string())?;
-        let cancelled = || storage.data_write_blocked();
         let mut source = prefix.source(group.first_entry, group.entries, &cancelled)?;
         let saved =
             encode_segment_file(&mut source, 0, group.frames, &mut file, &cancelled, &|_| {})?;
@@ -606,7 +622,7 @@ fn convert(
     if directory.optional(&final_name, false)?.is_none() {
         let file = directory.required(&partial, false)?;
         staging_identity.require(&file)?;
-        verify_audio(&file, &audio)?;
+        verify_audio(&file, &audio, &cancelled)?;
         receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
         directory.rename(&partial, &final_name, true)?;
     } else if directory.optional(&partial, false)?.is_some() {
@@ -615,7 +631,7 @@ fn convert(
     let file = directory.required(&final_name, false)?;
     staging_identity.require(&file)?;
     let stamp = Stamp::read(&file)?;
-    verify_derived_audio(storage, &file, &audio, prefix, group)?;
+    verify_derived_audio(storage, &file, &audio, prefix, group, &cancelled)?;
     stamp.require(&file)?;
     stamp.require(&directory.required(&final_name, false)?)?;
     receipt_stamp.require(&directory.required(&receipt_name, false)?)?;
@@ -643,12 +659,16 @@ fn convert(
         receipt: receipt_stamp,
     })
 }
-fn verify_audio(file: &File, proof: &AudioProof) -> Result<(), String> {
+fn verify_audio(
+    file: &File,
+    proof: &AudioProof,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
     let verified = VerifiedAudio::open_cancellable(
         file.try_clone().map_err(|e| e.to_string())?,
         proof.size,
         &proof.sha256,
-        &|| false,
+        cancelled,
     )?;
     if !verified.is_flac()
         || verified.format.frames != proof.frames
@@ -669,8 +689,9 @@ fn verify_derived_audio(
     proof: &AudioProof,
     prefix: &Prefix,
     group: &FlacGroup,
+    requested_cancel: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let cancelled = || storage.data_write_blocked();
+    let cancelled = || requested_cancel() || storage.data_write_blocked();
     let mut verified = VerifiedAudio::open_cancellable(
         file.try_clone().map_err(|e| e.to_string())?,
         proof.size,
@@ -687,6 +708,7 @@ fn verify_derived_audio(
     let mut source = prefix.source(group.first_entry, group.entries, &cancelled)?;
     let mut first = 0;
     while first < group.frames {
+        partial::check_cancel(&cancelled)?;
         storage.require_data_writable()?;
         let count = (group.frames - first).min(4096);
         let raw = source.read_frames(first, count)?;

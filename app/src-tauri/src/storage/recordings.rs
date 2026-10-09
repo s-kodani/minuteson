@@ -7,9 +7,12 @@ mod clock;
 #[cfg(unix)]
 mod flac;
 #[cfg(unix)]
-#[allow(dead_code)] // Backend recovery capability; explicit UI admission follows.
 pub(crate) mod partial;
 use clock::{CaptureClock, CaptureEnd};
+#[cfg(all(test, unix))]
+pub(crate) use flac::tests::{
+    partial_fixture as partial_test_fixture, Fixture as PartialTestFixture,
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

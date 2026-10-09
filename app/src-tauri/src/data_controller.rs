@@ -22,6 +22,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use uuid::Uuid;
 
 mod dialog;
+#[cfg(unix)]
+pub(crate) mod partial_recording;
 mod work;
 #[cfg(unix)]
 pub(crate) use work::AudioTarget;
@@ -39,6 +41,7 @@ pub(crate) enum Kind {
     Deletion,
     ModelDeletion,
     AudioDeletion,
+    PartialRecording,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -116,6 +119,10 @@ pub(crate) struct Snapshot {
     pub audio_deletion_preview: Option<audio_deletion::Preview>,
     #[cfg(unix)]
     pub audio_deletion_receipt: Option<audio_deletion::Receipt>,
+    #[cfg(unix)]
+    pub partial_recording_preview: Option<partial_recording::Preview>,
+    #[cfg(unix)]
+    pub partial_recording_receipt: Option<partial_recording::Receipt>,
     pub restart_required: bool,
     pub error_message: Option<String>,
     pub attention_required: bool,
@@ -150,6 +157,10 @@ impl Default for Snapshot {
             audio_deletion_preview: None,
             #[cfg(unix)]
             audio_deletion_receipt: None,
+            #[cfg(unix)]
+            partial_recording_preview: None,
+            #[cfg(unix)]
+            partial_recording_receipt: None,
             restart_required: false,
             error_message: None,
             attention_required: false,
@@ -170,6 +181,8 @@ enum Selection {
     ModelDeletion(model_deletion::Prepared),
     #[cfg(unix)]
     AudioDeletion(audio_deletion::Prepared),
+    #[cfg(unix)]
+    PartialRecording(partial_recording::Prepared),
 }
 
 impl Selection {
@@ -186,6 +199,8 @@ impl Selection {
             Self::ModelDeletion(p) => p.preview().confirmation_id,
             #[cfg(unix)]
             Self::AudioDeletion(p) => p.preview().confirmation_id,
+            #[cfg(unix)]
+            Self::PartialRecording(p) => p.preview().confirmation_id,
         }
     }
 }
@@ -248,7 +263,8 @@ impl DataController {
         #[cfg(unix)]
         let deletion_completed = s.snapshot.deletion_receipt.is_some()
             || s.snapshot.model_deletion_receipt.is_some()
-            || s.snapshot.audio_deletion_receipt.is_some();
+            || s.snapshot.audio_deletion_receipt.is_some()
+            || s.snapshot.partial_recording_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         if s.request.as_ref() == Some(request)
@@ -283,6 +299,10 @@ impl DataController {
             || matches!(
                 (&s.selection, request.action),
                 (Some(Selection::AudioDeletion(_)), Action::Refresh)
+            )
+            || matches!(
+                (&s.selection, request.action),
+                (Some(Selection::PartialRecording(_)), Action::Refresh)
             )
             || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::Keep) if p.preview().keep_allowed)
             || matches!((&s.selection, request.action), (Some(Selection::AudioDeletion(p)), Action::ReviewRemaining) if p.preview().reconfirmation_allowed);
@@ -403,6 +423,16 @@ impl DataController {
                 }
                 _ => false,
             };
+        #[cfg(unix)]
+        let allowed = allowed
+            || match (selection, request.action) {
+                (Selection::PartialRecording(_), Action::Refresh) => true,
+                (Selection::PartialRecording(p), Action::Recover) => {
+                    s.snapshot.phase == "ready" && p.preview().summary.duration_us > 0
+                }
+                (Selection::PartialRecording(_), Action::Keep) => s.snapshot.phase == "ready",
+                _ => false,
+            };
         if !allowed {
             return Err("確認した対象と実行する操作が一致しません".into());
         }
@@ -495,6 +525,7 @@ impl DataController {
             s.snapshot.deletion_receipt = completion.deletion;
             s.snapshot.model_deletion_receipt = completion.model_deletion;
             s.snapshot.audio_deletion_receipt = completion.audio_deletion;
+            s.snapshot.partial_recording_receipt = completion.partial_recording;
         }
         s.snapshot.restart_required |= completion.restart_required;
         s.snapshot.attention_required = completion.attention;
@@ -502,7 +533,8 @@ impl DataController {
         #[cfg(unix)]
         let deletion_completed = s.snapshot.deletion_receipt.is_some()
             || s.snapshot.model_deletion_receipt.is_some()
-            || s.snapshot.audio_deletion_receipt.is_some();
+            || s.snapshot.audio_deletion_receipt.is_some()
+            || s.snapshot.partial_recording_receipt.is_some();
         #[cfg(not(unix))]
         let deletion_completed = false;
         let published = s.snapshot.backup_receipt.is_some()
@@ -557,6 +589,10 @@ impl DataController {
                 Some(Selection::AudioDeletion(p)) => Some(p.preview()),
                 _ => None,
             };
+            s.snapshot.partial_recording_preview = match &s.selection {
+                Some(Selection::PartialRecording(p)) => Some(p.preview()),
+                _ => None,
+            };
         }
         s.snapshot.retry_allowed = s.selection.is_some() && !published && !completion.attention;
         s.snapshot.busy = false;
@@ -572,7 +608,11 @@ impl DataController {
     pub(crate) async fn select(window: &WebviewWindow, kind: Kind) -> Result<Snapshot, String> {
         if matches!(
             kind,
-            Kind::Recovery | Kind::Deletion | Kind::ModelDeletion | Kind::AudioDeletion
+            Kind::Recovery
+                | Kind::Deletion
+                | Kind::ModelDeletion
+                | Kind::AudioDeletion
+                | Kind::PartialRecording
         ) {
             return Err("会議または要確認一覧から対象を選択してください".into());
         }
@@ -612,6 +652,28 @@ impl DataController {
             cancel,
             lease,
             Work::Recovery(source, id, previous),
+        );
+        Ok(snapshot)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn review_partial_recording(
+        app: &AppHandle,
+        session: String,
+    ) -> Result<Snapshot, String> {
+        let lease = work::Admission::acquire(app)?;
+        let (snapshot, cancel, previous) = app.state::<Self>().begin(Kind::PartialRecording)?;
+        let token = snapshot
+            .token
+            .clone()
+            .ok_or("部分救出の操作IDがありません")?;
+        Self::emit(app, snapshot.clone());
+        Self::launch(
+            app,
+            token,
+            cancel,
+            lease,
+            Work::PartialRecording(session, previous),
         );
         Ok(snapshot)
     }
@@ -905,6 +967,7 @@ impl DataController {
                         s.snapshot.deletion_receipt.is_none()
                             && s.snapshot.model_deletion_receipt.is_none()
                             && s.snapshot.audio_deletion_receipt.is_none()
+                            && s.snapshot.partial_recording_receipt.is_none()
                             && !s
                                 .snapshot
                                 .audio_deletion_preview
@@ -1046,6 +1109,9 @@ mod model_deletion_tests;
 
 #[cfg(all(test, unix))]
 mod audio_deletion_tests;
+
+#[cfg(all(test, unix))]
+mod partial_recording_tests;
 
 #[cfg(all(test, unix))]
 pub(crate) mod restored_audio_synthetic;

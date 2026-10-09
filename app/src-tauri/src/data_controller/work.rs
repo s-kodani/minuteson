@@ -136,6 +136,8 @@ pub(super) enum Work {
     ModelDeletion(PathBuf, ModelTarget, Option<Selection>),
     #[cfg(unix)]
     AudioDeletion(AudioTarget, Option<Selection>),
+    #[cfg(unix)]
+    PartialRecording(String, Option<Selection>),
 }
 
 #[derive(Default)]
@@ -151,6 +153,8 @@ pub(super) struct Completion {
     pub model_deletion: Option<model_deletion::Receipt>,
     #[cfg(unix)]
     pub audio_deletion: Option<audio_deletion::Receipt>,
+    #[cfg(unix)]
+    pub partial_recording: Option<partial_recording::Receipt>,
     pub restart_required: bool,
     pub error: Option<String>,
     pub attention: bool,
@@ -315,6 +319,29 @@ impl Work {
     ) -> Completion {
         match self {
             #[cfg(unix)]
+            Self::PartialRecording(session, previous) => {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    drop(previous);
+                    progress("verifying");
+                    let lease =
+                        admission.ok_or("部分救出の確認に必要な共有実行排他がありません")?;
+                    partial_recording::Prepared::fresh(storage, &session, lease, cancelled)
+                        .map(Selection::PartialRecording)
+                }))
+                .unwrap_or_else(|_| Err("部分救出の検査が停止しました。原音声は保持します".into()));
+                match result {
+                    Ok(selection) => Completion {
+                        selection: Some(selection),
+                        ..Completion::default()
+                    },
+                    Err(error) => Completion {
+                        error: Some(error),
+                        cancelled: cancelled(),
+                        ..Completion::default()
+                    },
+                }
+            }
+            #[cfg(unix)]
             Self::AudioDeletion(target, previous) => {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     drop(previous);
@@ -470,6 +497,9 @@ impl Work {
                                 "会議または音声削除の確認待ち一覧から選択してください".into()
                             )
                         }
+                        Kind::PartialRecording => {
+                            return Err("中断録音の一覧から選択してください".into())
+                        }
                     };
                     if cancelled() {
                         return Err("データの確認を取り消しました".into());
@@ -492,6 +522,70 @@ impl Work {
                 }
             }
             Self::Request(mut selection, request) => {
+                #[cfg(unix)]
+                if let Selection::PartialRecording(prepared) = &mut selection {
+                    let mut completion = Completion::default();
+                    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+                        let lease = admission.ok_or("部分救出に必要な共有実行排他がありません")?;
+                        match request.action {
+                            Action::Refresh => {
+                                progress("verifying");
+                                if let Some(receipt) = prepared.committed_result(storage)? {
+                                    completion.partial_recording = Some(receipt);
+                                } else {
+                                    prepared.refresh(storage, lease, cancelled)?;
+                                }
+                            }
+                            Action::Recover | Action::Keep => {
+                                completion.partial_recording = Some(prepared.resolve(
+                                    storage,
+                                    lease,
+                                    &request.confirmation_id,
+                                    request.action == Action::Recover,
+                                    cancelled,
+                                    progress,
+                                )?)
+                            }
+                            _ => return Err("部分救出の確認と操作が一致しません".into()),
+                        }
+                        Ok(())
+                    }));
+                    let panic = result.is_err();
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => completion.error = Some(error),
+                        Err(_) => {
+                            completion.error =
+                                Some("部分救出が予期せず停止しました。保存結果を照合します".into())
+                        }
+                    }
+                    if completion.partial_recording.is_none()
+                        && request.action == Action::Recover
+                        && completion.error.is_some()
+                    {
+                        match prepared.committed_result(storage) {
+                            Ok(Some(receipt)) => {
+                                completion.partial_recording = Some(receipt);
+                                completion.error = None;
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                completion.error = Some(error);
+                                completion.attention = true;
+                            }
+                        }
+                    }
+                    // If a panic cannot be reconciled, require inspection, not
+                    // an automatic second publication from an old confirmation.
+                    completion.attention |= panic
+                        && request.action == Action::Recover
+                        && completion.partial_recording.is_none();
+                    completion.cancelled = completion.partial_recording.is_none()
+                        && !completion.attention
+                        && cancelled();
+                    completion.selection = Some(selection);
+                    return completion;
+                }
                 #[cfg(unix)]
                 if let Selection::AudioDeletion(prepared) = &mut selection {
                     let mut completion = Completion::default();

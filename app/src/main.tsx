@@ -18,6 +18,7 @@ import { ModelInspectionPanel } from "./model-inspection";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
 import { RecoveryPanel } from "./recovery-panel";
+import { PartialRecordingPanel } from "./partial-recording-panel";
 import { MeetingDeletionPanel, useMeetingDeletion } from "./meeting-deletion";
 import { ModelBodyDeletionPanel, useModelBodyDeletion } from "./model-body-deletion";
 import { AudioDeletionPanel, useAudioDeletion } from "./audio-deletion";
@@ -127,6 +128,7 @@ function MainWindow() {
   const [recoveryPending, setRecoveryPending] = useState(false);
   const [modelDeletionPending, setModelDeletionPending] = useState(false);
   const [audioDeletionPending, setAudioDeletionPending] = useState(false);
+  const [partialRecordingPending, setPartialRecordingPending] = useState(false);
   const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0);
   const [restoredIds, setRestoredIds] = useState<string[]>([]);
   const [restoredFilter, setRestoredFilter] = useState<string[] | null>(null);
@@ -195,20 +197,20 @@ function MainWindow() {
       setNavigationBusy(false);
     }
   };
-  const deletion = useMeetingDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || modelDeletionPending || audioDeletionPending, withSavedEdits,
+  const deletion = useMeetingDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || modelDeletionPending || audioDeletionPending || partialRecordingPending, withSavedEdits,
     onDeleted: async receipt => {
       setSelectedMeeting(current => current?.id === receipt.meetingId ? null : current);
       setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins();
     } });
-  const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || audioDeletionPending, withSavedEdits,
+  const modelDeletion = useModelBodyDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || audioDeletionPending || partialRecordingPending, withSavedEdits,
     onProtectionChange: setModelDeletionPending, onDeleted: async () => { setModelCatalogEpoch(epoch => epoch + 1); } });
-  const audioDeletion = useAudioDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow, withSavedEdits,
+  const audioDeletion = useAudioDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || partialRecordingPending, withSavedEdits,
     onProtectionChange: setAudioDeletionPending, onDeleted: async () => {
       // Audio availability changes, not document heads. Keep mounted editors and
       // their local buffers, including when recovery deliberately skipped writes.
       setMeetings(await invoke<Meeting[]>("list_meetings"));
     } });
-  const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy;
+  const operationNavigationLocked = recordingDecision.visible || recordingDecision.requestBusy || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || !dataOperation.connected || !!dataOperation.snapshot?.busy;
   const baseNavigationLocked=operationNavigationLocked||captureTest.blocked||captureTestRecovery.blocked;
   const deletionBlocked = !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.snapshot?.deletionPreview?.pending || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.snapshot?.modelDeletionPreview?.pending || !!dataOperation.audioDeletionListing?.writeBlocked || !!dataOperation.snapshot?.audioDeletionPreview?.pending;
   const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
@@ -631,11 +633,17 @@ function MainWindow() {
           {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
           {screen !== "settings" && <ThemeReadNotice />}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
+          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
           <ModelBodyDeletionPanel operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} visible={screen === "settings"} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
-          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
+          <PartialRecordingPanel operation={dataOperation} visible={screen === "settings" || screen === "overview" && !detail} locked={captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked || closingBusy} withSavedEdits={withSavedEdits} onProtectionChange={setPartialRecordingPending} onRecovered={async meetingId => {
+            const [items, recovered] = await Promise.all([invoke<Meeting[]>("list_meetings"), invoke<Meeting | null>("get_meeting", { id: meetingId })]);
+            setMeetings(items);
+            setSelectedMeeting(current => current?.id === meetingId ? recovered : current);
+            setAnalysisEpoch(epoch => epoch + 1);
+          }} />
+          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
           {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} deletionControl={modelDeletion} refreshEpoch={modelCatalogEpoch} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} /><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></> : screen==="recording" ? <>
             <RecordingWorkspace preparation={preparation} title={selectedMeeting?.title??preparation?.title??"録音対象を確認してください"} state={state} owner={captureOwner} locked={writeLocked}
               canStart={isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?!preparation.submitted&&validRecordingTitle(preparation.title):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}

@@ -2,7 +2,8 @@ import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, typ
 import { assertDeletionPreview, assertDeletionReceipt, type DeletionPreview, type DeletionReceipt } from "./deletion-state.ts";
 import { assertModelBodyDeletionPreview, assertModelBodyDeletionReceipt, type ModelBodyDeletionPreview, type ModelBodyDeletionReceipt } from "./model-deletion-operation-state.ts";
 import { assertAudioDeletionPreview, assertAudioDeletionReceipt, type AudioDeletionPreview, type AudioDeletionReceipt } from "./audio-deletion-operation-state.ts";
-export type DataKind = "backup" | "restore" | "recovery" | "relocation" | "deletion" | "model_deletion" | "audio_deletion";
+import { assertPartialRecordingPreview, assertPartialRecordingReceipt, canRecoverPartialRecording, type PartialRecordingPreview, type PartialRecordingReceipt } from "./partial-recording-state.ts";
+export type DataKind = "backup" | "restore" | "recovery" | "relocation" | "deletion" | "model_deletion" | "audio_deletion" | "partial_recording";
 export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number | null; requiredBytes: number; availableBytes: number; pending: boolean; resumeAllowed: boolean; resumeReason: string | null; copiedPaths: number | null; expectedPaths: number | null }
 export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean; retained: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
@@ -30,6 +31,7 @@ export interface DataSnapshot {
   deletionPreview?: DeletionPreview | null; deletionReceipt?: DeletionReceipt | null;
   modelDeletionPreview?: ModelBodyDeletionPreview | null; modelDeletionReceipt?: ModelBodyDeletionReceipt | null;
   audioDeletionPreview?: AudioDeletionPreview | null; audioDeletionReceipt?: AudioDeletionReceipt | null;
+  partialRecordingPreview?: PartialRecordingPreview | null; partialRecordingReceipt?: PartialRecordingReceipt | null;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
 export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" | "delete_including_unregistered" | "review_remaining" }
@@ -43,7 +45,7 @@ export function assertDataSnapshot(s: DataSnapshot): void {
   if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database", "verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed", "verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"
     || typeof s.restartRequired !== "boolean"
-    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation", "deletion", "model_deletion", "audio_deletion"].includes(s.kind)
+    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation", "deletion", "model_deletion", "audio_deletion", "partial_recording"].includes(s.kind)
     || (s.errorMessage !== null && typeof s.errorMessage !== "string")) fail();
   if (["verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database"].includes(s.phase) && (s.kind !== "deletion" || !s.busy)) fail();
   if (["verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed"].includes(s.phase) && (s.kind !== "model_deletion" || !s.busy)) fail();
@@ -115,9 +117,14 @@ export function assertDataSnapshot(s: DataSnapshot): void {
     if (s.kind !== "audio_deletion" || s.restartRequired !== s.audioDeletionReceipt.restartRequired) fail();
   }
   const pendingDeletion = (s.kind === "deletion" && !!s.deletionPreview?.pending) || (s.kind === "model_deletion" && !!s.modelDeletionPreview?.pending) || (s.kind === "audio_deletion" && !!s.audioDeletionPreview?.pending);
-  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt || s.deletionReceipt || s.modelDeletionReceipt || s.audioDeletionReceipt);
+  if (s.partialRecordingPreview != null) { assertPartialRecordingPreview(s.partialRecordingPreview); if (s.kind !== "partial_recording") fail(); }
+  if (s.partialRecordingReceipt != null) {
+    assertPartialRecordingReceipt(s.partialRecordingReceipt, s.partialRecordingPreview);
+    if (s.kind !== "partial_recording" || s.restartRequired) fail();
+  }
+  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt || s.deletionReceipt || s.modelDeletionReceipt || s.audioDeletionReceipt || s.partialRecordingReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
-    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview || s.deletionPreview || s.modelDeletionPreview || s.audioDeletionPreview)))
+    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview || s.deletionPreview || s.modelDeletionPreview || s.audioDeletionPreview || s.partialRecordingPreview)))
     || (s.restartRequired && !pendingDeletion && (s.busy || s.retryAllowed || !["relocation", "deletion", "model_deletion", "audio_deletion"].includes(s.kind!) || (!s.relocationReceipt && !s.deletionReceipt && !s.modelDeletionReceipt && !s.audioDeletionReceipt && !s.attentionRequired)))
     || ((s.busy || s.retryAllowed || hasResult || s.attentionRequired) && (!s.token || !s.kind))) fail();
 }
@@ -132,6 +139,14 @@ export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnaps
 }
 export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): DataRequest {
   assertDataSnapshot(s);
+  if (s.kind === "partial_recording") {
+    const p = s.partialRecordingPreview;
+    if (!s.token || !p || s.busy || s.partialRecordingReceipt || s.restartRequired ||
+        !["refresh", "recover", "keep"].includes(action) ||
+        action !== "refresh" && (s.phase !== "ready" || !s.retryAllowed || s.attentionRequired) ||
+        action === "recover" && !canRecoverPartialRecording(p.summary)) throw Error("部分救出の対象と同意を再確認してください。");
+    return { token: s.token, confirmationId: p.confirmationId, action };
+  }
   if (s.kind === "audio_deletion") {
     const p = s.audioDeletionPreview;
     if (!s.token || !p || s.busy || s.audioDeletionReceipt || (s.restartRequired && !p.pending)) throw Error("音声削除の現在の状態を再確認してください。");

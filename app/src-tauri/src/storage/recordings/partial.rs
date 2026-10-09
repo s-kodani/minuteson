@@ -5,8 +5,8 @@ use super::*;
 use crate::recording_segments::{Lane, Prefix};
 use std::os::unix::fs::MetadataExt;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct LaneReview {
     pub lane: String,
     pub state: String,
@@ -30,6 +30,22 @@ pub(crate) struct Summary {
     pub tail_loss_us: Option<i64>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Item {
+    pub session_id: String,
+    pub meeting_id: String,
+    pub title: String,
+    pub state: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Listing {
+    pub items: Vec<Item>,
+    pub next: Option<String>,
+}
+
 /// Only Storage inspection can mint this exact-generation capability. The UI
 /// controller must retain it until explicit consent; a client summary is not
 /// authority to recover a guessed path or an updated prefix.
@@ -46,7 +62,95 @@ pub(crate) struct Review {
 }
 
 impl Storage {
+    /// DB-owned unresolved native sessions only; never scan the filesystem or
+    /// turn restored provenance into authority. Pagination never hides a tail.
+    pub(crate) fn partial_recording_listing(&self, after: Option<&str>) -> Result<Listing, String> {
+        self.managed_anchor.verify()?;
+        if after.is_some_and(|id| !crate::input_levels::valid_owner(id)) {
+            return Err("部分救出一覧の続き位置が不正です".into());
+        }
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title,r.state FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.state IN ('interrupted','failed') AND r.audio_manifest_hash IS NULL AND r.input_history_snapshot_json IS NULL AND m.source_type='recording' AND m.lifecycle IN ('recording','draft') AND (?1 IS NULL OR r.id>?1) ORDER BY r.id LIMIT 201").map_err(|e|e.to_string())?;
+        let mut items = query
+            .query_map([after], |row| {
+                Ok(Item {
+                    session_id: row.get(0)?,
+                    meeting_id: row.get(1)?,
+                    title: row.get(2)?,
+                    state: row.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let more = items.len() > 200;
+        items.truncate(200);
+        let next = more.then(|| items.last().unwrap().session_id.clone());
+        Ok(Listing { items, next })
+    }
+
+    /// Durable result, not new recovery authority. This remains readable after
+    /// restart/restore or intentional audio deletion and says only what commit
+    /// recorded, not whether the current bodies are still playable.
+    pub(crate) fn partial_recovery_result(
+        &self,
+        session_id: &str,
+        review_hash: &str,
+    ) -> Result<Option<Summary>, String> {
+        self.managed_anchor.verify()?;
+        if !crate::input_levels::valid_owner(session_id)
+            || review_hash.len() != 64
+            || !review_hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("部分救出の結果照合条件が不正です".into());
+        }
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let Some(session) = load_session(&db, session_id)? else {
+            return Ok(None);
+        };
+        if !super::super::transcription::partial_recording_committed(&db, &session.meeting_id)? {
+            return Ok(None);
+        }
+        let config: String = db.query_row("SELECT processing_config_json FROM audio_tracks WHERE session_id=?1 AND kind IN ('mic','system') ORDER BY kind LIMIT 1",[session_id],|row|row.get(0)).map_err(|e|e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+        let recovery = &value["partial_recovery"];
+        if recovery["reviewHash"].as_str() != Some(review_hash) {
+            return Ok(None);
+        }
+        let lanes: Vec<LaneReview> =
+            serde_json::from_value(recovery["lanes"].clone()).map_err(|e| e.to_string())?;
+        let summary = Summary {
+            session_id: session.id,
+            meeting_id: session.meeting_id,
+            review_hash: review_hash.into(),
+            duration_us: session.duration_us,
+            lanes,
+            acquisition_end_known: false,
+            tail_loss_us: None,
+        };
+        summary.validate()?;
+        Ok(Some(summary))
+    }
+
+    #[cfg(test)]
     pub(crate) fn review_partial_recording(&self, session_id: &str) -> Result<Review, String> {
+        self.review_partial_recording_checked(session_id, &|| false)
+    }
+
+    pub(crate) fn review_partial_recording_checked(
+        &self,
+        session_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Review, String> {
+        check_cancel(cancelled)?;
         self.require_data_writable()?;
         self.managed_anchor.verify()?;
         if !crate::input_levels::valid_owner(session_id) {
@@ -75,7 +179,7 @@ impl Storage {
                 directory.try_clone().map_err(|e| e.to_string())?,
                 session_id,
                 lane,
-                &|| false,
+                cancelled,
             );
             let state = match result {
                 Ok(Some(prefix)) if prefix.frames() > 0 => {
@@ -86,7 +190,10 @@ impl Storage {
                 Ok(None) => "missing",
                 // The other lane's valid sealed prefix is still recoverable.
                 // Do not guess CAF names or consume unadvertised trailing files.
-                Err(_) => "unreadable",
+                Err(_) => {
+                    check_cancel(cancelled)?;
+                    "unreadable"
+                }
             };
             lanes.push(LaneReview {
                 lane: lane.name().into(),
@@ -108,6 +215,7 @@ impl Storage {
             .unwrap_or(0);
         let mut duration_us = 0;
         for prefix in &prefixes {
+            check_cancel(cancelled)?;
             let groups = prefix.flac_groups(origin)?;
             let first = prefix
                 .entries()
@@ -146,8 +254,9 @@ impl Storage {
         self.require_data_writable()?;
         self.managed_anchor.verify()?;
         for prefix in &prefixes {
-            prefix.verify_at(&self.root.join(&base), &|| false)?;
+            prefix.verify_at(&self.root.join(&base), cancelled)?;
         }
+        check_cancel(cancelled)?;
         Ok(Review {
             summary: Summary {
                 session_id: session.id.clone(),
@@ -169,15 +278,26 @@ impl Storage {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn recover_partial_recording(
         &self,
         reviewed: &Review,
         confirmed: bool,
     ) -> Result<RecordingSession, String> {
+        self.recover_partial_recording_checked(reviewed, confirmed, &|| false)
+    }
+
+    pub(crate) fn recover_partial_recording_checked(
+        &self,
+        reviewed: &Review,
+        confirmed: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<RecordingSession, String> {
+        check_cancel(cancelled)?;
         if !confirmed {
             return Err("確定済み部分だけを救出する明示的な同意が必要です".into());
         }
-        let current = self.review_partial_recording(&reviewed.session.id)?;
+        let current = self.review_partial_recording_checked(&reviewed.session.id, cancelled)?;
         if current.summary != reviewed.summary {
             return Err("部分救出の対象が確認後に変更されました。再確認してください".into());
         }
@@ -191,6 +311,7 @@ impl Storage {
             &reviewed.summary.review_hash,
             reviewed.origin,
             &reviewed.prefixes,
+            cancelled,
         )?;
         let recovery = serde_json::json!({"schemaVersion":1,"kind":"sealed_prefix",
             "reviewHash":reviewed.summary.review_hash,"acquisitionEndKnown":false,
@@ -209,13 +330,18 @@ impl Storage {
                 .to_string();
         // Re-inspect both lanes after conversion: newly available or changed
         // evidence must not be included, or omitted, under an old confirmation.
-        if self.review_partial_recording(&reviewed.session.id)?.summary != reviewed.summary {
+        if self
+            .review_partial_recording_checked(&reviewed.session.id, cancelled)?
+            .summary
+            != reviewed.summary
+        {
             return Err("部分救出の対象が変換中に変更されました".into());
         }
         let mut connection = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        check_cancel(cancelled)?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
@@ -233,7 +359,7 @@ impl Storage {
         self.require_data_writable()?;
         self.managed_anchor.verify()?;
         for prefix in &reviewed.prefixes {
-            prefix.verify_at(&self.root.join(&reviewed.base), &|| false)?;
+            prefix.verify_at(&self.root.join(&reviewed.base), cancelled)?;
         }
         publication.verify(self)?;
         let now = now_ms()?;
@@ -267,16 +393,78 @@ impl Storage {
         )?;
         super::super::transcription::known::read(&tx, &reviewed.session.meeting_id, &source)?;
         for prefix in &reviewed.prefixes {
-            prefix.verify_at(&self.root.join(&reviewed.base), &|| false)?;
+            prefix.verify_at(&self.root.join(&reviewed.base), cancelled)?;
         }
         publication.verify(self)?;
         self.require_data_writable()?;
+        check_cancel(cancelled)?;
         let result =
             load_session(&tx, &reviewed.session.id)?.ok_or("部分救出の結果がありません")?;
         #[cfg(test)]
         flac::crash_point("partial-before-db-commit");
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
+    }
+}
+
+impl Summary {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.lanes.len() != 2
+            || self.lanes[0].lane != "microphone"
+            || self.lanes[1].lane != "system"
+            || self.acquisition_end_known
+            || self.tail_loss_us.is_some()
+            || self.duration_us < 0
+        {
+            return Err("部分救出の範囲・取得終了記録が不正です".into());
+        }
+        let mut earliest = None;
+        let mut extent = 0;
+        for lane in &self.lanes {
+            if lane.state == "available" {
+                let start = lane.start_us.ok_or("部分救出の始端がありません")?;
+                let end = lane.end_us.ok_or("部分救出の終端がありません")?;
+                if start < 0
+                    || end <= start
+                    || lane.sealed_segments == 0
+                    || lane.sealed_segments > 32768
+                    || lane.frames == 0
+                    || lane.frames > 9_007_199_254_740_991
+                    || !lane
+                        .sample_rate
+                        .is_some_and(|v| (8000..=384000).contains(&v))
+                    || !lane.channels.is_some_and(|v| (1..=8).contains(&v))
+                {
+                    return Err("部分救出の測定範囲が不正です".into());
+                }
+                earliest = Some(earliest.map_or(start, |old: i64| old.min(start)));
+                extent = extent.max(end);
+            } else if !matches!(lane.state.as_str(), "empty" | "missing" | "unreadable")
+                || lane.sealed_segments != 0
+                || lane.frames != 0
+                || lane.start_us.is_some()
+                || lane.end_us.is_some()
+                || lane.sample_rate.is_some()
+                || lane.channels.is_some()
+            {
+                return Err("検証できない入力に測定範囲があります".into());
+            }
+        }
+        if earliest.is_some_and(|start| start != 0)
+            || extent != self.duration_us
+            || self.duration_us > 9_007_199_254_740_991
+        {
+            return Err("部分救出の時間軸が不正です".into());
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn check_cancel(cancelled: &impl Fn() -> bool) -> Result<(), String> {
+    if cancelled() {
+        Err("部分救出を安全な区切りで停止しました。原音声と途中出力は保持します".into())
+    } else {
+        Ok(())
     }
 }
 

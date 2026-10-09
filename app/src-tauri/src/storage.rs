@@ -41,7 +41,7 @@ pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
 mod recording_preparation;
-mod recordings;
+pub(crate) mod recordings;
 mod restored_input;
 mod revisions;
 mod speaker_review;
