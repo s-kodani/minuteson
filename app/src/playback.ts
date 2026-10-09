@@ -21,7 +21,7 @@ export interface PlaybackMissingRange {
 
 export function validateMissingRanges(info: PlaybackInfo): PlaybackMissingRange[] {
   if (info.missingRanges === undefined) return [];
-  if (!Array.isArray(info.missingRanges) || info.missingRanges.length > 2048
+  if (!Array.isArray(info.missingRanges) || info.missingRanges.length > 2 * 65_537
     || info.startUs !== 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= 0
     || info.sampleRate !== 48000 || info.channels !== 1 || info.alignment !== "unverified"
     || !["mic", "system", "both", "imported"].includes(info.trackKind)
@@ -46,7 +46,7 @@ export function validateMissingRanges(info: PlaybackInfo): PlaybackMissingRange[
       throw Error("会議音声の欠損範囲と保存時間軸が一致しません。");
     }
     const count=(counts.get(gap.trackKind) ?? 0)+1;
-    if(count>1024)throw Error("会議音声の欠損記録が多すぎます。");
+    if(count>65_537)throw Error("会議音声の欠損記録が多すぎます。");
     counts.set(gap.trackKind,count);
     previous = gap;
   }

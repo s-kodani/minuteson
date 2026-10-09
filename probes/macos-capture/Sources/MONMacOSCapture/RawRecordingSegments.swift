@@ -32,6 +32,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     }
   }
   static let maximumSegments = 32_768
+  // Bound both affine maps and nanosecond witnesses within the 65KiB entry.
+  static let maximumClockSegments = 128
   static let maximumPendingBytes = 16 * 1024 * 1024
   static let maximumPendingNanoseconds: Int64 = 500_000_000
   private struct Payload: @unchecked Sendable {
@@ -99,6 +101,7 @@ final class RawRecordingSegments: @unchecked Sendable {
   private let pointer: InputEventJournalFile
   private let beforeAppend: @Sendable () -> Void
   private let storageIO: StorageIO
+  private let maximumTotalClockSegments: Int
   private let queue = DispatchQueue(label: "app.mon.capture.raw-segments")
   private let lock = NSLock()
   private var pendingBytes = 0
@@ -108,21 +111,27 @@ final class RawRecordingSegments: @unchecked Sendable {
   private var closed = false
   private var sealedCount = 0
   private var sealedFrames: Int64 = 0
+  private var sealedClockSegments = 0
+  private var sealedMetadataBytes = 0
   private var previousHash: String?
   // Only accessed by the serial writer queue, including finish().
   private var active: Active?
 
   init(
     output: URL, owner: String, lane: String,
-    beforeAppend: @escaping @Sendable () -> Void = {}, storageIO: StorageIO = StorageIO()
+    beforeAppend: @escaping @Sendable () -> Void = {}, storageIO: StorageIO = StorageIO(),
+    maximumTotalClockSegments: Int = CapturedClockMap.maximumTrackSegments
   ) throws {
-    guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane) else {
+    guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane),
+      (1...CapturedClockMap.maximumTrackSegments).contains(maximumTotalClockSegments)
+    else {
       throw ProbeError.capture("raw segment owner or lane is invalid")
     }
     self.owner = owner
     self.lane = lane
     self.beforeAppend = beforeAppend
     self.storageIO = storageIO
+    self.maximumTotalClockSegments = maximumTotalClockSegments
     directory = try InputEventJournalFile.pin(output)
     do {
       let data = try Self.encode(
@@ -282,7 +291,7 @@ final class RawRecordingSegments: @unchecked Sendable {
         // raw files rather than pretending a changed format is the old track.
         throw ProbeError.capture("raw segment source format changed")
       }
-      if active.frames >= rate * 4 {
+      if active.frames >= rate * 4 || active.timing.needsSegmentRollover {
         let maps = try active.timing.finishBeforeNext(
           frames: frames, observation: payload.observation, sourceFrame: payload.sourceFrame,
           sourceEpoch: payload.sourceEpoch, originNanoseconds: active.origin,
@@ -304,7 +313,9 @@ final class RawRecordingSegments: @unchecked Sendable {
         try storageIO.write(Self.header(rate: rate, channels: channels, frames: 0), descriptor)
         active = try Active(
           descriptor: descriptor, identity: identity, name: name, rate: rate, channels: channels,
-          origin: origin, timing: CaptureTrackTiming(sampleRate: Double(rate)))
+          origin: origin,
+          timing: CaptureTrackTiming(
+            sampleRate: Double(rate), maximumSegments: Self.maximumClockSegments))
       } catch {
         close(descriptor)
         throw error
@@ -339,6 +350,9 @@ final class RawRecordingSegments: @unchecked Sendable {
   }
 
   private func seal(_ segment: Active, maps: [CapturedClockSegment]) throws {
+    guard sealedClockSegments <= maximumTotalClockSegments - maps.count else {
+      throw ProbeError.capture("raw segment total clock capacity exceeded")
+    }
     let header = Self.header(rate: segment.rate, channels: segment.channels, frames: segment.frames)
     guard lseek(segment.descriptor, 0, SEEK_SET) == 0 else {
       throw ProbeError.capture("raw segment header seek failed")
@@ -389,6 +403,11 @@ final class RawRecordingSegments: @unchecked Sendable {
         audioBytes: size, audioSHA256: Self.hex(whole.finalize()),
         previousEntrySHA256: previousHash))
     let entryName = String(format: "raw-%@-%08d.json", lane, sequence)
+    // Keep the producer's entries plus tip within the reader's 32MiB entry
+    // budget. Reserve 1KiB for bounded tip fields and producerClosed update.
+    guard sealedMetadataBytes <= 32 * 1024 * 1024 - 1024 - entry.count else {
+      throw ProbeError.capture("raw segment total metadata capacity exceeded")
+    }
     let descriptor = try create(entryName)
     defer { close(descriptor) }
     var identity = stat()
@@ -437,6 +456,8 @@ final class RawRecordingSegments: @unchecked Sendable {
       sealedCount = sequence
       sealedFrames += segment.frames
     }
+    sealedClockSegments += maps.count
+    sealedMetadataBytes += entry.count
     active = nil
   }
 

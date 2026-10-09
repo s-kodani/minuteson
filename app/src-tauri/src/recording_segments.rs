@@ -50,6 +50,19 @@ pub(crate) struct Status {
     failure: Option<String>,
 }
 impl Status {
+    /// A bounded decoding envelope, never proof of PCM, closure or consent.
+    pub(crate) fn capacity_owner(&self, owner: &str, lane: Lane) -> bool {
+        self.schema_version == 2
+            && self.owner_id == owner
+            && self.lane == lane.name()
+            && self.sealed_segments <= MAX_SEGMENTS
+            && self.sealed_frames <= SAFE
+            && if self.sealed_segments == 0 {
+                self.sealed_frames == 0 && self.last_entry_sha256.is_none()
+            } else {
+                self.sealed_frames > 0 && self.last_entry_sha256.as_deref().is_some_and(valid_hash)
+            }
+    }
     pub(crate) fn agrees_with_completed(&self, prefix: &Prefix, frames: u64) -> bool {
         self.schema_version == 2
             && self.owner_id == prefix.tip.owner_id
@@ -591,7 +604,14 @@ impl Prefix {
                 .ok_or("原音声セグメントの総JSON容量が上限を超えています")?;
             let entry: Entry = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             entry.validate(owner, lane, sequence, frames, previous_hash.as_deref())?;
-            if sequence < tip.sealed_segments && entry.frames < u64::from(entry.sample_rate) * 4 {
+            // The native writer may seal before four physical seconds when
+            // its 128-map entry budget reserves two pending/final boundary
+            // slots. Only that bounded density range is an early-seal reason;
+            // all PCM, measured endpoints, ownership and chain checks remain.
+            if sequence < tip.sealed_segments
+                && entry.frames < u64::from(entry.sample_rate) * 4
+                && !(126..=128).contains(&entry.clock_segments.len())
+            {
                 return Err("原音声の途中のセグメントが確定条件を満たしていません".into());
             }
             if format.is_some_and(|f| f != (entry.sample_rate, entry.channels)) {

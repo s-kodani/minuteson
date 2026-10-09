@@ -234,13 +234,14 @@ struct CaptureTrackTiming {
   private var previousCaptureEnd: Int64?
   private var sourceEpoch: UInt64?
   var firstCaptureNanoseconds: Int64? { map.firstCaptureNanoseconds }
+  var needsSegmentRollover: Bool { map.needsSegmentRollover }
   func finalizedEndpoints() throws -> [CapturedClockEndpoints] { try map.finalizedEndpoints() }
 
-  init(sampleRate: Double) throws {
+  init(sampleRate: Double, maximumSegments: Int = 1024) throws {
     guard sampleRate.isFinite, sampleRate.rounded() == sampleRate,
       (8000...384000).contains(sampleRate)
     else { throw ProbeError.capture("capture clock sample rate is invalid") }
-    map = try CapturedClockMap(sampleRate: Int64(sampleRate))
+    map = try CapturedClockMap(sampleRate: Int64(sampleRate), maximumSegments: maximumSegments)
   }
 
   mutating func recordSaved(

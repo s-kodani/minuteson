@@ -5,6 +5,8 @@ const MAX_SAFE_FRAMES: u128 = (1_u128 << 53) - 1;
 // Native raw segments retain independent affine fits. Bound a whole track's
 // metadata separately from the unchanged 1,024-map per-chunk admission.
 pub(crate) const MAX_CLOCK_SEGMENTS: usize = 65_536;
+// Internal map gaps plus the two possible capture boundaries per track.
+pub(crate) const MAX_CLOCK_GAPS: usize = MAX_CLOCK_SEGMENTS + 1;
 pub(crate) const MAX_CLOCK_MAPPING_BYTES: usize = 4 * 1024 * 1024;
 
 /// Chunk-local frame endpoints. The enclosing chunk's immutable asset proof
@@ -68,6 +70,17 @@ pub(crate) fn frame_at(micros: i64, rate: u32) -> Result<u64, String> {
 
 impl ClockLayout {
     pub(crate) fn new(chunks: &[ClockChunk<'_>], rate: u32) -> Result<Self, String> {
+        Self::bounded(chunks, rate, 1024)
+    }
+
+    /// Whole native capture metadata only, not admission of an audio chunk.
+    /// The caller must separately bind this to both completed raw prefixes;
+    /// final physical chunks still use `new` and its unchanged 1,024-map limit.
+    pub(crate) fn capture_track(chunk: ClockChunk<'_>, rate: u32) -> Result<Self, String> {
+        Self::bounded(&[chunk], rate, MAX_CLOCK_SEGMENTS)
+    }
+
+    fn bounded(chunks: &[ClockChunk<'_>], rate: u32, chunk_limit: usize) -> Result<Self, String> {
         if chunks.is_empty() || chunks.len() > 1024 || !(8_000..=384_000).contains(&rate) {
             return Err("時刻補正の音声構成が不正です".into());
         }
@@ -80,7 +93,7 @@ impl ClockLayout {
                 || chunk.start_us < 0
                 || chunk.end_us <= chunk.start_us
                 || previous_end.is_some_and(|end| end > chunk.start_us)
-                || chunk.segments.len() > 1024
+                || chunk.segments.len() > chunk_limit
             {
                 return Err("時刻補正の音声区間に欠損・重複または不正な範囲があります".into());
             }

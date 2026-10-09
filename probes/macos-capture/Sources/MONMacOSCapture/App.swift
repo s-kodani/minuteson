@@ -233,6 +233,7 @@ struct TrackStats: Encodable {
   var clockSegments: [CapturedClockSegment]?
   var clockFailure: String?
   var timing: CaptureTrackTiming?
+  var clockCapacity = 1024
   var inputLevel = PCMInputLevel()
   var microphoneRecovery: MicrophoneRecovery.Status?
   var systemRecovery: SystemAudioRecovery.Status?
@@ -285,7 +286,7 @@ struct TrackStats: Encodable {
     do {
       if timing == nil {
         guard let sampleRate else { throw ProbeError.capture("capture sample rate is missing") }
-        timing = try CaptureTrackTiming(sampleRate: sampleRate)
+        timing = try CaptureTrackTiming(sampleRate: sampleRate, maximumSegments: clockCapacity)
       }
       try timing?.recordSaved(
         frames: frames, observation: observation, sourceFrame: sourceFrame,
@@ -367,10 +368,19 @@ struct Manifest: Encodable {
   }
 
   func encodedData() throws -> Data {
+    let segmented =
+      recordingOwnerId.map { owner in
+        InputLevelReport.validOwner(owner)
+          && microphone.rawSegments?.ownerId == owner
+          && microphone.rawSegments?.lane == "microphone"
+          && system.rawSegments?.ownerId == owner && system.rawSegments?.lane == "system"
+      } ?? false
+    let extended = segmented && (2...3).contains(schemaVersion)
     let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    encoder.outputFormatting = extended ? [.sortedKeys] : [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(self)
-    guard data.count <= 256 * 1024 else {
+    let limit = extended ? 32 * 1024 * 1024 : 256 * 1024
+    guard data.count <= limit else {
       throw ProbeError.capture("capture manifest exceeds the bounded reader capacity")
     }
     return data
@@ -877,6 +887,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     self.testWindow = testWindow
     self.inputEventObserver = inputEventObserver
     self.rawSegments = rawSegments
+    stats.clockCapacity = rawSegments == nil ? 1024 : CapturedClockMap.maximumTrackSegments
   }
 
   func start() async throws {

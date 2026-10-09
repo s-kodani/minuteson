@@ -54,9 +54,7 @@ impl HistoricalFinal {
         bytes: &[u8],
         owner: &str,
     ) -> Result<Option<Self>, String> {
-        if bytes.is_empty() || bytes.len() > 256 * 1024 {
-            return Err("持ち運ぶ停止時診断の容量が不正です".into());
-        }
+        crate::capture_manifest::validate_size(bytes)?;
         let report: Final = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         if report.input_event_journal_persistence.is_none()
             && report.input_event_journal_error.is_none()
@@ -320,9 +318,15 @@ pub(super) fn archived_issue(directory: &File, owner: &str) -> Option<&'static s
     final_issue(directory, owner).unwrap_or(Some("unavailable"))
 }
 fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, String> {
-    let Some((data, _)) = bytes(directory, "manifest.json", 256 * 1024)? else {
+    let Some((data, _)) = bytes(
+        directory,
+        "manifest.json",
+        crate::capture_manifest::MAX_BYTES,
+    )?
+    else {
         return retained_issue(directory, owner);
     };
+    crate::capture_manifest::validate_size(&data)?;
     let final_report: Final = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
     if final_report.input_event_journal_persistence.is_none()
         && final_report.input_event_journal_error.is_none()

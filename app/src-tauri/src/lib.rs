@@ -7,6 +7,7 @@ mod audio_import;
 #[cfg(target_os = "macos")]
 mod bootstrap;
 mod capture_inputs;
+mod capture_manifest;
 mod capture_scope;
 mod capture_test;
 mod data_controller;

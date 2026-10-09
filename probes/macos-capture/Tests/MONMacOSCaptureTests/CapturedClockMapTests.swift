@@ -4,6 +4,43 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class CapturedClockMapTests: XCTestCase {
+  func testFourHourFragmentedTrackExceedsLegacyCapacityWithoutLosingMeasuredGaps() throws {
+    var clock = try CapturedClockMap(sampleRate: 48000, maximumSegments: 65_536)
+    let origin: Int64 = 123_000_000_000
+    let count = 675_000
+    for index in 0..<count {
+      let gap = Int64(index / 100) * 1_000_000
+      let start = origin + Int64(index) * 21_333_333 + gap
+      try clock.append(
+        frames: 1024, captureStartNanoseconds: start, captureEndNanoseconds: start + 21_333_333,
+        discontinuity: index > 0 && index % 100 == 0)
+    }
+    let maps = try clock.finish(originNanoseconds: origin)
+    XCTAssertEqual(maps.count, 6750)
+    XCTAssertEqual(maps.last?.sourceFrameEnd, 691_200_000)
+    for pair in zip(maps, maps.dropFirst()) {
+      XCTAssertEqual(pair.0.sourceFrameEnd, pair.1.sourceFrameStart)
+      XCTAssertEqual(pair.1.timelineStartUs - pair.0.timelineEndUs, 1000)
+    }
+    XCTAssertLessThan(try JSONEncoder().encode(maps).count, 2 * 1024 * 1024)
+  }
+
+  func testTrackCapacityIsFiniteAndDoesNotWeakenDefaultRawLimit() throws {
+    for limit in [1024, CapturedClockMap.maximumTrackSegments] {
+      var clock = try CapturedClockMap(sampleRate: 8000, maximumSegments: limit)
+      for index in 0..<limit {
+        try clock.append(
+          frames: 8, captureStartNanoseconds: Int64(index) * 2_000_000,
+          captureEndNanoseconds: Int64(index) * 2_000_000 + 1_000_000, discontinuity: index > 0)
+      }
+      XCTAssertThrowsError(
+        try clock.append(
+          frames: 8, captureStartNanoseconds: Int64(limit) * 2_000_000,
+          captureEndNanoseconds: Int64(limit) * 2_000_000 + 1_000_000, discontinuity: true))
+      XCTAssertEqual(clock.frames, Int64(limit) * 8)
+      XCTAssertThrowsError(try clock.finish(originNanoseconds: 0))
+    }
+  }
   func testConstantAndDriftingClocksCompressAndKeepSharedNonzeroOrigin() throws {
     for multiplier in [1.0, 1.0001, 0.9999] {
       var clock = try CapturedClockMap(sampleRate: 48000)
@@ -101,7 +138,7 @@ final class CapturedClockMapTests: XCTestCase {
 
   func testInvalidInputAndFinalizationNeverPublishPartialMappings() throws {
     XCTAssertThrowsError(try CapturedClockMap(sampleRate: 7999))
-    XCTAssertThrowsError(try CapturedClockMap(sampleRate: 48000, maximumSegments: 1025))
+    XCTAssertThrowsError(try CapturedClockMap(sampleRate: 48000, maximumSegments: 65_537))
     for (frames, start, end) in [
       (Int64(0), Int64(0), Int64(1)), (1, -1, 1), (1, 1, 1), (Int64.max, 0, 1),
     ] {

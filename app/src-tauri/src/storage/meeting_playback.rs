@@ -271,17 +271,20 @@ impl Storage {
             {
                 return Err("会議音声のセグメント番号に欠損があります".into());
             }
-            let mut gaps = db.prepare("SELECT recovered, start_us, end_us, reason_code, json_object('id',id,'start',start_us,'end',end_us,'reason',reason_code,'recovered',recovered) FROM audio_gaps WHERE track_id = ?1 ORDER BY id LIMIT 1025").map_err(|e| e.to_string())?;
+            let mut gaps = db.prepare("SELECT recovered, start_us, end_us, reason_code, json_object('id',id,'start',start_us,'end',end_us,'reason',reason_code,'recovered',recovered) FROM audio_gaps WHERE track_id = ?1 ORDER BY id LIMIT ?2").map_err(|e| e.to_string())?;
             track.gaps = gaps
-                .query_map(params![track.id], |row| {
-                    Ok(Gap {
-                        recovered: row.get(0)?,
-                        start: row.get(1)?,
-                        end: row.get(2)?,
-                        reason: row.get(3)?,
-                        stamp: row.get(4)?,
-                    })
-                })
+                .query_map(
+                    params![track.id, (crate::audio_clock::MAX_CLOCK_GAPS + 1) as i64],
+                    |row| {
+                        Ok(Gap {
+                            recovered: row.get(0)?,
+                            start: row.get(1)?,
+                            end: row.get(2)?,
+                            reason: row.get(3)?,
+                            stamp: row.get(4)?,
+                        })
+                    },
+                )
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
@@ -294,7 +297,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            if track.gaps.len() > 1024
+            if track.gaps.len() > crate::audio_clock::MAX_CLOCK_GAPS
                 || track.mappings.len() > crate::audio_clock::MAX_CLOCK_SEGMENTS
             {
                 return Err("会議音声の時刻・欠損記録が多すぎます".into());

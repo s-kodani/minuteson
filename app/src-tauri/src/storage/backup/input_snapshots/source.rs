@@ -8,7 +8,7 @@ use std::os::unix::fs::MetadataExt;
 const FILES: [(&str, u64); 3] = [
     ("input-events.json", 65 * 1024),
     ("input-notices.json", 128 * 1024),
-    ("manifest.json", 256 * 1024),
+    ("manifest.json", crate::capture_manifest::MAX_BYTES),
 ];
 #[derive(Clone, PartialEq, Eq)]
 struct DirectoryStamp {
@@ -124,6 +124,9 @@ fn read(directory: &File, name: &str, limit: u64) -> Result<Option<(Leaf, Vec<u8
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     let current = crate::input_levels::open_capture_file_at(directory, name)?;
+    if name == "manifest.json" {
+        crate::capture_manifest::validate_size(&bytes)?;
+    }
     if bytes.len() as u64 != before.length
         || before != FileStamp::read(&file, name, limit)?
         || before != FileStamp::read(&current, name, limit)?

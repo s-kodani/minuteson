@@ -18,6 +18,8 @@ struct CapturedClockEndpoints: Encodable, Equatable {
 /// Each append represents successfully stored PCM frames. An explicit missing
 /// interval remains a gap; it is not represented by fabricated input frames.
 struct CapturedClockMap {
+  static let maximumTrackSegments = 65_536
+  var needsSegmentRollover: Bool { segments.count >= maximumSegments - 2 }
   private struct Point {
     let frame: Int64
     let time: Int64
@@ -50,7 +52,9 @@ struct CapturedClockMap {
   }
 
   init(sampleRate: Int64, maximumSegments: Int = 1024) throws {
-    guard (8000...384000).contains(sampleRate), (1...1024).contains(maximumSegments) else {
+    guard (8000...384000).contains(sampleRate),
+      (1...Self.maximumTrackSegments).contains(maximumSegments)
+    else {
       throw ProbeError.capture("capture clock format or capacity is invalid")
     }
     self.sampleRate = sampleRate

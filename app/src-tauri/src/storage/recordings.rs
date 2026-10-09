@@ -82,7 +82,7 @@ struct CapturedFile {
     hash: String,
 }
 
-const MAX_CAPTURE_MANIFEST_BYTES: u64 = 256 * 1024;
+const MAX_CAPTURE_MANIFEST_BYTES: u64 = crate::capture_manifest::MAX_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingConfig {
@@ -787,6 +787,7 @@ impl Storage {
         if bytes.len() as u64 > MAX_CAPTURE_MANIFEST_BYTES {
             return Err("録音manifestが大きすぎます".into());
         }
+        crate::capture_manifest::validate_size(&bytes)?;
         if bytes.len() as i64 != proof.size_bytes
             || format!("{:x}", Sha256::digest(&bytes)) != proof.hash
         {
@@ -849,6 +850,7 @@ impl Storage {
             if bytes.len() as u64 > MAX_CAPTURE_MANIFEST_BYTES {
                 return Err("録音manifestが大きすぎます".into());
             }
+            crate::capture_manifest::validate_size(&bytes)?;
             if bytes.len() as u64 != before.len()
                 || after.len() != before.len()
                 || after.modified().map_err(|error| error.to_string())?

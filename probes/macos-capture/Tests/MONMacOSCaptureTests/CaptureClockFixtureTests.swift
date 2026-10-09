@@ -6,6 +6,37 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class CaptureClockFixtureTests: XCTestCase, @unchecked Sendable {
+  func testSegmentedManifestCapacityCoversBothMaximumTracksAtSafeIntegerEndpoints() throws {
+    let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
+    let maximum: Int64 = 9_007_199_254_740_991
+    let maps: [CapturedClockSegment] = (Int64(0)..<Int64(65_536)).map { index in
+      let from = Int64(65_536) - index
+      let to = from - 1
+      return CapturedClockSegment(
+        sourceFrameStart: maximum - from * 8, sourceFrameEnd: maximum - to * 8,
+        timelineStartUs: maximum - from * 1000, timelineEndUs: maximum - to * 1000)
+    }
+    let track = { (lane: String) in
+      TrackStats(
+        frames: maximum, sampleRate: 8000, channels: 2, clockSegments: maps,
+        rawSegments: RawSegmentStatus(
+          ownerId: owner, lane: lane, sealedSegments: 0, sealedFrames: 0,
+          lastEntrySHA256: nil, producerClosed: false, failure: nil))
+    }
+    var manifest = Manifest(
+      schemaVersion: 2, scenario: "capacity-only-not-saved", captureMode: "system",
+      backend: "screencapturekit", targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic",
+      requestedDurationSeconds: nil, osVersion: "synthetic", architecture: "arm64", state: "failed",
+      microphone: track("microphone"), system: track("system"), errors: [], recordingOwnerId: owner)
+    let data = try manifest.encodedData()
+    XCTAssertGreaterThan(data.count, 256 * 1024)
+    XCTAssertLessThanOrEqual(data.count, 32 * 1024 * 1024)
+    // Serialization capacity only, not frame coverage, PCM or closure.
+    manifest.system.rawSegments = nil
+    XCTAssertThrowsError(try manifest.encodedData())
+    manifest.system = track("microphone")
+    XCTAssertThrowsError(try manifest.encodedData())
+  }
   func sample(frames: Int, value: Float, presentation: CMTime, rightValue: Float? = nil) throws
     -> CMSampleBuffer
   {

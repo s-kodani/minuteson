@@ -74,6 +74,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
     self.clock = clock
     self.levelsEnabled = levelsEnabled
     self.rawSegments = rawSegments
+    stats.clockCapacity = rawSegments == nil ? 1024 : CapturedClockMap.maximumTrackSegments
   }
 
   func start(targetPIDs: [pid_t]) throws {

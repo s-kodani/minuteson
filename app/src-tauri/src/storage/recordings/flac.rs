@@ -15,6 +15,8 @@ pub(in crate::storage) mod relocation;
 use files::{Directory, Identity, Stamp};
 pub(in crate::storage) use inventory::{inspect_workspaces, WorkspaceFiles};
 #[cfg(test)]
+mod dense_tests;
+#[cfg(test)]
 pub(super) mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -17,6 +17,7 @@ rust-test-cache:
 check: lint test build-macos-probe check-app check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-recording-raw-prefix check-speaker-embedding
 
 check-recording-raw-prefix:
+	python3 tools/mon_rust_tests.py swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legacy_capacity -- --ignored
 	python3 tools/mon_rust_tests.py swift_generated_recording_segments_bind_actual_storage_and_encode_flac_without_rewriting_raw -- --ignored
 	python3 tools/mon_rust_tests.py final_flac_owned_sigkill_checkpoints_recover_without_registering_partial_audio -- --ignored
 	python3 tools/mon_rust_tests.py partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh_consent -- --ignored

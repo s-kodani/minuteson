@@ -326,6 +326,30 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertFalse(writer.snapshot().producerClosed)
   }
 
+  func testAggregateRawClockLimitNeverAdvertisesAnUnreadablePrefix() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let writer = try RawRecordingSegments(
+      output: root, owner: owner, lane: "microphone", maximumTotalClockSegments: 200)
+    for index in 0..<201 {
+      try writer.enqueue(
+        buffer(frames: 8), observation: .timestamp(origin + Int64(index) * 2_000_000),
+        sourceFrame: Int64(index) * 16)
+      try writer.drainAcceptedPCM()
+    }
+    let confirmed = writer.snapshot()
+    XCTAssertGreaterThan(confirmed.sealedFrames, 0)
+    let tip = try Data(contentsOf: root.appendingPathComponent("raw-microphone.json"))
+    XCTAssertThrowsError(try writer.finish())
+    XCTAssertEqual(writer.snapshot().sealedFrames, confirmed.sealedFrames)
+    XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("raw-microphone.json")), tip)
+    XCTAssertFalse(writer.snapshot().producerClosed)
+    XCTAssertNotNil(writer.snapshot().failure)
+    XCTAssertThrowsError(
+      try writer.enqueue(
+        buffer(frames: 8), observation: .timestamp(origin + 402_000_000), sourceFrame: 1608))
+  }
+
   func testStorageFullQuotaAndSyncFailureKeepConfirmedPrefixAndRejectFurtherWrites() throws {
     for code in [POSIXErrorCode.ENOSPC, .EDQUOT, .EIO] {
       // PCM/header/entry writes, followed by audio/entry/directory fsync.
@@ -513,6 +537,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let root = try external.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? directory()
     defer { if external == nil { try? FileManager.default.removeItem(at: root) } }
     let recordingOwner = environment["MON_RAW_SEGMENT_FIXTURE_OWNER"] ?? owner
+    let dense = environment["MON_RAW_SEGMENT_FIXTURE_DENSE"] == "1"
     let reference = { (time: Int64) in
       CaptureClockReading(
         hostBeforeNs: time, continuousNs: time + 10,
@@ -522,20 +547,21 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
       readings.read()
     }
-    readings.set(reference(origin + 5_000_000_000))
+    readings.set(reference(origin + (dense ? 42_000_000_000 : 5_000_000_000)))
     let fixture = CaptureClockFixtureTests()
     var tracks: [TrackStats] = []
     for lane in ["microphone", "system"] {
       let raw = try RawRecordingSegments(output: root, owner: recordingOwner, lane: lane)
       let writer = SystemPCMWriter(
         outputURL: root.appendingPathComponent("\(lane).caf"), rawSegments: raw)
-      for index in 0..<17 {
+      for index in 0..<(dense ? 2048 : 17) {
         let sample = try fixture.sample(
-          frames: 12000, value: 0.25,
+          frames: dense ? 480 : 12000, value: 0.25,
           presentation: CMTime(value: Int64(index), timescale: 4), rightValue: -0.5)
         try writer.append(
           sample,
-          observation: clock.observe(hostTicks: UInt64(origin + Int64(index) * 250_000_000)),
+          observation: clock.observe(
+            hostTicks: UInt64(origin + Int64(index) * (dense ? 20_000_000 : 250_000_000))),
           sourceEpoch: 0, levelsEnabled: false, receivedAt: nil)
         try raw.drainAcceptedPCM()
       }
@@ -553,8 +579,25 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       clock, microphoneClosure: micClosure, systemClosure: systemClosure)
     try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
     XCTAssertEqual(manifest.schemaVersion, 3)
-    XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, 204_000)
+    XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, dense ? 983_040 : 204_000)
     XCTAssertNotNil(manifest.microphone.rawSegments?.lastEntrySHA256)
+    if dense {
+      XCTAssertEqual(manifest.microphone.clockSegments?.count, 2048)
+      XCTAssertGreaterThan(try manifest.encodedData().count, 256 * 1024)
+      XCTAssertGreaterThan(manifest.microphone.rawSegments?.sealedSegments ?? 0, 6)
+      for lane in ["microphone", "system"] {
+        for sequence in 1...(tracks[lane == "microphone" ? 0 : 1].rawSegments?.sealedSegments ?? 0)
+        {
+          let name = String(format: "raw-%@-%08d.json", lane, sequence)
+          let entry = try value(root, name)
+          XCTAssertLessThanOrEqual(
+            (entry["clockSegments"] as? [Any])?.count ?? Int.max,
+            RawRecordingSegments.maximumClockSegments)
+          XCTAssertLessThanOrEqual(
+            try Data(contentsOf: root.appendingPathComponent(name)).count, 65 * 1024)
+        }
+      }
+    }
   }
 
   private func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {

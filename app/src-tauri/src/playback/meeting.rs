@@ -47,13 +47,13 @@ impl MeetingAudio {
             return Err("両方の再生にはマイクとPC音声が一つずつ必要です".into());
         }
         let total_frames = output_frame(end_us)?;
-        if missing_ranges.len() > 2048
+        if missing_ranges.len() > 2 * crate::audio_clock::MAX_CLOCK_GAPS
             || sources.iter().any(|source| {
                 missing_ranges
                     .iter()
                     .filter(|gap| gap.track_kind == source.track_kind)
                     .count()
-                    > 1024
+                    > crate::audio_clock::MAX_CLOCK_GAPS
             })
             || missing_ranges.iter().any(|gap| {
                 gap.end_frame > total_frames

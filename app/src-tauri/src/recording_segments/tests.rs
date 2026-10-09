@@ -121,6 +121,49 @@ impl Fixture {
 }
 
 #[test]
+fn short_intermediate_segments_require_the_native_clock_density_seal_budget() {
+    for count in [1_u64, 125, 126, 127, 128, 129] {
+        let mut fixture = Fixture::new(2, 2000, true);
+        let frames = count * 8;
+        let audio = caf(frames);
+        write(
+            &fixture.root.path().join(fixture.lane.name_at(1, "caf")),
+            &audio,
+        );
+        let first = &mut fixture.entries[0];
+        first["frames"] = json!(frames);
+        first["audioBytes"] = json!(audio.len());
+        first["audioSHA256"] = json!(hash(&audio));
+        first["clockSegments"] = json!((0..count)
+            .map(|i| json!({
+                "sourceFrameStart":i*8,"sourceFrameEnd":(i+1)*8,
+                "timelineStartUs":i*2000,"timelineEndUs":i*2000+1000,
+                "mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"
+            }))
+            .collect::<Vec<_>>());
+        first["clockNanoseconds"] = json!((0..count)
+            .map(|i| json!({
+                "startNanoseconds":ORIGIN+i as i64*2_000_000,
+                "endNanoseconds":ORIGIN+i as i64*2_000_000+1_000_000
+            }))
+            .collect::<Vec<_>>());
+        let origin = ORIGIN + count as i64 * 2_000_000;
+        let second = &mut fixture.entries[1];
+        second["sourceFrameStart"] = json!(frames);
+        second["captureOriginNanoseconds"] = json!(origin);
+        second["clockNanoseconds"] = json!([{
+            "startNanoseconds":origin,"endNanoseconds":origin+250_000_000
+        }]);
+        fixture.publish();
+        assert_eq!(
+            fixture.read().is_ok(),
+            (126..=128).contains(&count),
+            "{count}"
+        );
+    }
+}
+
+#[test]
 fn advertised_prefix_is_bound_to_actual_pcm_and_status_hash_not_to_unadvertised_tail() {
     let fixture = Fixture::new(2, 2000, true);
     write(

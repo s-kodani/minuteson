@@ -72,7 +72,7 @@ fn runs(source: &RecordedAudioPlan, duration: i64, gaps: &[Gap]) -> Result<Vec<R
         || source.tracks.len() > 2
         || duration <= 0
         || duration > 7 * 24 * 3600 * 1_000_000
-        || gaps.len() > 2048
+        || gaps.len() > 2 * crate::audio_clock::MAX_CLOCK_GAPS
     {
         return Err("保存区間の解析構成が範囲外です".into());
     }
@@ -117,16 +117,22 @@ fn runs(source: &RecordedAudioPlan, duration: i64, gaps: &[Gap]) -> Result<Vec<R
             .iter()
             .filter(|gap| gap.track_index == track_index)
             .collect();
-        if track_gaps.len() > 1024 {
+        if track_gaps.len() > crate::audio_clock::MAX_CLOCK_GAPS {
             return Err("入力の欠損記録が多すぎます".into());
         }
         let missing: Vec<_> = track_gaps
             .into_iter()
             .filter(|gap| !gap.recovered)
             .collect();
+        let mut gap_cursor = 0;
         for pair in layout.spans.windows(2) {
+            // Spans and missing rows are time ordered. Do not rescan an entire
+            // dense gap prefix for each successive observed clock hole.
+            while gap_cursor < missing.len() && missing[gap_cursor].end_us <= pair[0].end_us {
+                gap_cursor += 1;
+            }
             if pair[0].end_us < pair[1].start_us
-                && !covers(&missing, pair[0].end_us, pair[1].start_us)
+                && !covers(&missing[gap_cursor..], pair[0].end_us, pair[1].start_us)
             {
                 return Err("取得時計の空白に未回復の欠損証拠がありません".into());
             }
@@ -164,7 +170,7 @@ fn runs(source: &RecordedAudioPlan, duration: i64, gaps: &[Gap]) -> Result<Vec<R
             return Err("この入力には解析可能な保存音声がありません".into());
         }
     }
-    if result.len() > 4098 {
+    if result.len() > 2 * (crate::audio_clock::MAX_CLOCK_GAPS + 1) {
         return Err("解析可能な保存区間が多すぎます".into());
     }
     Ok(result)
@@ -211,21 +217,24 @@ pub(in crate::storage) fn read(
         .map_err(|e| e.to_string())?;
     let mut gaps = Vec::new();
     for (track_index, track) in source.tracks.iter().enumerate() {
-        let mut query=db.prepare("SELECT start_us,end_us,reason_code,recovered FROM audio_gaps WHERE track_id=?1 ORDER BY start_us,end_us,reason_code,recovered,id LIMIT 1025").map_err(|e|e.to_string())?;
+        let mut query=db.prepare("SELECT start_us,end_us,reason_code,recovered FROM audio_gaps WHERE track_id=?1 ORDER BY start_us,end_us,reason_code,recovered,id LIMIT ?2").map_err(|e|e.to_string())?;
         let selected = query
-            .query_map(params![track.id], |r| {
-                Ok(Gap {
-                    track_index,
-                    start_us: r.get(0)?,
-                    end_us: r.get(1)?,
-                    reason_code: r.get(2)?,
-                    recovered: r.get(3)?,
-                })
-            })
+            .query_map(
+                params![track.id, (crate::audio_clock::MAX_CLOCK_GAPS + 1) as i64],
+                |r| {
+                    Ok(Gap {
+                        track_index,
+                        start_us: r.get(0)?,
+                        end_us: r.get(1)?,
+                        reason_code: r.get(2)?,
+                        recovered: r.get(3)?,
+                    })
+                },
+            )
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        if selected.len() > 1024 {
+        if selected.len() > crate::audio_clock::MAX_CLOCK_GAPS {
             return Err("入力の欠損記録が多すぎます".into());
         }
         gaps.extend(selected);

@@ -1,6 +1,7 @@
 use crate::session::{RecordingPhase, RecordingSnapshot, SessionStore};
 use crate::storage::{RecordingConfig, Storage};
 use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -531,6 +532,28 @@ impl RecorderController {
 mod tests {
     use super::*;
     const SESSION: &str = "735027d4-a03e-43d3-830a-21e767dfaf88";
+    #[test]
+    #[cfg(unix)]
+    fn segmented_manifest_monitor_preserves_large_state_and_bounded_error() {
+        let root = tempfile::tempdir().unwrap();
+        let status = |lane| {
+            serde_json::json!({"schemaVersion":2,"ownerId":SESSION,"lane":lane,
+            "sealedSegments":0,"sealedFrames":0,"lastEntrySHA256":null,"producerClosed":false,"failure":null})
+        };
+        let mut value = serde_json::json!({"schemaVersion":2,"recordingOwnerId":SESSION,"state":"failed",
+            "errors":["storage failed"],"microphone":{"rawSegments":status("microphone")},
+            "system":{"rawSegments":status("system")},"padding":"x".repeat(256*1024)});
+        std::fs::write(root.path().join("manifest.json"), value.to_string()).unwrap();
+        assert_eq!(manifest_state(root.path()).as_deref(), Some("failed"));
+        assert_eq!(
+            manifest_error(root.path()).as_deref(),
+            Some("storage failed")
+        );
+        value.as_object_mut().unwrap().remove("recordingOwnerId");
+        std::fs::write(root.path().join("manifest.json"), value.to_string()).unwrap();
+        assert!(manifest_state(root.path()).is_none());
+        assert!(manifest_error(root.path()).is_none());
+    }
 
     #[test]
     fn notification_owner_does_not_hold_capture_or_child_lock_while_reader_is_busy() {
@@ -775,19 +798,13 @@ fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> Reco
 }
 
 fn manifest_state(output: &Path) -> Option<String> {
-    let manifest = std::fs::read(output.join("manifest.json")).ok()?;
-    if manifest.len() > 256 * 1024 {
-        return None;
-    }
+    let manifest = manifest_bytes(output)?;
     let value: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
     value.get("state")?.as_str().map(str::to_owned)
 }
 
 fn manifest_error(output: &Path) -> Option<String> {
-    let bytes = std::fs::read(output.join("manifest.json")).ok()?;
-    if bytes.len() > 256 * 1024 {
-        return None;
-    }
+    let bytes = manifest_bytes(output)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let details = value
         .get("errors")?
@@ -802,6 +819,19 @@ fn manifest_error(output: &Path) -> Option<String> {
     } else {
         Some(details.chars().take(400).collect())
     }
+}
+
+fn manifest_bytes(output: &Path) -> Option<Vec<u8>> {
+    let file = File::open(output.join("manifest.json")).ok()?;
+    if file.metadata().ok()?.len() > crate::capture_manifest::MAX_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(crate::capture_manifest::MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    crate::capture_manifest::validate_size(&bytes).ok()?;
+    Some(bytes)
 }
 
 fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, output: PathBuf) {

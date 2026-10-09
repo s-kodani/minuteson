@@ -27,6 +27,7 @@ final class SystemPCMWriter: @unchecked Sendable {
   init(outputURL: URL, rawSegments: RawRecordingSegments? = nil) {
     self.outputURL = outputURL
     self.rawSegments = rawSegments
+    savedStats.clockCapacity = rawSegments == nil ? 1024 : CapturedClockMap.maximumTrackSegments
   }
   var ready: Bool {
     lock.withLock {

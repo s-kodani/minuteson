@@ -93,7 +93,16 @@ impl CaptureTrack {
             .clock_segments
             .as_deref()
             .ok_or("録音の時刻補正区間がありません")?;
-        if segments.is_empty() || segments.len() > 1024 {
+        #[cfg(unix)]
+        let segmented = self.raw_segments.is_some();
+        #[cfg(not(unix))]
+        let segmented = false;
+        let limit = if segmented {
+            crate::audio_clock::MAX_CLOCK_SEGMENTS
+        } else {
+            1024
+        };
+        if segments.is_empty() || segments.len() > limit {
             return Err("録音の時刻補正区間数が不正です".into());
         }
         let start = segments[0].timeline_start_us;
@@ -101,15 +110,17 @@ impl CaptureTrack {
         if end > 9_007_199_254_740_991 {
             return Err("録音の補正時刻が数値表現の範囲外です".into());
         }
-        let layout = ClockLayout::new(
-            &[ClockChunk {
-                frames: self.frames,
-                start_us: start,
-                end_us: end,
-                segments,
-            }],
-            rate as u32,
-        )?;
+        let chunk = ClockChunk {
+            frames: self.frames,
+            start_us: start,
+            end_us: end,
+            segments,
+        };
+        let layout = if segmented {
+            ClockLayout::capture_track(chunk, rate as u32)?
+        } else {
+            ClockLayout::new(&[chunk], rate as u32)?
+        };
         // Do not require a contiguous range here: explicit positive gaps are
         // evidence to save, not PCM to invent. Readers gate each requested run.
         Ok(CaptureTimeline {

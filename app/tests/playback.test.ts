@@ -188,8 +188,19 @@ test("missing metadata rejects forged bounds, shapes, foreign tracks, fabricated
   }
   for(const patch of [{sampleRate:44100},{channels:2},{startUs:1},{alignment:"verified"},{trackKind:"processed"},{totalFrames:479999},{missingRanges:null}])assert.throws(()=>validateMissingRanges({...data,...patch} as PlaybackInfo));
   assert.throws(()=>validateMissingRanges(missingInfo([gap(200000,300000),gap(100000,200000)])));
-  assert.throws(()=>validateMissingRanges(missingInfo(Array.from({length:1025},()=>gap(100000,200000)))));
+  assert.throws(()=>validateMissingRanges(missingInfo(Array.from({length:65_538},()=>gap(100000,200000)))));
   assert.deepEqual(validateMissingRanges(info),[]);
+});
+
+test("dense native clock gaps exceed legacy capacity without padding or crossing missing audio",()=>{
+  const ranges=Array.from({length:2048},(_,index)=>[gap(index*20_000+10_000,(index+1)*20_000,"mic"),gap(index*20_000+10_000,(index+1)*20_000,"system")]).flat();
+  const data:PlaybackInfo={...info,endUs:42_000_000,totalFrames:2_016_000,trackKind:"both",missingRanges:ranges};
+  assert.equal(validateMissingRanges(data).length,4096);
+  assert.equal(playbackPacketFrames(data,0),480);
+  assert.equal(playbackPacketFrames(data,480),0);
+  assert.equal(nextSavedFrame(data,480),960);
+  assert.equal(missingAtFrame(data,480).length,2);
+  assert.equal(playbackPacketFrames(data,960),480);
 });
 
 test("both-track missing ranges advance through overlaps and adjacent boundaries without collapsing meeting time",()=>{
