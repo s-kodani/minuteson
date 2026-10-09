@@ -196,6 +196,225 @@ fn map(from: i64, to: i64, start: i64, end: i64) -> ClockSegment {
         mapping_json: "{\"schema_version\":1,\"method\":\"linear\"}".into(),
     }
 }
+fn remove_reviewed_audio(storage: &Storage, meeting: &str) -> usize {
+    use crate::storage::deletion::audio::{
+        intent::{self, Policy},
+        Census,
+    };
+    let controller = crate::analysis_worker::AnalysisController::default();
+    let lease = controller
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    let census = Census::capture(storage, meeting, &|| false).unwrap();
+    let count = census
+        .preview(&Uuid::new_v4().to_string())
+        .unwrap()
+        .audio_files;
+    let operation = Uuid::new_v4().to_string();
+    intent::prepare(
+        storage,
+        &operation,
+        &census,
+        Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &|| false,
+    )
+    .unwrap();
+    intent::removal::start(storage, &operation, &lease, &|| false).unwrap();
+    assert!(intent::removal::run(storage, &operation, &lease, &|| false)
+        .unwrap()
+        .files_removed());
+    assert!(
+        intent::removal::completion::finish(storage, &operation, &lease, &|| false)
+            .unwrap()
+            .completed()
+    );
+    count
+}
+
+#[test]
+fn native_raw_audio_final_flac_additive_restore_preserves_pcm_clocks_gaps_and_manual_deletion() {
+    let fixture = Fixture::new(17, 2000, true);
+    fixture
+        .storage
+        .finalize_recording(&fixture.session.id)
+        .unwrap();
+    let (source, source_known) = fixture
+        .storage
+        .recorded_analysis_input(&fixture.session.meeting_id)
+        .unwrap();
+    assert_eq!(source_known.unwrap().runs.len(), 4);
+    let output = tempfile::tempdir().unwrap();
+    let archive_path = output.path().join("normal-final-flac.monbackup");
+    let receipt = fixture
+        .storage
+        .create_backup_archive(&archive_path, &|| false)
+        .unwrap();
+    assert_eq!(receipt.asset_count, 5); // Four final FLACs and the manifest, not raw PCM.
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().to_owned()).unwrap();
+    let existing = target.create_meeting("保持する既存会議").unwrap().id;
+    let selection = target
+        .prepare_additive_restore(&archive_path, &|| false, &|_| {})
+        .unwrap();
+    let done = selection
+        .publish(
+            &target,
+            &selection.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(done.meeting_ids.len(), 1);
+    let meeting = &done.meeting_ids[0];
+    assert_ne!(meeting, &fixture.session.meeting_id);
+    let (restored, known) = target.recorded_analysis_input(meeting).unwrap();
+    assert_eq!(known.unwrap().runs.len(), 4);
+    for track in &source.tracks {
+        let other = restored
+            .tracks
+            .iter()
+            .find(|other| other.kind == track.kind)
+            .unwrap();
+        assert_ne!(other.id, track.id);
+        assert_eq!(
+            (
+                other.start_us,
+                other.end_us,
+                other.sample_rate,
+                other.channels
+            ),
+            (
+                track.start_us,
+                track.end_us,
+                track.sample_rate,
+                track.channels
+            )
+        );
+        assert_eq!(other.chunks.len(), 2);
+        for (original, copy) in track.chunks.iter().zip(&other.chunks) {
+            assert_ne!(copy.asset_id, original.asset_id);
+            assert_eq!(
+                (
+                    copy.frames,
+                    copy.start_us,
+                    copy.end_us,
+                    &copy.clock_segments,
+                    &copy.hash
+                ),
+                (
+                    original.frames,
+                    original.start_us,
+                    original.end_us,
+                    &original.clock_segments,
+                    &original.hash
+                )
+            );
+            assert!(target.verify_asset(&copy.asset_id).unwrap());
+            let (relative, media): (String, String) = target.connection.lock().unwrap().query_row(
+                "SELECT relative_path,media_type FROM file_assets WHERE id=?1 AND meeting_id=?2",
+                params![copy.asset_id, meeting], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(media, "audio/flac");
+            let file = File::open(target.root.join(relative)).unwrap();
+            let mut audio = VerifiedAudio::open(file, copy.size as u64, &copy.hash).unwrap();
+            assert!(audio.is_flac());
+            assert_eq!(
+                audio.read_frames(0, 1).unwrap(),
+                [0.25_f32.to_le_bytes(), (-0.5_f32).to_le_bytes()].concat()
+            );
+        }
+        assert!(target
+            .prepare_track_audio(meeting, &other.id, 3_900_000, 4_800_000)
+            .is_err());
+        target
+            .prepare_track_audio(meeting, &other.id, 60_800_000, 61_000_000)
+            .unwrap();
+    }
+    drop(selection);
+    assert_eq!(remove_reviewed_audio(&target, meeting), 4);
+    assert!(target.recorded_analysis_input(meeting).is_err());
+    assert!(target.get_meeting(&existing).unwrap().is_some());
+    assert!(fixture
+        .storage
+        .recorded_analysis_input(&fixture.session.meeting_id)
+        .is_ok());
+    assert_eq!(
+        remove_reviewed_audio(&fixture.storage, &fixture.session.meeting_id),
+        40
+    );
+    for lane in ["microphone", "system"] {
+        assert!(!fixture.base.join(format!("{lane}.caf")).exists());
+        for sequence in 1..=17 {
+            assert!(!fixture
+                .base
+                .join(format!("raw-{lane}-{sequence:08}.caf"))
+                .exists());
+            assert!(fixture
+                .base
+                .join(format!("raw-{lane}-{sequence:08}.json"))
+                .is_file());
+        }
+    }
+    assert!(fixture.base.join(PLAN).is_file());
+    assert!(fixture.base.join("manifest.json").is_file());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_raw_audio_completed_relocation_image_keeps_raw_final_flac_and_all_sidecars() {
+    let fixture = Fixture::new(2, 2000, true);
+    fixture
+        .storage
+        .finalize_recording(&fixture.session.id)
+        .unwrap();
+    let image = fixture
+        .storage
+        .prepare_relocation_snapshot(&|| false)
+        .unwrap();
+    image.verify(&|| false).unwrap();
+    image.verify_source(&|| false).unwrap();
+    for entry in image
+        .manifest()
+        .entries
+        .iter()
+        .filter(|entry| !entry.directory)
+    {
+        assert_eq!(
+            std::fs::read(image.source_root().join(&entry.relative_path)).unwrap(),
+            std::fs::read(image.image().join(&entry.relative_path)).unwrap()
+        );
+    }
+    assert_eq!(
+        image
+            .manifest()
+            .entries
+            .iter()
+            .filter(|entry| entry.relative_path.ends_with(".caf"))
+            .count(),
+        6
+    );
+    assert_eq!(
+        image
+            .manifest()
+            .entries
+            .iter()
+            .filter(|entry| entry.relative_path.ends_with(".flac"))
+            .count(),
+        2
+    );
+    assert!(image
+        .manifest()
+        .entries
+        .iter()
+        .any(|entry| entry.relative_path.ends_with(PLAN)));
+    // This is an image-integrity check, not an activation/rebinding test of an
+    // interrupted conversion whose checkpoints contain original inode IDs.
+}
+
 #[test]
 fn independently_compressed_raw_clocks_keep_frame_alignment_and_exact_gaps() {
     let global = vec![

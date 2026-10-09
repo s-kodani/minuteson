@@ -492,6 +492,85 @@ fn audio_only_census_distinguishes_missing_and_changed_audio_and_keeps_the_origi
 }
 
 #[test]
+fn native_raw_audio_census_uses_exact_names_and_session_membership_and_retains_evidence() {
+    let f = Fixture::new();
+    let mut raw_paths = Vec::new();
+    for lane in ["microphone", "system"] {
+        // Highest canonical sequence is admitted too; no reading of raw JSON
+        // is needed to request deletion of damaged/unsealed private audio.
+        for sequence in [1, 32768] {
+            raw_paths.push(f.file(
+                &format!("audio/{}/raw-{lane}-{sequence:08}.caf", f.session),
+                None,
+            ));
+            f.file(
+                &format!("audio/{}/raw-{lane}-{sequence:08}.json", f.session),
+                None,
+            );
+        }
+        f.file(&format!("audio/{}/raw-{lane}.json", f.session), None);
+    }
+    for leaf in ["final-flac.json", ".final-flac.lock"] {
+        f.file(&format!("audio/{}/{leaf}", f.session), None);
+    }
+    let unknown = [
+        "raw-system-00000000.caf",
+        "raw-system-00032769.caf",
+        "raw-system-1.caf",
+        "raw-system-000000001.caf",
+        "raw-system-0000000x.caf",
+        "raw-system-00000001.caf.part",
+        "raw-other-00000001.caf",
+        // Do not alias the existing lowercase sequence 1 on case-insensitive
+        // macOS volumes: an alias is one object, not another unknown file.
+        "RAW-system-00000005.caf",
+    ];
+    let mut unknown_paths = Vec::new();
+    for leaf in unknown {
+        unknown_paths.push(f.file(&format!("audio/{}/{leaf}", f.session), None));
+    }
+    f.file(
+        &format!("audio/{}/raw-system-00000002.caf", uuid::Uuid::new_v4()),
+        None,
+    );
+    f.file(
+        &format!("audio/{}/nested/raw-system-00000003.caf", f.session),
+        None,
+    );
+    f.file(
+        &format!("audio/{}/raw-system-00000004.caf", f.session),
+        Some("text/plain"),
+    );
+    let preview = f.preview();
+    assert_eq!(preview.audio_files, 5);
+    assert_eq!(preview.unregistered_audio_files, 4);
+    assert_eq!(preview.unclassified_files, unknown.len() + 2);
+    for path in unknown_paths {
+        let item = preview
+            .entries
+            .iter()
+            .find(|item| f.storage.root().join(&item.relative_path) == path)
+            .unwrap();
+        assert_eq!(item.disposition, Disposition::Unclassified);
+    }
+    for path in raw_paths {
+        let item = preview
+            .entries
+            .iter()
+            .find(|item| f.storage.root().join(&item.relative_path) == path)
+            .unwrap();
+        assert_eq!(item.disposition, Disposition::ProducerAudioLeftover);
+    }
+    for item in preview.entries.iter().filter(|item| {
+        item.relative_path.ends_with(".json")
+            || item.relative_path.ends_with(".lock")
+            || item.relative_path.ends_with("00000004.caf")
+    }) {
+        assert_eq!(item.disposition, Disposition::Retain);
+    }
+}
+
+#[test]
 fn audio_only_census_never_promotes_unknown_files_from_extensions_or_neighbor_session_ids() {
     let f = Fixture::new();
     f.file("notes/audio.wav", None);

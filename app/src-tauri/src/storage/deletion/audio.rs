@@ -368,7 +368,10 @@ fn disposition(entry: &FileEntry, records: &Records) -> Result<Disposition, Stri
         .next()
         .ok_or("音声対象のパスが不正です")?;
     match entry.stage_hint.as_deref() {
-        Some("recording") if matches!(leaf, "microphone.caf" | "system.caf") => {
+        Some("recording")
+            if matches!(leaf, "microphone.caf" | "system.caf")
+                || super::files::raw_recording_audio_name(leaf) =>
+        {
             Ok(Disposition::ProducerAudioLeftover)
         }
         Some("import")

@@ -90,6 +90,57 @@ fn phase(f: &Fixture, op: &str) -> String {
 }
 
 #[test]
+fn native_raw_audio_deletion_cold_restart_removes_pcm_but_keeps_documents_and_raw_proofs() {
+    let mut f = Fixture::new();
+    f.documents();
+    let raw = f.file(
+        &format!("audio/{}/raw-system-00000001.caf", f.session),
+        None,
+    );
+    let metadata = f.file(
+        &format!("audio/{}/raw-system-00000001.json", f.session),
+        None,
+    );
+    let pointer = f.file(&format!("audio/{}/raw-system.json", f.session), None);
+    let unknown = f.file(
+        &format!("audio/{}/raw-system-00000002.caf.part", f.session),
+        None,
+    );
+    let before_metadata = std::fs::read(&metadata).unwrap();
+    let before_pointer = std::fs::read(&pointer).unwrap();
+    let lease = owner();
+    let op = prepared(&f, &lease);
+    let original = fixed(&f, &op);
+    super::super::start(&f.storage, &op, &lease, &|| false).unwrap();
+    // Stop after durable consent/start, not by recreating a deletion permit.
+    drop(lease);
+    reopen(&mut f);
+    let lease = resume(&f, &op);
+    let receipt = super::super::run(&f.storage, &op, &lease, &|| false).unwrap();
+    assert!(receipt.files_removed());
+    assert_eq!(receipt.processed_files(), 2);
+    assert!(finish(&f.storage, &op, &lease, &|| false)
+        .unwrap()
+        .completed());
+    assert_eq!(fixed(&f, &op), original);
+    assert!(!raw.exists() && !f.path.exists());
+    assert_eq!(std::fs::read(&metadata).unwrap(), before_metadata);
+    assert_eq!(std::fs::read(&pointer).unwrap(), before_pointer);
+    assert!(unknown.is_file());
+    assert!(f
+        .storage
+        .minutes_versions(&f.meeting)
+        .unwrap()
+        .current_id
+        .is_some());
+    drop(lease);
+    reopen(&mut f);
+    assert!(!f.storage.data_write_blocked());
+    assert!(deleted(&f.storage.connection.lock().unwrap(), &f.meeting).unwrap());
+    assert_eq!(fixed(&f, &op), original);
+}
+
+#[test]
 fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_original_evidence() {
     let mut f = Fixture::new();
     f.documents();

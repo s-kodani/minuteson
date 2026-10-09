@@ -43,6 +43,37 @@ fn reopen(f: &mut Fixture, mutate: impl FnOnce(&Connection)) {
 }
 
 #[test]
+fn native_raw_audio_requires_distinct_unregistered_consent_and_blocks_changed_review() {
+    let f = Fixture::new();
+    let raw = f.file(
+        &format!("audio/{}/raw-system-00000001.caf", f.session),
+        None,
+    );
+    let census = f.census();
+    let owner = lease();
+    let op = uuid::Uuid::new_v4().to_string();
+    assert!(prepare(&f.storage, &op, &census, policy(), &owner, &|| false).is_err());
+    assert_eq!(count(&f), 0);
+    assert!(raw.is_file());
+    assert!(!f.storage.data_write_blocked());
+    std::fs::write(&raw, b"changed unfinished raw PCM").unwrap();
+    assert!(prepare(
+        &f.storage,
+        &op,
+        &census,
+        Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &owner,
+        &|| false
+    )
+    .is_err());
+    assert_eq!(count(&f), 0);
+    assert!(raw.is_file() && f.path.is_file());
+}
+
+#[test]
 fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_review_hash() {
     let f = Fixture::new();
     f.documents();

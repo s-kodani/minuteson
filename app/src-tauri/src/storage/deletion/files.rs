@@ -122,6 +122,28 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
 fn uuid(s: &str) -> bool {
     uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s)
 }
+// Exact native producer grammar, not an extension-based audio guess. The
+// containing directory must still belong to a DB recording session. Active
+// (not yet sealed) segments use the same CAF name and may contain partial PCM.
+pub(super) fn raw_recording_audio_name(leaf: &str) -> bool {
+    raw_recording_sequence(leaf, ".caf").is_some()
+}
+fn raw_recording_sequence(leaf: &str, suffix: &str) -> Option<u32> {
+    let sequence = leaf
+        .strip_prefix("raw-microphone-")
+        .or_else(|| leaf.strip_prefix("raw-system-"))?
+        .strip_suffix(suffix)?;
+    if sequence.len() != 8 || !sequence.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    sequence.parse().ok().filter(|n| (1..=32_768).contains(n))
+}
+fn raw_recording_metadata_name(leaf: &str) -> bool {
+    matches!(
+        leaf,
+        "raw-microphone.json" | "raw-system.json" | "final-flac.json" | ".final-flac.lock"
+    ) || raw_recording_sequence(leaf, ".json").is_some()
+}
 pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
     s.len() <= 256
         && s.starts_with(&format!("meetings/{meeting}/"))
@@ -238,7 +260,7 @@ impl Records {
         if p.len() == 5 && uuid(p[3]) {
             if p[2] == "audio"
                 && self.sessions.contains(p[3])
-                && matches!(
+                && (matches!(
                     p[4],
                     "microphone.caf"
                         | "system.caf"
@@ -246,7 +268,8 @@ impl Records {
                         | "input-events.json"
                         | "input-notices.json"
                         | "input-notices.lock"
-                )
+                ) || raw_recording_audio_name(p[4])
+                    || raw_recording_metadata_name(p[4]))
             {
                 return Some("recording".into());
             }
