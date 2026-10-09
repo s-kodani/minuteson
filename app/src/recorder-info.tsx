@@ -3,12 +3,18 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useId, useRef, useState } from "react";
 import { appShortcut } from "./keyboard";
 import { ThemeReadNotice } from "./theme";
+import { RecorderOperationDetails, useRecorderOperations, useRecorderOperationPublisher } from "./recorder-operation-notices";
 
 /** Only explicit user input opens native help. Polls repair aria-expanded after
  * a lost response or native close; they never show a window or move focus. */
-export function RecorderInfoTrigger({ disabled = false }: { disabled?: boolean }) {
+export function RecorderInfoTrigger({ disabled = false, problem = "" }: { disabled?: boolean; problem?: string }) {
   const errorId = useId();
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [resolved, setResolved] = useState(false);
+  const operations = useRecorderOperations();
+  const relayError = useRecorderOperationPublisher("info_read", error, !busy, resolved);
+  const count = operations.snapshot.entries.filter(e => e.message).length;
+  const description = [error, problem, relayError, operations.error, count ? `録音パネルの操作が${count}件、要対応です。説明を開いて原因を確認してください。` : ""].filter(Boolean).join("\n");
   const button = useRef<HTMLButtonElement>(null), running = useRef(false), epoch = useRef(0);
   useEffect(() => {
     if (!isTauri()) return;
@@ -37,15 +43,17 @@ export function RecorderInfoTrigger({ disabled = false }: { disabled?: boolean }
   const toggle = async () => {
     if (running.current || disabled || !isTauri()) return;
     running.current = true; setBusy(true); setError(""); ++epoch.current;
+    setResolved(false);
     try {
       const value = await invoke<boolean>(open ? "close_recorder_info" : "show_recorder_info");
       if (typeof value !== "boolean") throw Error("説明画面の表示状態を確認できません");
       setOpen(value);
+      setResolved(true);
     } catch (cause) { setError(String(cause)); }
     finally { running.current = false; setBusy(false); }
   };
-  return <span className="recorder-info-trigger"><button ref={button} type="button" className="info-trigger" data-help-error={!!error} title={error ? `説明の表示は要確認：${error}` : undefined} aria-describedby={error ? errorId : undefined} aria-label="録音パネルの説明を開く" aria-expanded={open} aria-haspopup="dialog" disabled={disabled || busy || !isTauri()} onClick={() => void toggle()}><span aria-hidden="true">{error ? "ⓘ!" : "ⓘ"}</span></button>
-    {error && <span id={errorId} className="recorder-info-error" role="alert">説明の表示は要確認：{error}</span>}
+  return <span className="recorder-info-trigger"><button ref={button} type="button" className="info-trigger" data-help-error={!!description} title={description || undefined} aria-describedby={description ? errorId : undefined} aria-label="録音パネルの説明を開く" aria-expanded={open} aria-haspopup="dialog" disabled={disabled || busy || !isTauri()} onClick={() => void toggle()}><span aria-hidden="true">{description ? "ⓘ!" : "ⓘ"}</span></button>
+    {description && <><small className="recorder-operation-badge" aria-hidden="true">要対応</small><span id={errorId} className="recorder-info-error" role="alert">説明の表示は要確認：{description}</span></>}
   </span>;
 }
 
@@ -78,5 +86,6 @@ export function RecorderInfoWindow() {
     <p>文字起こし・話者分離は録音終了後に行います。説明を閉じても、録音の停止やデータの変更は行いません。</p>
     {error && <p role="alert">説明画面を閉じられません：{error}。閉じる操作を再試行できます。</p>}
     <ThemeReadNotice compact />
+    <RecorderOperationDetails />
   </main>;
 }

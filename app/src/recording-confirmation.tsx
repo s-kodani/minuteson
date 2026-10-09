@@ -8,6 +8,7 @@ import { acceptRecordingDecision, recordingDecisionVisible, type RecordingDecisi
 export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
   const [snapshot, setSnapshot] = useState<RecordingDecision | null>(null), [connected,setConnected]=useState(false), [error,setError]=useState("");
   const [readError,setReadError]=useState("");
+  const [requestResolved,setRequestResolved]=useState(false);
   const current=useRef<RecordingDecision|null>(null), mounted=useRef(true), requesting=useRef(false), deciding=useRef(false), sent=useRef<string|null>(null), opener=useRef<HTMLElement|null>(null);
   const [requestBusy,setRequestBusy]=useState(false), [decisionBusy,setDecisionBusy]=useState(false);
   const accept=(next:RecordingDecision)=>{
@@ -37,9 +38,9 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     target.focus({preventScroll:true});opener.current=null;
   },[snapshot?.revision,requestBusy,origin]);
   const request=async(quit=false)=>{
-    if(requesting.current)return;requesting.current=true;setRequestBusy(true);setError("");
+    if(requesting.current)return;requesting.current=true;setRequestBusy(true);setError("");setRequestResolved(false);
     opener.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
-    try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit}));}
+    try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit}));if(mounted.current)setRequestResolved(true);}
     catch(cause){if(mounted.current)setError(String(cause));if(quit)throw cause;}
     finally{requesting.current=false;if(mounted.current)setRequestBusy(false);}
   };
@@ -50,7 +51,7 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     catch(cause){if(mounted.current)setError(`受付状態を確認してください。停止は自動再送していません: ${String(cause)}`);try{await refreshRef.current();if(current.current?.id===value.id&&current.current.phase==="confirming"&&current.current.preparing!==value.preparing)sent.current=null;}catch{}}
     finally{deciding.current=false;if(mounted.current)setDecisionBusy(false);}
   };
-  return {snapshot,connected,error:error||readError,request,decide,refresh,requestBusy,decisionBusy,visible:recordingDecisionVisible(snapshot),stopSent:sent.current===snapshot?.id};
+  return {snapshot,connected,error:error||readError,request,decide,refresh,requestBusy,requestResolved,decisionBusy,visible:recordingDecisionVisible(snapshot),stopSent:sent.current===snapshot?.id};
 }
 
 export function RecordingConfirmationWindow() {

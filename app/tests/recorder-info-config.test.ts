@@ -17,7 +17,7 @@ test("explanation has its own role and does not mount recording or editing provi
   assert.deepEqual(cap.windows, ["recorder-info"]);
   assert.deepEqual(cap.permissions, ["core:default", "core:event:allow-listen"]);
   const ui = source("../src/main.tsx");
-  assert.ok(ui.includes("isRecorderInfo ? <RecorderInfoWindow /> : isRecordingConfirmation"));
+  assert.ok(ui.includes("isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider"));
   const popup = source("../src/recorder-info.tsx").split("export function RecorderInfoWindow()")[1];
   assert.doesNotMatch(popup, /invoke\("(?:stop_recording|start_recording|save_|delete_|decide_recording_confirmation)/);
 });

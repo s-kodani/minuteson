@@ -4,6 +4,7 @@ import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderInfoTrigger, RecorderInfoWindow } from "./recorder-info";
+import { RecorderOperationProvider, RecorderOperationNotifications, useRecorderOperationPublisher, useRecorderOperations } from "./recorder-operation-notices";
 import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
@@ -27,7 +28,7 @@ import type { DataSnapshot } from "./data-operation-state";
 import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
-import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications } from "./theme";
+import { ThemeProvider, ThemeSelection, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications, useTheme } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
@@ -81,31 +82,41 @@ function phaseLabel(state: BridgeState): string {
 function useWindowAction() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resolved, setResolved] = useState(false);
   const run = async (command: string) => {
     setBusy(true);
+    setResolved(false);
     setError("");
     try {
       await invoke(command);
+      setResolved(true);
     } catch (cause) {
       setError(String(cause));
     } finally {
       setBusy(false);
     }
   };
-  return { run, error, busy };
+  return { run, error, busy, resolved };
 }
 
 function RecorderPanel() {
   const state = useRecordingSession();
   const decision = useRecordingConfirmation("recorder");
   const action = useWindowAction();
+  const operations = useRecorderOperations(), theme = useTheme();
+  const actionRelay = useRecorderOperationPublisher("window_action", action.error, !action.busy, action.resolved);
+  const decisionRelay = useRecorderOperationPublisher("confirmation", decision.error, !decision.requestBusy, decision.requestResolved && decision.connected);
+  const themeRelay = useRecorderOperationPublisher("theme_read", theme.state.error, !theme.state.busy, !!theme.state.snapshot && !theme.state.error);
+  const sessionError = state.kind === "error" ? state.message : "";
+  const sessionRelay = useRecorderOperationPublisher("session_read", sessionError, true, state.kind === "ready");
+  const localProblem = [action.error, decision.error, theme.state.error, sessionError, actionRelay, decisionRelay, themeRelay, sessionRelay, operations.error].filter(Boolean).join("\n");
   const idle = state.kind === "ready" && state.snapshot.phase === "idle";
   return (
     <main className="mini-shell" aria-label="録音ミニパネル">
       <div className="mini-top">
         <span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />
         <strong>{phaseLabel(state)}</strong>
-        <RecorderInfoTrigger disabled={decision.visible} />
+        <RecorderInfoTrigger disabled={decision.visible} problem={localProblem} />
         {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
@@ -116,9 +127,6 @@ function RecorderPanel() {
         {idle && <button type="button" className="text-button" onClick={() => action.run("hide_recorder_preview")} disabled={action.busy}>閉じる</button>}
       </div>
       <RecordingInputNotice windowLabel="recorder"/>
-      {action.error && <p className="mini-error" role="alert">{action.error}</p>}
-      {decision.error && <p className="mini-error" role="alert">{decision.error}</p>}
-      <ThemeReadNotice compact />
     </main>
   );
 }
@@ -611,6 +619,7 @@ function MainWindow() {
       </aside>
       <div className="main-column">
         <ToastHost />
+        <RecorderOperationNotifications />
         <RecordingInputNotice windowLabel="main"/>
         <RecordingJournalNotice/>
         <ThemeNotifications locked={writeLocked} />
@@ -727,4 +736,4 @@ function MainWindow() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecorderInfo ? <RecorderInfoWindow /> : isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</ThemeProvider>);
+createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecorderOperationProvider>{isRecorderInfo ? <RecorderInfoWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</RecorderOperationProvider>}</ThemeProvider>);

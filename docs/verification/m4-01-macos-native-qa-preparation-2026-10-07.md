@@ -43,4 +43,6 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 2026-10-10の直前のQAは[release録音ヘルパーとCLI入口の分離](m4-02-capture-release-bundle-2026-10-10.md)で再構築した。最新のPCM形式ガードとreleaseヘルパーを含み、同梱CLIの5形式取り込み・再起動再生は合成音声で確認済み。保持場所は`/private/tmp/mon-native-qa-release-artifact.bs0dqS/MON QA.app`。
 
-最新QAは[録音パネルの独立した説明画面](m3-08-recorder-info-window-2026-10-10.md)を含めて構築し、`/private/tmp/mon-recorder-info-qa-artifact.p91QMy/MON QA.app`に保持した。署名・識別子・両ヘルパーの確認済みだが、GUI起動・保存先分離・実録音・公証は未検証のままである。
+直前のQAは[録音パネルの独立した説明画面](m3-08-recorder-info-window-2026-10-10.md)を含めて構築し、`/private/tmp/mon-recorder-info-qa-artifact.p91QMy/MON QA.app`に保持した。
+
+最新QAは[録音パネルの操作通知と原因保持](m3-08-recorder-operation-notifications-2026-10-10.md)も含めて再構築し、`/private/tmp/mon-operation-notices-qa-artifact.oerdTa/MON QA.app`に保持した。署名・識別子・両ヘルパーの確認済みだが、GUI起動・保存先分離・実録音・公証は未検証のままである。

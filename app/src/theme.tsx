@@ -93,7 +93,7 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
 }
 export function ThemeReadNotice({ compact = false }: { compact?: boolean }) {
   const { state } = useTheme();
-  // The recorder has no full-size toast host yet. Keep its local error visible
-  // until notifications can be routed to one native window safely.
+  // Compact use belongs to scrollable help. Recorder operation diagnostics
+  // are shared with main-window toasts, not long clipped panel paragraphs.
   return compact ? state.error ? <p className="theme-read-notice" role="alert">{state.error}</p> : null : <IssueStatus label="表示設定の読込・保存" message={state.error} />;
 }

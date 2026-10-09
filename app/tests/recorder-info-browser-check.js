@@ -4,10 +4,13 @@ async (page, capturePath = path => path) => {
   const recording = { revision: 1, phase: "recording", elapsedMs: 45000, microphoneConnected: true, systemAudioConnected: true, meetingId: "synthetic", sessionId: "00000000-0000-4000-8000-000000000001", errorMessage: null };
   const before = JSON.stringify(recording);
   let visible = false, lostShow = false, failClose = false, badRead = false;
+  const operations = ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
   await context.route("http://127.0.0.1:1420/__synthetic_recorder_info", async route => {
     const { command, args, label } = route.request().postDataJSON(); calls.push({ command, args, label });
     let value, error;
-    if (command === "get_recording_snapshot") value = recording;
+    if (command === "get_recorder_operation_notices") value = { schemaVersion: 1, entries: operations };
+    else if (command === "publish_recorder_operation_notice") { const e = operations.find(e => e.source === args.source); check(label === "recorder" && e?.revision === args.expectedRevision, "bad operation relay"); if (e.message !== args.message) { e.revision++; e.message = args.message; e.eventId = args.message ? `${e.source}:${e.revision}` : null; e.dismissed = false; } value = { schemaVersion: 1, entries: operations }; }
+    else if (command === "get_recording_snapshot") value = recording;
     else if (command === "get_recording_confirmation") value = { revision: 0, id: null, phase: "idle", sessionId: null, meetingId: null, meetingTitle: null, origin: null, preparing: false, quitAfterSave: false, errorMessage: null };
     else if (command === "get_ui_preferences") value = { id: "ui_preferences", lockVersion: 1, payload: { schemaVersion: 2, theme: "dark", textSize: 20, followPlayback: false } };
     else if (command === "get_recorder_info") value = badRead ? { forged: true } : visible;

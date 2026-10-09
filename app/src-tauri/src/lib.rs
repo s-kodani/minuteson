@@ -27,6 +27,7 @@ mod model_rebinding;
 mod playback;
 mod recorder;
 mod recorder_info;
+mod recorder_operation_notices;
 mod recording_confirmation;
 mod recording_confirmation_window;
 #[cfg(unix)]
@@ -2405,6 +2406,7 @@ pub fn run() {
         .manage(input_status::archived::ArchivedInputs::default())
         .manage(capture_test::CaptureTests::default())
         .manage(StopDecisionStore::default())
+        .manage(recorder_operation_notices::Notices::default())
         .manage(ExitGuard::default())
         .manage(PlaybackStore::default())
         .manage(PlaybackPreparations::default())
@@ -2534,6 +2536,9 @@ pub fn run() {
             hide_recorder_preview,
             open_main_window,
             recorder_info::get_recorder_info,
+            recorder_operation_notices::get_recorder_operation_notices,
+            recorder_operation_notices::publish_recorder_operation_notice,
+            recorder_operation_notices::dismiss_recorder_operation_notice,
             recorder_info::show_recorder_info,
             recorder_info::close_recorder_info,
             create_meeting,

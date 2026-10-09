@@ -14,11 +14,21 @@ const f = window.dataFixture = {
   changed: async patch => { f.snapshot = { ...f.snapshot, ...patch, revision: f.snapshot.revision + 1 }; if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
 };
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
+const operationEntries = ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false }));
 window.isTauri = true; mockWindows("main");
 export const dataSaveIPC = async (command, args) => {
   // Read-only help starts hidden in fixtures that do not own its native window.
   // Showing/closing still requires a dedicated mock, not a catch-all success.
   if (command === "get_recorder_info") return false;
+  if (command === "get_recorder_operation_notices") return { schemaVersion: 1, entries: structuredClone(operationEntries) };
+  if (["publish_recorder_operation_notice", "dismiss_recorder_operation_notice"].includes(command)) {
+    const e = operationEntries.find(e => e.source === args.source);
+    if (!e || e.revision !== args.expectedRevision) throw Error("合成操作通知が変更されています");
+    if (command === "publish_recorder_operation_notice" && e.message !== args.message) { e.revision++; e.message = args.message; e.eventId = args.message ? `${e.source}:${e.revision}` : null; e.dismissed = false; }
+    if (command === "dismiss_recorder_operation_notice") { if (e.eventId !== args.eventId || !e.message) throw Error("合成通知の対象が違います"); if (!e.dismissed) { e.revision++; e.dismissed = true; } }
+    await emit("recorder-operation-notices-changed", null);
+    return { schemaVersion: 1, entries: structuredClone(operationEntries) };
+  }
   f.calls.push({ command, args: structuredClone(args) });
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return dataIdleRead(command);
   if (command === "get_ui_preferences") return dataIdleRead(command);
