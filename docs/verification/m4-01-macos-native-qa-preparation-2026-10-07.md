@@ -40,3 +40,5 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 2026-10-07時点ではネイティブバンドルは作成・起動していなかった。2026-10-10に初回のMON QAバンドル構築と識別子・署名・リソースの確認を完了した。構築前に話者特徴量ヘルパーの同梱指定漏れを修正し、本番・QA共通のMac設定へ追加した。詳細と保持場所は[MON QAのネイティブバンドル検証](m4-01-native-qa-bundle-2026-10-10.md)を参照。アプリの起動は行っていない。
 
 実際の設定・DB領域、WebViewとネイティブ操作、録音権限と取得条件、通常・異常時の統合は実機の確認項目として残る。通知実装の本番Reactと合成IPCによる全38組・450ケースは別の検査であり、ネイティブ統合の代わりにしない。正式評価とWindows固有部分は保留し、Windows CIは停止したままとする。
+
+2026-10-10の最新QAは[release録音ヘルパーとCLI入口の分離](m4-02-capture-release-bundle-2026-10-10.md)で再構築した。最新のPCM形式ガードとreleaseヘルパーを含み、同梱CLIの5形式取り込み・再起動再生は合成音声で確認済み。保持場所は`/private/tmp/mon-native-qa-release-artifact.bs0dqS/MON QA.app`。GUI起動・保存先分離・実録音・公証は未検証のままである。

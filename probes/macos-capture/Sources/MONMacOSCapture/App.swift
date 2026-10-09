@@ -1178,9 +1178,11 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   }
 }
 
-@main
-private enum Main {
-  static func main() async {
+/// The executable owns @main; importing the core must not import a C entry
+/// point into an optimized test runner. Preserve async-main actor isolation.
+public enum CaptureCommand {
+  @MainActor
+  public static func run() async {
     do {
       let arguments = Array(CommandLine.arguments.dropFirst())
       if arguments.first == "--import-audio" {

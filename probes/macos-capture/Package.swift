@@ -4,9 +4,9 @@ import PackageDescription
 let package = Package(
   name: "mon-macos-capture",
   platforms: [.macOS(.v15)],
-  products: [.executable(name: "mon-macos-capture", targets: ["MONMacOSCapture"])],
+  products: [.executable(name: "mon-macos-capture", targets: ["MONMacOSCaptureCLI"])],
   targets: [
-    .executableTarget(
+    .target(
       name: "MONMacOSCapture",
       linkerSettings: [
         .linkedFramework("AVFoundation"),
@@ -16,6 +16,7 @@ let package = Package(
         .linkedFramework("ScreenCaptureKit"),
       ]
     ),
+    .executableTarget(name: "MONMacOSCaptureCLI", dependencies: ["MONMacOSCapture"]),
     .testTarget(
       name: "MONMacOSCaptureTests", dependencies: ["MONMacOSCapture"],
       path: "Tests/MONMacOSCaptureTests"

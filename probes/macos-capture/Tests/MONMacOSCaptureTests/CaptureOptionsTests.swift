@@ -7,6 +7,15 @@ final class CaptureOptionsTests: XCTestCase {
   private let output = ["--output", "/tmp/mon-capture-options-test"]
   private let controlled = ["--stop-on-file", "--parent-pid", "1234"]
 
+  func testTestRunnerFlagsRemainUnknownCaptureArguments() {
+    for arguments in [
+      ["--test-bundle-path", "/tmp/mon-test-bundle"],
+      ["--testing-library", "swift-testing"],
+    ] {
+      XCTAssertThrowsError(try Options.parse(output + arguments))
+    }
+  }
+
   func testDefaultAndExplicitProbeDurationRemainBounded() throws {
     let startedAt = ContinuousClock.now
     for (arguments, seconds) in [([], 30.0), (["--duration", "14400"], 14400.0)] {

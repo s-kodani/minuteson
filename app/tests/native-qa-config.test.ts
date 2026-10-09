@@ -38,3 +38,24 @@ test("native macOS packaging includes the generated headless embedding helper at
   const runtime = readFileSync(new URL("../src-tauri/src/diarization/known.rs", import.meta.url), "utf8");
   assert.ok(runtime.includes('contents.join("Resources/mon-speaker-embedding")'));
 });
+
+test("native app packaging explicitly builds the capture helper in release and installs that same configuration", () => {
+  const build = readFileSync(new URL("../build-macos.sh", import.meta.url), "utf8");
+  assert.match(build, /^"\$app_dir\/\.\.\/probes\/macos-capture\/build-bundle\.sh" --configuration release --disable-sandbox$/m);
+  const bundle = readFileSync(new URL("../../probes/macos-capture/build-bundle.sh", import.meta.url), "utf8");
+  assert.ok(bundle.includes('swift build "$@"'));
+  assert.ok(bundle.includes('binary_dir=$(swift build --show-bin-path "$@")'));
+  assert.ok(bundle.includes('install -m 755 "$binary_dir/mon-macos-capture"'));
+});
+
+test("capture package keeps its CLI entry point out of the core imported by both test runners", () => {
+  const pkg = readFileSync(new URL("../../probes/macos-capture/Package.swift", import.meta.url), "utf8");
+  assert.ok(pkg.includes('.executable(name: "mon-macos-capture", targets: ["MONMacOSCaptureCLI"])'));
+  assert.ok(pkg.includes('.executableTarget(name: "MONMacOSCaptureCLI", dependencies: ["MONMacOSCapture"])'));
+  assert.match(pkg, /\.target\(\s*name: "MONMacOSCapture"/);
+  const core = readFileSync(new URL("../../probes/macos-capture/Sources/MONMacOSCapture/App.swift", import.meta.url), "utf8");
+  assert.doesNotMatch(core, /^@main$/m);
+  const entry = readFileSync(new URL("../../probes/macos-capture/Sources/MONMacOSCaptureCLI/App.swift", import.meta.url), "utf8");
+  assert.match(entry, /^@main$/m);
+  assert.ok(entry.includes("await CaptureCommand.run()"));
+});
