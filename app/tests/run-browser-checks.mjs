@@ -39,6 +39,7 @@ const suites = [
   ["info-production", "theme-browser-fixture.js", "info-production-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
+  ["recorder-info", null, "recorder-info-browser-check.js"],
   ["close", null, "application-close-browser-check.js"],
   ["microphone-input", null, "microphone-input-browser-check.js"],
   ["capture-scope", "capture-scope-browser-fixture.tsx", "capture-scope-browser-check.js"],

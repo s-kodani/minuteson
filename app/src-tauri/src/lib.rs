@@ -26,6 +26,7 @@ mod model_placement;
 mod model_rebinding;
 mod playback;
 mod recorder;
+mod recorder_info;
 mod recording_confirmation;
 mod recording_confirmation_window;
 #[cfg(unix)]
@@ -825,7 +826,7 @@ fn get_analysis_preferences(window: WebviewWindow) -> Result<storage::Preference
 fn get_ui_preferences(window: WebviewWindow) -> Result<storage::UiPreferencesSnapshot, String> {
     if !matches!(
         window.label(),
-        "main" | "recorder" | recording_confirmation_window::LABEL
+        "main" | "recorder" | recording_confirmation_window::LABEL | recorder_info::LABEL
     ) {
         return Err("Only application windows can read presentation settings".into());
     }
@@ -2215,6 +2216,7 @@ fn hide_recorder_preview(
     if store.snapshot().is_active() {
         return Err("An active recording panel cannot be hidden".into());
     }
+    recorder_info::hide(window.app_handle(), false)?;
     window.hide().map_err(|error| error.to_string())
 }
 
@@ -2531,6 +2533,9 @@ pub fn run() {
             show_recorder_preview,
             hide_recorder_preview,
             open_main_window,
+            recorder_info::get_recorder_info,
+            recorder_info::show_recorder_info,
+            recorder_info::close_recorder_info,
             create_meeting,
             list_meetings,
             get_meeting,
@@ -2603,6 +2608,19 @@ pub fn run() {
             restore_analysis_version
         ])
         .on_window_event(|window, event| {
+            if window.label() == recorder_info::LABEL {
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = recorder_info::hide(window.app_handle(), true);
+                    }
+                    WindowEvent::Focused(false) => {
+                        let _ = recorder_info::hide(window.app_handle(), false);
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == recording_confirmation_window::LABEL {
                     api.prevent_close();

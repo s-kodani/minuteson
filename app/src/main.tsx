@@ -3,6 +3,7 @@ import { InfoPopover } from "./info-popover";
 import { ConfirmationHost } from "./confirmation-host";
 import { IssueNotice, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
+import { RecorderInfoTrigger, RecorderInfoWindow } from "./recorder-info";
 import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
@@ -51,6 +52,7 @@ import { assertCloseContext, assertCloseImport, assertCloseRecording, assertClos
 
 const isRecorderPanel = new URLSearchParams(window.location.search).get("window") === "recorder";
 const isRecordingConfirmation = new URLSearchParams(window.location.search).get("window") === "recording-confirmation";
+const isRecorderInfo = new URLSearchParams(window.location.search).get("window") === "recorder-info";
 
 interface Meeting {
   id: string;
@@ -103,6 +105,7 @@ function RecorderPanel() {
       <div className="mini-top">
         <span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />
         <strong>{phaseLabel(state)}</strong>
+        <RecorderInfoTrigger disabled={decision.visible} />
         {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
@@ -724,4 +727,4 @@ function MainWindow() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</ThemeProvider>);
+createRoot(document.getElementById("root")!).render(<ThemeProvider>{isRecorderInfo ? <RecorderInfoWindow /> : isRecordingConfirmation ? <RecordingConfirmationWindow /> : <RecordingInputProvider windowLabel={isRecorderPanel?"recorder":"main"}>{isRecorderPanel ? <RecorderPanel /> : <><MainWindow /><ConfirmationHost /></>}</RecordingInputProvider>}</ThemeProvider>);

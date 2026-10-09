@@ -109,6 +109,8 @@ pub fn request_recording_confirmation(
         store.request(&recording, window.label(), title)?
     };
     let present = || -> Result<(), String> {
+        // Read-only help cannot cover a confirmation or steal its focus back.
+        crate::recorder_info::hide(app, false)?;
         let modal = app
             .get_webview_window(LABEL)
             .ok_or("録音確認ウィンドウがありません")?;

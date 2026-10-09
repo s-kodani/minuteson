@@ -16,6 +16,9 @@ const f = window.dataFixture = {
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
 window.isTauri = true; mockWindows("main");
 export const dataSaveIPC = async (command, args) => {
+  // Read-only help starts hidden in fixtures that do not own its native window.
+  // Showing/closing still requires a dedicated mock, not a catch-all success.
+  if (command === "get_recorder_info") return false;
   f.calls.push({ command, args: structuredClone(args) });
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return dataIdleRead(command);
   if (command === "get_ui_preferences") return dataIdleRead(command);

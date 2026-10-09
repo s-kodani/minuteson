@@ -1,6 +1,6 @@
 # macOS実機検証用MON QAの準備
 
-MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
+MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
 
 ## 本番との分離
 
@@ -9,7 +9,7 @@ MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ�
 | アプリ名 | mon | MON QA |
 | 識別子 | jp.mon.desktop | jp.mon.desktop.qa |
 | ウィンドウ名 | mon | MON QAで始まる名前 |
-| ウィンドウの役割 | main、recorder、recording-confirmation | 同じ役割とURL |
+| ウィンドウの役割 | main、recorder、recording-confirmation、recorder-info | 同じ役割とURL |
 
 `app/src-tauri/tauri.qa.conf.json`は識別子・アプリ名・ウィンドウ名だけを変更する。Tauriの既存のmacOS設定は自動的に読み込まれるため、録音・復号・再生ヘルパーと最低OS条件を維持する。通常の設定ファイルとnpmの`tauri`コマンドは変更しない。
 
@@ -41,4 +41,6 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 実際の設定・DB領域、WebViewとネイティブ操作、録音権限と取得条件、通常・異常時の統合は実機の確認項目として残る。通知実装の本番Reactと合成IPCによる全38組・450ケースは別の検査であり、ネイティブ統合の代わりにしない。正式評価とWindows固有部分は保留し、Windows CIは停止したままとする。
 
-2026-10-10の最新QAは[release録音ヘルパーとCLI入口の分離](m4-02-capture-release-bundle-2026-10-10.md)で再構築した。最新のPCM形式ガードとreleaseヘルパーを含み、同梱CLIの5形式取り込み・再起動再生は合成音声で確認済み。保持場所は`/private/tmp/mon-native-qa-release-artifact.bs0dqS/MON QA.app`。GUI起動・保存先分離・実録音・公証は未検証のままである。
+2026-10-10の直前のQAは[release録音ヘルパーとCLI入口の分離](m4-02-capture-release-bundle-2026-10-10.md)で再構築した。最新のPCM形式ガードとreleaseヘルパーを含み、同梱CLIの5形式取り込み・再起動再生は合成音声で確認済み。保持場所は`/private/tmp/mon-native-qa-release-artifact.bs0dqS/MON QA.app`。
+
+最新QAは[録音パネルの独立した説明画面](m3-08-recorder-info-window-2026-10-10.md)を含めて構築し、`/private/tmp/mon-recorder-info-qa-artifact.p91QMy/MON QA.app`に保持した。署名・識別子・両ヘルパーの確認済みだが、GUI起動・保存先分離・実録音・公証は未検証のままである。
