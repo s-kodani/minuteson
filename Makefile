@@ -19,6 +19,7 @@ check: lint test build-macos-probe check-app check-caf-playback check-capture-cl
 check-recording-raw-prefix:
 	python3 tools/mon_rust_tests.py swift_generated_recording_segments_bind_actual_storage_and_encode_flac_without_rewriting_raw -- --ignored
 	python3 tools/mon_rust_tests.py final_flac_owned_sigkill_checkpoints_recover_without_registering_partial_audio -- --ignored
+	python3 tools/mon_rust_tests.py partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh_consent -- --ignored
 
 check-input-journal:
 	@mon_journal_dir=$$(mktemp -d /tmp/mon-input-journal.XXXXXX) || exit 1; \

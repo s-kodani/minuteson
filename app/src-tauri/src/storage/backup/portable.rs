@@ -440,6 +440,7 @@ pub(super) fn portable_json_with_metadata(
             "requestedDurationSeconds",
             "captureClock",
             "captureEnd",
+            "partialRecovery",
             "recordingOwnerId",
             "osVersion",
             "architecture",

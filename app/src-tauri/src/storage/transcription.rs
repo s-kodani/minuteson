@@ -209,6 +209,35 @@ enum AudioMetadataState {
     Deleted,
 }
 
+/// An interrupted session is playable only after the explicit, atomic prefix
+/// recovery commit. Every native track must carry the same recovery receipt;
+/// one marked track must not authorize another unconfirmed input. This gate
+/// also works for restored/deleted-audio metadata without native paths.
+pub(super) fn partial_recording_committed(db: &Connection, meeting: &str) -> Result<bool, String> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id
+        WHERE r.meeting_id=?1 AND r.state='interrupted' AND r.ended_at_utc_ms IS NULL
+        AND r.duration_us>0 AND r.last_committed_us=r.duration_us AND m.duration_us=r.duration_us
+        AND m.source_type='recording' AND EXISTS(SELECT 1 FROM file_assets f
+            WHERE f.meeting_id=r.meeting_id AND f.content_hash=r.audio_manifest_hash
+            AND f.media_type='application/json' AND f.state='ready')
+        AND EXISTS(SELECT 1 FROM audio_tracks t WHERE t.meeting_id=r.meeting_id AND t.session_id=r.id AND t.kind IN ('mic','system'))
+        AND NOT EXISTS(SELECT 1 FROM audio_tracks t WHERE t.meeting_id=r.meeting_id AND t.kind IN ('mic','system')
+            AND (t.session_id IS NOT r.id
+                OR json_extract(t.processing_config_json,'$.partial_recovery.schemaVersion') IS NOT 1
+                OR json_extract(t.processing_config_json,'$.partial_recovery.kind') IS NOT 'sealed_prefix'
+                OR json_extract(t.processing_config_json,'$.partial_recovery.acquisitionEndKnown') IS NOT 0
+                OR json_extract(t.processing_config_json,'$.partial_recovery.timelineUtcOriginKnown') IS NOT 0
+                OR json_type(t.processing_config_json,'$.partial_recovery.tailLossUs') IS NOT 'null'
+                OR json_type(t.processing_config_json,'$.partial_recovery.reviewHash') IS NOT 'text'
+                OR length(json_extract(t.processing_config_json,'$.partial_recovery.reviewHash')) != 64
+                OR json_extract(t.processing_config_json,'$.partial_recovery.reviewHash') GLOB '*[^0-9a-f]*'))
+        AND (SELECT count(DISTINCT json_extract(t.processing_config_json,'$.partial_recovery.reviewHash'))
+            FROM audio_tracks t WHERE t.meeting_id=r.meeting_id AND t.kind IN ('mic','system'))=1)",
+        [meeting], |row|row.get(0),
+    ).map_err(|e|e.to_string())
+}
+
 fn read_audio_metadata(
     transaction: &Connection,
     meeting_id: &str,
@@ -221,20 +250,24 @@ fn read_audio_metadata(
     };
     // Keep the serialized plan shape for old jobs; both source types use
     // verified managed manifests, never an external original path.
+    let partial = partial_recording_committed(transaction, meeting_id)?;
     let (manifest_asset_id, manifest_hash, source_kind): (String, String, String) = transaction.query_row(
-            "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND r.state = 'saved' AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",
-            params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?)),
+            "SELECT f.id, r.audio_manifest_hash, 'recording' FROM recording_sessions r JOIN meetings m ON m.id = r.meeting_id JOIN file_assets f ON f.meeting_id = r.meeting_id AND f.content_hash = r.audio_manifest_hash AND f.media_type = 'application/json' AND f.state = 'ready' WHERE r.meeting_id = ?1 AND (r.state = 'saved' OR (r.state='interrupted' AND ?2)) AND m.lifecycle = 'recorded' AND m.source_type='recording' UNION ALL SELECT f.id,p.manifest_hash,'audio_import' FROM audio_import_commits p JOIN audio_imports i ON i.id=p.import_id AND i.meeting_id=p.meeting_id JOIN meetings m ON m.id=p.meeting_id JOIN file_assets f ON f.id=p.manifest_asset_id AND f.meeting_id=p.meeting_id AND f.content_hash=p.manifest_hash AND f.media_type='application/json' AND f.state='ready' WHERE p.meeting_id=?1 AND i.state='ready' AND m.lifecycle='imported' AND m.source_type='audio_import' ORDER BY 1 LIMIT 1",
+            params![meeting_id,partial], |row| Ok((row.get(0)?, row.get(1)?,row.get(2)?)),
         ).optional().map_err(|e| e.to_string())?.ok_or("解析可能な保存済み音声manifestがありません")?;
-    let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = ?3 AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND state='saved')) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
+    let mut query = transaction.prepare("SELECT id, kind, sample_rate, channels FROM audio_tracks WHERE meeting_id = ?1 AND state = ?3 AND ((?2='recording' AND kind IN ('mic','system') AND session_id IN (SELECT id FROM recording_sessions WHERE meeting_id=?1 AND (state='saved' OR (state='interrupted' AND ?4)))) OR (?2='audio_import' AND kind='imported' AND session_id IS NULL AND import_id IN (SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'))) ORDER BY kind, id").map_err(|e| e.to_string())?;
     let rows = query
-        .query_map(params![meeting_id, source_kind, track_state], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, u32>(2)?,
-                row.get::<_, u32>(3)?,
-            ))
-        })
+        .query_map(
+            params![meeting_id, source_kind, track_state, partial],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, u32>(3)?,
+                ))
+            },
+        )
         .map_err(|e| e.to_string())?;
     let tracks = rows
         .collect::<Result<Vec<_>, _>>()

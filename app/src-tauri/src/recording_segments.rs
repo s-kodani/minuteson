@@ -65,7 +65,7 @@ impl Status {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, serde::Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Tip {
     schema_version: u32,
@@ -363,6 +363,47 @@ impl Entry {
 }
 
 impl Prefix {
+    pub(crate) fn lane(&self) -> Lane {
+        if self.tip.lane == "microphone" {
+            Lane::Microphone
+        } else {
+            Lane::System
+        }
+    }
+    /// Bind a review to exact durable generations, not just the last entry's
+    /// content hash. Replacing identical bytes or closing the producer still
+    /// invalidates a previously reviewed generation.
+    pub(crate) fn review_hash(&self) -> Result<String, String> {
+        fn proof(stamp: &Stamp) -> serde_json::Value {
+            serde_json::json!([
+                stamp.dev,
+                stamp.ino,
+                stamp.uid,
+                stamp.mode,
+                stamp.links,
+                stamp.size,
+                stamp.modified,
+                stamp.changed,
+                stamp
+                    .created
+                    .and_then(|v| v.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|v| (v.as_secs(), v.subsec_nanos()))
+            ])
+        }
+        let directory = self.directory.metadata().map_err(|e| e.to_string())?;
+        let entries: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| serde_json::json!([proof(&entry.json_stamp), proof(&entry.audio_stamp)]))
+            .collect();
+        Ok(hash(
+            &serde_json::to_vec(&serde_json::json!({
+                "version":1, "directory":[directory.dev(),directory.ino(),directory.uid()],
+                "tip":self.tip, "tipGeneration":proof(&self.tip_stamp), "entries":entries
+            }))
+            .map_err(|e| e.to_string())?,
+        ))
+    }
     pub(crate) fn first_capture_nanoseconds(&self) -> Result<i64, String> {
         self.entries
             .first()

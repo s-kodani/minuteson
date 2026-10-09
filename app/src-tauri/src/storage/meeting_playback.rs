@@ -192,7 +192,9 @@ impl Storage {
         ).optional().map_err(|e| e.to_string())?.ok_or("会議がありません")?;
         let allowed: &[&str] = match source.0.as_deref() {
             Some("recording")
-                if source.2.as_deref() == Some("saved")
+                if (source.2.as_deref() == Some("saved")
+                    || (source.2.as_deref() == Some("interrupted")
+                        && super::transcription::partial_recording_committed(&db, meeting)?))
                     && matches!(source.1.as_str(), "recorded" | "archived") =>
             {
                 &["mic", "system"]
@@ -203,7 +205,11 @@ impl Storage {
             {
                 &["imported"]
             }
-            _ => return Err("録音・取り込みの保存完了後に再生できます".into()),
+            _ => {
+                return Err(
+                    "録音・取り込みの保存完了または確定済み部分の救出後に再生できます".into(),
+                )
+            }
         };
         let (duration, parent_duration, stamp): (i64, Option<i64>, String) = db.query_row(
             "SELECT m.duration_us, COALESCE(r.duration_us,i.duration_us), json_object('source',m.source_type,'lifecycle',m.lifecycle,'duration',m.duration_us,'recording',r.id,'recordingState',r.state,'recordingDuration',r.duration_us,'manifest',r.audio_manifest_hash,'import',i.id,'importState',i.state,'importDuration',i.duration_us,'original',i.original_asset_id,'converted',i.converted_asset_id) FROM meetings m LEFT JOIN recording_sessions r ON r.meeting_id = m.id LEFT JOIN audio_imports i ON i.meeting_id = m.id WHERE m.id = ?1",
@@ -279,13 +285,18 @@ impl Storage {
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            let mut maps = db.prepare("SELECT json_object('id',id,'chunk',chunk_id,'from',source_frame_start,'to',source_frame_end,'start',timeline_start_us,'end',timeline_end_us,'mapping',mapping_json) FROM track_clock_segments WHERE track_id = ?1 ORDER BY id LIMIT 1025").map_err(|e| e.to_string())?;
+            // Enforce per-chunk and byte budgets before constructing census
+            // JSON. Whole-track maps have a separate bound from one chunk.
+            super::transcription::read_clock_segments(&db, &track.id)?;
+            let mut maps = db.prepare("SELECT json_object('id',id,'chunk',chunk_id,'from',source_frame_start,'to',source_frame_end,'start',timeline_start_us,'end',timeline_end_us,'mapping',mapping_json) FROM track_clock_segments WHERE track_id = ?1 ORDER BY id LIMIT 65537").map_err(|e| e.to_string())?;
             track.mappings = maps
                 .query_map(params![track.id], |row| row.get(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            if track.gaps.len() > 1024 || track.mappings.len() > 1024 {
+            if track.gaps.len() > 1024
+                || track.mappings.len() > crate::audio_clock::MAX_CLOCK_SEGMENTS
+            {
                 return Err("会議音声の時刻・欠損記録が多すぎます".into());
             }
             for gap in &track.gaps {

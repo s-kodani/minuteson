@@ -69,6 +69,7 @@ struct Chunk {
 }
 struct Track {
     id: String,
+    kind: &'static str,
     directory: Directory,
     chunks: Vec<Chunk>,
 }
@@ -77,9 +78,12 @@ pub(super) struct Publication {
     lock: File,
     lock_stamp: Stamp,
     plan_stamp: Stamp,
+    plan_name: &'static str,
+    documents: Vec<(String, Stamp)>,
     tracks: Vec<Track>,
 }
 const PLAN: &str = "final-flac.json";
+const PARTIAL_PLAN: &str = "partial-flac.json";
 const LOCK: &str = ".final-flac.lock";
 
 fn hash(bytes: &[u8]) -> String {
@@ -181,18 +185,6 @@ impl Publication {
         manifest: &CaptureManifest,
         prefixes: &[Prefix],
     ) -> Result<Self, String> {
-        storage.require_data_writable()?;
-        storage.managed_anchor.verify()?;
-        let root = Directory::open(&storage.root.join(base))?;
-        let lock = match root.optional(LOCK, true)? {
-            Some(file) => file,
-            None => root.create(LOCK)?,
-        };
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("この録音のFLAC確定は別の処理で実行中です".into());
-        }
-        let lock_stamp = Stamp::read(&lock)?;
-        lock_stamp.require(&root.required(LOCK, false)?)?;
         if prefixes.len() != 2 {
             return Err("原音声の確定証拠が両入力で揃っていません".into());
         }
@@ -229,7 +221,80 @@ impl Publication {
             "origin":origin, "groups":descriptions}))
             .map_err(|e| e.to_string())?,
         );
-        if root.read_json(PLAN)?.is_none() {
+        Self::prepare_groups(storage, base, PLAN, input_hash, prefixes, all_groups)
+    }
+
+    pub(super) fn prepare_recovery(
+        storage: &Storage,
+        base: &Path,
+        review_hash: &str,
+        origin: i64,
+        prefixes: &[Prefix],
+    ) -> Result<Self, String> {
+        if prefixes.is_empty() || prefixes.len() > 2 {
+            return Err("部分救出の原音声がありません".into());
+        }
+        let all_groups = prefixes
+            .iter()
+            .map(|prefix| prefix.flac_groups(origin))
+            .collect::<Result<Vec<_>, _>>()?;
+        if all_groups
+            .iter()
+            .any(|groups| groups.is_empty() || groups.len() > 1024)
+        {
+            return Err("部分救出のFLAC区間数が対応範囲外です".into());
+        }
+        for groups in &all_groups {
+            let maps: usize = groups.iter().map(|group| group.clock_segments.len()).sum();
+            let bytes: usize = groups
+                .iter()
+                .flat_map(|group| &group.clock_segments)
+                .map(|map| map.mapping_json.len())
+                .sum();
+            if maps > crate::audio_clock::MAX_CLOCK_SEGMENTS
+                || bytes > crate::audio_clock::MAX_CLOCK_MAPPING_BYTES
+            {
+                return Err("部分救出の時刻対応が保存・読戻しの容量上限を超えています".into());
+            }
+        }
+        let input_hash = hash(
+            &serde_json::to_vec(&serde_json::json!({
+                "version":1,"mode":"sealed_prefix","review":review_hash,"origin":origin,
+                "lanes":prefixes.iter().map(|p|p.lane().name()).collect::<Vec<_>>()
+            }))
+            .map_err(|e| e.to_string())?,
+        );
+        Self::prepare_groups(
+            storage,
+            base,
+            PARTIAL_PLAN,
+            input_hash,
+            prefixes,
+            all_groups,
+        )
+    }
+
+    fn prepare_groups(
+        storage: &Storage,
+        base: &Path,
+        plan_name: &'static str,
+        input_hash: String,
+        prefixes: &[Prefix],
+        all_groups: Vec<Vec<FlacGroup>>,
+    ) -> Result<Self, String> {
+        storage.require_data_writable()?;
+        storage.managed_anchor.verify()?;
+        let root = Directory::open(&storage.root.join(base))?;
+        let lock = match root.optional(LOCK, true)? {
+            Some(file) => file,
+            None => root.create(LOCK)?,
+        };
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("この録音のFLAC確定は別の処理で実行中です".into());
+        }
+        let lock_stamp = Stamp::read(&lock)?;
+        lock_stamp.require(&root.required(LOCK, false)?)?;
+        if root.read_json(plan_name)?.is_none() {
             let parent = Directory::open(root.path.parent().ok_or("録音管理先がありません")?)?;
             let mut tracks = Vec::new();
             for groups in &all_groups {
@@ -247,15 +312,17 @@ impl Publication {
                 recording_directory: root.identity.clone(),
                 tracks,
             };
-            root.json(PLAN, &plan, None)?;
+            root.json(plan_name, &plan, None)?;
         }
         // Value and stamp must describe one exact immutable generation.
-        let (plan_bytes, plan_stamp) = root.read_json(PLAN)?.ok_or("FLAC確定計画がありません")?;
+        let (plan_bytes, plan_stamp) = root
+            .read_json(plan_name)?
+            .ok_or("FLAC確定計画がありません")?;
         let plan: Plan = serde_json::from_slice(&plan_bytes).map_err(|e| e.to_string())?;
         if plan.schema_version != 1
             || plan.input_hash != input_hash
             || plan.recording_directory != root.identity
-            || plan.tracks.len() != 2
+            || plan.tracks.len() != prefixes.len()
         {
             return Err("FLAC確定計画と原音声・録音manifestが一致しません".into());
         }
@@ -281,7 +348,7 @@ impl Publication {
                 storage.managed_anchor.verify()?;
                 root.verify()?;
                 lock_stamp.require(&root.required(LOCK, false)?)?;
-                plan_stamp.require(&root.required(PLAN, false)?)?;
+                plan_stamp.require(&root.required(plan_name, false)?)?;
                 prefixes[lane].verify_at(&root.path, &|| false)?;
                 chunks.push(convert(
                     storage,
@@ -294,6 +361,10 @@ impl Publication {
             }
             tracks.push(Track {
                 id: track_plan.id,
+                kind: match prefixes[lane].lane() {
+                    crate::recording_segments::Lane::Microphone => "mic",
+                    crate::recording_segments::Lane::System => "system",
+                },
                 directory,
                 chunks,
             });
@@ -303,10 +374,44 @@ impl Publication {
             lock,
             lock_stamp,
             plan_stamp,
+            plan_name,
+            documents: Vec::new(),
             tracks,
         };
         result.verify(storage)?;
         Ok(result)
+    }
+
+    pub(super) fn recovery_document(
+        &mut self,
+        storage: &Storage,
+        value: &serde_json::Value,
+    ) -> Result<CapturedFile, String> {
+        self.verify(storage)?;
+        let name = "partial-recovery.json";
+        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+        if self.root.read_json(name)?.is_none() {
+            self.root.json(name, value, None)?;
+        }
+        let (current, stamp) = self
+            .root
+            .read_json(name)?
+            .ok_or("部分救出の記録がありません")?;
+        if current != bytes {
+            return Err("部分救出の記録と確認済み範囲が一致しません".into());
+        }
+        self.documents.push((name.into(), stamp));
+        Ok(CapturedFile {
+            relative: self
+                .root
+                .path
+                .join(name)
+                .strip_prefix(&storage.root)
+                .map_err(|e| e.to_string())?
+                .to_owned(),
+            size_bytes: bytes.len() as i64,
+            hash: hash(&bytes),
+        })
     }
     pub(super) fn verify(&self, storage: &Storage) -> Result<(), String> {
         storage.require_data_writable()?;
@@ -314,7 +419,11 @@ impl Publication {
         self.root.verify()?;
         self.lock_stamp.require(&self.lock)?;
         self.lock_stamp.require(&self.root.required(LOCK, false)?)?;
-        self.plan_stamp.require(&self.root.required(PLAN, false)?)?;
+        self.plan_stamp
+            .require(&self.root.required(self.plan_name, false)?)?;
+        for (name, stamp) in &self.documents {
+            stamp.require(&self.root.required(name, false)?)?;
+        }
         for track in &self.tracks {
             track.directory.verify()?;
             for chunk in &track.chunks {
@@ -342,10 +451,10 @@ impl Publication {
         boundary_gaps: bool,
         now: i64,
     ) -> Result<(), String> {
-        for (track, kind) in self.tracks.iter().zip(["mic", "system"]) {
+        for track in &self.tracks {
             let audio = &track.chunks[0].audio;
             tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,?4,'flac',?5,?6,'ready',?7,?8,?8)",
-                params![track.id, meeting, session, kind, audio.sample_rate, audio.channels, config, now]).map_err(|e| e.to_string())?;
+                params![track.id, meeting, session, track.kind, audio.sample_rate, audio.channels, config, now]).map_err(|e| e.to_string())?;
             let mut previous = None;
             for (sequence, chunk) in track.chunks.iter().enumerate() {
                 let asset = insert_capture_asset(tx, meeting, &chunk.file, "audio/flac", now)?;
@@ -370,9 +479,21 @@ impl Publication {
                     (
                         0,
                         track.chunks[0].maps[0].timeline_start_us,
-                        "capture_start_gap",
+                        if self.plan_name == PARTIAL_PLAN {
+                            "partial_prefix_start_gap"
+                        } else {
+                            "capture_start_gap"
+                        },
                     ),
-                    (previous.unwrap(), duration, "capture_stop_gap"),
+                    (
+                        previous.unwrap(),
+                        duration,
+                        if self.plan_name == PARTIAL_PLAN {
+                            "partial_prefix_end_gap"
+                        } else {
+                            "capture_stop_gap"
+                        },
+                    ),
                 ] {
                     if start < end {
                         tx.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code) VALUES(?1,?2,?3,?4,?5)",

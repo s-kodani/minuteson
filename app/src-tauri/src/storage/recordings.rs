@@ -6,6 +6,9 @@ use std::fs::File;
 mod clock;
 #[cfg(unix)]
 mod flac;
+#[cfg(unix)]
+#[allow(dead_code)] // Backend recovery capability; explicit UI admission follows.
+pub(crate) mod partial;
 use clock::{CaptureClock, CaptureEnd};
 
 #[derive(Deserialize)]
@@ -301,7 +304,7 @@ impl Storage {
                 .lock()
                 .map_err(|_| "DBロックを取得できません".to_string())?;
             let mut statement = connection
-                .prepare("SELECT id FROM recording_sessions WHERE state = 'interrupted' ORDER BY created_at, id")
+                .prepare("SELECT id FROM recording_sessions WHERE state = 'interrupted' AND audio_manifest_hash IS NULL ORDER BY created_at, id")
                 .map_err(|error| error.to_string())?;
             let ids = statement
                 .query_map([], |row| row.get::<_, String>(0))
@@ -539,6 +542,19 @@ impl Storage {
             "recording" | "stopping" | "interrupted"
         ) {
             return Err("録音が確定可能な状態ではありません".into());
+        }
+        let already_registered: bool = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?
+            .query_row(
+                "SELECT audio_manifest_hash IS NOT NULL FROM recording_sessions WHERE id=?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if already_registered {
+            return Err("登録済みの部分救出を正常な録音終了へ置き換えることはできません".into());
         }
         let base = PathBuf::from("meetings")
             .join(&session.meeting_id)
