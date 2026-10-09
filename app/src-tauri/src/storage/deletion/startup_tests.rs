@@ -129,7 +129,7 @@ fn history_v27_completed_meeting_upgrades_without_rewriting_consent_or_fencing_c
     );
     assert_eq!(
         crate::storage::verify_migration_history(&f.storage().connection.lock().unwrap()).unwrap(),
-        28
+        crate::storage::MIGRATIONS.len()
     );
     f.kept();
     f.storage()

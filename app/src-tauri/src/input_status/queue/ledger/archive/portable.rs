@@ -123,6 +123,9 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn source_owner_id(&self) -> &str {
+        &self.source_owner_id
+    }
     /// Inputs must be bounded bytes read under the caller's DB/source ownership
     /// and data-maintenance fence. No file open or mutable writer is performed.
     /// Reject malformed original bytes before any Value conversion erases keys.

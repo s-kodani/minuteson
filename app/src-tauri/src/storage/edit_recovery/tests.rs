@@ -294,10 +294,7 @@ fn v27_migration_preserves_existing_draft_hash_version_and_undo_chain() {
         .unwrap();
     drop(storage);
     let mut db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
-    db.execute_batch(
-        "DROP TABLE transcript_edit_recovery; DELETE FROM schema_migrations WHERE version=28;",
-    )
-    .unwrap();
+    remove_schema_for_test(&db);
     let old: (String, String, String) = db
         .query_row(
             "SELECT payload_json,inverse_json,after_hash FROM edit_operations",

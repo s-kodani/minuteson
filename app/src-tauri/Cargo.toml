@@ -32,12 +32,16 @@ libc = "0.2"
 strip = "symbols"
 debug = 0
 # Avoid growing incremental object caches across many native test builds.
-# Explicit partitioning also keeps the large arm64 test binary within the
-# macOS linker's branch-distance limit when incremental compilation is off.
+# Explicit partitioning limits individual code-generation units.
 incremental = false
 codegen-units = 256
 debug-assertions = true
 overflow-checks = true
+
+# Reduce only the root package's oversized arm64 test text. Dependency,
+# production dev/release profiles, assertions and overflow checks stay intact.
+[profile.test.package.mon-desktop]
+opt-level = 1
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

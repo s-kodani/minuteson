@@ -78,13 +78,16 @@ impl HistoricalFinal {
         if self.owner_id != owner
             || !crate::input_levels::valid_owner(owner)
             || !matches!(self.state.as_str(), "saved" | "failed")
-            || self
-                .persistence
-                .as_ref()
-                .is_some_and(|p| !p.valid() || !p.closed)
+        {
+            return Err("持ち運ぶ停止時の履歴診断の所有または状態が不正です".into());
+        }
+        if self
+            .persistence
+            .as_ref()
+            .is_some_and(|p| !p.valid() || !p.closed)
             || (self.persistence.is_none() && !self.unconfirmed_at_stop)
         {
-            return Err("持ち運ぶ停止時診断の所有または保存結果が不正です".into());
+            return Err("持ち運ぶ停止時の履歴診断の結果が不正です".into());
         }
         Ok(())
     }

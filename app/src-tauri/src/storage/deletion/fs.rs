@@ -408,6 +408,12 @@ pub(in crate::storage) struct RootAnchor {
     inspection_history: Option<std::sync::Arc<super::relocation::receiver::Aliases>>,
 }
 impl RootAnchor {
+    /// Read-only backup traversal starts from the SAME root inode as SQLite,
+    /// never a newly opened path that could have been substituted meanwhile.
+    pub(in crate::storage) fn backup_input_root(&self) -> Result<File, String> {
+        self.verify()?;
+        self.root.file.try_clone().map_err(|e| e.to_string())
+    }
     pub(in crate::storage) fn directory(path: &Path) -> Result<Directory, String> {
         let root = Directory::root(path)?;
         // Reject aliases before SQLite could follow them and change an

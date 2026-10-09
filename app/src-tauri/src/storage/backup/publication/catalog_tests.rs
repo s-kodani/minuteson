@@ -118,19 +118,16 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
         .tables
         .retain(|t| t.name != "transcript_edit_recovery");
     legacy.model_catalog = None;
+    let legacy_payloads =
+        archive::tests::legacy_payloads_without_input_snapshot(&verified, &mut legacy);
     let manifest = serde_json::to_vec(&legacy).unwrap();
     assert!(!serde_json::from_slice::<serde_json::Value>(&manifest)
         .unwrap()
         .as_object()
         .unwrap()
         .contains_key("modelCatalog"));
-    let mut bytes = raw[..8].to_vec();
-    bytes.extend((manifest.len() as u32).to_le_bytes());
-    bytes.extend(Sha256::digest(&manifest));
-    bytes.extend(manifest);
-    bytes.extend_from_slice(&raw[44 + header..]);
     let path = output.path().join("legacy-v26.monbackup");
-    std::fs::write(&path, bytes).unwrap();
+    archive::tests::pack(&path, &legacy, &legacy_payloads);
     let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
     assert!(source.manifest.model_catalog.is_none());
     restore(&source, &target, output.path(), &Uuid::new_v4().to_string());

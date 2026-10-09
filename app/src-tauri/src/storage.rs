@@ -113,6 +113,7 @@ const MIGRATION_25: &str = include_str!("migrations/0025_model_profile_applicati
 const MIGRATION_26: &str = include_str!("migrations/0026_job_model_rebinding.sql");
 const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.sql");
 const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
+const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -668,6 +669,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (26, MIGRATION_26),
     (27, MIGRATION_27),
     (28, MIGRATION_28),
+    (29, MIGRATION_29),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

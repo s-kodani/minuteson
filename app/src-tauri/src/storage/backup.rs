@@ -14,6 +14,7 @@ mod deleted_audio;
 pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) use deleted_audio::Verified as DeletedAudioHistory;
 mod exclusions;
+pub(in crate::storage) mod input_snapshots;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
 mod portable;
@@ -181,6 +182,7 @@ pub(crate) struct Snapshot<'a> {
     pub(super) assets: Vec<StagedAsset>,
     pub(super) meetings: Vec<Meeting>,
     deleted_audio: deleted_audio::Native,
+    input_snapshots: input_snapshots::Native,
     _maintenance: Maintenance<'a>,
 }
 
@@ -300,6 +302,7 @@ impl Storage {
         validate_database(&mut db, cancelled)?;
         let meetings = read_meetings(&db)?;
         let deleted_audio = deleted_audio::Native::capture(self, &db, cancelled)?;
+        let input_snapshots = input_snapshots::Native::capture(self, &db, cancelled)?;
         let assets = read_assets_with_deleted(&db, &deleted_audio)?;
         let required = assets.iter().try_fold(0_u64, |sum, a| {
             if a.state == "missing" {
@@ -332,6 +335,7 @@ impl Storage {
             assets: staged,
             meetings,
             deleted_audio,
+            input_snapshots,
             _maintenance: maintenance,
         };
         snapshot.verify(cancelled)?;
@@ -412,6 +416,8 @@ impl Snapshot<'_> {
             &read_only(&self.database)?,
             cancelled,
         )?;
+        self.input_snapshots
+            .verify(self._maintenance.storage, cancelled)?;
         for staged in &self.assets {
             if staged.asset.state == "missing" {
                 // Only validated exclusion metadata is staged; no dummy body.
@@ -489,6 +495,7 @@ fn validate_database_contents(
     db: &mut Connection,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    input_snapshots::validate_database(db, cancelled)?;
     // Validate native selections and imported, unavailable catalog history.
     super::model_profiles::portable::history::Bundle::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;

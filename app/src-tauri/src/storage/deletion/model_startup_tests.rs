@@ -96,7 +96,7 @@ fn history_v27_completed_model_upgrades_without_rewriting_evidence_or_reviving_b
     assert!(!f.path("").exists());
     assert_eq!(
         crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
-        28
+        crate::storage::MIGRATIONS.len()
     );
     f.storage
         .create_meeting("MODEL HISTORY IS READABLE AFTER UPGRADE")

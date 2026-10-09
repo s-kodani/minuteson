@@ -146,6 +146,35 @@ impl<'p, 's> FixedData<'p, 's> {
                 .ok_or_else(|| format!("復元列がありません: {name}"))
         };
         match table.name.as_str() {
+            "recording_sessions" => {
+                if let Some(index) = table
+                    .columns
+                    .iter()
+                    .position(|c| c.name == "input_history_snapshot_json")
+                {
+                    if let SqlValue::Text(text) = &row[index] {
+                        let (old_meeting, old_session): (String, String) = self
+                            .ids
+                            .source()
+                            .database
+                            .query_row(
+                                "SELECT meeting_id,id FROM recording_sessions WHERE rowid=?1",
+                                params![rowid],
+                                |r| Ok((r.get(0)?, r.get(1)?)),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let bound = super::input_snapshots::Bound::decode(
+                            text,
+                            &old_meeting,
+                            &old_session,
+                        )?;
+                        row[index] = SqlValue::Text(bound.rebind(
+                            row_text(&row, column("meeting_id")?)?,
+                            row_text(&row, column("id")?)?,
+                        )?);
+                    }
+                }
+            }
             "minutes_revisions" => {
                 let meeting: String = self
                     .ids

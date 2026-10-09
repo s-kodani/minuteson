@@ -391,6 +391,7 @@ pub(super) fn verify_all(db: &Connection, cancelled: &impl Fn() -> bool) -> Resu
 
 #[cfg(test)]
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
+    super::backup::input_snapshots::remove_schema_for_test(db);
     if db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=28)",

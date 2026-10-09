@@ -64,7 +64,7 @@ fn verified(path: &Path, dir: &Path) -> VerifiedArchive {
     read(&mut File::open(path).unwrap(), dir, &|| false).unwrap()
 }
 
-fn pack(path: &Path, manifest: &Manifest, payloads: &[Vec<u8>]) {
+pub(in crate::storage::backup) fn pack(path: &Path, manifest: &Manifest, payloads: &[Vec<u8>]) {
     let bytes = serde_json::to_vec(manifest).unwrap();
     let mut file = File::create(path).unwrap();
     file.write_all(MAGIC).unwrap();
@@ -83,6 +83,65 @@ fn payloads(archive: &VerifiedArchive) -> Vec<Vec<u8>> {
         .iter()
         .map(|e| std::fs::read(archive.stage.path().join(&e.path)).unwrap())
         .collect()
+}
+
+pub(in crate::storage::backup) fn legacy_payloads_without_input_snapshot(
+    source: &VerifiedArchive,
+    manifest: &mut Manifest,
+) -> Vec<Vec<u8>> {
+    assert!((20..=28).contains(&manifest.schema_version));
+    let table = manifest
+        .tables
+        .iter_mut()
+        .find(|table| table.name == "recording_sessions")
+        .unwrap();
+    let before = table.columns.clone();
+    let index = before
+        .iter()
+        .position(|column| column.name == "input_history_snapshot_json")
+        .unwrap();
+    table.columns.remove(index);
+    let historical = portable::tables(&portable::schema(manifest.schema_version).unwrap()).unwrap();
+    let expected = historical
+        .iter()
+        .find(|table| table.name == "recording_sessions")
+        .unwrap();
+    assert_eq!(table.columns, expected.columns);
+    let count = table.row_count;
+    let mut payloads = payloads(source);
+    assert_eq!(manifest.entries[0].path, "database.jsonl");
+    let mut logical = Vec::new();
+    let mut recordings = 0;
+    for line in std::str::from_utf8(&payloads[0])
+        .unwrap()
+        .split_inclusive('\n')
+    {
+        let mut row: Value = serde_json::from_str(line).unwrap();
+        if row["table"] == "recording_sessions" {
+            let original = row.clone();
+            let cells = row["cells"].as_array_mut().unwrap();
+            assert_eq!(cells.len(), before.len());
+            // Do not discard real historical evidence to imitate an older
+            // format. These legacy fixtures must have only the new NULL cell.
+            assert_eq!(cells.remove(index), json!({"type": "null"}));
+            let mut round_trip = row.clone();
+            round_trip["cells"]
+                .as_array_mut()
+                .unwrap()
+                .insert(index, json!({"type": "null"}));
+            assert_eq!(round_trip, original);
+            logical.extend(serde_json::to_vec(&row).unwrap());
+            logical.push(b'\n');
+            recordings += 1;
+        } else {
+            logical.extend_from_slice(line.as_bytes());
+        }
+    }
+    assert_eq!(recordings, count);
+    manifest.entries[0].size = logical.len() as u64;
+    manifest.entries[0].sha256 = format!("{:x}", Sha256::digest(&logical));
+    payloads[0] = logical;
+    payloads
 }
 
 #[test]
@@ -104,7 +163,8 @@ fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstructi
     manifest.format_version = 1;
     manifest.model_catalog = None;
     let legacy = output.path().join("legacy.monbackup");
-    pack(&legacy, &manifest, &payloads(&source));
+    let legacy_payloads = legacy_payloads_without_input_snapshot(&source, &mut manifest);
+    pack(&legacy, &manifest, &legacy_payloads);
     let source = verified(&legacy, output.path());
     assert_eq!(portable::tables(&source.database).unwrap().len(), 30);
     let ids = super::super::restore_ids::RestoreIds::prepare(
@@ -151,7 +211,8 @@ fn restore_journal_reader_publishes_v21_archives_with_current_local_recovery_led
     manifest.format_version = 1;
     manifest.model_catalog = None;
     let legacy = output.path().join("legacy-21.monbackup");
-    pack(&legacy, &manifest, &payloads(&source));
+    let legacy_payloads = legacy_payloads_without_input_snapshot(&source, &mut manifest);
+    pack(&legacy, &manifest, &legacy_payloads);
     let source = verified(&legacy, output.path());
     assert_eq!(
         super::super::super::verify_migration_history(&source.database).unwrap(),

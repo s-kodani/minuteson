@@ -601,7 +601,20 @@ pub(super) fn dump(
             } else {
                 None
             };
+            let input_snapshot = if table.name == "recording_sessions" {
+                snapshot
+                    .input_snapshots
+                    .payload(&text("meeting_id")?, &text("id")?)
+                    .map(str::to_owned)
+            } else {
+                None
+            };
             for (column, cell) in table.columns.iter().zip(&mut cells) {
+                if table.name == "recording_sessions"
+                    && column.name == "input_history_snapshot_json"
+                {
+                    *cell = input_snapshot.clone().map(Cell::Text).unwrap_or(Cell::Null);
+                }
                 if let Some((key, omitted)) = &file {
                     if column.name == "relative_path" {
                         *cell = Cell::Text(key.clone());
@@ -787,6 +800,7 @@ fn bounded_line(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
 }
 
 pub(super) fn validate_scopes(db: &Connection) -> Result<(), String> {
+    super::input_snapshots::validate_database(db, &|| false)?;
     for (table, head) in [
         ("analysis_revisions", "current_analysis_id"),
         ("analysis_revisions", "previous_analysis_id"),

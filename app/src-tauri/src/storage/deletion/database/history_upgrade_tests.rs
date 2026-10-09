@@ -84,7 +84,10 @@ fn history_v27_actual_selected_move_cold_start_migrates_and_retains_all_native_h
         }
         {
             let db = storage.connection.lock().unwrap();
-            assert_eq!(crate::storage::verify_migration_history(&db).unwrap(), 28);
+            assert_eq!(
+                crate::storage::verify_migration_history(&db).unwrap(),
+                crate::storage::MIGRATIONS.len()
+            );
             if fixture.full_deletion.is_none() {
                 assert!(
                     crate::storage::deletion::audio::require_source(&db, &fixture.meeting)

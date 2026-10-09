@@ -117,7 +117,7 @@ fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_origin
     .is_err());
     assert_eq!(
         crate::storage::verify_migration_history(&f.storage.connection.lock().unwrap()).unwrap(),
-        28
+        crate::storage::MIGRATIONS.len()
     );
     f.storage
         .create_meeting("OTHER MEETING AFTER AUDIO HISTORY UPGRADE")
