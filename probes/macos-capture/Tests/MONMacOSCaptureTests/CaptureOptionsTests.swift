@@ -7,6 +7,36 @@ final class CaptureOptionsTests: XCTestCase {
   private let output = ["--output", "/tmp/mon-capture-options-test"]
   private let controlled = ["--stop-on-file", "--parent-pid", "1234"]
 
+  func testCaptureClockRecoveryIsOnlyEnabledForOwnedOrdinaryConfirmedSCStreamRecording() throws {
+    let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
+    let base = output + controlled + ["--until-stopped", "--input-level-owner", owner]
+    XCTAssertTrue(try Options.parse(base).recoversCaptureClock)
+    XCTAssertFalse(try Options.parse(output).recoversCaptureClock)
+    XCTAssertFalse(
+      try Options.parse(output + controlled + ["--until-stopped"]).recoversCaptureClock)
+    XCTAssertFalse(
+      try Options.parse(output + controlled + ["--duration", "5", "--input-level-owner", owner])
+        .recoversCaptureClock)
+    XCTAssertFalse(
+      try Options.parse(base + ["--mode", "application", "--pid", "123"]).recoversCaptureClock)
+    let identity = CaptureApplicationIdentity(
+      pid: 123, bundleIdentifier: "com.example.confirmed", launchTimeUs: 1_791_100_000_000_001)
+    let json = String(decoding: try JSONEncoder().encode(identity), as: UTF8.self)
+    XCTAssertTrue(
+      try Options.parse(
+        base + ["--mode", "application", "--pid", "123", "--application-identity", json]
+      )
+      .recoversCaptureClock)
+    XCTAssertFalse(
+      try Options.parse(base + ["--mode", "application", "--backend", "coreaudio", "--pid", "123"])
+        .recoversCaptureClock)
+    // Capture-test flags are checked elsewhere for their inherited lease. Here
+    // inspect the same eligibility property without opening a file or device.
+    var test = try Options.parse(base)
+    test.captureTestOwner = owner
+    XCTAssertFalse(test.recoversCaptureClock)
+  }
+
   func testTestRunnerFlagsRemainUnknownCaptureArguments() {
     for arguments in [
       ["--test-bundle-path", "/tmp/mon-test-bundle"],

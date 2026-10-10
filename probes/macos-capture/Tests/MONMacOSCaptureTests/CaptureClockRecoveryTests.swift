@@ -29,6 +29,22 @@ final class CaptureClockRecoveryTests: XCTestCase {
       system: clock.quiesced(.system, for: request))
   }
 
+  func testMicrophoneCannotMintQuiescenceBeforeStartingItsConfirmedAcquisition() throws {
+    let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let box = ReadingBox(reading(1_000_000))
+    let clock = try clock(box)
+    let recorder = MicrophoneRecorder(
+      outputURL: output.appendingPathComponent("microphone.caf"), clock: clock,
+      microphoneUID: "confirmed-only", mayContinue: { false })
+    box.set(reading(2_000_000, offset: 10_000_500))
+    let ticket = try request(clock)
+    XCTAssertThrowsError(try recorder.suspendForClockRecovery(ticket))
+    recorder.maintain()
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+  }
+
   func testPositiveBridgeChangeSuspendsAllPCMAndRequiresBothInputsFromTheSameClock() throws {
     let box = ReadingBox(reading(1_000_000))
     let first = try clock(box)

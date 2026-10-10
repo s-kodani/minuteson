@@ -46,6 +46,56 @@ fn write(path: &Path, value: &Value) {
 }
 
 #[test]
+fn clock_change_keeps_both_inputs_disconnected_until_new_confirmed_epochs() {
+    let mut paused = publication(1);
+    for (lane, history) in [
+        ("microphone", "microphoneHistory"),
+        ("system", "systemHistory"),
+    ] {
+        paused[lane]["reason"] = json!("clock_changed");
+        paused[history]["events"][0]["status"]["reason"] = json!("clock_changed");
+    }
+    let p = decode(&paused).unwrap();
+    assert_eq!(p.microphone.state, "disconnected");
+    assert_eq!(p.system.as_ref().unwrap().state, "disconnected");
+    for lane in ["microphone", "system"] {
+        let mut bad = paused.clone();
+        bad[lane]["state"] = json!("connected");
+        assert!(decode(&bad).is_err());
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+    write(temp.path(), &publication(0));
+    reader.read(OWNER, None).unwrap();
+    write(temp.path(), &paused);
+    let snapshot = reader.read(OWNER, Some("main")).unwrap();
+    assert!(!snapshot.connected());
+    assert_eq!(snapshot.notices.len(), 2);
+}
+
+#[test]
+fn clock_change_history_delivers_original_reason_even_when_resume_precedes_heartbeat() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();
+    write(temp.path(), &publication(0));
+    reader.read(OWNER, None).unwrap();
+    let mut resumed = publication(2);
+    for history in ["microphoneHistory", "systemHistory"] {
+        resumed[history]["events"][0]["status"]["reason"] = json!("clock_changed");
+    }
+    write(temp.path(), &resumed);
+    let snapshot = reader.read(OWNER, Some("main")).unwrap();
+    assert!(snapshot.connected());
+    let json = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(json["notices"].as_array().unwrap().len(), 2);
+    for notice in json["notices"].as_array().unwrap() {
+        assert_eq!(notice["kind"], "interrupted");
+        assert_eq!(notice["delivery"]["status"]["reason"], "clock_changed");
+        assert_eq!(notice["delivery"]["status"]["sourceEpoch"], 1);
+    }
+}
+
+#[test]
 fn event_history_keeps_unobserved_interruption_and_recovery_with_no_legacy_format_changes() {
     let temp = tempfile::tempdir().unwrap();
     let mut reader = StatusReader::pin(&temp.path().canonicalize().unwrap()).unwrap();

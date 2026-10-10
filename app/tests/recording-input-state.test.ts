@@ -59,6 +59,18 @@ test("format changes and unknown reports remain explicit and do not suggest anot
   assert.doesNotMatch(microphoneLabel(checkedInputStatus(issue(),id).microphone),/保存中|PCの音声は録音中|自動切替/u);
 });
 const systemIssue=()=>({...report(),revision:2,system:{state:"disconnected",sourceEpoch:1,interruptions:1,reason:"stream_stopped"},notices:[{id:`${id}:system:1:interrupted`,input:"system",target:"recorder",kind:"interrupted",interruptions:1,recipientId:null}]});
+test("clock recovery remains disconnected on both inputs until confirmed new source epochs",()=>{
+  const s=new RecordingInputSession();s.reset(id);s.accept(report(),0);
+  const paused={...report(),revision:2,microphone:{...issue().microphone,reason:"clock_changed"},system:{...systemIssue().system,reason:"clock_changed"},notices:[]};
+  s.accept(paused,1);
+  const visible=s.read(1);
+  assert.match(microphoneLabel(visible.microphone),/切断されました.*スリープ等により取得時計が変更/u);
+  assert.match(systemLabel(visible.system),/切断されました.*スリープ等により取得時計が変更/u);
+  assert.doesNotMatch(microphoneLabel(visible.microphone),/保存済み|正常|自動切替/u);
+  assert.throws(()=>s.accept({...report(),revision:3,microphone:{...report().microphone,interruptions:1},system:{...report().system,interruptions:1}},2));
+  const recovered={...report(),revision:3,microphone:{...report().microphone,sourceEpoch:2,interruptions:1},system:{...report().system,sourceEpoch:2,interruptions:1}};
+  s.accept(recovered,3);assert.equal(s.read(3).microphone.state,"connected");assert.equal(s.read(3).system.state,"connected");
+});
 test("schema three requires both tracks explicitly and never guesses an unsupported system binding",()=>{
   const missing=report() as Record<string,unknown>;delete missing.system;
   for(const r of [missing,{...report(),schemaVersion:1},{...report(),schemaVersion:2},{...report(),system:undefined},{...report(),system:[]},{...report(),system:{...report().system,reason:undefined}},

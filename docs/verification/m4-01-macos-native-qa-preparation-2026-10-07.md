@@ -55,4 +55,6 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 直前のQAは[ダウンロードの読戻しと配置由来](model-download-readback-2026-10-10.md)も含め、`/private/tmp/mon-download-readback-qa-artifact.UsausP/MON QA.app`に保持した。この時点では基盤はIPC非公開で、設定画面のダウンロードはまだ利用できなかった。
 
-最新QAは[初回取得の画面・IPC・停止待ち・結果確認](model-download-ui-2026-10-10.md)を含め、`/private/tmp/mon-download-ui-final-qa-artifact.6FTOqF/MON QA.app`に保持した。取得・管理コピー・CPU実行・適用は別々の明示操作であり、一覧の完了記録だけでは実体を利用可能にしない。署名・識別子・両ヘルパーは確認済みだが、GUI起動・保存先分離・実録音・実モデル／配布元・公証は未検証のままである。専用UIへの切替・通常IPCの拒否・OSの終了とデータ移行を実機で確認するためにも、本番と分離したQA領域を使う。
+直前のQAは[初回取得の画面・IPC・停止待ち・結果確認](model-download-ui-2026-10-10.md)を含め、`/private/tmp/mon-download-ui-final-qa-artifact.6FTOqF/MON QA.app`に保持した。取得・管理コピー・CPU実行・適用は別々の明示操作であり、一覧の完了記録だけでは実体を利用可能にしない。署名・識別子・両ヘルパーは確認済みだが、GUI起動・保存先分離・実録音・実モデル／配布元・公証は未検証のままである。専用UIへの切替・通常IPCの拒否・OSの終了とデータ移行を実機で確認するためにも、本番と分離したQA領域を使う。
+
+最新QAは[時計復帰の録音制御・入力通知接続](capture-clock-recovery-control-2026-10-10.md)を含み、`/private/tmp/mon-clock-control-qa-artifact.wpTMjP/MON QA.app`に保持した。通常の所有付き確認済みSCStream録音の両入力停止・新epoch・再取得経路を含む。アドホック署名・識別子・全arm64・両ヘルパー・同梱CLIのhelpは確認済みで、GUI・TCC・実スリープ・実録音・実モデル・配布署名／公証の成功にはしない。

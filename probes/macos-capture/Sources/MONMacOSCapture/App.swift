@@ -25,6 +25,7 @@ struct Options {
     duration == nil && captureTestOwner == nil && backend == "screencapturekit"
       && (targetPIDs.isEmpty || applicationIdentity != nil)
   }
+  var recoversCaptureClock: Bool { publishesInputStatus && recoversSystemAudio }
   var captureTestOwner: String? = nil
   var captureTestLeaseFD: Int32? = nil
 
@@ -419,6 +420,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private var stopping = false
   private var stopFailure: String?
   private var captureClosure: CaptureClosure?
+  private var clockRecoveryRequest: CaptureClockRecoveryRequest?
+  private var clockStopReceipt: StopReceipt?
   private let retries: Bool
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
@@ -623,7 +626,10 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   }
 
   func maintain() {
-    guard retries, mayContinue(), lock.withLock({ !stopping && pcm.stats.captureFailure == nil })
+    guard retries, mayContinue(),
+      lock.withLock({
+        !stopping && clockRecoveryRequest == nil && pcm.stats.captureFailure == nil
+      })
     else { return }
     if let identity = lock.withLock({ applicationIdentity }) {
       do { try requireIdentity(identity) } catch {
@@ -701,6 +707,78 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     func read() -> (Bool, String?) { lock.withLock { value } }
   }
 
+  /// Called only by the recording control loop, never on an SCStream queue.
+  /// Keep the writer open, but do not release the clock barrier until all owned
+  /// acquisition work and the actual OS stop have returned successfully.
+  func suspendForClockRecovery(_ request: CaptureClockRecoveryRequest) async throws
+    -> CaptureClockQuiescence
+  {
+    guard let clock, try clock.recoveryRequest() == request else {
+      throw ProbeError.capture("system clock recovery request is obsolete")
+    }
+    try lock.withLock {
+      try pcm.stats.requireWritable()
+      guard retries, !stopping, clockRecoveryRequest == nil
+      else { throw ProbeError.capture("system clock recovery is not available") }
+      clockRecoveryRequest = request
+      recovery?.interrupt("clock_changed")
+      pcm.invalidateLevels()
+      operationTask?.cancel()
+    }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while lock.withLock({ recovery?.operation != nil }), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    guard !lock.withLock({ recovery?.operation != nil }) else {
+      throw ProbeError.capture("system acquisition is still pending during clock recovery")
+    }
+    let retirement = try lock.withLock {
+      guard !stopping, let token = try recovery?.beginRetirement(at: now() ?? -1) else {
+        throw ProbeError.capture("system clock retirement cannot be owned")
+      }
+      return token
+    }
+    defer { lock.withLock { recovery?.operationFinished(retirement) } }
+    if let active = lock.withLock({ captureStarted && !streamEnded ? stream : nil }) {
+      let receipt = StopReceipt()
+      lock.withLock { clockStopReceipt = receipt }
+      active.requestStop { receipt.complete($0) }
+      let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+      while !receipt.read().0, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      let result = receipt.read()
+      guard result.0, result.1 == nil else {
+        throw ProbeError.capture("system stream did not stop for clock recovery")
+      }
+    }
+    if let source = lock.withLock({ stream }) { try source.detach() }
+    queue.sync {}
+    try lock.withLock {
+      guard !stopping else { throw ProbeError.capture("system clock recovery was stopped") }
+      stream = nil
+      streamToken = nil
+      captureStarted = false
+      streamEnded = true
+      clockStopReceipt = nil
+    }
+    return try clock.quiesced(.system, for: request)
+  }
+
+  func resumeAfterClockRecovery(_ request: CaptureClockRecoveryRequest) throws {
+    guard let clock, try clock.recoveryRequest() == nil else {
+      throw ProbeError.capture("system clock has not resumed")
+    }
+    try lock.withLock {
+      guard !stopping, clockRecoveryRequest == request else {
+        throw ProbeError.capture("system clock recovery result is obsolete")
+      }
+      clockRecoveryRequest = nil
+    }
+    // The normal single-flight path verifies the same frozen application scope.
+    maintain()
+  }
+
   func stop() async throws { _ = try await finishStop(proveEnding: false) }
 
   func stopRecording() async throws -> CaptureClosure {
@@ -735,8 +813,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       streamStopError =
         "system acquisition is still pending; retained audio is not published as saved"
     } else if let active = lock.withLock({ captureStarted && !streamEnded ? stream : nil }) {
-      let receipt = StopReceipt()
-      active.requestStop { receipt.complete($0) }
+      let pending = lock.withLock { clockStopReceipt }
+      let receipt = pending ?? StopReceipt()
+      if pending == nil { active.requestStop { receipt.complete($0) } }
       let deadline = ContinuousClock.now.advanced(by: .seconds(5))
       while !receipt.read().0, ContinuousClock.now < deadline {
         try? await Task.sleep(for: .milliseconds(10))
@@ -848,6 +927,11 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         ?? clock?.observe(
           presentation: sampleBuffer.presentationTimeStamp,
           clock: stream.native?.synchronizationClock)
+      if case .suspended = observation {
+        recovery?.interrupt("clock_changed")
+        pcm.invalidateLevels()
+        return
+      }
       try pcm.append(
         sampleBuffer, observation: observation, sourceEpoch: token.epoch,
         levelsEnabled: levelsEnabled, receivedAt: receivedAt)
@@ -862,7 +946,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
 }
 
-private final class MicrophoneRecorder: @unchecked Sendable {
+final class MicrophoneRecorder: @unchecked Sendable {
   private(set) var captureClosure: CaptureClosure?
   private enum RebindError: Error { case formatChanged }
   private var engine: AVAudioEngine?
@@ -883,6 +967,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   private let inputEventObserver: InputEventJournal.Observer?
   private var inputUnit: AudioUnit?
   private let rawSegments: RawRecordingSegments?
+  private let mayContinue: @Sendable () -> Bool
   private var selectedDeviceID: AudioObjectID?
   private(set) var deviceUID: String?
 
@@ -890,7 +975,8 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
     levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil,
     inputEventObserver: InputEventJournal.Observer? = nil,
-    rawSegments: RawRecordingSegments? = nil
+    rawSegments: RawRecordingSegments? = nil,
+    mayContinue: @escaping @Sendable () -> Bool = { true }
   ) {
     self.outputURL = outputURL
     self.clock = clock
@@ -899,6 +985,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     self.testWindow = testWindow
     self.inputEventObserver = inputEventObserver
     self.rawSegments = rawSegments
+    self.mayContinue = mayContinue
     stats.clockCapacity = rawSegments == nil ? 1024 : CapturedClockMap.maximumTrackSegments
   }
 
@@ -920,6 +1007,7 @@ private final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   private func configure(_ selected: CaptureInputDevice) throws {
+    guard mayContinue() else { throw ProbeError.capture("microphone stop was requested") }
     let token = try lock.withLock {
       guard let token = try recovery?.begin(selected) else {
         throw ProbeError.capture("microphone recovery owner is missing")
@@ -984,7 +1072,10 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       let receivedAt = self.levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
       self.lock.lock()
       defer { self.lock.unlock() }
-      guard self.recovery?.accepts(token) == true, !self.configurationChanged else { return }
+      guard self.mayContinue(), self.recovery?.accepts(token) == true, !self.configurationChanged
+      else {
+        return
+      }
       guard (try? self.stats.requireWritable(raw: self.rawSegments?.snapshot())) != nil else {
         self.stats.inputLevel.invalidate()
         return
@@ -1004,6 +1095,12 @@ private final class MicrophoneRecorder: @unchecked Sendable {
       do {
         if let testWindow = self.testWindow, !testWindow.accepting { return }
         var observation = self.clock?.observe(hostTicks: when.isHostTimeValid ? when.hostTime : nil)
+        if case .suspended = observation {
+          self.recovery?.interrupt("clock_changed")
+          self.configurationChanged = true
+          self.stats.inputLevel.invalidate()
+          return
+        }
         var buffer = buffer
         var sourceFrameOffset: Int64 = 0
         if let testWindow = self.testWindow {
@@ -1063,10 +1160,11 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     }
     tapInstalled = true
     engine.prepare()
+    guard mayContinue() else { throw ProbeError.capture("microphone stop was requested") }
     try engine.start()
     try InputDevices.verifyDevice(unit, expected: selected.objectID, expectedUID: token.uid)
     try lock.withLock {
-      guard !configurationChanged else {
+      guard mayContinue(), !configurationChanged else {
         throw ProbeError.capture("microphone changed during restart")
       }
       try recovery?.activate(token)
@@ -1097,10 +1195,29 @@ private final class MicrophoneRecorder: @unchecked Sendable {
     // The current CAF remains open. Recreating it would overwrite prior PCM.
   }
 
+  func suspendForClockRecovery(_ request: CaptureClockRecoveryRequest) throws
+    -> CaptureClockQuiescence
+  {
+    guard let clock, testWindow == nil, try clock.recoveryRequest() == request else {
+      throw ProbeError.capture("microphone clock recovery is not available")
+    }
+    try lock.withLock {
+      guard let recovery, recovery.status.state != "stopped" else {
+        throw ProbeError.capture("microphone acquisition has not started or is stopped")
+      }
+      try stats.requireWritable(raw: rawSegments?.snapshot())
+    }
+    suspend("clock_changed")
+    // Invalidation takes the callback lock, draining already-admitted writes.
+    // After removeTap/stop, late callbacks still carry the retired binding and
+    // are rejected before timestamps, CAF or raw writes are considered.
+    return try clock.quiesced(.microphone, for: request)
+  }
+
   func maintain() {
     // Formal bounded probes and a private 5-second test retain their existing
     // fail/verify contract; only an active production recording retries inputs.
-    guard clock != nil, testWindow == nil,
+    guard mayContinue(), clock != nil, testWindow == nil,
       lock.withLock({
         recovery?.status.state != "stopped"
           && (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil
@@ -1136,7 +1253,8 @@ private final class MicrophoneRecorder: @unchecked Sendable {
         // Continue only after invalidating the old engine binding.
       }
     }
-    suspend("engine_changed")
+    let reason = lock.withLock { recovery?.status.reason }
+    suspend(reason == "clock_changed" ? "clock_changed" : "engine_changed")
     let now = ContinuousClock.now
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now
@@ -1244,7 +1362,9 @@ public enum CaptureCommand {
       // probes retain schema 1 until their formal evaluation harness is updated.
       let clock =
         options.duration == nil || options.captureTestOwner != nil
-        ? try CaptureClockDomain.live() : nil
+        ? try CaptureClockDomain.live(
+          allowsRecovery: options.recoversCaptureClock)
+        : nil
       let testWindow = try options.captureTestOwner.map { try CaptureTestWindow(ownerId: $0) }
       let inputEvents =
         options.publishesInputStatus
@@ -1264,14 +1384,19 @@ public enum CaptureCommand {
         options.publishesInputStatus
         ? try RawRecordingSegments(
           output: options.output, owner: options.inputLevelOwner!, lane: "system") : nil
+      let systemStopRequest = options.output.appendingPathComponent("stop.request")
+      let systemParentPID = options.parentPID
+      let systemControlled = options.stopOnFile
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
         microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
         testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone),
-        rawSegments: rawMic)
-      let systemStopRequest = options.output.appendingPathComponent("stop.request")
-      let systemParentPID = options.parentPID
-      let systemControlled = options.stopOnFile
+        rawSegments: rawMic,
+        mayContinue: {
+          !systemControlled
+            || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
+              && !parentHasExited(systemParentPID))
+        })
       let system = SystemAudioRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow,
@@ -1344,6 +1469,21 @@ public enum CaptureCommand {
             stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
             parentExited: parentHasExited(options.parentPID))
           {
+            if let clock, let request = try clock.recoveryRequest() {
+              let micQuiescence = try mic.suspendForClockRecovery(request)
+              let systemQuiescence = try await system.suspendForClockRecovery(request)
+              try clock.resume(
+                request, microphone: micQuiescence, system: systemQuiescence)
+              // A stop/parent exit during quiescence may close the proven clock,
+              // but must never launch another microphone/SCStream acquisition.
+              guard
+                options.shouldContinueRecording(
+                  startedAt: startedAt, now: .now,
+                  stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
+                  parentExited: parentHasExited(options.parentPID))
+              else { break }
+              try system.resumeAfterClockRecovery(request)
+            }
             mic.maintain()
             if options.backend == "screencapturekit" { system.maintain() }
             let microphone = mic.snapshot()

@@ -10,10 +10,11 @@ struct InputStatusReport: Encodable, Sendable {
       ? [
         "identity_changed", "engine_changed", "device_disconnected", "identity_ambiguous",
         "metadata_unavailable", "permission_unavailable", "restart_failed", "format_changed",
+        "clock_changed",
       ]
       : [
         "stream_stopped", "application_unavailable", "acquisition_timeout",
-        "permission_unavailable", "restart_failed", "format_changed",
+        "permission_unavailable", "restart_failed", "format_changed", "clock_changed",
       ]
     return ["microphone", "system"].contains(input)
       && ["connected", "disconnected", "unavailable", "reconnecting", "stopped"].contains(

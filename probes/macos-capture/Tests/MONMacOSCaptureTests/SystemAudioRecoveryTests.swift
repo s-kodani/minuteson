@@ -27,12 +27,18 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
   private var stops = 0
   private var detachments = 0
   private var stopAction: (@Sendable () -> Void)?
+  private var stopCompletion: (@Sendable (Error?) -> Void)?
+  private let holdStop: Bool
   private let startFailure: Bool
   private let stopFailure: Bool
-  init(held: Bool = false, startFailure: Bool = false, stopFailure: Bool = false) {
+  init(
+    held: Bool = false, startFailure: Bool = false, stopFailure: Bool = false,
+    holdStop: Bool = false
+  ) {
     self.held = held
     self.startFailure = startFailure
     self.stopFailure = stopFailure
+    self.holdStop = holdStop
   }
   var counts: (Int, Int, Int) { lock.withLock { (starts, stops, detachments) } }
   func start() async throws {
@@ -70,10 +76,19 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
       stops += 1
       let action = stopAction
       stopAction = nil
+      if holdStop { stopCompletion = completion }
       return action
     }
     action?()
-    completion(stopFailure ? ProbeError.capture("synthetic stop failure") : nil)
+    if !holdStop { completion(stopFailure ? ProbeError.capture("synthetic stop failure") : nil) }
+  }
+  func releaseStop() {
+    let completion = lock.withLock {
+      let completion = stopCompletion
+      stopCompletion = nil
+      return completion
+    }
+    completion?(stopFailure ? ProbeError.capture("synthetic stop failure") : nil)
   }
   func onStop(_ action: @escaping @Sendable () -> Void) { lock.withLock { stopAction = action } }
   func detach() throws { lock.withLock { detachments += 1 } }
@@ -112,6 +127,279 @@ private final class SilentSystemFactory: @unchecked Sendable {
 }
 
 final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  private func sleepReading(_ host: Int64, offset: Int64 = 500) -> CaptureClockReading {
+    CaptureClockReading(
+      hostBeforeNs: host, continuousNs: host + offset + 10,
+      utcMs: 1_700_000_000_000, hostAfterNs: host + 20)
+  }
+
+  func testClockRecoveryWaitsForActualStopAndResumesOnlyNewConfirmedStreamWithoutChangingCAF()
+    async throws
+  {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource(holdStop: true)
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([source, current])
+    let time = SystemTestTime()
+    let box = ReadingBox(sleepReading(1_000_000_000))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), allowsRecovery: true
+    ) { box.read() }
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), clock: clock,
+      levelsEnabled: true, retries: true, factory: { try factory.make($0, $1) },
+      now: time.read, requireIdentity: { _ in }, mayContinue: time.mayContinue)
+    try await recorder.start(targetPID: identity.pid, applicationIdentity: identity)
+    let micURL = output.appendingPathComponent("microphone.caf")
+    let micFormat = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2))
+    var micFile: AVAudioFile? = try AVAudioFile(
+      forWriting: micURL, settings: micFormat.settings,
+      commonFormat: .pcmFormatFloat32, interleaved: false)
+    let micBuffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: 480))
+    micBuffer.frameLength = 480
+    for frame in 0..<480 {
+      micBuffer.floatChannelData![0][frame] = 0.125
+      micBuffer.floatChannelData![1][frame] = -0.125
+    }
+    var micStats = TrackStats(frames: 960, sampleRate: 48000, channels: 2)
+    box.set(sleepReading(1_020_000_000))
+    let firstObservation = clock.observe(hostTicks: 1_010_000_000)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: firstObservation
+    )
+    micStats.recordSavedClock(firstObservation, frames: 480, sourceFrame: 0, sourceEpoch: 1)
+    try micFile?.write(from: micBuffer)
+    let before = recorder.snapshot()
+    XCTAssertEqual(before.frames, 480)
+    box.set(sleepReading(1_030_000_000, offset: 10_000_000_500))
+    let request = try XCTUnwrap(clock.recoveryRequest())
+    recorder.receive(from: source, sampleBuffer: try sample(value: 9), observation: .suspended)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "clock_changed")
+    let mic = try clock.quiesced(.microphone, for: request)
+    let retirement = Task { try await recorder.suspendForClockRecovery(request) }
+    try await wait { source.counts.1 == 1 }
+    XCTAssertTrue(recorder.acquisitionPending)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(source.counts.2, 0)
+    XCTAssertThrowsError(try recorder.resumeAfterClockRecovery(request))
+    recorder.receive(
+      from: source, sampleBuffer: try sample(value: 9), observation: .timestamp(11_050_000_500))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    source.releaseStop()
+    let system = try await retirement.value
+    XCTAssertFalse(recorder.acquisitionPending)
+    XCTAssertEqual(source.counts.2, 1)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1)
+    box.set(sleepReading(1_040_000_000, offset: 10_000_000_500))
+    try clock.resume(request, microphone: mic, system: system)
+    time.set(12_000_000_000)
+    try recorder.resumeAfterClockRecovery(request)
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(factory.observedScopes.map(\.0), [identity.pid, identity.pid])
+    XCTAssertEqual(factory.observedScopes.map(\.1), [identity, identity])
+    recorder.sourceEnded(source)
+    recorder.receive(from: source, sampleBuffer: try sample(value: 9), observation: .invalid("old"))
+    try await wait { recorder.readyForPCM }
+    box.set(sleepReading(1_060_000_000, offset: 10_000_000_500))
+    let secondObservation = clock.observe(hostTicks: 1_050_000_000)
+    recorder.receive(
+      from: current, sampleBuffer: try sample(value: 0.5),
+      observation: secondObservation)
+    micStats.recordSavedClock(secondObservation, frames: 480, sourceFrame: 0, sourceEpoch: 2)
+    try micFile?.write(from: micBuffer)
+    micFile = nil
+    let closure = try await recorder.stopRecording()
+    let micClosure = try clock.close(.microphone)
+    var stats = recorder.snapshot()
+    try stats.finishClock(originNanoseconds: 1_010_000_500)
+    XCTAssertEqual(stats.frames, 960)
+    XCTAssertEqual(stats.appendFailures, 0)
+    XCTAssertNil(stats.captureFailure)
+    XCTAssertEqual(stats.clockSegments?.count, 2)
+    XCTAssertEqual(stats.clockSegments?[1].timelineStartUs, 10_040_000)
+    XCTAssertEqual(stats.systemRecovery?.sourceEpoch, 2)
+    XCTAssertEqual(stats.systemRecovery?.interruptions, 1)
+    XCTAssertEqual(stats.inputEventHistory?.events.map(\.kind), ["interrupted", "recovered"])
+    XCTAssertEqual(stats.inputEventHistory?.events.first?.status.reason, "clock_changed")
+    XCTAssertTrue(stats.inputEventHistory!.matches(stats.systemRecovery!, input: "system"))
+    let (_, ending) = try clock.ending(
+      originNanoseconds: 1_010_000_500, microphone: micClosure, system: closure)
+    XCTAssertEqual(ending.endUs, 10_050_000)
+    let saved = try AVAudioFile(forReading: output.appendingPathComponent("system.caf"))
+    XCTAssertEqual(saved.length, 960)
+    let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: saved.processingFormat, frameCapacity: 960))
+    try saved.read(into: pcm)
+    XCTAssertEqual(pcm.frameLength, 960)
+    let values = try XCTUnwrap(pcm.floatChannelData)
+    for frame in 0..<960 {
+      let expected: Float = frame < 480 ? 0.25 : 0.5
+      XCTAssertEqual(values[0][frame], expected)
+      XCTAssertEqual(values[1][frame], -expected)
+    }
+    var manifest = Manifest(
+      schemaVersion: 2, scenario: "synthetic-clock-recovery", captureMode: "application",
+      backend: "screencapturekit", targetPID: identity.pid, targetPIDs: [identity.pid],
+      startedAtUTC: "2023-11-14T22:13:20Z", requestedDurationSeconds: nil,
+      osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: micStats, system: recorder.snapshot(), errors: [])
+    manifest.targetApplicationIdentity = identity
+    manifest.recordingOwnerId =
+      ProcessInfo.processInfo.environment["MON_CLOCK_RECOVERY_FIXTURE_OWNER"]
+      ?? "735027d4-a03e-43d3-830a-21e767dfaf88"
+    try manifest.finalizeStoppedClock(
+      clock, microphoneClosure: micClosure, systemClosure: closure)
+    XCTAssertEqual(manifest.captureClock?.originUtcMs, 1_700_000_000_009)
+    try verifyRecordedCAF(micURL, expected: manifest.microphone)
+    try verifyRecordedCAF(output.appendingPathComponent("system.caf"), expected: manifest.system)
+    try manifest.encodedData().write(to: output.appendingPathComponent("manifest.json"))
+    if let path = ProcessInfo.processInfo.environment["MON_CLOCK_RECOVERY_FIXTURE_DIR"] {
+      let destination = URL(fileURLWithPath: path, isDirectory: true)
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: path).isEmpty)
+      for name in ["manifest.json", "microphone.caf", "system.caf"] {
+        try FileManager.default.copyItem(
+          at: output.appendingPathComponent(name), to: destination.appendingPathComponent(name))
+      }
+    }
+  }
+
+  func testClockRecoveryStopFailureCannotProduceQuiescenceOrStartReplacement() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource(stopFailure: true)
+    let factory = SilentSystemFactory([source, SilentSystemSource()])
+    let time = SystemTestTime()
+    let box = ReadingBox(sleepReading(1_000_000_000))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), allowsRecovery: true
+    ) { box.read() }
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), clock: clock,
+      retries: true, factory: { try factory.make($0, $1) }, now: time.read)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_010_000_500))
+    box.set(sleepReading(1_030_000_000, offset: 10_000_000_500))
+    let request = try XCTUnwrap(clock.recoveryRequest())
+    do {
+      _ = try await recorder.suspendForClockRecovery(request)
+      XCTFail("failed OS stop minted quiescence")
+    } catch {}
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(source.counts.2, 0)
+    XCTAssertThrowsError(try recorder.resumeAfterClockRecovery(request))
+    do {
+      _ = try await recorder.stopRecording()
+      XCTFail("failed stop minted ending")
+    } catch {}
+    XCTAssertEqual(source.counts.1, 1)  // Reuse the actual stop result, not a second OS request.
+    XCTAssertEqual(
+      try AVAudioFile(forReading: output.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testClockRecoveryTimeoutKeepsSingleStopRequestAndLateResultCannotResume() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource(holdStop: true)
+    let factory = SilentSystemFactory([source, SilentSystemSource()])
+    let time = SystemTestTime()
+    let box = ReadingBox(sleepReading(1_000_000_000))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), allowsRecovery: true
+    ) { box.read() }
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), clock: clock,
+      retries: true, factory: { try factory.make($0, $1) }, now: time.read)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_010_000_500))
+    box.set(sleepReading(1_030_000_000, offset: 10_000_000_500))
+    let request = try XCTUnwrap(clock.recoveryRequest())
+    do {
+      _ = try await recorder.suspendForClockRecovery(request)
+      XCTFail("unresponsive stop minted quiescence")
+    } catch {}
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(source.counts.2, 0)
+    time.set(12_000_000_000)
+    do {
+      _ = try await recorder.suspendForClockRecovery(request)
+      XCTFail("timed-out OS stop was requested a second time")
+    } catch {}
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1)
+    source.releaseStop()
+    XCTAssertThrowsError(try recorder.resumeAfterClockRecovery(request))
+    recorder.receive(from: source, sampleBuffer: try sample(value: 9), observation: .suspended)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    do {
+      _ = try await recorder.stopRecording()
+      XCTFail("unproven clock minted ending")
+    } catch {}
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: output.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testClockRecoveryWaitsForOwnedLateAcquisitionAndNeverAdoptsItsPCM() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource()
+    let held = SilentSystemSource(held: true)
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([source, held, current])
+    let time = SystemTestTime()
+    let box = ReadingBox(sleepReading(1_000_000_000))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), allowsRecovery: true
+    ) { box.read() }
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), clock: clock,
+      retries: true, factory: { try factory.make($0, $1) }, now: time.read)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_010_000_500))
+    recorder.sourceEnded(source)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { held.counts.0 == 1 }
+    box.set(sleepReading(1_030_000_000, offset: 10_000_000_500))
+    let request = try XCTUnwrap(clock.recoveryRequest())
+    let retirement = Task { try await recorder.suspendForClockRecovery(request) }
+    try await wait { recorder.snapshot().systemRecovery?.reason == "clock_changed" }
+    XCTAssertTrue(recorder.acquisitionPending)
+    time.set(12_000_000_000)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 2)
+    recorder.receive(from: held, sampleBuffer: try sample(value: 9), observation: .suspended)
+    held.release()
+    let system = try await retirement.value
+    XCTAssertEqual(held.counts.1, 1)
+    XCTAssertEqual(held.counts.2, 1)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    box.set(sleepReading(1_040_000_000, offset: 10_000_000_500))
+    try clock.resume(
+      request, microphone: clock.quiesced(.microphone, for: request), system: system)
+    try recorder.resumeAfterClockRecovery(request)
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 3)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.sourceEpoch, 3)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.interruptions, 1)
+    recorder.receive(
+      from: held, sampleBuffer: try sample(value: 9), observation: .invalid("obsolete"))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    _ = try await recorder.stopRecording()
+    XCTAssertEqual(
+      try AVAudioFile(forReading: output.appendingPathComponent("system.caf")).length, 480)
+  }
+
   func testTerminalClockFailureRejectsPCMAndReconnectAndCannotMintStopClosure() async throws {
     let output = try directory()
     defer { try? FileManager.default.removeItem(at: output) }

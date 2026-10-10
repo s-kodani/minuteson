@@ -178,6 +178,7 @@ fn valid_input(m: &Input, input: &str) -> bool {
                     | "permission_unavailable"
                     | "restart_failed"
                     | "format_changed"
+                    | "clock_changed"
             )
         } else {
             matches!(
@@ -188,6 +189,7 @@ fn valid_input(m: &Input, input: &str) -> bool {
                     | "permission_unavailable"
                     | "restart_failed"
                     | "format_changed"
+                    | "clock_changed"
             )
         }
     });

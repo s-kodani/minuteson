@@ -41,7 +41,7 @@ check-speaker-embedding:
 	sh probes/speaker-embedding/check.sh
 
 check-capture-ending:
-	python3 tools/mon_rust_tests.py swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewriting_proofs -- --ignored
+	python3 tools/mon_rust_tests.py swift_generated_capture_ending -- --ignored
 
 check-system-recovery:
 	@mon_system_dir=$$(mktemp -d /tmp/mon-system-recovery.XXXXXX) || exit 1; \

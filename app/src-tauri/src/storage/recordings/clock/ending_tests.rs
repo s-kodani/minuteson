@@ -439,6 +439,142 @@ fn capture_ending_additive_restore_preserves_duration_gaps_and_known_pcm_without
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "runs synthetic Swift clock recovery into native-owned output; make check-capture-ending"]
+fn swift_generated_capture_ending_clock_recovery_preserves_sleep_gaps_and_actual_pcm() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = storage
+        .create_meeting("synthetic sleep clock recovery")
+        .unwrap();
+    let identity = crate::capture_scope::ApplicationIdentity {
+        pid: 321,
+        bundle_identifier: "com.example.confirmed".into(),
+        launch_time_us: 1_700_000_000_000_000,
+    };
+    let session = storage
+        .prepare_recording(
+            &meeting.id,
+            &RecordingConfig {
+                mode: "application".into(),
+                backend: "screencapturekit".into(),
+                target_pids: vec![identity.pid],
+                microphone_device_uid: None,
+                target_application_identity: Some(identity),
+            },
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+    storage.mark_recording_started(&session.id).unwrap();
+    let output = storage
+        .root
+        .join("meetings")
+        .join(&meeting.id)
+        .join("audio")
+        .join(&session.id);
+    std::fs::create_dir_all(&output).unwrap();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let generated = std::process::Command::new("/usr/bin/xcrun")
+        .args(["swift", "test", "--package-path"]).arg(repo.join("probes/macos-capture"))
+        .args(["--disable-sandbox", "--filter", "SystemAudioRecoveryTests/testClockRecoveryWaitsForActualStopAndResumesOnlyNewConfirmedStreamWithoutChangingCAF"])
+        .env("SWIFTPM_MODULECACHE_OVERRIDE", "/tmp/mon-swift-module-cache")
+        .env("CLANG_MODULE_CACHE_PATH", "/tmp/mon-clang-module-cache")
+        .env("MON_CLOCK_RECOVERY_FIXTURE_DIR", &output)
+        .env("MON_CLOCK_RECOVERY_FIXTURE_OWNER", &session.id)
+        .output().unwrap();
+    assert!(
+        generated.status.success(),
+        "Swift clock recovery failed: {}\n{}",
+        String::from_utf8_lossy(&generated.stdout),
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let before = originals(&output);
+    let manifest: Value = serde_json::from_slice(&before[0]).unwrap();
+    assert_eq!(manifest["schemaVersion"], 3);
+    assert_eq!(manifest["recordingOwnerId"], session.id);
+    // Lifecycle history belongs to its separate producer journal/status, never
+    // to the audio manifest. Its clock_changed reason is asserted in the Swift
+    // source test and input_status's history tests, not invented here.
+    assert!(manifest["system"].get("inputEventHistory").is_none());
+    assert_eq!(manifest["system"]["systemRecovery"]["sourceEpoch"], 2);
+    assert_eq!(manifest["system"]["systemRecovery"]["interruptions"], 1);
+    assert_eq!(manifest["system"]["systemRecovery"]["state"], "stopped");
+    let saved = storage.finalize_recording(&session.id).unwrap();
+    assert_eq!(saved.duration_us, 10_050_000);
+    assert_eq!(saved.ended_at_utc_ms, Some(1_700_000_010_059));
+    assert_eq!(
+        gaps(&storage),
+        vec![
+            (
+                "mic".into(),
+                10_000,
+                10_040_000,
+                "capture_timestamp_gap".into(),
+                false
+            ),
+            (
+                "system".into(),
+                10_000,
+                10_040_000,
+                "capture_timestamp_gap".into(),
+                false
+            ),
+        ]
+    );
+    // A whole-track analysis plan must not pretend the inner missing range is
+    // continuous PCM. Each verified saved run remains independently playable.
+    assert!(storage.recorded_audio_plan(&meeting.id).is_err());
+    let tracks = storage
+        .connection
+        .lock()
+        .unwrap()
+        .prepare("SELECT id,kind FROM audio_tracks WHERE meeting_id=?1 ORDER BY kind")
+        .unwrap()
+        .query_map([&meeting.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(tracks.len(), 2);
+    for (track, kind) in tracks {
+        assert!(storage
+            .prepare_track_audio(&meeting.id, &track, 10_000, 10_040_000)
+            .is_err());
+        for (start, end, value) in [(0, 10_000, 0.25_f32), (10_040_000, 10_050_000, 0.5)] {
+            let mut audio = storage
+                .prepare_track_audio(&meeting.id, &track, start, end)
+                .unwrap();
+            assert_eq!(audio.total_frames(), 480);
+            let expected = if kind == "mic" { 0.125 } else { value };
+            for (index, sample) in audio.read_pcm(0, 480).unwrap().chunks_exact(4).enumerate() {
+                assert_eq!(
+                    f32::from_le_bytes(sample.try_into().unwrap()),
+                    if index % 2 == 0 { expected } else { -expected }
+                );
+            }
+        }
+    }
+    assert_whole_gap_playback(&storage, &meeting.id, 10_050_000);
+    assert_eq!(originals(&output), before);
+    drop(storage);
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        load_session(&reopened.connection.lock().unwrap(), &session.id)
+            .unwrap()
+            .unwrap(),
+        saved
+    );
+    assert_eq!(meeting_duration(&reopened, &meeting.id), 10_050_000);
+    assert_whole_gap_playback(&reopened, &meeting.id, 10_050_000);
+    assert_eq!(originals(&output), before);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 #[ignore = "runs synthetic Swift capture directly into the native-owned output; make check-capture-ending"]
 fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewriting_proofs() {
     let root = tempfile::tempdir().unwrap();
