@@ -2,7 +2,9 @@
 
 MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
 
-現在の最新QAは `/private/tmp/mon-modal-modality-qa-artifact.u8TS4Y/MON QA.app`、main SHA `1ed7f67296cdde68fa33c3d1e5d33c202b4a5ef0491cb06a7ddda506967da3f1`。共通dialogの固定ARIA宣言だけを外し、ネイティブmodal状態へ統一した。フロント634件と合成ブラウザの限定回帰、QA構築・コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認。Macの再ロックにより復元画面AXの旧／新A/Bは解除待ちで、実機不具合解消・録音・実モデル・公証は未検証。[今回の範囲・時間・解除後手順](m4-01-native-nonrecording-ui-2026-10-10.md#ネイティブモーダル状態への統一と解除待ち)を参照。以下の「最新」表記は当時の履歴として扱う。
+現在の最新QAは `/private/tmp/mon-raw-duration-qa-artifact.nHNweS/MON QA.app`、main SHA `cd38dc862662d68d404d2e84a1d10a8efebc68cf7adcf0e33c3c02cdf2ca6d31`。共通dialogのネイティブmodal状態への統一に加えて、[未処理PCMの500ms上限を端数切捨てで超えない修正](live-raw-recording-segments-2026-10-09.md#2026-10-10の未処理pcm時間の端数保護)を含む。最新Swift全体・合成Swift／Rust連携・QA構築・コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認した。操作可能となった後、新QAの冷起動・既存3会議・復元プレビューの限定Tab／Escapeを確認し終了した。同条件の旧側もAX取得に成功したため、以前の欠落は今回再現できず、原因／解消の断定・VoiceOver等の全体合格にはしない。実復元・録音・実モデル・公証は未検証。[今回の実機比較](m4-01-native-nonrecording-ui-2026-10-10.md#再操作可能になった後の最新qaと旧qaの比較)を参照。以下の「最新」表記は当時の履歴として扱う。
+
+直前のQAは `/private/tmp/mon-modal-modality-qa-artifact.u8TS4Y/MON QA.app`、main SHA `1ed7f67296cdde68fa33c3d1e5d33c202b4a5ef0491cb06a7ddda506967da3f1`。共通dialogの固定ARIA宣言だけを外し、ネイティブmodal状態へ統一した。フロント634件と合成ブラウザの限定回帰、QA構築・コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認。Macの再ロックにより復元画面AXの旧／新A/Bは解除待ちで、実機不具合解消・録音・実モデル・公証は未検証。[今回の範囲・時間・解除後手順](m4-01-native-nonrecording-ui-2026-10-10.md#ネイティブモーダル状態への統一と解除待ち)を参照。
 
 最新QAは `/private/tmp/mon-legacy-seal-qa-artifact.rI1uKt/MON QA.app`。直前の読取コピー案内等に加えて、[形式版1の会議参照を完全削除前に保護する修正](legacy-deletion-seal-detachment-2026-10-10.md)を含む。構築・全コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認した。新しい画面機能はない。ロック解除後、この成果物で移動済み保存先の冷起動・日本語会議名／用語の保持・合成6秒M4Aの取り込み／再生／冷起動後保持を実画面で確認し、終了した。追加復元確認のAX操作要素欠落は2回再現し、Escapeで取消、復元は実行していない。原因は未解決で、録音・実モデル・公証・モーダル全体の合格とはしない。[最新QAの再確認](m4-01-native-nonrecording-ui-2026-10-10.md#ロック解除後の最新qa再確認)を参照。以下のロック待ち・未起動記述は、その時点の履歴である。
 

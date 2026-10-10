@@ -10,9 +10,19 @@ import XCTest
 private final class RawSegmentGate: @unchecked Sendable {
   let entered = DispatchSemaphore(value: 0)
   let released = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private var waited = false
   func wait() {
     entered.signal()
     _ = released.wait(timeout: .now() + 5)
+  }
+  func waitOnce() {
+    let first = lock.withLock {
+      if waited { return false }
+      waited = true
+      return true
+    }
+    if first { wait() }
   }
 }
 
@@ -164,6 +174,50 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       XCTAssertNil(second["acquisitionClosed"])
       XCTAssertEqual(try value(root)["producerClosed"] as? Bool, true)
     }
+  }
+
+  func testSubNanosecondDurationRoundingNeverAdmitsMoreThanHalfASecond() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let gate = RawSegmentGate()
+    let writer = try RawRecordingSegments(
+      output: root, owner: owner, lane: "microphone", beforeAppend: gate.waitOnce)
+    defer { gate.released.signal() }
+    let rate: Int64 = 380_000
+    try writer.enqueue(
+      buffer(frames: 95_000, rate: Double(rate)), observation: .timestamp(origin),
+      sourceFrame: 0)
+    XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
+    try writer.enqueue(
+      buffer(frames: 90_001, rate: Double(rate)), observation: .timestamp(origin + 250_000_000),
+      sourceFrame: 95_000)
+    let tiny = try buffer(frames: 1, rate: Double(rate))
+    var admittedFrames: Int64 = 185_001
+    var rejected = false
+    // Exact rational duration exceeds 0.5s at 190,001 frames. Rounding
+    // each tiny callback down can hide that extra frame within the budget.
+    for _ in 0..<5_000 {
+      do {
+        try writer.enqueue(
+          tiny,
+          observation: .timestamp(origin + admittedFrames * 1_000_000_000 / rate),
+          sourceFrame: admittedFrames)
+        admittedFrames += 1
+      } catch {
+        rejected = true
+        break
+      }
+    }
+    XCTAssertTrue(rejected)
+    XCTAssertLessThanOrEqual(admittedFrames * 2, rate)
+    XCTAssertEqual(writer.snapshot().sealedFrames, 0)
+    XCTAssertFalse(writer.snapshot().producerClosed)
+    gate.released.signal()
+    XCTAssertThrowsError(try writer.drainAcceptedPCM())
+    XCTAssertThrowsError(try writer.finish())
+    let tip = try value(root)
+    XCTAssertEqual(tip["sealedFrames"] as? Int64, 0)
+    XCTAssertEqual(tip["producerClosed"] as? Bool, false)
   }
 
   func testSegmentBoundaryUsesMeasuredNextTimestampAndNeverChangesPublishedClock() throws {

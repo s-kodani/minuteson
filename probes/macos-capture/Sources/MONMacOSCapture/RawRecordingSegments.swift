@@ -192,7 +192,11 @@ final class RawRecordingSegments: @unchecked Sendable {
       throw ProbeError.capture("raw segment capture timestamp is unavailable")
     }
     let bytes = frames * Int(buffer.format.channelCount) * 4
-    let duration = Int64(frames) * 1_000_000_000 / Int64(buffer.format.sampleRate)
+    let rate = Int64(buffer.format.sampleRate)
+    // Round each reservation up: repeated fractional nanoseconds must never
+    // admit more PCM than the half-second pending limit. requireFormat bounds
+    // frames and the integer rate, so this numerator cannot overflow Int64.
+    let duration = (Int64(frames) * 1_000_000_000 + rate - 1) / rate
     try lock.withLock {
       guard accepting, failure == nil, pendingBytes <= Self.maximumPendingBytes - bytes,
         pendingNanoseconds <= Self.maximumPendingNanoseconds - duration
