@@ -8,6 +8,7 @@ import { ModelInspectionPanel } from "../src/model-inspection";
 import { ToastHost } from "../src/toast";
 import { parseDownloadDefinition, downloadDigest, type DownloadReview } from "../src/model-download-state";
 import "../src/style.css";
+import "../src/prototype-alignment.css";
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
@@ -70,6 +71,9 @@ mockIPC(async (command, args) => {
 function Fixture() {
   const [locked, setLocked] = useState(false), [visible, setVisible] = useState(true), [busy, setBusy] = useState(false), [parent, setParent] = useState(false);
   f.setLocked = setLocked; f.setVisible = setVisible; f.setParent = setParent; f.busy = busy;
-  return <main><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>{visible && (parent ? <ModelInspectionPanel locked={locked} recordingActive={false} /> : <ModelDownloadPanel locked={locked} onBusyChange={setBusy} onChanged={async () => { f.changed++; }} />)}<ToastHost /></main>;
+  const compact = new URLSearchParams(location.search).get("compact") === "1";
+  return <main><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>
+    {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button></>}
+    {visible && (parent ? <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} /> : <ModelDownloadPanel compact={compact} locked={locked} onBusyChange={setBusy} onChanged={async () => { f.changed++; }} />)}<ToastHost /></main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

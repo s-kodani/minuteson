@@ -88,6 +88,14 @@ button:disabled { opacity:.5; }
 .utterance-edit-tools>label { display:flex; align-items:center; gap:6px; margin-block:10px; }
 .minutes-editor-actions-host,.minutes-edit-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .minutes-edit-actions[hidden] { display:none; }
+.settings-disclosure { margin-top:12px; }
+.settings-disclosure-body[hidden] { display:none; }
+.settings-disclosure-body { padding-top:12px; }
+.settings-disclosure-toggle { font-size:13px; font-weight:500; }
+.model-setup-summary { display:grid; gap:6px; margin:18px 0; }
+.model-setup-summary>span { color:var(--muted); font-size:13px; }
+.model-inspection .model-download { border:0; padding:0; margin:0; }
+.model-inspection>.heading-with-info h2 { font-size:17px; }
 .minutes-edit-options { font-size:12px; color:var(--muted); }
 .minutes-edit-options>summary { cursor:pointer; }
 .minutes-edit-options[open] { max-width:280px; }

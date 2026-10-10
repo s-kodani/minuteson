@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { CommonModal } from "./common-modal";
+import { SettingsDisclosure } from "./settings-disclosure";
 import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { assertPlacementReceipt, type ModelPlacementReceipt } from "./model-inspection-state";
 import { acceptDownloadProgress, assertDownloadCatalog, assertDownloadCopyResult, assertDownloadLifetime, assertDownloadReadback, assertDownloadReceipt, assertDownloadReview, downloadDigest, parseDownloadDefinition, type DownloadCatalog, type DownloadReceipt, type DownloadReview } from "./model-download-state";
@@ -10,7 +11,7 @@ type Pending = { kind: "download" | "copy"; token: string; downloadId: string; r
 // Navigation must not create a new writer after an uncertain response. Restart
 // discovers native intents separately; this is not persistent success evidence.
 let unresolved: Pending | null = null;
-export function ModelDownloadPanel({ locked, onBusyChange, onChanged }: { locked: boolean; onBusyChange: (value: boolean) => void; onChanged: () => Promise<void> }) {
+export function ModelDownloadPanel({ locked, onBusyChange, onChanged, compact = false }: { locked: boolean; onBusyChange: (value: boolean) => void; onChanged: () => Promise<void>; compact?: boolean }) {
   const [definition, setDefinition] = useState("");
   const [review, setReview] = useState<DownloadReview | null>(null);
   const [receipt, setReceipt] = useState<DownloadReceipt | null>(null);
@@ -152,6 +153,7 @@ export function ModelDownloadPanel({ locked, onBusyChange, onChanged }: { locked
   };
   const supported = catalog?.supported !== false, disabled = !!busy || locked || !!pending || !isTauri();
   return <section className="model-download" aria-label="モデルの初回取得">
+    <SettingsDisclosure label="取得定義からダウンロード" initialOpen={!compact} attention={!!(pending || modal || review || receipt || error || busy && busy !== "取得記録を読み取っています")}>
     <h3>モデルの初回取得（macOS）</h3>
     <p>利用者が用意した定義のHTTPS配布元から取得します。公式カタログ・配布元の認証ではありません。全ファイルの容量とSHA-256・ライセンスを確認してください。取得とコピーでは実行ファイルを起動せず、設定・会議・ジョブを変更しません。</p>
     {!supported ? <p>Windowsのモデル取得は保留中です。</p> : <>
@@ -167,6 +169,7 @@ export function ModelDownloadPanel({ locked, onBusyChange, onChanged }: { locked
         {!!busy && <button type="button" className="secondary" onClick={() => void stop()}>停止を要求する</button>}
       </div>
     </>}
+    </SettingsDisclosure>
     {!!busy && <p role="status">{busy}。停止要求だけでは停止完了になりません。</p>}
     {!modal && pending?.kind === "download" && <p aria-label="モデル取得進捗">受信 {received.toLocaleString()} / {pending.review.totalBytes.toLocaleString()} bytes（全量受信でも照合・同期・完了は未確認）</p>}
     <IssueNotice scope="model-download" type="error" label="モデル取得・コピー" message={!modal ? error : ""} />
@@ -174,10 +177,12 @@ export function ModelDownloadPanel({ locked, onBusyChange, onChanged }: { locked
     <ToastNotice scope="model-download" type="result" message={!modal ? message : ""} level="info" />
     {message && <p role="status" aria-label="モデル取得結果">{message}</p>}
     {receipt && <div aria-label="照合済み取得素材"><p>素材照合済み・未配置 · {receipt.report.manifest.modelName} / {receipt.report.manifest.modelVersion}</p><p>取得ID: <code>{receipt.operationId}</code> · {receipt.report.totalBytes.toLocaleString()} bytes</p></div>}
+    <SettingsDisclosure label="取得記録" initialOpen={!compact} attention={!!catalogError || !!catalog?.unknownEntries || !!catalog?.entries.some(entry => entry.state !== "completion_recorded")}>
     <h4>保持している取得記録</h4>
     <button type="button" className="small-secondary" disabled={!!busy || locked || !!pending || !isTauri()} onClick={() => void loadCatalog().catch(() => {})}>取得記録を再読込</button>
     <IssueNotice scope="model-download" type="catalog-error" label="取得記録の読込" message={catalogError} />
     {catalog && <><p>一覧の「完了記録あり」は実体照合済みではありません。選択後に全ファイルを再照合します。自動再開・再取得・削除は行いません。</p>{catalog.unknownEntries > 0 && <p>由来不明の保持物: {catalog.unknownEntries} 件（変更しません）</p>}<ul className="model-download-catalog">{catalog.entries.map(entry => <li key={entry.operationId}><strong>{entry.modelName ?? "要確認の取得"}</strong> / {entry.modelVersion ?? "不明"}<p>{entry.state === "completion_recorded" ? "完了記録あり（実体未照合）" : entry.state === "incomplete" ? "未完了・途中ファイル保全" : "要対応・記録または管理領域を確認できません"}<br /><code>{entry.operationId}</code></p><button type="button" className="small-secondary" disabled={disabled || !entry.recipeHash} onClick={() => void inspectEntry(entry)}>この取得の実体を照合</button></li>)}</ul></>}
+    </SettingsDisclosure>
     <CommonModal open={!!modal} blocked={!!busy} onDismiss={() => { setModal(null); setAcknowledged(false); }} restoreTarget={() => opener.current} className="model-application-dialog" aria-labelledby="model-download-title">
       <h3 id="model-download-title">{modal === "copy" ? "管理領域へのコピーを確認" : "モデルの取得内容を確認"}</h3>
       {review && <><p>{review.manifest.modelName} / {review.manifest.modelVersion} · {review.manifest.engine} / {review.manifest.engineVersion} · {review.manifest.target}</p><p>合計 {review.totalBytes.toLocaleString()} bytes · ライセンス参照: {review.manifest.licenseRef}</p><p>定義SHA: <code>{review.recipeHash}</code></p><p>配布元・ライセンス・真正性は未検証です。SHA一致だけでは安全性・互換性を証明しません。取得済み素材とコピーを両方保持し、中断・不明な結果のファイルも保全します。コピー・CPU実行・解析への適用はそれぞれ別の確認が必要です。</p>

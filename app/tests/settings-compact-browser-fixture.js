@@ -8,6 +8,7 @@ const idle = structuredClone(f.snapshot);
 let blocked = false, interrupted = false;
 mockIPC(async (command, args) => {
   const listing = { items: [], writeBlocked: false, restartRequired: false, reason: null };
+  if (command === "get_model_download_catalog") return { supported: true, entries: [], unknownEntries: 0 };
   if (command === "get_deletion_items") return { ...listing, deletingMeetingIds: [] };
   if (command === "get_model_deletion_items") return { ...listing, writeBlocked: blocked, reason: blocked ? "合成：中断したモデル削除のため書込停止" : null };
   if (command === "get_audio_deletion_items") return listing;

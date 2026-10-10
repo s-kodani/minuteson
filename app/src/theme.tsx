@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useId, useState, useSyncExternalS
 import { isTheme, isTextSize, readingPreferences, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
 import { IssueStatus, ToastNotice } from "./toast";
+import { SettingsDisclosure } from "./settings-disclosure";
 
 const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -64,21 +65,25 @@ export function PlaybackFollowingSelection({ locked = false }: { locked?: boolea
   const selected={...readingPreferences(state.snapshot?.payload),...state.pendingDisplay};
   return <label className="playback-follow-choice"><input type="checkbox" checked={selected.followPlayback} disabled={locked||state.busy||state.uncertain||!!state.pendingPreferences||!state.snapshot||!isTauri()} onChange={event=>void controller.changeDisplay({followPlayback:event.target.checked})}/>再生位置に追従</label>;
 }
-export function ThemeSettingsPanel({ locked }: { locked: boolean }) {
+export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolean; compact?: boolean }) {
   const { controller, state } = useTheme();
   return <section className="status-card theme-settings" aria-label="表示設定">
-    <div className="heading-with-info"><h2>表示設定</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
+    <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
     <ThemeSelection locked={locked} />
+    <IssueStatus label="表示設定の読込・保存" message={state.error} />
+    {(state.pendingTheme || state.pendingDisplay) && !state.busy && <div className="analysis-actions">
+      {state.pendingTheme && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
+      {state.pendingDisplay && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>文字サイズ・追従設定の保存を再試行</button>}
+    </div>}
+    <SettingsDisclosure label="本文と再生の表示設定" initialOpen={!compact} attention={!!(state.error || state.busy || state.uncertain || state.pendingPreferences)}>
     <TextSizeSelection locked={locked} />
     <PlaybackFollowingSelection locked={locked} />
     <p className="hint">文字サイズは文字起こし・議事録の本文に適用します。追従は文字起こしの時間位置へ移動します。手動スクロールで一時停止し、再開ボタンか新しい再生で戻ります。編集中・文字選択中・確認画面では移動しません。</p>
-    <IssueStatus label="表示設定の読込・保存" message={state.error} />
     <div className="analysis-actions">
-      {state.pendingTheme && !state.busy && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
-      {state.pendingDisplay && !state.busy && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>文字サイズ・追従設定の保存を再試行</button>}
       <button type="button" className="small-secondary" disabled={state.busy || !isTauri()} onClick={() => void controller.reload()}>保存済み表示設定を再読込</button>
       <span role="status">{state.busy ? "表示設定を保存中" : state.uncertain ? "表示設定は未確認" : state.pendingPreferences ? "選択は未保存" : state.snapshot ? "保存済み設定を使用しています。" : isTauri() ? "表示設定を確認しています。" : "ブラウザプレビューではOS設定に追従します。"}</span>
     </div>
+    </SettingsDisclosure>
   </section>;
 }
 // This owner stays mounted across navigation. Periodic reads are state updates,
