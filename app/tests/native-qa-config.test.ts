@@ -59,3 +59,15 @@ test("capture package keeps its CLI entry point out of the core imported by both
   assert.match(entry, /^@main$/m);
   assert.ok(entry.includes("await CaptureCommand.run()"));
 });
+
+test("distribution preparation is explicit, production-only and leaves QA/default signing unchanged", () => {
+  const release = json("../src-tauri/tauri.release.conf.json");
+  assert.deepEqual(Object.keys(release).sort(), ["$schema", "bundle"]);
+  assert.equal(production.identifier, "jp.mon.desktop");
+  assert.equal(qa.identifier, "jp.mon.desktop.qa");
+  assert.deepEqual(release.bundle.targets, ["app"]);
+  assert.equal(release.bundle.macOS.signingIdentity, "-");
+  assert.equal(macos.bundle.macOS.signingIdentity, "-");
+  assert.equal(release.bundle.macOS.infoPlist, "release-entitlements/Info.plist");
+  assert.equal(pkg.scripts["tauri:release:build"], "python3 ../tools/mon_macos_release.py");
+});
