@@ -23,6 +23,8 @@ if (new URLSearchParams(location.search).get("view") === "minutes") {
     theme.onchange = () => { if (theme.value) window.__mon.changeThemeFromOtherWindow(theme.value); };
     themeLabel.append(theme); controls.append(themeLabel);
     const state = document.createElement("output"); state.setAttribute("aria-label", "合成の保存状態"); controls.append(state);
+    const close = document.createElement("button"); close.textContent = "合成操作を閉じる";
+    close.onclick = () => { controls.hidden = true; }; controls.append(close);
     const update = () => { state.textContent = `保存失敗: ${window.__mon.failMinutesSave ? "有効" : "無効"} · 保存要求: ${window.__mon.calls.filter(call => call.cmd === "save_minutes_draft").length} · 元発言読込: ${window.__mon.calls.filter(call => call.cmd === "get_minutes_evidence_source").length}`; };
     update(); window.setInterval(update, 250);
   }

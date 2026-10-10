@@ -48,13 +48,22 @@ test("minutes regression drivers use explicit panel, primary actions and rich ev
   assert.match(read("run-browser-checks.mjs"),/applyMinutesFixtureTheme.toString\(\)/);
 });
 
-test("expanded idle playback settings keep a bounded scrollport in the minimum desktop frame", () => {
+test("shared playback and settings keep a bounded scrollport in the minimum desktop frame", () => {
   const css=readFileSync(new URL("../src/prototype-alignment.css",import.meta.url),"utf8");
-  assert.match(css,/@media\(max-width:1119px\) and \(max-height:760px\)/);
-  assert.match(css,/\.meeting-playback-dock:has\(\.meeting-audio-details\[open\]\):not\(:has\(\.audio-player\)\) \{ max-height:80px; align-items:start; scroll-padding-block:8px;/);
+  assert.match(css,/\.meeting-playback-dock \{ max-height:max\(80px,min\(40dvh,calc\(100dvh - 680px\)\)\); align-items:start; scroll-padding-block:8px;/);
   assert.doesNotMatch(css,/\.minutes-primary-toolbar \{[^}]*position:sticky/);
   assert.match(css,/\.minutes-format-tools:not\(\[open\]\) \{ padding:0; border:0; background:transparent;/);
   const audio=readFileSync(new URL("../src/meeting-audio.tsx",import.meta.url),"utf8");
   assert.match(audio,/<TextSizeSelection locked=\{locked\} \/>/);
   assert.match(audio,/<PlaybackFollowingSelection locked=\{locked\} \/>/);
+});
+
+test("synthetic controls can be dismissed without clearing the failure or changing product controls", () => {
+  const fixture=readFileSync(new URL("./detail-mock-browser-fixture.js",import.meta.url),"utf8");
+  assert.match(fixture,/close.textContent = "合成操作を閉じる"/);
+  assert.match(fixture,/close.onclick = \(\) => \{ controls.hidden = true; \}/);
+  const css=readFileSync(new URL("../src/style.css",import.meta.url),"utf8");
+  assert.match(css,/\.meeting-playback-dock \{[^}]*overflow:auto; overscroll-behavior:contain;/);
+  const player=readFileSync(new URL("../src/transcript-audio.tsx",import.meta.url),"utf8");
+  for (const action of ["先頭へ","再生を閉じる","会議全体の再生位置","速度"]) assert.ok(player.includes(action));
 });

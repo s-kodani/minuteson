@@ -174,11 +174,9 @@ button:disabled { opacity:.5; }
   .topbar:has(>.toast-host[data-docked=true]:not(:empty)) { grid-template-columns:minmax(0,1fr); }
   .main-column .topbar>.toast-host[data-docked=true] { grid-column:1; grid-row:3; max-height:80px; }
 }
-/* In the minimum desktop frame, expanded idle playback settings scroll inside
-   their existing dock instead of consuming the minutes editor's last row. */
-@media(max-width:1119px) and (max-height:760px) {
-  .meeting-playback-dock:has(.meeting-audio-details[open]):not(:has(.audio-player)) { max-height:80px; align-items:start; scroll-padding-block:8px; }
-}
+/* Keep a compact dock in short frames, then grow smoothly: crossing a height
+   breakpoint must not suddenly take the editor's remaining lines away. */
+.meeting-playback-dock { max-height:max(80px,min(40dvh,calc(100dvh - 680px))); align-items:start; scroll-padding-block:8px; }
 .mini-shell { padding:14px 16px; border-radius:12px; border-color:var(--border); }
 .mini-top strong { font-size:13px; font-weight:650; }
 .timer { font-size:16px; font-weight:650; }
