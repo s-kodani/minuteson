@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
-import { MinutesDocument } from "./minutes-document";
+import { MinutesDocument, type MinutesDocumentHandle } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
 import { documentAddress, documentPage, documentPageForAddress, firstDocumentAddress, inlineAddressKey } from "./minutes-pagination";
 import { MinutesPages } from "./minutes-pages";
@@ -32,6 +32,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const [full,setFull] = useState(false);
   const [referenceMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body minutes-reference-body"; return node; });
   const referenceHandle = useRef<WorkspacePanelHandle | null>(null);
+  const documentHandle = useRef<MinutesDocumentHandle | null>(null);
   const busyRef = useRef(false);
   const failure = useRef("");
   const compositions = useRef(new Set<string>());
@@ -125,7 +126,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const changingPageDisabled = disabled || !!failure.current || compositions.current.size > 0;
   const chipLabel = (id: string) => { const e = doc.evidence.find((e) => e.id === id); return e ? `${timeLabel(e.startUs)}${e.verificationState === "user_verified" ? " ✓" : " · 未確認"}` : "根拠"; };
   const field = (nodes: Inline[], address: InlineAddress, label: string, evidenceOnly = false) => <MinutesRichField key={`${epoch}:${JSON.stringify(address)}`} value={nodes} label={label} blockIndex={address.block} addressKey={inlineAddressKey(address)} disabled={disabled} evidenceOnly={evidenceOnly} chipLabel={chipLabel}
-    onChange={(nodes) => edit((d) => editInline(d, address, nodes), true)} onSelection={(range) => setSelection({ address, ...range })} onFailure={failed}
+    onChange={(nodes) => edit((d) => editInline(d, address, nodes), true)} onSelection={(range) => setSelection({ address, ...range })} onFailure={failed} onEvidence={id => documentHandle.current?.showEvidence(id)}
     onCompositionChange={(active) => { const key = JSON.stringify(address); if (active) compositions.current.add(key); else compositions.current.delete(key); setSaved(queue.snapshot()); }} />;
   const selectedBlock = selection ? doc.blocks[selection.address.block] : null;
   const structural = (action: (doc: MinutesContent) => MinutesContent, next: InlineAddress | number = selection?.address ?? { block: 0 }) => {
@@ -188,14 +189,13 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
       <details className="workspace-tools minutes-format-tools" hidden={full}><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>
       <div className="minutes-toolbar" role="toolbar" aria-label="議事録の書式と構造">
-        {(["bold", "italic"] as const).map((mark) => <span key={mark}>{toolbarButton(mark === "bold" ? "太字" : "斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, mark))); }, !selection || selection.end <= selection.start)}</span>)}
+        {toolbarButton("斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, "italic"))); }, !selection || selection.end <= selection.start)}
         {toolbarButton("段落", () => { if (selection) structural((d) => convertBlock(d, selection.address, "paragraph"), conversionAddress); }, !selection || selectedBlock?.type === "table")}
-        {([1, 2, 3] as const).map((level) => <span key={level}>{toolbarButton(`見出し${level}`, () => { if (selection) structural((d) => convertBlock(d, selection.address, "heading", level), conversionAddress); }, !selection || selectedBlock?.type === "table")}</span>)}
-        {toolbarButton("箇条書き", () => { if (selection) structural((d) => convertBlock(d, selection.address, "list")); }, !selection || selectedBlock?.type === "table")}
+        {([1, 3] as const).map((level) => <span key={level}>{toolbarButton(`見出し${level}`, () => { if (selection) structural((d) => convertBlock(d, selection.address, "heading", level), conversionAddress); }, !selection || selectedBlock?.type === "table")}</span>)}
         {toolbarButton("番号付きリスト", () => { if (selection) structural((d) => convertBlock(d, selection.address, "list", 2, true)); }, !selection || selectedBlock?.type === "table")}
         {toolbarButton("項目を追加", () => { if (selection) structural((d) => changeList(d, selection.address, false), { ...selection.address, item: (selection.address.item ?? 0) + 1 }); }, selectedBlock?.type !== "list")}
         {toolbarButton("項目を削除", () => { if (selection) structural((d) => changeList(d, selection.address, true)); }, selectedBlock?.type !== "list")}
-        {(["paragraph", "heading", "list", "table"] as const).map((type) => <span key={type}>{toolbarButton(({ paragraph: "段落を挿入", heading: "見出しを挿入", list: "リストを挿入", table: "表を挿入" })[type], () => structural((d) => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, type), (selection?.address.block ?? doc.blocks.length - 1) + 1))}</span>)}
+        {(["paragraph", "heading", "list"] as const).map((type) => <span key={type}>{toolbarButton(({ paragraph: "段落を挿入", heading: "見出しを挿入", list: "リストを挿入" })[type], () => structural((d) => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, type), (selection?.address.block ?? doc.blocks.length - 1) + 1))}</span>)}
         {(["addRow", "removeRow", "addColumn", "removeColumn"] as const).map((action) => <span key={action}>{toolbarButton(({ addRow: "表の行を追加", removeRow: "表の行を削除", addColumn: "表の列を追加", removeColumn: "表の列を削除" })[action], () => { if (selection) structural((d) => changeTable(d, selection.address, action), action === "addRow" ? { block: selection.address.block, row: (selection.address.row ?? (selectedBlock?.type === "table" ? selectedBlock.rows.length - 1 : 0)) + 1, column: 0 } : selection.address); }, selectedBlock?.type !== "table" || (action === "removeRow" && selection?.address.header))}</span>)}
         {toolbarButton("ブロックを削除", () => {
           if (!selection) return;
@@ -208,6 +208,12 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     <div className="minutes-split" data-full={full}>
     <div className="minutes-body-scroll" role="region" aria-label="議事録本文" tabIndex={0}>
     {editing && <>
+      <div className="minutes-primary-toolbar" role="toolbar" aria-label="議事録の基本書式" hidden={full}>
+        {toolbarButton("太字", () => { if (selection) edit(d => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, "bold"))); }, !selection || selection.end <= selection.start)}
+        {toolbarButton("見出し2", () => { if (selection) structural(d => convertBlock(d, selection.address, "heading", 2), conversionAddress); }, !selection || selectedBlock?.type === "table")}
+        {toolbarButton("箇条書き", () => { if (selection) structural(d => convertBlock(d, selection.address, "list")); }, !selection || selectedBlock?.type === "table")}
+        {toolbarButton("表を挿入", () => structural(d => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, "table"), (selection?.address.block ?? doc.blocks.length - 1) + 1))}
+      </div>
       <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト" hidden={full}>
         {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {
           const b = doc.blocks[index];
@@ -221,10 +227,10 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     {error && <p className="action-error" role="alert">{error}</p>}
     <IssueNotice scope={view.meetingId} type="minutes-save" label="議事録の保存に失敗" message={saved.error ? `入力はこの画面に保持しています。修正後に再試行してください: ${saved.error}` : ""} action={{ kind: "retry", label: "議事録保存を再試行", disabled: locked || busy || saved.saving || confirm.pending, run: () => run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); }) }} />
     <MinutesDocument key={view.id} view={view} locked={locked || busy} content={doc} title={editing ? "編集中の議事録プレビュー・根拠" : "現在の議事録"}
-      panelHost={referenceMount} panelHandle={referenceHandle} active={visible} onFullChange={setFull} navigateHeading={editing ? headingNavigation : undefined}
+      handle={documentHandle} readerHidden={editing} panelHost={referenceMount} panelHandle={referenceHandle} active={visible} onFullChange={setFull} navigateHeading={editing ? headingNavigation : undefined}
       verify={disabled || failure.current || compositions.current.size ? undefined : (id, verified) => { edit((d) => setEvidenceVerification(d, id, verified)); }} />
     </div>
-    <WorkspacePanel content={referenceMount} label="議事録の目次・根拠" side="right" active={visible} handle={referenceHandle} />
+    <WorkspacePanel collapsible content={referenceMount} label="議事録の目次・根拠" side="right" active={visible} handle={referenceHandle} />
     </div>
   </section>;
 }

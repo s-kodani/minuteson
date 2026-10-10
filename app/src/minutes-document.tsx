@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { timeLabel } from "./transcript";
 import type { MinutesContent, Inline, Block, MinutesView } from "./minutes-state";
@@ -9,16 +9,19 @@ import { MinutesPages } from "./minutes-pages";
 import type { WorkspacePanelHandle } from "./workspace-panel";
 
 // Typed document nodes become React text elements, never model-supplied HTML.
-export function MinutesDocument({ content, title, view, locked = false, verify, panelHost = null, panelHandle, active = true, onFullChange, navigateHeading }: {
+export type MinutesDocumentHandle = { showEvidence: (id: string) => void };
+export function MinutesDocument({ content, title, view, locked = false, verify, panelHost = null, panelHandle, active = true, onFullChange, navigateHeading, readerHidden = false, handle }: {
   content: MinutesContent; title: string; view: MinutesView; locked?: boolean; verify?: (id: string, verified: boolean) => void;
   panelHost?: HTMLElement | null; panelHandle?: RefObject<WorkspacePanelHandle | null>; active?: boolean; onFullChange?: (full: boolean) => void;
   navigateHeading?: { disabled: boolean; go: (entry: DocumentOutlineEntry) => boolean; target: (blockIndex: number) => HTMLElement | null };
+  readerHidden?: boolean; handle?: Ref<MinutesDocumentHandle>;
 }) {
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [evidencePage, setEvidencePage] = useState<number | null>(null);
   const [showFull, setShowFull] = useState(false);
   const fullEvidence = useRef<string | null>(null);
+  const evidenceOpener = useRef<HTMLElement | null>(null);
   const section = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const outline = useMemo(() => documentOutline(content.blocks), [content.blocks]);
@@ -35,7 +38,7 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
       heading.current?.scrollIntoView({ block: "start" });
     }
   }, [plan.page]);
-  const bookmark = useRef<{ x: number; y: number; opener: HTMLButtonElement | null; drawer: boolean; scroll: { element: HTMLElement; top: number; left: number }[] } | null>(null);
+  const bookmark = useRef<{ x: number; y: number; opener: HTMLButtonElement | null; panel: boolean; panelOpener: HTMLElement | null; scroll: { element: HTMLElement; top: number; left: number }[] } | null>(null);
   const evidence = content.evidence.find((e) => e.id === selected);
   const fullSource = content.evidence.find((e) => e.id === fullEvidence.current);
   const full = showFull && !!evidence && !!fullSource;
@@ -47,7 +50,7 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
     for (const root of [section.current,panelHost]) for (let element = root; element; element = element.parentElement) if (!seen.has(element)) {
       seen.add(element); scroll.push({ element, top: element.scrollTop, left: element.scrollLeft });
     }
-    bookmark.current = { x: window.scrollX, y: window.scrollY, opener: sourceOpener(id), drawer: !!panelHost?.closest("dialog[open]"), scroll };
+    bookmark.current = { x: window.scrollX, y: window.scrollY, opener: sourceOpener(id), panel: !!panelHost && !panelHost.closest("[hidden]"), panelOpener: evidenceOpener.current, scroll };
     // Group members can open the full transcript without losing the group page.
     fullEvidence.current = id;
     panelHandle?.current?.dismiss(() => section.current?.querySelector<HTMLElement>(".fixed-transcript-workspace h3") ?? null);
@@ -60,7 +63,7 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
   useLayoutEffect(() => {
     if (full || !bookmark.current) return;
     const saved = bookmark.current; bookmark.current = null;
-    if (saved.drawer) panelHandle?.current?.reveal();
+    if (saved.panel) panelHandle?.current?.reveal(saved.panelOpener);
     const frame = requestAnimationFrame(() => {
       if (!currentActive.current) return;
       for (const { element, top, left } of saved.scroll) if (element.isConnected) { element.scrollTop = top; element.scrollLeft = left; }
@@ -96,11 +99,17 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
     // Recenter only a newly selected reference. Returning from a different
     // member of its group must restore the actual opener's bookmark instead.
   }, [selected,panelHost]);
+  const showEvidence = (id: string) => {
+    if (locked || full || !active || !content.evidence.some(entry => entry.id === id)) return;
+    evidenceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSelected(id); setEvidencePage(null); panelHandle?.current?.reveal(evidenceOpener.current);
+  };
+  useImperativeHandle(handle, () => ({ showEvidence }), [locked,full,active,content.evidence,panelHandle]);
   const source = (id: string | null | undefined) => id && content.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
   const inline = (nodes: Inline[]) => nodes.map((node, index) => {
     if (node.type === "evidence") {
       const e = content.evidence.find((e) => e.id === node.evidenceLinkId && e.minutesItemId === node.minutesItemId);
-      return e ? <button type="button" className="evidence-chip" disabled={locked} key={index} onClick={() => { setSelected(e.id); setEvidencePage(null); panelHandle?.current?.reveal(); }} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
+      return e ? <button type="button" className="evidence-chip" disabled={locked} key={index} onClick={() => showEvidence(e.id)} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
     }
     let text = <span className="document-text">{node.text}</span>;
     if (node.bold) text = <strong>{text}</strong>;
@@ -122,20 +131,20 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
     }
   };
   const references = <div className="minutes-reference-content" hidden={full}>
-    <nav className="minutes-outline" aria-label="議事録目次"><h4>目次</h4>
+    <details className="minutes-outline-tools"><summary>目次</summary><nav className="minutes-outline" aria-label="議事録目次">
       {outline.length ? <ol>{outline.map(entry => <li key={entry.blockIndex} style={{ paddingInlineStart:`${Math.min(3,entry.level-1)*12}px` }}>
         <button type="button" className="small-secondary" disabled={locked || navigateHeading?.disabled} aria-current={tocTarget?.blockIndex === entry.blockIndex ? "location" : undefined}
           aria-label={`${entry.label}へ移動（見出し${entry.blockIndex + 1}）`} onClick={() => goToHeading(entry)}>{entry.label}</button>
       </li>)}</ol> : <p>見出しがありません。本文はそのまま表示します。</p>}
-    </nav>
-    {evidence ? <MinutesEvidenceGroup key={`${view.id}:${evidence.id}`} view={view} content={content} selectedId={evidence.id} page={evidencePage} changePage={setEvidencePage} suspended={full || !active} locked={locked} close={() => setSelected(null)} showTranscript={showTranscript} verify={verify} dockPlayback={!!panelHost} /> : <p className="hint">本文の根拠時刻を選ぶと、生成時に固定した発言・話者・音声を確認できます。</p>}
+    </nav></details>
+    {evidence ? <MinutesEvidenceGroup key={`${view.id}:${evidence.id}`} view={view} content={content} selectedId={evidence.id} page={evidencePage} changePage={setEvidencePage} suspended={full || !active} locked={locked} close={() => { setSelected(null); panelHandle?.current?.dismiss(); }} showTranscript={showTranscript} verify={verify} dockPlayback={!!panelHost} /> : <p className="hint">本文の根拠時刻を選ぶと、生成時に固定した発言・話者・音声を確認できます。</p>}
   </div>;
   return <section className="minutes-document" aria-label={title} ref={section}>
     {full && fullSource && <FixedTranscriptWorkspace key={`${view.id}:${fullSource.id}`} view={view} evidence={fullSource} locked={locked} active={active} dockPlayback={!!panelHost} back={() => setShowFull(false)} />}
     {/* Keep the reader/group mounted but inaccessible while looking at the
         fixed transcript. This preserves loaded context and group pagination,
         so asynchronous reloading cannot change the bookmarked layout. */}
-    <div hidden={full}>
+    <div hidden={full || readerHidden}>
     <h3 ref={heading} tabIndex={-1}>{title}</h3>
     <div className="minutes-document-layout"><article>{plan.fragments.map((fragment) => block(content.blocks[fragment.blockIndex], fragment))}</article>
       {!panelHost && references}

@@ -65,10 +65,11 @@ function terminalCaret(root: HTMLElement) {
     const sentinel = document.createElement("br"); sentinel.dataset.caretSentinel = "true"; root.append(sentinel);
   } else for (const node of sentinels) node.remove();
 }
-export function MinutesRichField({ value, label, blockIndex, addressKey, disabled, evidenceOnly = false, chipLabel, onChange, onSelection, onFailure, onCompositionChange }: {
+export function MinutesRichField({ value, label, blockIndex, addressKey, disabled, evidenceOnly = false, chipLabel, onChange, onSelection, onFailure, onCompositionChange, onEvidence }: {
   value: Inline[]; label: string; blockIndex: number; addressKey: string; disabled: boolean; evidenceOnly?: boolean;
   chipLabel: (id: string) => string;
   onChange: (value: Inline[]) => void; onSelection: (range: { start: number; end: number }) => void; onFailure: (cause: unknown) => void; onCompositionChange: (active: boolean) => void;
+  onEvidence?: (id: string) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
@@ -107,6 +108,8 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
           const id = chip.dataset.evidenceId!;
           const label = chipLabel(id);
           if (chip.textContent !== label) { chip.textContent = label; updated = true; }
+          chip.tabIndex = onEvidence && !disabled ? 0 : -1;
+          chip.setAttribute("aria-disabled", String(disabled));
         }
         terminalCaret(field);
         if (updated && selection) restore(field, selection.start, selection.end);
@@ -117,7 +120,8 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
     for (const node of value) {
       if (node.type === "evidence") {
         const chip = document.createElement("span"); chip.contentEditable = "false"; chip.className = "evidence-chip";
-        chip.dataset.evidenceId = node.evidenceLinkId; chip.textContent = chipLabel(node.evidenceLinkId); chip.title = "固定された根拠（文書下のプレビューから確認できます）";
+        chip.dataset.evidenceId = node.evidenceLinkId; chip.textContent = chipLabel(node.evidenceLinkId); chip.title = "生成時に固定した発言を確認";
+        if (onEvidence) { chip.setAttribute("role", "button"); chip.tabIndex = disabled ? -1 : 0; chip.setAttribute("aria-disabled", String(disabled)); }
         fragment.append(chip);
       } else {
         let element: Node = document.createTextNode(node.text);
@@ -129,9 +133,15 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
     field.replaceChildren(fragment);
     terminalCaret(field);
     if (selection) restore(field, selection.start, selection.end);
-  }, [value, chipLabel]);
+  }, [value, chipLabel,disabled,onEvidence]);
+  const evidenceTarget = (target: EventTarget | null) => {
+    const chip = target instanceof Element ? target.closest<HTMLElement>("[data-evidence-id]") : null;
+    return chip && root.current?.contains(chip) && known.current.has(chip.dataset.evidenceId!) ? chip : null;
+  };
   return <div ref={root} className="minutes-rich-field" data-block={blockIndex} data-inline-address={addressKey} data-placeholder={evidenceOnly ? "根拠なし（手動追加）" : "入力してください"} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-label={label} aria-multiline="true" aria-readonly={disabled} tabIndex={0}
     onFocus={capture} onKeyUp={capture} onMouseUp={capture} onSelect={capture}
+    onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled) onEvidence?.(chip.dataset.evidenceId!); }}
+    onKeyDown={event => { const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!); } }}
     onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={changed}
     onPaste={(event) => {
       event.preventDefault(); if (disabled || evidenceOnly) return;
