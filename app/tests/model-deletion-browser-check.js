@@ -9,7 +9,7 @@ async (page) => {
   const fixture = patch => page.evaluate(p => window.modelDeletionFixture.update(p), patch);
   const review = async () => { await trigger().click(); await modal().waitFor(); };
   const closed = () => modal().waitFor({ state: "hidden" });
-  const onlyReadCommands = async () => check(await page.evaluate(() => window.modelDeletionFixture.calls.every(c => ["get_model_placements", "get_model_profiles", "preview_model_deletion", "cancel_model_inspection"].includes(c.command))), "mutation or execution command invoked");
+  const onlyReadCommands = async () => check(await page.evaluate(() => window.modelDeletionFixture.calls.every(c => ["get_model_placements", "get_model_profiles", "get_model_download_catalog", "preview_model_deletion", "cancel_model_inspection"].includes(c.command))), "mutation or execution command invoked");
   await boot(); await review();
   const body = await modal().innerText();
   check(body.includes("欠落 1 件") && body.includes("登録内容から変更 1 件") && body.includes("未登録ファイル 1 件"), "classifications hidden");

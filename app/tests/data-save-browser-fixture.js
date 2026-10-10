@@ -170,6 +170,7 @@ export const dataSaveIPC = async (command, args) => {
     f.book = { id: "global", payload: structuredClone(args.payload), lockVersion: f.book.lockVersion + 1 };
     return structuredClone(f.book);
   }
+  if (command === "get_model_download_catalog") return { supported: false, entries: [], unknownEntries: 0 };
   if (command === "get_model_placements") return [];
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
   if (["get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };

@@ -172,6 +172,10 @@
 .import-term label:has(input[type="checkbox"]) { flex-direction:row; align-items:center; }
 .model-inspection pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 .model-inspection code { overflow-wrap:anywhere; }
+.model-download { border-top:1px solid var(--border); padding-top:12px; margin-bottom:20px; }
+.model-download textarea { width:100%; box-sizing:border-box; font:12px/1.5 monospace; padding:10px; border:1px solid var(--input-border); border-radius:8px; color:var(--text); background:var(--surface); }
+.model-download-catalog { max-height:360px; overflow:auto; }
+.model-download .model-application-dialog code { overflow-wrap:anywhere; }
 .model-inspection .prompt-label input { font:inherit; width:100%; border:1px solid var(--input-border); border-radius:8px; padding:10px; background:var(--surface); }
 .model-application-dialog { width:min(960px,calc(100vw - 48px)); max-height:calc(100vh - 64px); overflow:auto; padding:24px; border:1px solid var(--input-border); border-radius:16px; color:var(--text); }
 .model-application-dialog::backdrop { background:var(--backdrop); }

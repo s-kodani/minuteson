@@ -35,6 +35,248 @@ fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+fn listed(root: &Path) -> Value {
+    serde_json::to_value(catalog::catalog(root, &|| false).unwrap()).unwrap()
+}
+#[test]
+fn catalog_missing_root_is_read_only_and_private_unknowns_are_preserved() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    assert_eq!(listed(&root)["entries"], json!([]));
+    assert!(!root.exists());
+    let directory = Directory::root(&root).unwrap();
+    durable_file(&directory, "unknown", b"keep").unwrap();
+    let value = listed(&root);
+    assert_eq!(value["unknownEntries"], 1);
+    assert_eq!(std::fs::read(root.join("unknown")).unwrap(), b"keep");
+}
+#[test]
+fn catalog_completion_marker_does_not_grant_physical_readiness() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let receipt = synthetic_stage(&root, &operation);
+    std::fs::write(receipt.directory.join("models/model.gguf"), b"broken").unwrap();
+    let value = listed(&root);
+    assert_eq!(value["entries"][0]["state"], "completion_recorded");
+    assert_eq!(value["entries"][0]["recipeHash"], receipt.recipe_hash);
+    assert!(value["entries"][0].get("ready").is_none());
+    assert!(read(&root, &operation).is_err());
+}
+#[test]
+fn catalog_partial_and_malformed_records_never_disappear_as_success() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    synthetic_stage(&root, &operation);
+    let complete = root.join(&operation).join(COMPLETE);
+    std::fs::rename(&complete, root.join(&operation).join("preserved")).unwrap();
+    assert_eq!(listed(&root)["entries"][0]["state"], "incomplete");
+    std::fs::write(&complete, b"{}").unwrap();
+    assert_eq!(listed(&root)["entries"][0]["state"], "attention");
+    std::fs::write(
+        root.join(&operation).join(INTENT),
+        vec![b'x'; MAX_RECIPE + 1025],
+    )
+    .unwrap();
+    let value = listed(&root);
+    assert_eq!(value["entries"][0]["state"], "attention");
+    assert_eq!(value["entries"][0]["recipeHash"], Value::Null);
+    assert!(root.join(&operation).join("preserved").exists());
+}
+#[test]
+fn catalog_rejects_links_public_roots_cancellation_and_mutating_directory_snapshot() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    synthetic_stage(&root, &operation);
+    let directory = Directory::open_existing(&root).unwrap();
+    std::fs::write(root.join("added-after-open"), b"keep").unwrap();
+    assert!(directory.verify_unchanged().is_err());
+    assert!(catalog::catalog(&root, &|| true).is_err());
+    let linked = temp.path().canonicalize().unwrap().join("linked");
+    symlink(&root, &linked).unwrap();
+    assert!(catalog::catalog(&linked, &|| false).is_err());
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(catalog::catalog(&root, &|| false).is_err());
+}
+#[test]
+fn catalog_does_not_follow_canonical_uuid_symlink_entries() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    synthetic_stage(&root, &operation);
+    let alias = id();
+    symlink(root.join(&operation), root.join(&alias)).unwrap();
+    let value = listed(&root);
+    let entry = value["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["operationId"] == alias)
+        .unwrap();
+    assert_eq!(entry["state"], "attention");
+    assert_eq!(entry["recipeHash"], Value::Null);
+}
+#[test]
+fn future_placement_metadata_budget_is_rejected_before_directory_or_fetch() {
+    let mut value = recipe_value();
+    let mut files = Vec::new();
+    let mut sources = Vec::new();
+    for index in 0..18 {
+        let path = format!("{index}/{}", vec!["a".repeat(180); 5].join("/"));
+        let role = match index {
+            0 => "executable",
+            1 => "asr",
+            _ => "runtime_library",
+        };
+        files.push(
+            json!({"relativePath":path,"role":role,"expectedSize":1,"expectedHash":"a".repeat(64)}),
+        );
+        sources.push(json!({"relativePath":path,"url":format!("https://example.com/{}-{index}", "b".repeat(800))}));
+    }
+    value["manifest"]["files"] = json!(files);
+    value["sources"] = json!(sources);
+    let recipe = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(recipe.bytes().unwrap().len() <= MAX_RECIPE);
+    assert!(recipe.review().unwrap_err().contains("64KiB"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let mut fetched = 0;
+    assert!(stage(
+        &root,
+        &id(),
+        &recipe,
+        &recipe.hash().unwrap(),
+        &|| false,
+        &mut |_, _| {},
+        &mut |_, _, _, _, _, _| {
+            fetched += 1;
+            Ok(())
+        }
+    )
+    .is_err());
+    assert_eq!(fetched, 0);
+    assert!(!root.exists());
+}
+#[test]
+fn recipe_sha_matches_frontend_canonical_unicode_golden_without_io() {
+    // The same independently asserted golden exists in frontend unit tests.
+    let value = json!({"schemaVersion":1,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test","modelName":"合成取得素材","modelVersion":"1","quantization":null,"licenseRef":"synthetic fixture only","target":"macos_aarch64","files":[{"relativePath":"cli","role":"executable","expectedSize":16,"expectedHash":"a".repeat(64)},{"relativePath":"model","role":"asr","expectedSize":17,"expectedHash":"b".repeat(64)}]},"sources":[{"relativePath":"cli","url":"https://example.com/cli"},{"relativePath":"model","url":"https://example.com/model"}]});
+    let recipe = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(
+        recipe.review().unwrap().recipe_hash,
+        "83d86a1f28ad309e2d0e0ceb70ba728541d8aec29a1963c2a8ceda0b23551226"
+    );
+}
+#[test]
+fn copy_result_binds_history_to_original_download_and_survives_restart_without_body_probe() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let package = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let models = temp.path().canonicalize().unwrap().join("models");
+    assert!(storage
+        .downloaded_placement_result(
+            &package,
+            &operation,
+            &receipt.recipe_hash,
+            &receipt.report.review_hash
+        )
+        .unwrap()
+        .is_none());
+    place(
+        &storage,
+        &models,
+        &root,
+        &operation,
+        &receipt.recipe_hash,
+        &package,
+        &receipt.report.review_hash,
+        &|| false,
+    )
+    .unwrap();
+    assert!(storage
+        .downloaded_placement_result(
+            &package,
+            &id(),
+            &receipt.recipe_hash,
+            &receipt.report.review_hash
+        )
+        .is_err());
+    assert!(storage
+        .downloaded_placement_result(
+            &package,
+            &operation,
+            &"a".repeat(64),
+            &receipt.report.review_hash
+        )
+        .is_err());
+    assert!(storage
+        .downloaded_placement_result(&package, &operation, &receipt.recipe_hash, &"a".repeat(64))
+        .is_err());
+    assert!(storage
+        .downloaded_placement_result(
+            "../x",
+            &operation,
+            &receipt.recipe_hash,
+            &receipt.report.review_hash
+        )
+        .is_err());
+    let entry = storage.list_model_placements().unwrap().remove(0);
+    assert_eq!(entry.download.unwrap().operation_id, operation);
+    drop(storage);
+    // Physical body moved away: historical commit remains evidence only, never
+    // a new availability/ready grant or permission to replay the writer.
+    std::fs::rename(&models, temp.path().join("preserved-models")).unwrap();
+    let reopened = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let result = reopened
+        .downloaded_placement_result(
+            &package,
+            &operation,
+            &receipt.recipe_hash,
+            &receipt.report.review_hash,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(result.placement_recorded && !result.ready);
+}
+#[test]
+fn copy_result_retains_interrupted_intent_without_claiming_placement() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = private_root(&temp);
+    let operation = id();
+    let package = id();
+    let receipt = synthetic_stage(&root, &operation);
+    let meetings = tempfile::tempdir().unwrap();
+    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let record = crate::model_placement::PlacementRecord::downloaded(
+        &package,
+        &receipt.report,
+        recipe().origin(&operation).unwrap(),
+    )
+    .unwrap();
+    storage.begin_model_placement(&record).unwrap();
+    storage.interrupt_model_placement(&record).unwrap();
+    drop(storage);
+    let reopened = crate::storage::Storage::open(meetings.path().into()).unwrap();
+    let result = reopened
+        .downloaded_placement_result(
+            &package,
+            &operation,
+            &receipt.recipe_hash,
+            &receipt.report.review_hash,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(!result.placement_recorded && !result.ready);
+}
+
 // IO-only staging fixture: uses the production durable pipeline and physical
 // hashes, but no socket, external download or executable model.
 fn synthetic_stage(root: &Path, operation: &str) -> DownloadReceipt {
@@ -480,6 +722,69 @@ struct Server {
     requests: Arc<AtomicUsize>,
     thread: Option<thread::JoinHandle<()>>,
 }
+fn fixture_request(reader: &mut impl Read, stop: &AtomicBool) -> std::io::Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 256];
+    while request.len() < 4096 && !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+        let remaining = (4096 - request.len()).min(buffer.len());
+        match reader.read(&mut buffer[..remaining]) {
+            Ok(0) => break,
+            Ok(n) => {
+                request.extend_from_slice(&buffer[..n]);
+                if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    return String::from_utf8(request)
+                        .map_err(|_| std::io::ErrorKind::InvalidData.into());
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "incomplete bounded loopback HTTP request",
+    ))
+}
+#[test]
+fn loopback_fixture_requires_complete_bounded_headers_even_when_fragmented_or_interrupted() {
+    struct Fragmented {
+        data: std::io::Cursor<Vec<u8>>,
+        calls: usize,
+    }
+    impl Read for Fragmented {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.calls += 1;
+            if self.calls % 3 == 0 {
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.data.read(&mut buffer[..1])
+        }
+    }
+    let stop = AtomicBool::new(false);
+    let header = b"GET /bin HTTP/1.1\r\nHost: fixture\r\n\r\n";
+    let mut fragmented = Fragmented {
+        data: std::io::Cursor::new(header.to_vec()),
+        calls: 0,
+    };
+    assert_eq!(
+        fixture_request(&mut fragmented, &stop).unwrap().as_bytes(),
+        header
+    );
+    for body in [b"GET /bin".to_vec(), vec![b'x'; 4097]] {
+        assert!(fixture_request(&mut std::io::Cursor::new(body), &stop).is_err());
+    }
+    assert!(fixture_request(&mut std::io::Cursor::new(header), &AtomicBool::new(true)).is_err());
+}
 impl Server {
     fn new(handler: impl Fn(&str, &mut TcpStream, &AtomicBool) + Send + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -495,26 +800,18 @@ impl Server {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         stream
-                            .set_read_timeout(Some(Duration::from_millis(500)))
+                            .set_read_timeout(Some(Duration::from_millis(50)))
                             .unwrap();
                         stream
                             .set_write_timeout(Some(Duration::from_millis(500)))
                             .unwrap();
-                        let mut request = Vec::new();
-                        let mut buffer = [0_u8; 256];
-                        while request.len() < 4096 && !request.windows(4).any(|b| b == b"\r\n\r\n")
-                        {
-                            match stream.read(&mut buffer) {
-                                Ok(0) | Err(_) => break,
-                                Ok(n) => request.extend_from_slice(&buffer[..n]),
-                            }
-                        }
+                        // Count actual connections, but never dispatch a partial
+                        // request as a valid path. Under parallel test load a
+                        // read timeout can occur before curl sends its headers.
                         requests_thread.fetch_add(1, Ordering::SeqCst);
-                        handler(
-                            &String::from_utf8_lossy(&request),
-                            &mut stream,
-                            &stop_thread,
-                        );
+                        if let Ok(request) = fixture_request(&mut stream, &stop_thread) {
+                            handler(&request, &mut stream, &stop_thread);
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
@@ -537,8 +834,11 @@ impl Server {
         Self::new(|request, stream, _| {
             let body = if request.starts_with("GET /bin ") {
                 BIN
-            } else {
+            } else if request.starts_with("GET /model ") {
                 MODEL
+            } else {
+                response(stream, "400 Bad Request", "", b"wrong fixture path");
+                return;
             };
             response(stream, "200 OK", "", body);
         })
@@ -906,7 +1206,13 @@ fn http_errors_redirect_without_location_and_partial_206_are_not_success_even_wi
 
 #[test]
 fn redirect_to_allowed_fixture_protocol_is_bounded_and_hash_verified() {
-    let server = Server::new(|request, stream, _| {
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let trace = observed.clone();
+    let server = Server::new(move |request, stream, _| {
+        trace
+            .lock()
+            .unwrap()
+            .push(request.lines().next().unwrap_or("").to_string());
         if request.starts_with("GET /bin ") {
             response(
                 stream,
@@ -914,14 +1220,34 @@ fn redirect_to_allowed_fixture_protocol_is_bounded_and_hash_verified() {
                 "Location: /final\r\n",
                 b"redirect body ignored",
             );
-        } else {
+        } else if request.starts_with("GET /final ") {
             response(stream, "200 OK", "", BIN);
+        } else {
+            response(
+                stream,
+                "400 Bad Request",
+                "",
+                b"wrong fixture redirect path",
+            );
         }
     });
     let (result, bytes) = direct_fetch(&server, BIN.len() as u64, &hash(BIN));
-    result.unwrap();
+    assert!(
+        result.is_ok(),
+        "{result:?}; request trace: {:?}",
+        observed.lock().unwrap()
+    );
     assert_eq!(bytes, BIN);
-    assert_eq!(server.requests.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        2,
+        "{:?}",
+        observed.lock().unwrap()
+    );
+    assert_eq!(
+        *observed.lock().unwrap(),
+        ["GET /bin HTTP/1.1", "GET /final HTTP/1.1"]
+    );
     let cycle =
         Server::new(|_, stream, _| response(stream, "302 Found", "Location: /bin\r\n", b""));
     assert!(direct_fetch(&cycle, BIN.len() as u64, &hash(BIN))

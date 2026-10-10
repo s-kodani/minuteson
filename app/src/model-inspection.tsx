@@ -9,6 +9,7 @@ import { assertModelDeletionPreview, modelDeletionEntryLabel, type ModelDeletion
 import type { ModelBodyDeletionControl } from "./model-body-deletion";
 import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { modelNotice, type ModelNotice } from "./model-notification-state";
+import { ModelDownloadPanel } from "./model-download";
 
 type PendingApplication = { preview: ModelApplicationPreview; entry: ModelPlacementEntry; operationId: string };
 // Preserve an uncertain write across settings navigation. Never substitute a
@@ -18,7 +19,9 @@ let unresolvedApplication: { application: PendingApplication; message: string; s
 export function ModelInspectionPanel({ locked, recordingActive, deletionControl, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; deletionControl?: ModelBodyDeletionControl; refreshEpoch?: number }) {
   const confirm = useActionConfirmation(locked || recordingActive);
   const [directory, setDirectory] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [manualBusy, setBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const busy = manualBusy || downloadBusy;
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<ModelInspectionReport | null>(null);
@@ -248,8 +251,9 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const stoppedNotice = stoppedApplication ? modelNotice("applicationStopped", application!.operationId) : null;
   const unknownMessage = application && applicationUnknown && !applicationVisible ? applicationError : "";
   return <section className="analysis-card model-inspection" aria-label="AIモデルの事前検査">
-    <div className="heading-with-info"><h2>AIモデル</h2><InfoPopover label="AIモデル" details={<p>手動取り込みの事前検査・管理領域へのコピー・CPU互換性確認と、標準／高精度へのモデル選択を利用できます。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・コピー・適用では起動しません。ダウンロードは開発中です。</p>}>モデルを手動取り込みし、互換性確認後に標準／高精度へ選択できます。検査・コピー・適用では実行ファイルを起動しません。ダウンロードは開発中です。</InfoPopover></div>
+    <div className="heading-with-info"><h2>AIモデル</h2><InfoPopover label="AIモデル" details={<p>手動取り込みとmacOSの明示的な取得定義からの初回取得・管理コピー・CPU互換性確認を利用できます。標準／高精度への選択は別の確認です。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・取得・コピー・適用では起動しません。配布先・実モデルの検証とWindowsの取得は保留です。</p>}>取得または手動取り込みを行い、別途互換性確認後に標準／高精度へ選択できます。取得・コピー・適用では実行ファイルを起動しません。</InfoPopover></div>
     <p>AI処理・録音・取り込みを止めてから準備を開始してください。</p>
+    <ModelDownloadPanel locked={locked || recordingActive || manualBusy || applying || !!application || !!deletionReview} onBusyChange={setDownloadBusy} onChanged={loadPlacements} />
     <details className="analysis-settings"><summary>検査するフォルダーの準備方法</summary>
       <p>実行ファイルと、そのエンジン用のモデルを同じフォルダーへ置き、直下に <code>mon-model.json</code> を作成してください。ファイルのパスはフォルダー内の相対パスです。下記はmacOS Apple Silicon向けwhisper.cppの例です。版・ライセンス参照・ファイル名は実際の配布情報に合わせてください。対象Windowsの検証は保留中です。</p>
       <pre>{JSON.stringify({ schemaVersion: 1, engine: "whisper.cpp", engineVersion: "配布元の版", modelName: "モデル名", modelVersion: "モデルの版", quantization: null, licenseRef: "配布元のライセンス参照", target: "macos_aarch64", files: [{ relativePath: "whisper-cli", role: "executable", expectedSize: null, expectedHash: null }, { relativePath: "model.bin", role: "asr", expectedSize: null, expectedHash: null }] }, null, 2)}</pre>
@@ -258,9 +262,9 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     </details>
     <form onSubmit={event => void inspect(event)}>
       <label className="prompt-label" htmlFor="model-package-directory">パッケージフォルダーの絶対パス<input id="model-package-directory" value={directory} maxLength={4096} disabled={busy || locked || recordingActive || !isTauri()} onChange={event => { setDirectory(event.target.value); setReport(null); setError(""); }} placeholder="/Users/…/model-package" /></label>
-      <div className="analysis-actions"><button type="submit" disabled={busy || locked || recordingActive || !isTauri() || !directory.trim()}>ファイルを事前検査</button>{busy && !application && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{deletionReviewing ? "削除対象の検査を取り消す" : checking ? "互換性確認を取り消す" : placing ? "配置を取り消す" : reviewing ? "適用の事前確認を取り消す" : "検査を取り消す"}</button>}</div>
+      <div className="analysis-actions"><button type="submit" disabled={busy || locked || recordingActive || !isTauri() || !directory.trim()}>ファイルを事前検査</button>{manualBusy && !application && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{deletionReviewing ? "削除対象の検査を取り消す" : checking ? "互換性確認を取り消す" : placing ? "配置を取り消す" : reviewing ? "適用の事前確認を取り消す" : "検査を取り消す"}</button>}</div>
     </form>
-    {busy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
+    {manualBusy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
     {!isTauri() && <p>デスクトップアプリで利用できます。</p>}
     {recordingActive && <p>録音停止後に検査・配置・互換性確認・適用できます。録音開始要求があった場合は処理を取り消し、停止完了を待ちます。</p>}
     <IssueNotice scope="models" type="operation-error" label="モデル準備" message={(!applicationVisible || !application) && !confirm.pending ? error : ""} />
@@ -285,6 +289,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}>
         <strong>{entry.modelName}</strong> / {entry.modelVersion} · {entry.engine} / {entry.engineVersion}
         <p>{placementLabel(entry)} · {entry.totalBytes.toLocaleString()} bytes<br />配置ID: <code>{entry.packageId}</code></p>
+        {entry.sourceType && <p>由来: {entry.sourceType === "download" ? "確認済み定義からの取得" : "手動取り込み"}{entry.download && <><br />取得ID: <code>{entry.download.operationId}</code><br />定義SHA: <code>{entry.download.recipeHash}</code></>}</p>}
         {entry.compatibility && <p>確認操作ID: <code>{entry.compatibility.operationId}</code>{entry.compatibility.errorMessage && <><br />{entry.compatibility.errorMessage}</>}</p>}
         <div className="analysis-actions">
           <button type="button" className="small-secondary" disabled={!entry.placementRecorded || entry.bodyRemoved === true || entry.compatibility?.state === "preparing" || busy || locked || recordingActive || !isTauri()} onClick={() => void check(entry)}>{entry.compatibility ? "互換性を再確認" : "互換性を確認"}</button>

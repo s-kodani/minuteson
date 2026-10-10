@@ -1,0 +1,75 @@
+// Synthetic IPC and tiny fake metadata only. No native model IO or process.
+import React, { useState } from "react";
+import { createRoot } from "react-dom/client";
+import { mockIPC, mockWindows } from "./startup-ready-mocks";
+import { emit } from "@tauri-apps/api/event";
+import { ModelDownloadPanel } from "../src/model-download";
+import { ModelInspectionPanel } from "../src/model-inspection";
+import { ToastHost } from "../src/toast";
+import { parseDownloadDefinition, downloadDigest, type DownloadReview } from "../src/model-download-state";
+import "../src/style.css";
+const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
+(window as any).isTauri = true; mockWindows("main");
+f.definition = JSON.stringify({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
+async function reviewed(definition: string): Promise<DownloadReview> {
+  const recipe = parseDownloadDefinition(definition);
+  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };
+}
+async function receipt(operationId: string, review: DownloadReview) {
+  const manifestHash = await downloadDigest(review.manifest), files = review.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
+  return { operationId, recipeHash: review.recipeHash, directory: "/synthetic/payload", installed: false, ready: false, report: { manifest: review.manifest, manifestHash, reviewHash: await downloadDigest([1, review.manifest, manifestHash, files]), files, totalBytes: review.totalBytes, engineCompatibility: "not_verified", publisherAuthenticity: "not_verified", installed: false, ready: false } };
+}
+f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: review.totalBytes }); };
+f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review = await reviewed(f.definition); f.operations.set(id, { review, state: "complete", receipt: await receipt(id, review) }); return id; };
+mockIPC(async (command, args) => {
+  f.calls.push({ command, args: structuredClone(args) });
+  if (command === "get_model_placements") return [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
+  if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+  if (command === "review_model_download") {
+    const result = await reviewed(args.definition);
+    return f.mode === "forgedReview" ? { ...result, recipeHash: "a".repeat(64) } : result;
+  }
+  if (command === "get_model_download_catalog") {
+    if (f.failCatalog) throw Error("模擬取得一覧の読込失敗");
+    if (f.active.size) throw Error("模擬モデル準備が実行中");
+    return { supported: true, unknownEntries: 0, entries: Array.from(f.operations, ([operationId, item]: any) => ({ operationId, recipeHash: item.review.recipeHash, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, totalBytes: item.review.totalBytes, state: item.state === "complete" ? "completion_recorded" : "incomplete" })) };
+  }
+  if (command === "cancel_model_inspection") { if (f.failCancel) throw Error("模擬停止要求の応答喪失"); f.cancelled.add(args.token); return null; }
+  if (command === "get_model_download_lifetime") { if (f.failLifetime) throw Error("模擬停止状態の読込失敗"); return { active: f.active.has(args.token), cancelled: f.cancelled.has(args.token) }; }
+  if (command === "read_model_download") {
+    if (f.active.has(args.downloadId)) throw Error("元の処理がまだ実行中");
+    const item = f.operations.get(args.downloadId);
+    if (!item || f.readMissing) throw Error("模擬取得記録を読めません");
+    if (item.review.recipeHash !== args.expectedRecipeHash) throw Error("模擬定義SHAの不一致");
+    const result = { state: item.state, review: item.review, receipt: item.state === "complete" ? item.receipt : null };
+    return f.forgedReadback ? { ...result, receipt: { ...item.receipt, ready: true } } : structuredClone(result);
+  }
+  if (command === "start_model_download") {
+    if (f.cancelled.has(args.token) || f.active.size) throw Error("模擬の取消済み・競合操作");
+    const review = await reviewed(args.definition); if (review.recipeHash !== args.expectedRecipeHash) throw Error("模擬定義SHAの不一致");
+    f.active.add(args.token); const result = await receipt(args.token, review);
+    const item = { review, state: "incomplete", receipt: result }; f.operations.set(args.token, item);
+    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) throw Error("模擬取得の中断・途中保全"); item.state = "complete"; return structuredClone(result); };
+    if (f.mode === "earlyLost") { f.finish = finish; throw Error("処理は継続中だが開始応答が喪失"); }
+    if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
+    const complete = finish(); if (f.mode === "lost") throw Error("模擬取得の完了応答喪失");
+    return f.mode === "forgedReceipt" ? { ...complete, ready: true } : complete;
+  }
+  if (command === "place_downloaded_model") {
+    const item = f.operations.get(args.downloadId);
+    if (!item || item.state !== "complete" || item.review.recipeHash !== args.expectedRecipeHash || item.receipt.report.reviewHash !== args.expectedReviewHash) throw Error("模擬コピー対象の不一致");
+    f.active.add(args.token);
+    const result = { packageId: args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
+    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); return result; };
+    if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
+    const complete = finish(); if (f.mode === "lost") throw Error("模擬コピー完了応答喪失"); return complete;
+  }
+  if (command === "get_downloaded_model_placement_result") return { active: f.active.has(args.packageId), cancelled: f.cancelled.has(args.packageId), receipt: f.placements.get(args.packageId) ?? null };
+  throw Error(`Unexpected download fixture command: ${command}`);
+}, { shouldMockEvents: true });
+function Fixture() {
+  const [locked, setLocked] = useState(false), [visible, setVisible] = useState(true), [busy, setBusy] = useState(false), [parent, setParent] = useState(false);
+  f.setLocked = setLocked; f.setVisible = setVisible; f.setParent = setParent; f.busy = busy;
+  return <main><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>{visible && (parent ? <ModelInspectionPanel locked={locked} recordingActive={false} /> : <ModelDownloadPanel locked={locked} onBusyChange={setBusy} onChanged={async () => { f.changed++; }} />)}<ToastHost /></main>;
+}
+createRoot(document.getElementById("root")!).render(<Fixture />);

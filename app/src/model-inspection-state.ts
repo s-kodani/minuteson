@@ -35,6 +35,8 @@ export interface ModelPlacementEntry {
   totalBytes: number;
   placementRecorded: boolean;
   bodyRemoved?: boolean;
+  sourceType?: "manual_import" | "download";
+  download?: { operationId: string; recipeHash: string } | null;
   ready: false;
   reviewHash: string;
   compatibility?: ModelCompatibilitySummary | null;
@@ -64,8 +66,11 @@ export function modelBodyAvailable(entry: Pick<ModelPlacementEntry, "bodyRemoved
   if (entry.bodyRemoved !== undefined && typeof entry.bodyRemoved !== "boolean") throw Error("モデル本体の削除状態が不正です。配置記録を再読込してください。");
   return entry.bodyRemoved !== true;
 }
-export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready"> & Partial<Pick<ModelPlacementEntry, "compatibility" | "packageId" | "reviewHash" | "bodyRemoved">>): string {
+export function placementLabel(entry: Pick<ModelPlacementEntry, "placementRecorded" | "ready"> & Partial<Pick<ModelPlacementEntry, "compatibility" | "packageId" | "reviewHash" | "bodyRemoved" | "sourceType" | "download">>): string {
   if (entry.ready !== false) throw Error("配置記録だけでAI準備完了とは扱えません。");
+  if ((entry.sourceType !== undefined && !["manual_import", "download"].includes(entry.sourceType)) ||
+      (entry.sourceType === "download" && (!entry.download || !canonicalId.test(entry.download.operationId) || !/^[0-9a-f]{64}$/.test(entry.download.recipeHash))) ||
+      (entry.download != null && entry.sourceType !== "download")) throw Error("モデル配置の取得由来が不正です。記録を再読込してください。");
   const available = modelBodyAvailable(entry);
   if (entry.compatibility) {
     validateCompatibility(entry.compatibility);

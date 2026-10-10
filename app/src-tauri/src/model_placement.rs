@@ -125,6 +125,7 @@ pub(crate) struct PlacementReceipt {
 pub(crate) struct CatalogEntry {
     pub package_id: String,
     pub source_type: String,
+    pub download: Option<DownloadIdentity>,
     pub model_name: String,
     pub model_version: String,
     pub engine: String,
@@ -135,6 +136,12 @@ pub(crate) struct CatalogEntry {
     pub ready: bool,
     pub review_hash: String,
     pub compatibility: Option<crate::model_compatibility::CheckSummary>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DownloadIdentity {
+    pub operation_id: String,
+    pub recipe_hash: String,
 }
 fn uuid(text: &str) -> bool {
     uuid::Uuid::parse_str(text).is_ok_and(|id| id.to_string() == text)

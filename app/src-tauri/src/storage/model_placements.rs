@@ -142,6 +142,41 @@ fn receipt(record: &PlacementRecord, placed: bool) -> Result<PlacementReceipt, S
     })
 }
 impl Storage {
+    pub(crate) fn downloaded_placement_result(
+        &self,
+        package_id: &str,
+        download_id: &str,
+        recipe_hash: &str,
+        review_hash: &str,
+    ) -> Result<Option<PlacementReceipt>, String> {
+        if [package_id, download_id]
+            .iter()
+            .any(|value| !uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == *value))
+            || !crate::model_download_ipc::hash(recipe_hash)
+            || !crate::model_download_ipc::hash(review_hash)
+        {
+            return Err("取得・コピー結果の操作IDまたはSHAが不正です".into());
+        }
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        // History proves a committed copy, not current body availability or CPU
+        // compatibility. A later explicit removal must not erase this receipt.
+        load_history(&db, package_id)?
+            .map(|(record, placed)| {
+                if record.review_hash != review_hash
+                    || !record
+                        .download
+                        .as_ref()
+                        .is_some_and(|origin| origin.matches(download_id, recipe_hash))
+                {
+                    return Err("配置操作と取得由来・確認SHAが一致しません".into());
+                }
+                receipt(&record, placed)
+            })
+            .transpose()
+    }
     pub(crate) fn model_placement_receipt(
         &self,
         expected: &PlacementRecord,
@@ -241,6 +276,13 @@ impl Storage {
                 Ok(CatalogEntry {
                     package_id: id,
                     source_type: record.source_type().into(),
+                    download: record.download.as_ref().map(|origin| {
+                        let (operation, recipe) = origin.identity();
+                        crate::model_placement::DownloadIdentity {
+                            operation_id: operation.into(),
+                            recipe_hash: recipe.into(),
+                        }
+                    }),
                     model_name: record.manifest.model_name,
                     model_version: record.manifest.model_version,
                     engine: engine.as_str().ok_or("モデルエンジンが不正です")?.into(),

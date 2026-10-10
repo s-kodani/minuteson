@@ -175,6 +175,20 @@ impl Directory {
         }
         Ok(())
     }
+    pub(crate) fn verify_unchanged(&self) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
+        self.verify()?;
+        let now = self.file.metadata().map_err(|e| e.to_string())?;
+        if now.len() != self.identity.len()
+            || now.modified().map_err(|e| e.to_string())?
+                != self.identity.modified().map_err(|e| e.to_string())?
+            || now.ctime() != self.identity.ctime()
+            || now.ctime_nsec() != self.identity.ctime_nsec()
+        {
+            return Err("読戻し中にモデル管理領域が変更されました".into());
+        }
+        Ok(())
+    }
     pub(crate) fn sync(&self) -> Result<(), String> {
         self.verify()?;
         self.file.sync_all().map_err(|e| e.to_string())

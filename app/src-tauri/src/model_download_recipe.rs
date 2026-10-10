@@ -42,6 +42,8 @@ impl Recipe {
         Ok(recipe)
     }
     pub(crate) fn review(&self) -> Result<Review, String> {
+        self.validate()?;
+        self.ensure_placement_record_fits()?;
         Ok(Review {
             recipe_hash: self.hash()?,
             manifest: self.manifest.clone(),
@@ -51,6 +53,59 @@ impl Recipe {
             installed: false,
             ready: false,
         })
+    }
+    fn ensure_placement_record_fits(&self) -> Result<(), String> {
+        // Expected metadata for a byte-size budget ONLY, never observed file
+        // evidence, a stored intent, a download receipt or execution permission.
+        let manifest_hash = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?)
+        );
+        let files = self
+            .manifest
+            .files
+            .iter()
+            .map(|file| crate::model_inspection::FileReport {
+                relative_path: file.relative_path.clone(),
+                role: file.role,
+                actual_size: file.expected_size.unwrap(),
+                actual_hash: file.expected_hash.clone().unwrap(),
+                expected_size_checked: true,
+                expected_hash_checked: true,
+            })
+            .collect::<Vec<_>>();
+        let report = crate::model_inspection::Report {
+            review_hash: crate::model_inspection::review_hash(
+                &self.manifest,
+                &manifest_hash,
+                &files,
+            )?,
+            manifest: self.manifest.clone(),
+            manifest_hash,
+            files,
+            total_bytes: 0,
+            engine_compatibility: "not_verified",
+            publisher_authenticity: "not_verified",
+            installed: false,
+            ready: false,
+        };
+        let placeholder = uuid::Uuid::nil().to_string();
+        let record = crate::model_placement::PlacementRecord::downloaded(
+            &placeholder,
+            &report,
+            self.origin(&placeholder)?,
+        )?;
+        if serde_json::to_vec(&record)
+            .map_err(|e| e.to_string())?
+            .len()
+            > 65_536
+        {
+            return Err(
+                "将来の配置記録が64KiBを超えます。取得前に構成・長いパスやURLを見直してください"
+                    .into(),
+            );
+        }
+        Ok(())
     }
     pub(crate) fn bytes(&self) -> Result<Vec<u8>, String> {
         let bytes = serde_json::to_vec(self).map_err(|_| "ダウンロード定義を符号化できません")?;
@@ -109,6 +164,12 @@ pub(crate) struct DownloadOrigin {
     sources: Vec<DownloadSource>,
 }
 impl DownloadOrigin {
+    pub(crate) fn matches(&self, operation: &str, recipe: &str) -> bool {
+        self.operation_id == operation && self.recipe_hash == recipe
+    }
+    pub(crate) fn identity(&self) -> (&str, &str) {
+        (&self.operation_id, &self.recipe_hash)
+    }
     pub(crate) fn validate(
         &self,
         manifest: &PackageManifest,

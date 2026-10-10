@@ -21,12 +21,9 @@ mod local_engine;
 mod minutes_document;
 mod model_application;
 mod model_compatibility;
-// Download transport/staging is not exposed as IPC until durable provenance,
-// operation readback and the explicit UI review are connected.
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 mod model_download;
-#[allow(dead_code)]
+mod model_download_ipc;
 mod model_download_recipe;
 mod model_inspection;
 mod model_placement;
@@ -2501,6 +2498,13 @@ pub fn run() {
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
                 inspect_model_package,
+                model_download_ipc::review_model_download,
+                model_download_ipc::start_model_download,
+                model_download_ipc::get_model_download_lifetime,
+                model_download_ipc::get_model_download_catalog,
+                model_download_ipc::read_model_download,
+                model_download_ipc::place_downloaded_model,
+                model_download_ipc::get_downloaded_model_placement_result,
                 preview_model_deletion,
                 cancel_model_inspection,
                 get_model_placements,

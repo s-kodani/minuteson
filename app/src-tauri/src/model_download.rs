@@ -1,7 +1,8 @@
 //! Initial-download transport/staging, not placement or runtime readiness.
-//! No IPC exposes this yet. Its future caller must hold the model-preparation
+//! IPC callers must hold the model-preparation
 //! lease for the whole operation (including child teardown and durable IO).
 //! Download recipes are explicit untrusted input, not an authenticated catalog.
+pub(crate) mod catalog;
 mod transport;
 #[cfg(test)]
 use crate::model_download_recipe::MAX_TOTAL;
@@ -254,7 +255,7 @@ fn stage(
     if !uuid::Uuid::parse_str(operation_id).is_ok_and(|id| id.to_string() == operation_id) {
         return Err("ダウンロード操作IDが不正です".into());
     }
-    let total = recipe.validate()?;
+    let total = recipe.review()?.total_bytes;
     let recipe_hash = recipe.hash()?;
     if recipe_hash != expected_recipe_hash {
         return Err("ダウンロード定義が確認内容から変わっています。再確認してください".into());

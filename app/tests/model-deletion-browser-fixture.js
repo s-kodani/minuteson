@@ -17,6 +17,7 @@ window.isTauri = true;
 mockWindows("main");
 mockIPC(async (command, args) => {
   data.calls.push({ command, args: structuredClone(args) });
+  if (command === "get_model_download_catalog") return { supported: false, entries: [], unknownEntries: 0 };
   if (command === "get_model_placements") {
     if (data.failCatalog) throw Error("模擬配置読込失敗");
     const value = { ...entry, placementRecorded: !data.partial };
