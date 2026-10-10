@@ -381,6 +381,26 @@ impl Registry {
             owner: Some((self.clone(), id)),
         })
     }
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage) fn require_no_attention(&self) -> Result<(), String> {
+        self.check_root()?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "一時領域台帳ロックを取得できません")?;
+        self.check_schema(&db)?;
+        let attention: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM areas WHERE state='attention')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if attention {
+            return Err("読取用一時コピーに所有不明・変更済みの対象があります。元のDBと残ったコピーを保持して確認してください".into());
+        }
+        Ok(())
+    }
     fn relative(&self, path: &Path) -> Result<String, String> {
         let relative = path
             .strip_prefix(&self.root)
@@ -757,7 +777,7 @@ pub(in crate::storage) struct Stage {
     owner: Option<(Arc<Registry>, String)>,
 }
 impl Stage {
-    pub(super) fn path(&self) -> &Path {
+    pub(in crate::storage) fn path(&self) -> &Path {
         &self.path
     }
     pub(in crate::storage) fn create(parent: &Path) -> Result<Self, String> {
@@ -842,7 +862,7 @@ impl Drop for Stage {
         }
     }
 }
-pub(super) fn record_file(path: &Path, file: &File) -> Result<(), String> {
+pub(in crate::storage) fn record_file(path: &Path, file: &File) -> Result<(), String> {
     if let Some((_, a)) = active(path)? {
         if let Some(registry) = a.owner()? {
             registry.record(
@@ -855,7 +875,7 @@ pub(super) fn record_file(path: &Path, file: &File) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) fn check_creation(path: &Path) -> Result<(), String> {
+pub(in crate::storage) fn check_creation(path: &Path) -> Result<(), String> {
     if let Some((_, context)) = active(path)? {
         if let Some(registry) = context.owner()? {
             registry.check_creation(&context.area, path)?;

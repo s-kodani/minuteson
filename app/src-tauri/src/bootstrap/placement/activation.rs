@@ -44,6 +44,13 @@ impl NativeHistoryAdmission<'_, '_> {
     pub(crate) fn root(&self) -> &Path {
         &self.root.path
     }
+    pub(crate) fn read_snapshot(&self) -> Result<crate::storage::read_cache::Snapshot, String> {
+        self.verify()?;
+        let snapshot =
+            crate::storage::read_cache::Snapshot::create(&self.placement.bootstrap.config)?;
+        self.verify()?;
+        Ok(snapshot)
+    }
     pub(crate) fn models_root(&self) -> &Path {
         &self.placement.bootstrap.models_root
     }
@@ -423,6 +430,14 @@ impl Bootstrap {
             self.guard(&state)?;
             state.loaded.as_ref().map(|l| l.record.clone())
         };
+        crate::storage::read_cache::recover(&self.config)?;
+        {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "起動設定ロックを取得できません")?;
+            self.guard(&state)?;
+        }
         let storage = match record.and_then(|record| record.activation.map(|a| (record.current, a)))
         {
             None => Storage::open_with_models(self.root().to_owned(), self.models_root.clone())

@@ -42,6 +42,8 @@ mod model_placements;
 pub(crate) mod model_profiles;
 mod playback;
 mod preferences;
+#[cfg(target_os = "macos")]
+pub(crate) mod read_cache;
 mod recording_preparation;
 pub(crate) mod recordings;
 mod restored_input;

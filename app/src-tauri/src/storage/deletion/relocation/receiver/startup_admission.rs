@@ -330,7 +330,7 @@ pub(in crate::storage) fn admitted_history(
     let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(admission.root())?)?
         .with_inspection_history(aliases.clone())?;
     anchor.seal_controls()?;
-    let db = inspection_database(&anchor, admission.root())?;
+    let db = inspection_database(&anchor, admission.root(), &|| admission.read_snapshot())?;
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA query_only=ON;")
         .map_err(|e| e.to_string())?;
     anchor.verify()?;
@@ -373,7 +373,7 @@ struct InspectionDatabase {
     db: Connection,
     root: fs::Directory,
     files: Vec<(String, std::fs::File, fs::Proof)>,
-    snapshot: Option<tempfile::TempDir>,
+    snapshot: Option<crate::storage::read_cache::Snapshot>,
 }
 impl std::ops::Deref for InspectionDatabase {
     type Target = Connection;
@@ -416,7 +416,11 @@ impl InspectionDatabase {
 // only. WAL without SHM is copied from held descriptors into a private snapshot,
 // where SQLite may construct its index. This snapshot grants no root/admission
 // authority. Held full proofs reject concurrent changes to the actual files.
-fn inspection_database(anchor: &fs::RootAnchor, path: &Path) -> Result<InspectionDatabase, String> {
+fn inspection_database(
+    anchor: &fs::RootAnchor,
+    path: &Path,
+    create: &dyn Fn() -> Result<crate::storage::read_cache::Snapshot, String>,
+) -> Result<InspectionDatabase, String> {
     use std::os::unix::ffi::OsStrExt;
     anchor.verify()?;
     let root = anchor.directory_ref()?;
@@ -443,7 +447,7 @@ fn inspection_database(anchor: &fs::RootAnchor, path: &Path) -> Result<Inspectio
         }
     }
     let snapshot = if wal && !shm {
-        Some(private_wal_snapshot(&owned_root, &files)?)
+        Some(private_wal_snapshot(&owned_root, &files, create)?)
     } else {
         None
     };
@@ -486,11 +490,9 @@ fn inspection_database(anchor: &fs::RootAnchor, path: &Path) -> Result<Inspectio
 fn private_wal_snapshot(
     root: &fs::Directory,
     files: &[(String, std::fs::File, fs::Proof)],
-) -> Result<tempfile::TempDir, String> {
-    use std::{
-        io::{Read, Seek, SeekFrom},
-        os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    };
+    create: &dyn Fn() -> Result<crate::storage::read_cache::Snapshot, String>,
+) -> Result<crate::storage::read_cache::Snapshot, String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
     verify_inspection_files(root, files)?;
     let bytes = files.iter().try_fold(0u64, |sum, (_, _, p)| {
         sum.checked_add(p.size)
@@ -500,11 +502,7 @@ fn private_wal_snapshot(
         .checked_mul(2)
         .and_then(|n| n.checked_add(64 * 1024 * 1024))
         .ok_or("読取用コピーの容量が範囲外です")?;
-    let snapshot = tempfile::Builder::new()
-        .prefix(".mon-deletion-read-")
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
-        .map_err(|e| e.to_string())?;
+    let snapshot = create()?;
     if crate::audio_import::available_bytes(snapshot.path())? < needed {
         return Err(
             "削除履歴の非破壊読取に必要な一時容量がありません。元のDB・WALを保持します".into(),
@@ -517,31 +515,81 @@ fn private_wal_snapshot(
         root.verify_file(name, source)?;
         let mut input = source.try_clone().map_err(|e| e.to_string())?;
         input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        let mut output = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(snapshot.path().join(name))
-            .map_err(|e| e.to_string())?;
-        let copied = std::io::copy(
-            &mut input.take(
-                proof
-                    .size
-                    .checked_add(1)
-                    .ok_or("読取用コピーの容量が範囲外です")?,
-            ),
-            &mut output,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut output = snapshot.create_file(name)?;
+        #[cfg(test)]
+        if name == "meetings.sqlite3" {
+            read_copy_checkpoint("database_registered", snapshot.path());
+        }
+        let mut input = input.take(
+            proof
+                .size
+                .checked_add(1)
+                .ok_or("読取用コピーの容量が範囲外です")?,
+        );
+        let mut copied = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+            copied = copied
+                .checked_add(count as u64)
+                .ok_or("読取用コピーの容量が範囲外です")?;
+            #[cfg(test)]
+            if name == "meetings.sqlite3" {
+                read_copy_checkpoint("database_chunk", snapshot.path());
+            }
+        }
         if copied != proof.size {
             return Err("読取用コピー中にDB・WALの容量が変更されています".into());
         }
         output.sync_all().map_err(|e| e.to_string())?;
         verify_inspection_files(root, files)?;
     }
+    #[cfg(test)]
+    read_copy_checkpoint("wal_copied", snapshot.path());
+    // SQLite may rebuild the WAL index, but only inside the owned copy. Record
+    // its empty inode before SQLite can write any shared-memory payload.
+    snapshot
+        .create_file("meetings.sqlite3-shm")?
+        .sync_all()
+        .map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    read_copy_checkpoint("index_registered", snapshot.path());
     verify_inspection_files(root, files)?;
     Ok(snapshot)
+}
+
+#[cfg(test)]
+fn read_copy_checkpoint(label: &str, path: &Path) {
+    if std::env::var("MON_SYNTHETIC_READ_COPY_CHECKPOINT")
+        .ok()
+        .as_deref()
+        != Some(label)
+    {
+        return;
+    }
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let marker = std::env::var_os("MON_SYNTHETIC_READ_COPY_READY").expect("owned ready marker");
+    let mut ready = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(marker)
+        .unwrap();
+    ready
+        .write_all(path.as_os_str().as_encoded_bytes())
+        .unwrap();
+    ready.sync_all().unwrap();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 fn verify_registry_unchanged(
@@ -566,6 +614,34 @@ fn verify_registry_unchanged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestInspection {
+        db: InspectionDatabase,
+        _config: tempfile::TempDir,
+    }
+    impl std::ops::Deref for TestInspection {
+        type Target = InspectionDatabase;
+        fn deref(&self) -> &InspectionDatabase {
+            &self.db
+        }
+    }
+    impl TestInspection {
+        fn finish(self) -> Result<tempfile::TempDir, String> {
+            self.db.finish()?;
+            Ok(self._config)
+        }
+    }
+    fn inspect(anchor: &fs::RootAnchor, path: &Path) -> Result<TestInspection, String> {
+        let config = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let parent = config.path().canonicalize().map_err(|e| e.to_string())?;
+        let db = inspection_database(anchor, path, &|| {
+            crate::storage::read_cache::Snapshot::create(&parent)
+        })?;
+        Ok(TestInspection {
+            db,
+            _config: config,
+        })
+    }
 
     fn anchor(path: &Path) -> fs::RootAnchor {
         let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(path).unwrap()).unwrap();
@@ -648,7 +724,7 @@ mod tests {
         let before = files(&path);
         assert!(before[1..].iter().all(Option::is_none));
         let a = anchor(&path);
-        let read = inspection_database(&a, &path).unwrap();
+        let read = inspect(&a, &path).unwrap();
         assert_eq!(
             read.query_row("SELECT value FROM synthetic", [], |r| r.get::<_, String>(0))
                 .unwrap(),
@@ -758,7 +834,7 @@ mod tests {
             assert!(before[1].as_ref().is_some_and(|b| b.len() > 32));
             assert_eq!(before[2].is_some(), shm);
             let a = anchor(&path);
-            let read = inspection_database(&a, &path).unwrap();
+            let read = inspect(&a, &path).unwrap();
             let temporary = read.snapshot.as_ref().map(|s| s.path().to_owned());
             assert_eq!(temporary.is_some(), !shm);
             if let Some(temporary) = &temporary {
@@ -784,13 +860,158 @@ mod tests {
             assert!(read
                 .execute("INSERT INTO synthetic VALUES('NEVER WRITE')", [])
                 .is_err());
-            read.finish().unwrap();
+            let _config = read.finish().unwrap();
             if let Some(temporary) = temporary {
                 assert!(!temporary.exists());
             }
             a.verify().unwrap();
             assert_eq!(files(&path), before);
         }
+    }
+
+    #[test]
+    fn read_cache_sigkill_during_owned_wal_copy_reopens_bootstrap_and_preserves_source_and_meeting()
+    {
+        use std::os::unix::process::ExitStatusExt;
+        use std::time::{Duration, Instant};
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        for checkpoint in [
+            "database_registered",
+            "database_chunk",
+            "wal_copied",
+            "index_registered",
+            "index_read",
+        ] {
+            let config_temp = tempfile::tempdir().unwrap();
+            let legacy = tempfile::tempdir().unwrap();
+            let config = config_temp.path().canonicalize().unwrap();
+            let legacy_path = legacy.path().canonicalize().unwrap();
+            let bootstrap = crate::bootstrap::Bootstrap::open(&config, &legacy_path).unwrap();
+            let storage = bootstrap.open_storage().unwrap();
+            let meeting = storage
+                .create_meeting("SYNTHETIC RETAINED MEETING")
+                .unwrap();
+            let source = storage.root.clone();
+            drop(storage);
+            drop(bootstrap);
+            let db = Connection::open(source.join("meetings.sqlite3")).unwrap();
+            db.execute_batch("CREATE TABLE retained_payload(data BLOB); INSERT INTO retained_payload VALUES(zeroblob(196608));").unwrap();
+            drop(db);
+            crashed_wal(&source);
+            std::fs::rename(
+                source.join("meetings.sqlite3-shm"),
+                source.join("retained.shm"),
+            )
+            .unwrap();
+            let original = files(&source);
+            let retained = std::fs::read(source.join("retained.shm")).unwrap();
+            let ready = config.join("synthetic-read-ready");
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "storage::deletion::relocation::receiver::startup_admission::tests::read_cache_sigkill_copy_child", "--ignored", "--nocapture"])
+                .env("MON_SYNTHETIC_READ_COPY_CONFIG", &config)
+                .env("MON_SYNTHETIC_READ_COPY_LEGACY", &legacy_path)
+                .env("MON_SYNTHETIC_READ_COPY_SOURCE", &source)
+                .env("MON_SYNTHETIC_READ_COPY_READY", &ready)
+                .env("MON_SYNTHETIC_READ_COPY_CHECKPOINT", checkpoint)
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::inherit())
+                .spawn().unwrap();
+            let mut child = Child(child);
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !ready.exists() {
+                assert!(
+                    child.0.try_wait().unwrap().is_none(),
+                    "child ended before {checkpoint}"
+                );
+                assert!(Instant::now() < deadline, "checkpoint timeout {checkpoint}");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let snapshot = PathBuf::from(std::fs::read_to_string(&ready).unwrap());
+            assert_eq!(
+                snapshot.parent(),
+                Some(config.join(".mon-read-cache").as_path())
+            );
+            assert!(snapshot
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".mon-stage-"));
+            let copied = std::fs::metadata(snapshot.join("meetings.sqlite3"))
+                .unwrap()
+                .len();
+            match checkpoint {
+                "database_registered" => assert_eq!(copied, 0),
+                "database_chunk" => {
+                    assert_eq!(copied, 65536);
+                    assert!(copied < original[0].as_ref().unwrap().len() as u64);
+                }
+                _ => assert_eq!(copied, original[0].as_ref().unwrap().len() as u64),
+            }
+            child.0.kill().unwrap();
+            assert_eq!(child.0.wait().unwrap().signal(), Some(9));
+            assert_eq!(
+                files(&source),
+                original,
+                "inspection must not write source at {checkpoint}"
+            );
+            assert_eq!(
+                std::fs::read(source.join("retained.shm")).unwrap(),
+                retained
+            );
+            let bootstrap = crate::bootstrap::Bootstrap::open(&config, &legacy_path).unwrap();
+            let storage = bootstrap.open_storage().unwrap();
+            assert!(
+                !snapshot.exists(),
+                "owned abandoned copy survived {checkpoint}"
+            );
+            assert_eq!(
+                storage.get_meeting(&meeting.id).unwrap().unwrap().title,
+                "SYNTHETIC RETAINED MEETING"
+            );
+            assert_eq!(
+                std::fs::read(source.join("retained.shm")).unwrap(),
+                retained
+            );
+            let db = storage.connection.lock().unwrap();
+            assert_eq!(
+                db.query_row("SELECT value FROM synthetic", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "committed in WAL only"
+            );
+            assert_eq!(
+                db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "ok"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "child process only; owned synthetic read-copy checkpoint required"]
+    fn read_cache_sigkill_copy_child() {
+        let env_path = |name| PathBuf::from(std::env::var_os(name).expect("owned synthetic path"));
+        let config = env_path("MON_SYNTHETIC_READ_COPY_CONFIG");
+        let legacy = env_path("MON_SYNTHETIC_READ_COPY_LEGACY");
+        let source = env_path("MON_SYNTHETIC_READ_COPY_SOURCE");
+        let bootstrap = crate::bootstrap::Bootstrap::open(&config, &legacy).unwrap();
+        bootstrap.view().unwrap();
+        let a = anchor(&source);
+        let read = inspection_database(&a, &source, &|| {
+            crate::storage::read_cache::Snapshot::create(&config)
+        })
+        .unwrap();
+        assert_eq!(
+            read.query_row("SELECT value FROM synthetic", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "committed in WAL only"
+        );
+        read_copy_checkpoint("index_read", read.snapshot.as_ref().unwrap().path());
+        panic!("requested checkpoint did not hold the child");
     }
 
     #[test]
@@ -812,7 +1033,7 @@ mod tests {
             }
             let before = files(&path);
             let a = anchor(&path);
-            assert!(inspection_database(&a, &path).is_err(), "{kind}");
+            assert!(inspect(&a, &path).is_err(), "{kind}");
             a.verify().unwrap();
             assert_eq!(files(&path), before);
         }
@@ -829,7 +1050,7 @@ mod tests {
         let a = anchor(&path);
         std::fs::write(path.join("meetings.sqlite3-wal"), b"UNOWNED DO NOT DELETE").unwrap();
         let before = files(&path);
-        assert!(inspection_database(&a, &path).is_err());
+        assert!(inspect(&a, &path).is_err());
         assert_eq!(files(&path), before);
     }
 
@@ -852,7 +1073,7 @@ mod tests {
                         .unwrap();
                 }
                 let a = anchor(&path);
-                let read = inspection_database(&a, &path).unwrap();
+                let read = inspect(&a, &path).unwrap();
                 read.query_row("SELECT value FROM synthetic", [], |r| r.get::<_, String>(0))
                     .unwrap();
                 let file = path.join(name);
