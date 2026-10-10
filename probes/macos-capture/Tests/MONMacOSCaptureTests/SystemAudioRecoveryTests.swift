@@ -31,14 +31,16 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
   private let holdStop: Bool
   private let startFailure: Bool
   private let stopFailure: Bool
+  private var detachFailure: Bool
   init(
     held: Bool = false, startFailure: Bool = false, stopFailure: Bool = false,
-    holdStop: Bool = false
+    holdStop: Bool = false, detachFailure: Bool = false
   ) {
     self.held = held
     self.startFailure = startFailure
     self.stopFailure = stopFailure
     self.holdStop = holdStop
+    self.detachFailure = detachFailure
   }
   var counts: (Int, Int, Int) { lock.withLock { (starts, stops, detachments) } }
   func start() async throws {
@@ -70,7 +72,10 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
     }
     pending?.resume()
   }
-  func stop() async throws { lock.withLock { stops += 1 } }
+  func stop() async throws {
+    lock.withLock { stops += 1 }
+    if stopFailure { throw ProbeError.capture("synthetic stop failure") }
+  }
   func requestStop(_ completion: @escaping @Sendable (Error?) -> Void) {
     let action = lock.withLock {
       stops += 1
@@ -91,7 +96,13 @@ private final class SilentSystemSource: SystemCaptureStream, @unchecked Sendable
     completion?(stopFailure ? ProbeError.capture("synthetic stop failure") : nil)
   }
   func onStop(_ action: @escaping @Sendable () -> Void) { lock.withLock { stopAction = action } }
-  func detach() throws { lock.withLock { detachments += 1 } }
+  func setDetachFailure(_ value: Bool) { lock.withLock { detachFailure = value } }
+  func detach() throws {
+    try lock.withLock {
+      detachments += 1
+      if detachFailure { throw ProbeError.capture("synthetic output detach failure") }
+    }
+  }
 }
 
 private final class SilentApplicationIdentity: @unchecked Sendable {
@@ -1222,6 +1233,133 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       try await recorder.stop()
       XCTFail("missing tail remains unresolved")
     } catch {}
+  }
+
+  func testFailedOldOutputDetachPreventsReplacementUntilTheSameStreamIsRetired() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let old = SilentSystemSource(detachFailure: true)
+    let current = SilentSystemSource()
+    let factory = SilentSystemFactory([old, current])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(from: old, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.sourceEnded(old)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(factory.calls, 1, "a failed detach must not release the owned source")
+    XCTAssertEqual(current.counts.0, 0)
+    XCTAssertEqual(old.counts.2, 1)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "unavailable")
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "restart_failed")
+    recorder.receive(
+      from: old, sampleBuffer: try sample(value: 9), observation: .timestamp(1_010_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+
+    old.setDetachFailure(false)
+    time.set(3_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(old.counts.2, 2)
+    XCTAssertEqual(old.counts.1, 0, "delegate-confirmed termination must not be stopped again")
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.sourceEpoch, 3)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    recorder.sourceEnded(old)
+    recorder.receive(
+      from: old, sampleBuffer: try sample(value: 9), observation: .timestamp(1_020_000_000))
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+    recorder.receive(
+      from: current, sampleBuffer: try sample(value: 0.5), observation: .timestamp(1_030_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 960)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    try await recorder.stop()
+    let audio = try AVAudioFile(forReading: directory.appendingPathComponent("system.caf"))
+    XCTAssertEqual(audio.length, 960)
+    let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 960))
+    try audio.read(into: buffer)
+    XCTAssertEqual(buffer.frameLength, 960)
+    for frame in 0..<960 {
+      let value: Float = frame < 480 ? 0.25 : 0.5
+      XCTAssertEqual(buffer.floatChannelData![0][frame], value)
+      XCTAssertEqual(buffer.floatChannelData![1][frame], -value)
+    }
+  }
+
+  func testFormatRetirementRetriesDetachWithoutRepeatingAnAlreadyCompletedStop() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource(detachFailure: true)
+    let factory = SilentSystemFactory([source])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.receive(
+      from: source, sampleBuffer: try sample(rate: 44100), observation: .timestamp(1_010_000_000))
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(source.counts.2, 1)
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "format_changed")
+    recorder.receive(
+      from: source, sampleBuffer: try sample(value: 9), observation: .timestamp(1_020_000_000))
+    source.setDetachFailure(false)
+    time.set(2_000_000_000)
+    recorder.maintain()
+    try await wait { !recorder.acquisitionPending }
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(source.counts.2, 2)
+    for _ in 0..<10 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 1, "format retirement never permits a replacement format")
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    do {
+      try await recorder.stop()
+      XCTFail("format retirement cannot turn unresolved audio into a saved legacy recording")
+    } catch {}
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
+  func testFailedRetirementStopDoesNotDetachOrReplaceTheStillOwnedStream() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource(stopFailure: true)
+    let factory = SilentSystemFactory([source])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    recorder.receive(
+      from: source, sampleBuffer: try sample(rate: 44100), observation: .timestamp(1_010_000_000))
+    for attempt in 1...2 {
+      recorder.maintain()
+      try await wait { !recorder.acquisitionPending }
+      XCTAssertEqual(source.counts.1, attempt)
+      XCTAssertEqual(source.counts.2, 0, "a failed stop must not become completed retirement")
+      XCTAssertEqual(factory.calls, 1)
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "format_changed")
+      recorder.receive(
+        from: source, sampleBuffer: try sample(value: 9), observation: .timestamp(1_020_000_000))
+      XCTAssertEqual(recorder.snapshot().frames, 480)
+    }
+    for _ in 0..<2 {
+      do {
+        _ = try await recorder.stopRecording()
+        XCTFail("failed OS stop cannot mint a recording closure")
+      } catch {}
+    }
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
   }
 
   func testChangedSourceFormatBlocksRetriesWithoutOverwritingExistingCAF() async throws {

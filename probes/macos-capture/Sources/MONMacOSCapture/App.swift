@@ -612,7 +612,17 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     let old = lock.withLock { (stream, captureStarted && !streamEnded) }
     if let stream = old.0 {
       if old.1 { try await stream.stop() }
-      try? stream.detach()
+      // Successful stop and successful output removal are separate facts.
+      // Keep an undetached source owned, but never stop it a second time just
+      // because removal failed. A replacement cannot be created until detach
+      // succeeds and its admitted callback queue has drained.
+      lock.withLock {
+        if self.stream === stream {
+          captureStarted = false
+          streamEnded = true
+        }
+      }
+      try stream.detach()
       queue.sync {}
       lock.withLock {
         if self.stream === stream {
@@ -675,7 +685,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
           }
           // Also owns the cleanup of a late start. A hanging cleanup remains
           // single-flight and can never activate a replacement source.
-          if lock.withLock({ streamToken == token }) { try? await retireStream() }
+          if !retirementOnly, lock.withLock({ streamToken == token }) {
+            try? await retireStream()
+          }
         }
       }
     }
