@@ -116,6 +116,110 @@ class RustRunnerTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.cache.remove_debug(True, entry)
 
+    def test_completed_unshared_objects_are_evicted_before_latest_incremental(self):
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            deps = self.cache.path / "debug/deps"
+            deps.mkdir(parents=True)
+            executable = deps / "mon_lib-0123456789abcdef"
+            executable.write_bytes(b"completed test executable")
+            executable.chmod(0o700)
+            old = deps / (executable.name + ".old.unit.rcgu.o")
+            old.write_bytes(b"x" * 32768)
+            os.utime(old, ns=(1, 1))
+            newest = self.cache.path / "debug/incremental/mon_lib-123/s-current-hash"
+            newest.mkdir(parents=True)
+            (newest / "dep-graph.bin").write_bytes(b"y" * 32768)
+            total = runner.footprint(self.cache.path)
+            self.cache.trim(total - runner.footprint(old) + 8192)
+            self.assertFalse(old.exists())
+            self.assertTrue((newest / "dep-graph.bin").exists())
+            self.assertEqual(executable.read_bytes(), b"completed test executable")
+
+    def test_object_cleanup_preserves_shared_unfinished_unmatched_and_external_files(self):
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            deps = self.cache.path / "debug/deps"
+            deps.mkdir(parents=True)
+            executable = deps / "mon_lib-0123456789abcdef"
+            executable.write_bytes(b"executable")
+            executable.chmod(0o700)
+            os.utime(executable, ns=(10, 10))
+            objects = []
+            for stem in [executable.name + ".shared.unit", executable.name + ".new.unit",
+                         "no_binary-0123456789abcdef.old.unit", "unmatched"]:
+                candidate = deps / (stem + ".rcgu.o")
+                candidate.write_bytes(b"keep")
+                os.utime(candidate, ns=(1, 1))
+                objects.append(candidate)
+            outside = self.root / "external.o"
+            outside.write_bytes(b"outside")
+            link = deps / (executable.name + ".link.unit.rcgu.o")
+            link.symlink_to(outside)
+            shared = self.cache.path / "debug/incremental/shared/current.o"
+            shared.parent.mkdir(parents=True)
+            os.link(objects[0], shared)
+            os.utime(objects[1], ns=(20, 20))
+            for artifact, executable_link in [("plain-0123456789abcdef", False),
+                                              ("linked-0123456789abcdef", True)]:
+                binary = deps / artifact
+                if executable_link:
+                    binary.symlink_to(executable)
+                else:
+                    binary.write_bytes(b"not executable")
+                candidate = deps / (artifact + ".old.unit.rcgu.o")
+                candidate.write_bytes(b"keep")
+                os.utime(candidate, ns=(1, 1))
+                objects.append(candidate)
+            self.cache.remove_completed_objects(1)
+            self.assertTrue(all(candidate.exists() for candidate in objects))
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(outside.read_bytes(), b"outside")
+            self.assertEqual(shared.read_bytes(), b"keep")
+
+    def test_object_cleanup_requires_live_owned_cache_lock(self):
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            pass
+        with self.assertRaises(ValueError):
+            self.cache.remove_completed_objects(1)
+
+    def test_object_cleanup_refuses_linked_deps_directory(self):
+        external = self.root / "external"
+        external.mkdir()
+        keep = external / "keep.o"
+        keep.write_bytes(b"outside")
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            debug = self.cache.path / "debug"
+            debug.mkdir()
+            (debug / "deps").symlink_to(external, target_is_directory=True)
+            with self.assertRaises(OSError):
+                self.cache.remove_completed_objects(1)
+        self.assertEqual(keep.read_bytes(), b"outside")
+
+    def test_object_changed_after_inventory_is_not_unlinked(self):
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            deps = self.cache.path / "debug/deps"
+            deps.mkdir(parents=True)
+            executable = deps / "mon_lib-0123456789abcdef"
+            executable.write_bytes(b"completed executable")
+            executable.chmod(0o700)
+            candidate = deps / (executable.name + ".old.unit.rcgu.o")
+            candidate.write_bytes(b"keep")
+            os.utime(candidate, ns=(1, 1))
+            original_stat = os.stat
+            calls = 0
+
+            def stat_with_change(path, *args, **kwargs):
+                nonlocal calls
+                if path == candidate.name:
+                    calls += 1
+                    if calls == 2:
+                        os.utime(candidate, ns=(2, 2))
+                return original_stat(path, *args, **kwargs)
+
+            with patch.object(runner.os, "stat", side_effect=stat_with_change), \
+                    self.assertRaisesRegex(ValueError, "changed before cleanup"):
+                self.cache.remove_completed_objects(1)
+            self.assertEqual(candidate.read_bytes(), b"keep")
+
     def test_unowned_nonempty_cache_is_preserved(self):
         self.cache.path.mkdir(parents=True)
         keep = self.cache.path / "keep"

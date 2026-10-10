@@ -193,10 +193,15 @@ class Cache:
                         if footprint(self.path) <= maximum:
                             break
                         self.remove_debug(True, crate.name, child.name)
+                # deps can retain unshared codegen objects from older completed
+                # links. Reclaim those before discarding a reusable generation.
+                self.remove_completed_objects(maximum)
                 for child in candidates:
                     if footprint(self.path) <= maximum:
                         break
                     self.remove_debug(incremental_only=True, incremental_entry=child.name)
+            if footprint(self.path) > maximum:
+                self.remove_completed_objects(maximum)
             if footprint(self.path) > maximum:
                 self.remove_debug(incremental_only=True)
         if footprint(self.path) > maximum:
@@ -207,6 +212,64 @@ class Cache:
         if after < before:
             report(f"[rust-tests] Reclaimed {(before-after)/MIB:.1f} MiB of rebuildable cache")
         return after
+
+    def remove_completed_objects(self, maximum):
+        """Bounded, locked cleanup of old, unshared deps codegen objects only."""
+        if self.lock_fd is None:
+            raise ValueError("object cleanup requires the live cache lock")
+        self.verify()
+        excess = footprint(self.path) - maximum
+        if excess <= 0:
+            return
+        pattern = re.compile(r"([A-Za-z_][A-Za-z0-9_]*-[0-9a-f]{16})\.[^.]+\.[^.]+\.rcgu\.o")
+        root_fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            metadata = os.fstat(root_fd)
+            if (metadata.st_dev, metadata.st_ino) != self.identity:
+                raise ValueError("cache was replaced before object cleanup")
+            try:
+                debug_fd = os.open("debug", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=root_fd)
+            except FileNotFoundError:
+                return
+            try:
+                try:
+                    deps_fd = os.open("deps", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=debug_fd)
+                except FileNotFoundError:
+                    return
+                try:
+                    candidates = []
+                    for name in os.listdir(deps_fd):
+                        match = pattern.fullmatch(name)
+                        if match is None:
+                            continue
+                        proof = os.stat(name, dir_fd=deps_fd, follow_symlinks=False)
+                        try:
+                            linked = os.stat(match[1], dir_fd=deps_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        if (stat.S_ISREG(proof.st_mode) and proof.st_uid == os.geteuid()
+                                and proof.st_nlink == 1 and stat.S_ISREG(linked.st_mode)
+                                and linked.st_uid == os.geteuid() and linked.st_mode & 0o111
+                                and proof.st_mtime_ns <= linked.st_mtime_ns):
+                            candidates.append((proof.st_mtime_ns, name, proof))
+                    for _, name, proof in sorted(candidates):
+                        if excess <= 0:
+                            break
+                        self.verify()
+                        current = os.stat(name, dir_fd=deps_fd, follow_symlinks=False)
+                        if (current != proof or current.st_mtime_ns != proof.st_mtime_ns
+                                or current.st_ctime_ns != proof.st_ctime_ns):
+                            raise ValueError("codegen object changed before cleanup")
+                        os.unlink(name, dir_fd=deps_fd)
+                        excess -= proof.st_blocks * 512
+                finally:
+                    os.close(deps_fd)
+            finally:
+                os.close(debug_fd)
+        finally:
+            os.close(root_fd)
 
 
 def inventory(output):
