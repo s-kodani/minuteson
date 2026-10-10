@@ -24,6 +24,7 @@ function Fixture() {
       <label>確認欄<input aria-label="確認欄"/></label>
       <button type="button" disabled={blocked} onClick={() => { window.modalFixture.commands++; setBlocked(true); }}>対象を変更する</button>
       <button type="button" onClick={() => setSecond(true)}>次の確認も要求</button>
+      <button type="button" hidden={!blocked} onClick={() => setBlocked(false)}>合成処理の完了を通知</button>
       {Array.from({ length: 40 }, (_, i) => <p key={i}>確認対象 {i + 1}: 長い対象一覧もモーダル本文の中でスクロールします。</p>)}
       <button type="button" data-dialog-cancel disabled={blocked} onClick={dismiss}>変更せず閉じる</button>
     </CommonModal>

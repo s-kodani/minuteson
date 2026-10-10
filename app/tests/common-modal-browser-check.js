@@ -3,7 +3,10 @@ async (page) => {
   const dialog = () => page.getByRole("dialog", { name: "対象の変更確認", exact: true });
   const open = async () => { await page.getByRole("button", { name: "確認を開く", exact: true }).click(); await dialog().waitFor(); await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "確認をキャンセル"); };
   const closed = async () => { await dialog().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "確認を開く"); };
+  check(await page.evaluate(() => [...document.querySelectorAll("dialog")].every(element => !element.hasAttribute("aria-modal"))), "closed dialogs declare independent modality");
   await open();
+  check(await dialog().evaluate(element => element.matches(":modal") && !element.hasAttribute("aria-modal")), "native modal semantics missing");
+  results.push("showModal exposes native modality without permanent ARIA on closed or queued dialogs");
   await page.keyboard.press("Enter"); await closed();
   check(await page.evaluate(() => window.modalFixture.commands) === 0, "initial Enter executed a command");
   results.push("safe initial cancellation and Enter, StrictMode opener restoration without commands");

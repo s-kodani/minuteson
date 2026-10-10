@@ -18,6 +18,8 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
 
 // Native top-layer dialogs supply an inert background. Explicit Tab wrapping
 // keeps focus inside even when a browser would cycle through its own chrome.
+// Let showModal/close expose actual modality; closed and queued dialogs must
+// not advertise an independent, permanent ARIA modal state to WebKit AX.
 // Controllers retain all command, identity, consent and unknown-result guards.
 export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
@@ -141,7 +143,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     element.addEventListener("keydown",keyDown);
     return () => element.removeEventListener("keydown",keyDown);
   }, [externalContent,ref,owned?.id,owned?.phase,effectiveBlocked]);
-  return <dialog {...attributes} ref={ref} data-common-modal aria-labelledby={owned ? `${owned.id}-title` : attributes["aria-labelledby"]} className={`common-modal ${className}`} aria-modal="true"
+  return <dialog {...attributes} ref={ref} data-common-modal aria-labelledby={owned ? `${owned.id}-title` : attributes["aria-labelledby"]} className={`common-modal ${className}`}
     onCancel={event => { event.preventDefault(); dismiss(); }}
     onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}
     onClick={event => {
