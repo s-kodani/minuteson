@@ -4,7 +4,12 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::process::{Child, Command};
+
+#[cfg(target_os = "macos")]
+mod guard_core;
+#[cfg(all(test, target_os = "macos"))]
+mod guard_tests;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -62,7 +67,112 @@ impl Fingerprint {
     }
 }
 
-pub(crate) struct ManagedChild(pub(crate) Child);
+pub(crate) struct ManagedChild {
+    pub(crate) child: Child,
+    #[cfg(target_os = "macos")]
+    owner: Option<std::os::unix::net::UnixStream>,
+}
+impl ManagedChild {
+    // Import helpers already have their own parent-PID protocol. This preserves
+    // that existing path; native inference uses OwnedCommand instead.
+    pub(crate) fn direct(child: Child) -> Self {
+        Self {
+            child,
+            #[cfg(target_os = "macos")]
+            owner: None,
+        }
+    }
+}
+
+/// Four inference engines share one headless guardian and one anonymous owner
+/// channel per launch. No PID from a receipt, file or later scan is adopted.
+pub(crate) struct OwnedCommand {
+    pub(crate) command: Command,
+    #[cfg(target_os = "macos")]
+    receiver: Option<std::os::unix::net::UnixStream>,
+    #[cfg(target_os = "macos")]
+    owner: Option<std::os::unix::net::UnixStream>,
+}
+impl OwnedCommand {
+    pub(crate) fn new(program: &Path) -> Result<Self, String> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(Self {
+                command: Command::new(program),
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::{fd::AsRawFd, unix::process::CommandExt};
+            let executable = guard_executable()?;
+            let (receiver, owner) =
+                std::os::unix::net::UnixStream::pair().map_err(|e| e.to_string())?;
+            for stream in [&receiver, &owner] {
+                if unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+            }
+            let fd = receiver.as_raw_fd();
+            let mut command = Command::new(executable);
+            command.args([
+                std::ffi::OsString::from(guard_core::ENTRY),
+                std::process::id().to_string().into(),
+                guard_core::OWNER_FD.to_string().into(),
+                program.as_os_str().to_owned(),
+                "--".into(),
+            ]);
+            // Only async-signal-safe descriptor operations happen after fork;
+            // all allocation and parsing runs after exec in the guardian.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::dup2(fd, guard_core::OWNER_FD) < 0
+                        || libc::fcntl(guard_core::OWNER_FD, libc::F_SETFD, 0) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            Ok(Self {
+                command,
+                receiver: Some(receiver),
+                owner: Some(owner),
+            })
+        }
+    }
+    pub(crate) fn spawn(&mut self) -> Result<ManagedChild, std::io::Error> {
+        #[cfg(target_os = "macos")]
+        if self.owner.is_none() || self.receiver.is_none() {
+            return Err(std::io::Error::other(
+                "engine ownership channel was already consumed",
+            ));
+        }
+        let child = self.command.spawn()?;
+        #[cfg(target_os = "macos")]
+        {
+            self.receiver.take();
+            Ok(ManagedChild {
+                child,
+                owner: self.owner.take(),
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(ManagedChild::direct(child))
+    }
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
+fn guard_executable() -> Result<PathBuf, String> {
+    std::env::current_exe().map_err(|e| e.to_string())
+}
+#[cfg(all(test, target_os = "macos"))]
+fn guard_executable() -> Result<PathBuf, String> {
+    guard_tests::executable()
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn guard_entry() -> Option<i32> {
+    guard_core::dispatch(&std::env::args_os().skip(1).collect::<Vec<_>>())
+}
 pub(crate) struct StableFile {
     path: PathBuf,
     metadata: std::fs::Metadata,
@@ -104,7 +214,14 @@ impl StableFile {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         // Dropping std::process::Child alone leaves a native worker alive.
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        #[cfg(target_os = "macos")]
+        if self.owner.take().is_some() {
+            // Do not SIGKILL the guard before it can stop/reap its engine group.
+            // EOF also happens without Drop when the MON parent is SIGKILLed.
+            let _ = self.child.wait();
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }

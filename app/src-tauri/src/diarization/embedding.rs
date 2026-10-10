@@ -1,12 +1,12 @@
 //! Bounded, task-owned headless feature extraction for saved diarization runs.
 //! Does not record, change source PCM, or infer identity from local labels.
 use super::sherpa::SherpaConfig;
-use crate::local_engine::{Fingerprint, ManagedChild, StableFile};
+use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 const MAX_OUTPUT: u64 = 64 * 1024;
@@ -308,29 +308,30 @@ fn run_inner(
     if cancelled() {
         return Ok(None);
     }
-    let mut child = ManagedChild(
-        Command::new(&config.helper.path)
-            .env_clear()
-            .env("LC_ALL", "C")
-            .current_dir(&directory)
-            .stdin(Stdio::null())
-            .stdout(stdout.file.try_clone().map_err(|e| e.to_string())?)
-            .stderr(stderr.file.try_clone().map_err(|e| e.to_string())?)
-            .args(["--protocol-version", "1", "--library"])
-            .arg(&config.library.path)
-            .arg("--model")
-            .arg(&engine.embedding_model.path)
-            .arg("--wave")
-            .arg(&wave.path)
-            .arg("--first-frame")
-            .arg(first.to_string())
-            .arg("--end-frame")
-            .arg(end.to_string())
-            .arg("--threads")
-            .arg(engine.threads.to_string())
-            .spawn()
-            .map_err(|e| format!("特徴量抽出を起動できません: {e}"))?,
-    );
+    let mut launch = OwnedCommand::new(&config.helper.path)?;
+    launch
+        .command
+        .env_clear()
+        .env("LC_ALL", "C")
+        .current_dir(&directory)
+        .stdin(Stdio::null())
+        .stdout(stdout.file.try_clone().map_err(|e| e.to_string())?)
+        .stderr(stderr.file.try_clone().map_err(|e| e.to_string())?)
+        .args(["--protocol-version", "1", "--library"])
+        .arg(&config.library.path)
+        .arg("--model")
+        .arg(&engine.embedding_model.path)
+        .arg("--wave")
+        .arg(&wave.path)
+        .arg("--first-frame")
+        .arg(first.to_string())
+        .arg("--end-frame")
+        .arg(end.to_string())
+        .arg("--threads")
+        .arg(engine.threads.to_string());
+    let mut child = launch
+        .spawn()
+        .map_err(|e| format!("特徴量抽出を起動できません: {e}"))?;
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -341,7 +342,7 @@ fn run_inner(
         }
         stdout.check()?;
         stderr.check()?;
-        if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("特徴量抽出が失敗しました: {status}"));
             }

@@ -1,10 +1,12 @@
 pub use crate::local_engine::Fingerprint;
-use crate::local_engine::{ManagedChild, StableFile};
+use crate::local_engine::{OwnedCommand, StableFile};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
@@ -193,7 +195,8 @@ pub fn run_unit(
         .create_new(true)
         .open(&stderr_path)
         .map_err(|e| e.to_string())?;
-    let mut command = Command::new(&config.executable.path);
+    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let command = &mut launch.command;
     command
         // Do not inherit injected libraries, credentials, or engine overrides.
         .env_clear()
@@ -221,11 +224,9 @@ pub fn run_unit(
     if let Some(vad) = &config.vad_model {
         command.arg("--vad").arg("--vad-model").arg(&vad.path);
     }
-    let mut child = ManagedChild(
-        command
-            .spawn()
-            .map_err(|e| format!("whisper.cppを起動できません: {e}"))?,
-    );
+    let mut child = launch
+        .spawn()
+        .map_err(|e| format!("whisper.cppを起動できません: {e}"))?;
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -242,7 +243,7 @@ pub fn run_unit(
         if json.exists() && json.metadata().map_err(|e| e.to_string())?.len() > MAX_JSON_BYTES {
             return Err("文字起こし出力が上限を超えました".into());
         }
-        if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("whisper.cppが失敗しました: {status}"));
             }

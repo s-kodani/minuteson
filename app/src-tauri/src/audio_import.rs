@@ -148,7 +148,7 @@ pub(crate) fn decode(
         .prefix(".mon-import-report-")
         .tempfile_in(scratch)
         .map_err(|e| e.to_string())?;
-    let mut child = ManagedChild(
+    let mut child = ManagedChild::direct(
         Command::new(&helper.path)
             .arg("--import-audio")
             .arg(input)
@@ -175,7 +175,7 @@ pub(crate) fn decode(
         {
             return Err("音声検証の応答が大きすぎます".into());
         }
-        if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             break status;
         }
         if started.elapsed() > Duration::from_secs(3600) {

@@ -2405,6 +2405,10 @@ fn undo_transcript_edit(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    if let Some(code) = local_engine::guard_entry() {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .manage(startup_attention::Startup::default())
         .manage(SessionStore::default())

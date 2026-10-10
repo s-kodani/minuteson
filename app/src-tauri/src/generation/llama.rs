@@ -1,10 +1,12 @@
-use crate::local_engine::{Fingerprint, ManagedChild, StableFile};
+use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
@@ -211,7 +213,8 @@ pub(crate) fn run_unit(
         .create_new(true)
         .open(&log_path)
         .map_err(|e| e.to_string())?;
-    let mut command = Command::new(&config.executable.path);
+    let mut launch = OwnedCommand::new(&config.executable.path)?;
+    let command = &mut launch.command;
     command
         .current_dir(&directory)
         // Do not inherit LLAMA_ARG_RPC, model URLs, credentials or options that
@@ -263,11 +266,9 @@ pub(crate) fn run_unit(
             "2",
             "--simple-io",
         ]);
-    let mut child = ManagedChild(
-        command
-            .spawn()
-            .map_err(|e| format!("llama.cppを起動できません: {e}"))?,
-    );
+    let mut child = launch
+        .spawn()
+        .map_err(|e| format!("llama.cppを起動できません: {e}"))?;
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -282,7 +283,7 @@ pub(crate) fn run_unit(
                 return Err("議事録の出力・ログが上限を超えたか通常ファイルではありません".into());
             }
         }
-        if let Some(status) = child.0.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("llama.cppが失敗しました: {status}"));
             }

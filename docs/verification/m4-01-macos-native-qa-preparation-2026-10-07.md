@@ -59,4 +59,12 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 直前のQAは[時計復帰の録音制御・入力通知接続](capture-clock-recovery-control-2026-10-10.md)を含み、`/private/tmp/mon-clock-control-qa-artifact.wpTMjP/MON QA.app`に保持した。通常の所有付き確認済みSCStream録音の両入力停止・新epoch・再取得経路を含む。アドホック署名・識別子・全arm64・両ヘルパー・同梱CLIのhelpは確認済みで、GUI・TCC・実スリープ・実録音・実モデル・配布署名／公証の成功にはしない。
 
-最新QAは[PC音声の旧出力解除の失敗経路修正](system-output-retirement-2026-10-10.md)も含み、`/private/tmp/mon-output-retirement-qa-artifact.0oNZjp/MON QA.app`に保持した。旧出力の解除成功とcallback排出まで所有を保ち、解除失敗では新streamを開始しない。成功した停止を繰返さず、形式変更のblockも維持する。全コピー一致・アドホック署名・識別子・全arm64・両ヘルパー・同梱CLIのhelpは確認済みだが、GUI／TCC／実SCStreamの停止と解除／実録音／実モデル／配布署名と公証は未検証のままである。
+直前のQAは[PC音声の旧出力解除の失敗経路修正](system-output-retirement-2026-10-10.md)も含み、`/private/tmp/mon-output-retirement-qa-artifact.0oNZjp/MON QA.app`に保持した。旧出力の解除成功とcallback排出まで所有を保ち、解除失敗では新streamを開始しない。成功した停止を繰返さず、形式変更のblockも維持する。全コピー一致・アドホック署名・識別子・全arm64・両ヘルパー・同梱CLIのhelpは確認済みだが、GUI／TCC／実SCStreamの停止と解除／実録音／実モデル／配布署名と公証は未検証のままである。
+
+最新QAは[解析プロセスの親寿命と所有付き終了](local-engine-parent-lifetime-2026-10-10.md)も含み、`/private/tmp/mon-owned-engine-qa-artifact.OwfWTg/MON QA.app`に保持した。同じ製品実行ファイルの私有headless入口をGUI初期化前に分岐させ、合成engineの正確な出力・終了コード、継承端／親の拒否、通常終了後の残子、通信切断、実親SIGKILLと無関係な対照プロセスの保持の6ケースを確認した。アドホック署名・識別子・全arm64・同梱help・全コピー一致も確認済み。私有入口の検査は製品GUIの起動、実会議、実モデル、録音優先、OSスリープ、Developer ID署名と公証の成功とは区別する。
+
+GUIを起動しない専用検査は、同じ新QAが用意されている場合に限り、リポジトリで以下を実行する。古いQAには私有入口がなく、同じ引数でも通常GUIを起動し得るので使わない。
+
+```sh
+node tools/mon_owned_engine_check.mjs --executable '/private/tmp/mon-owned-engine-qa-artifact.OwfWTg/MON QA.app/Contents/MacOS/mon-desktop' --sha256 a52055b689db09faafed8e7f9b42aaab54ca1e488aad28f3e6348ad1907d0cb2
+```
