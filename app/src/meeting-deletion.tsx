@@ -154,14 +154,14 @@ export function MeetingDeletionPanel({ operation, control, visible }: { operatio
       {!operation.deletionSupported && operation.connected && <p>この環境の会議削除操作は保留中です。</p>}
       {!operation.connected && <p role="alert">データ操作の状態を確認できるまで変更を停止しています。{operation.error}</p>}
       <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>削除と書込停止の状態を再読込</button>
-      {needed && <p role="alert">未完了削除の確認対象を保護するため、編集・録音・AI処理などの通常書込みを停止しています。既に消したデータは復元していません。{c.listing?.reason}</p>}
+      {needed && <p role="alert">編集・録音・AI処理などの通常書込みを停止しています。{c.listing?.reason}</p>}
       {c.listing?.items.length ? <ul>{c.listing.items.map(i => <li key={i.operationId}><p>未完了削除 {i.operationId} · 記録状態 {i.state === "completed" ? "完了記録あり・残り処理の確認が必要" : i.state}{i.meetingId && ` · 会議 ${i.meetingId}`}</p>{deletionAttentionLabel(i.errorCode) && <p>{deletionAttentionLabel(i.errorCode)}</p>}<button type="button" className="small-secondary" disabled={!c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了削除の対象を確認</button></li>)}</ul> : null}
       {active && <p role="status">{s.busy ? "削除対象の検査・処理中です。停止要求後も実際の終了を待ちます。" : p ? deletionPhaseLabel(p.phase) : s.phase === "failed" ? "削除対象の確認に失敗しました。" : "削除の確認待ちです。"}</p>}
       {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>安全な停止を要求</button>}
       {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>残りの状態を再検査</button></div>}
       {c.unknown && <button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ削除操作の結果を確認</button>}
       <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s.errorMessage : "")} />
-      {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">保留した起動時回復を行うため、通常利用にはアプリの再起動が必要です。未確認の完了応答がある場合は、先に残りの状態を再検査できます。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
+      {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の操作結果がある場合は、先に状態を再確認してください。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
     </section>}
     <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("deletion-panel-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
       <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>{isDeletionReconfirmation(p?.phase) ? "変更後の残り範囲への再同意" : "会議の完全削除を確認"}</h2>
