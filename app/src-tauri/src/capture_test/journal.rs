@@ -109,6 +109,17 @@ pub(super) struct Quiet {
     run_id: String,
     lease: File,
 }
+impl Drop for Quiet {
+    fn drop(&mut self) {
+        // This fresh description was acquired only after all capture-writer
+        // descriptions released their lock. Quiet is never delegated to a
+        // helper. A concurrent pre-exec copy must not prolong collection
+        // ownership after this guard ends. Do not unlock Area's writer lease.
+        unsafe {
+            libc::flock(self.lease.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
 fn private(metadata: &Metadata) -> bool {
     metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0
 }
@@ -584,13 +595,16 @@ impl Area {
         self.release_parent_lease();
         let file = self.lease_file()?;
         lock(&file)?;
-        self.check_payload()?;
-        self.check_record()?;
-        Ok(Quiet {
+        let quiet = Quiet {
             registry: self.registry.clone(),
             run_id: self.record.request.run_id.clone(),
             lease: file,
-        })
+        };
+        // If either post-lock identity check fails, the same non-delegated
+        // description must be released by Quiet, not just close one copy.
+        self.check_payload()?;
+        self.check_record()?;
+        Ok(quiet)
     }
     pub(super) fn finish(&self, quiet: &Quiet) -> Result<(), String> {
         if !Arc::ptr_eq(&self.registry, &quiet.registry)

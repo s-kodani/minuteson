@@ -30,6 +30,164 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+// Pause an actual owned child after fork but before exec. Only descriptor
+// syscalls run there; no allocation, Rust locks, GUI or capture initialization.
+struct PendingExec {
+    ready: std::os::unix::net::UnixStream,
+    release: Option<std::os::unix::net::UnixStream>,
+    task: Option<std::thread::JoinHandle<std::io::Result<std::process::ExitStatus>>>,
+}
+impl PendingExec {
+    fn new(retained: File) -> Self {
+        use std::os::unix::net::UnixStream;
+        let (notify, ready) = UnixStream::pair().unwrap();
+        let (release, gate) = UnixStream::pair().unwrap();
+        ready
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let task = std::thread::spawn(move || {
+            let notify_fd = notify.as_raw_fd();
+            let gate_fd = gate.as_raw_fd();
+            let mut command = Command::new("/usr/bin/true");
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(move || {
+                    let flags = libc::fcntl(retained.as_raw_fd(), libc::F_GETFD);
+                    if flags < 0 || flags & libc::FD_CLOEXEC == 0 {
+                        return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+                    }
+                    let ready = 1_u8;
+                    if libc::write(notify_fd, (&ready as *const u8).cast(), 1) != 1 {
+                        return Err(std::io::Error::from_raw_os_error(libc::EPIPE));
+                    }
+                    let mut poll = libc::pollfd {
+                        fd: gate_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if libc::poll(&mut poll, 1, 8000) != 1 || poll.revents & libc::POLLIN == 0 {
+                        return Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT));
+                    }
+                    let mut byte = 0_u8;
+                    if libc::read(gate_fd, (&mut byte as *mut u8).cast(), 1) != 1 || byte != 7 {
+                        return Err(std::io::Error::from_raw_os_error(libc::ECANCELED));
+                    }
+                    Ok(())
+                });
+            }
+            let result = command.spawn().and_then(|mut child| child.wait());
+            drop(command);
+            drop(notify);
+            drop(gate);
+            result
+        });
+        Self {
+            ready,
+            release: Some(release),
+            task: Some(task),
+        }
+    }
+    fn wait_ready(&mut self) {
+        let mut byte = [0];
+        self.ready.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [1]);
+    }
+    fn finish(&mut self) {
+        self.release.take().unwrap().write_all(&[7]).unwrap();
+        assert!(self.task.take().unwrap().join().unwrap().unwrap().success());
+    }
+}
+impl Drop for PendingExec {
+    fn drop(&mut self) {
+        if let Some(mut release) = self.release.take() {
+            let _ = release.write_all(&[7]);
+        }
+        if let Some(task) = self.task.take() {
+            let _ = task.join();
+        }
+    }
+}
+
+#[test]
+fn quiet_drop_preexec_copy_ends_collection_ownership_but_not_capture_ownership() {
+    // Other parallel tests deliberately pause unrelated pre-exec children.
+    // They legitimately retain every current capture-writer description too.
+    // Create these leases only after exec in an isolated, single-test process
+    // so this check controls every fork copy instead of relaxing collection.
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "capture_test::journal::tests::quiet_drop_preexec_child",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env("MON_QUIET_PREEXEC_FIXTURE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "isolated pre-exec fixture failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[test]
+#[ignore = "owned pre-exec lease fixture; invoked by the ordinary test without capture"]
+fn quiet_drop_preexec_child() {
+    assert_eq!(
+        std::env::var("MON_QUIET_PREEXEC_FIXTURE").as_deref(),
+        Ok("1")
+    );
+    for collection in [false, true] {
+        let fixture = tempfile::tempdir().unwrap();
+        let registry = Registry::open(fixture.path()).unwrap();
+        let area = registry.allocate(request()).unwrap();
+        let path = area.path();
+        let record = registry.pending().unwrap().pop().unwrap();
+        let quiet = if collection {
+            Some(area.quiet().unwrap())
+        } else {
+            None
+        };
+        let retained = if let Some(quiet) = &quiet {
+            quiet.lease.try_clone().unwrap()
+        } else {
+            area.lease
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .try_clone()
+                .unwrap()
+        };
+        let mut child = PendingExec::new(retained);
+        child.wait_ready();
+        area.release_parent_lease();
+        if collection {
+            // Exact failed boundary: payload removed, allocated row durable,
+            // Quiet closes while an unrelated pre-exec child retains a copy.
+            std::fs::remove_dir(&path).unwrap();
+            drop(quiet);
+            registry.collect(record.clone()).unwrap();
+            assert!(registry.pending().unwrap().is_empty());
+        } else {
+            assert!(area.quiet().is_err());
+            assert!(registry.collect(record.clone()).is_err());
+            assert!(path.exists());
+            assert_eq!(registry.pending().unwrap().len(), 1);
+        }
+        child.finish();
+        if !collection {
+            registry.collect(record).unwrap();
+            assert!(registry.pending().unwrap().is_empty());
+        }
+        assert!(!path.exists());
+    }
+}
 #[test]
 fn durable_test_ownership_is_single_allocated_private_and_never_replays_removed_ids() {
     let fixture = tempfile::tempdir().unwrap();
@@ -76,6 +234,64 @@ fn registry_drop_releases_only_the_non_capture_lock_after_closing_sqlite() {
         reopened.err()
     );
     assert!(regular(&inherited, 0).is_ok());
+}
+#[test]
+fn quiet_drop_releases_collection_lock_without_adopting_or_removing_audio() {
+    let fixture = tempfile::tempdir().unwrap();
+    let registry = Registry::open(fixture.path()).unwrap();
+    let area = registry.allocate(request()).unwrap();
+    let path = area.path().join("microphone.caf");
+    std::fs::write(&path, b"synthetic owned audio").unwrap();
+    let quiet = area.quiet().unwrap();
+    assert!(area.quiet().is_err(), "live Quiet must remain exclusive");
+    // dup and a concurrent fork retain the same open description. Quiet is
+    // never delegated to a writer; its lock must end with the actual owner.
+    let inherited = quiet.lease.try_clone().unwrap();
+    drop(quiet);
+    let next = area.quiet().unwrap();
+    assert!(regular(&inherited, 0).is_ok());
+    assert!(area.quiet().is_err(), "the new Quiet still owns its lock");
+    drop(inherited);
+    assert!(
+        area.quiet().is_err(),
+        "closing an old copy cannot unlock the new Quiet"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"synthetic owned audio");
+    assert_eq!(registry.pending().unwrap().len(), 1);
+    drop(next);
+    drop(area.quiet().unwrap());
+}
+#[test]
+fn quiet_drop_never_unlocks_a_retained_capture_writer_description() {
+    let fixture = tempfile::tempdir().unwrap();
+    let registry = Registry::open(fixture.path()).unwrap();
+    let area = registry.allocate(request()).unwrap();
+    let path = area.path();
+    let writer = area
+        .lease
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .try_clone()
+        .unwrap();
+    area.release_parent_lease();
+    assert!(area.quiet().is_err());
+    assert!(registry
+        .collect(registry.pending().unwrap().pop().unwrap())
+        .is_err());
+    assert!(path.exists());
+    drop(writer);
+    let quiet = area.quiet().unwrap();
+    let retained_quiet = quiet.lease.try_clone().unwrap();
+    drop(quiet);
+    // Collection requires a new exclusive proof, not a PID or old Quiet.
+    registry
+        .collect(registry.pending().unwrap().pop().unwrap())
+        .unwrap();
+    assert!(!path.exists());
+    assert!(registry.pending().unwrap().is_empty());
+    assert!(regular(&retained_quiet, 0).is_ok());
 }
 #[test]
 fn restored_record_keeps_exact_inputs_and_cannot_restart_capture() {

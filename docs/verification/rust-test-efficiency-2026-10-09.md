@@ -70,3 +70,17 @@ SHA-256の合成64MiBは、実際の旧テスト依存を使う`tools/mon_hash_b
 ログは`/private/tmp/mon-rust-test-efficiency-ab-v1.log`、`/private/tmp/mon-rust-test-efficiency-runner-v8.log`、`/private/tmp/mon-rust-test-efficiency-sha256-baseline.log`、`/private/tmp/mon-rust-test-efficiency-sql-only-two-tests.log`、`/private/tmp/mon-rust-test-efficiency-full-check-v1.log`・`/private/tmp/mon-rust-test-efficiency-full-check-v2.log`・`/private/tmp/mon-rust-test-efficiency-full-check-v3.log`・`/private/tmp/mon-rust-test-efficiency-full-check-v4.log`に保持する。正式評価・10話者・Windows固有部分の保留、Windows CI停止と計画全体の進行中は維持する。
 
 最終の比較と再構築は`/private/tmp/mon-rust-test-efficiency-optimized-two-tests.log`、`/private/tmp/mon-rust-test-efficiency-incremental-build-v1.log`、`/private/tmp/mon-rust-test-efficiency-warm-build-final.log`、`/private/tmp/mon-rust-test-efficiency-profile-guard-final.log`、`/private/tmp/mon-rust-test-efficiency-python-final.log`に保持する。
+
+## 2026-10-10の並列全件比較
+
+後続の4プロセス全件で見つかった、録音確認の非delegated回収ロックがfork複製で一時的に残る不具合を修正した。取得ヘルパーへ継承するロックは明示解除せず、取得中の回収拒否を維持する。実fork検査の素材はexec後の専用子で作り、外側の別の並列forkが制御外の取得複製を残す競合も避ける。通常検査が専用子の成功を必ず要求し、検査対象を省略しない。
+
+論理CPU10個の同じMac・固定ソース・共通cache・4構築jobsで、どちらも16検査threadsを明示して順次比較した。両方とも通常Rust1,809件成功・76件ignored、bin／doc各0件、終了コード0。4プロセスは構築0.49秒・実行526.19秒、1プロセスは構築0.23秒・実行770.46秒で、この1回では約31.7%短縮した。旧1,669件の記録とは件数が異なり、同一比較に使わない。
+
+全件比較中に重いQA構築を重ねず、前回の先行失敗・今回の追加検査の競合と再試行も記録した。1回の順次比較であり、OS cache・他のプロセス・繰返し変動まで完全には制御していない。標準の1プロセス・自動threads・終了後10GiBのソフト予算は変更しない。4プロセス×16スレッドは最大64threadsとなる明示指定で、全環境の短縮保証にはしない。
+
+```sh
+python3 tools/mon_rust_tests.py --jobs 4 --threads 16 --processes 4
+```
+
+範囲・全件・専用Swift連携・時間・容量・残件は[回収ロックと並列検査の記録](capture-test-quiet-ownership-2026-10-10.md)を参照。

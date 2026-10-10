@@ -61,10 +61,12 @@ CARGO_TARGET_DIR="$qa_target" CARGO_INCREMENTAL=0 npm run tauri:qa:build
 
 直前のQAは[PC音声の旧出力解除の失敗経路修正](system-output-retirement-2026-10-10.md)も含み、`/private/tmp/mon-output-retirement-qa-artifact.0oNZjp/MON QA.app`に保持した。旧出力の解除成功とcallback排出まで所有を保ち、解除失敗では新streamを開始しない。成功した停止を繰返さず、形式変更のblockも維持する。全コピー一致・アドホック署名・識別子・全arm64・両ヘルパー・同梱CLIのhelpは確認済みだが、GUI／TCC／実SCStreamの停止と解除／実録音／実モデル／配布署名と公証は未検証のままである。
 
-最新QAは[解析プロセスの親寿命と所有付き終了](local-engine-parent-lifetime-2026-10-10.md)も含み、`/private/tmp/mon-owned-engine-qa-artifact.OwfWTg/MON QA.app`に保持した。同じ製品実行ファイルの私有headless入口をGUI初期化前に分岐させ、合成engineの正確な出力・終了コード、継承端／親の拒否、通常終了後の残子、通信切断、実親SIGKILLと無関係な対照プロセスの保持の6ケースを確認した。アドホック署名・識別子・全arm64・同梱help・全コピー一致も確認済み。私有入口の検査は製品GUIの起動、実会議、実モデル、録音優先、OSスリープ、Developer ID署名と公証の成功とは区別する。
+直前のQAは[解析プロセスの親寿命と所有付き終了](local-engine-parent-lifetime-2026-10-10.md)も含み、`/private/tmp/mon-owned-engine-qa-artifact.OwfWTg/MON QA.app`に保持した。同じ製品実行ファイルの私有headless入口をGUI初期化前に分岐させ、合成engineの正確な出力・終了コード、継承端／親の拒否、通常終了後の残子、通信切断、実親SIGKILLと無関係な対照プロセスの保持の6ケースを確認した。アドホック署名・識別子・全arm64・同梱help・全コピー一致も確認済み。私有入口の検査は製品GUIの起動、実会議、実モデル、録音優先、OSスリープ、Developer ID署名と公証の成功とは区別する。
+
+最新QAは[録音確認の回収ロックと並列検査](capture-test-quiet-ownership-2026-10-10.md)の修正も含み、`/private/tmp/mon-quiet-ownership-qa-artifact.5SgmBI/MON QA.app`へ保持した。通常Rustの1／4プロセス全件と専用Swift継承lease連携が成功し、回収用descriptionだけを明示解除して、取得ヘルパーの継承所有は保つ。全コピー一致・アドホック署名・識別子・全arm64・同梱helpと、同じmainのheadless6ケースを再確認した。GUI・TCC・実録音・実モデル・長時間取得・配布用署名／公証は未検証のままである。
 
 GUIを起動しない専用検査は、同じ新QAが用意されている場合に限り、リポジトリで以下を実行する。古いQAには私有入口がなく、同じ引数でも通常GUIを起動し得るので使わない。
 
 ```sh
-node tools/mon_owned_engine_check.mjs --executable '/private/tmp/mon-owned-engine-qa-artifact.OwfWTg/MON QA.app/Contents/MacOS/mon-desktop' --sha256 a52055b689db09faafed8e7f9b42aaab54ca1e488aad28f3e6348ad1907d0cb2
+node tools/mon_owned_engine_check.mjs --executable '/private/tmp/mon-quiet-ownership-qa-artifact.5SgmBI/MON QA.app/Contents/MacOS/mon-desktop' --sha256 bc45033b70acef09922b97297133f8931e8e396ce5996f2edee55f8376abccbe
 ```
