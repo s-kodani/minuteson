@@ -84,6 +84,40 @@ impl Aliases {
         }
         Ok(())
     }
+    // A legacy seal includes meeting_id. ON DELETE SET NULL would invalidate
+    // cold admission even though the new deletion had its own valid consent.
+    // Refuse before any file removal, not after the row transaction rolls back.
+    pub(in crate::storage::deletion) fn require_detachable_history(
+        &self,
+        db: &Connection,
+        meeting: &str,
+        current: &(fs::Identity, fs::Identity),
+    ) -> Result<(), String> {
+        self.verify_inheritance(current)?;
+        let mut query = db
+            .prepare(
+                "SELECT id FROM maintenance_operations WHERE meeting_id=?1 ORDER BY id LIMIT 10001",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([meeting]).map_err(|e| e.to_string())?;
+        let mut count = 0;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            count += 1;
+            if count > MAX_OPERATIONS {
+                return Err("会議参照を外す削除履歴が安全上限を超えています".into());
+            }
+            let operation: String = row.get(0).map_err(|e| e.to_string())?;
+            if self
+                .records
+                .get(&operation)
+                .is_some_and(|r| r.immutable_hash.is_none())
+            {
+                self.eligible(db, &operation)?;
+                return Err("古い削除履歴（形式版1）の会議参照を変更する完全削除は実行できません。会議・音声・元の履歴を保持します。削除を開始せず、現行版で保存先変更による所有付きコピーを作成してから、現在の範囲を新しく確認してください".into());
+            }
+        }
+        Ok(())
+    }
     pub(in crate::storage::deletion) fn matches_root(
         &self,
         db: &Connection,

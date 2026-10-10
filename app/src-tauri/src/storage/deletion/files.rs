@@ -644,6 +644,9 @@ impl Census {
         reserved: Option<&str>,
         reservation_roots: &[String],
     ) -> Result<Self, String> {
+        storage
+            .managed_anchor
+            .require_detachable_history(db, meeting)?;
         Self::capture_scoped_locked(
             storage,
             db,

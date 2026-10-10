@@ -18,6 +18,24 @@ const MAX_PATHS: usize = 200_000;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROOTS_PER_RECORD: usize = 64;
 
+#[cfg(test)]
+std::thread_local! {
+    static SYNTHETIC_VERSION_ONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+// Synthetic legacy shape only; no claim that an old binary produced it.
+// Keep the real snapshot, placement, cutover and cold-admission path intact.
+#[cfg(test)]
+pub(crate) fn synthetic_version_one_handoff<R>(action: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SYNTHETIC_VERSION_ONE.set(self.0);
+        }
+    }
+    let _restore = Restore(SYNTHETIC_VERSION_ONE.replace(true));
+    action()
+}
+
 // Flat observations only: never an origin JSON, nested history, or a permit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -420,6 +438,18 @@ impl Source {
                 .any(|r| !r.historical_roots.is_empty())
         {
             result.version = 3;
+        }
+        #[cfg(test)]
+        if SYNTHETIC_VERSION_ONE.get() {
+            assert_eq!(
+                result.version, 2,
+                "legacy fixture must be a first owned move"
+            );
+            result.version = 1;
+            for record in &mut result.records {
+                assert!(record.historical_roots.is_empty());
+                record.immutable_hash = None;
+            }
         }
         result.verify_size()?;
         snapshot.verify(cancelled)?;

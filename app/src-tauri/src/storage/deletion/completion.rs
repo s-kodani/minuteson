@@ -315,6 +315,9 @@ fn run_locked(
         let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_live(storage, &tx, check)?;
+        storage
+            .managed_anchor
+            .require_detachable_history(&tx, &receipt.confirmed.scope().meeting_id)?;
         let supersession = super::audio_supersession::retain(
             &tx,
             &storage.managed_anchor,
