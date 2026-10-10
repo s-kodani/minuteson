@@ -12,12 +12,17 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 NOTICE_NAME = re.compile(r"^(licen[sc]e|copying|notice|copyright)(?:$|[._-])", re.I)
+NOTICE_DIRECTORY = re.compile(r"^(licen[sc]es?|notices?)$", re.I)
+SOURCE_SUFFIXES = {".rs", ".py", ".c", ".cpp", ".cc", ".h", ".hpp", ".m", ".mm",
+                   ".swift", ".js", ".ts", ".go", ".rb", ".java", ".sh"}
 MAX_TEXT_BYTES = 1024 * 1024
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
 OUTPUTS = ("THIRD_PARTY_NOTICES.txt", "third-party-inventory.json")
+REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 
 
 def sha(data):
@@ -60,7 +65,9 @@ def notice_files(base, declared=None):
                                 if name not in (".git", "target", "node_modules")
                                 and not (Path(parent) / name).is_symlink())
         for name in files:
-            if NOTICE_NAME.match(name):
+            relative_parent = Path(parent).relative_to(base)
+            in_notices = any(NOTICE_DIRECTORY.fullmatch(part) for part in relative_parent.parts)
+            if (NOTICE_NAME.match(name) or in_notices) and Path(name).suffix.lower() not in SOURCE_SUFFIXES:
                 result.add(Path(parent) / name)
     texts = []
     for path in sorted(result):
@@ -75,20 +82,71 @@ def notice_files(base, declared=None):
     return texts
 
 
+def supplemental_files(repository, package, index, locked):
+    matched = [entry for entry in index["packages"]
+               if (entry["name"], entry["version"]) == (package["name"], package["version"])]
+    if len(matched) > 1:
+        raise ValueError("duplicate supplemental package")
+    if not matched:
+        return []
+    entry = matched[0]
+    base = Path(package["manifest_path"]).parent
+    vcs_path = base / ".cargo_vcs_info.json"
+    if vcs_path.is_symlink() or vcs_path.resolve() != vcs_path or vcs_path.stat().st_size > 65536:
+        raise ValueError("crate VCS metadata is linked or oversized")
+    vcs = json.loads(vcs_path.read_text(encoding="utf8"))
+    if (package.get("source") != REGISTRY or package.get("license") != entry["declaredLicense"]
+            or locked[(package["name"], package["version"], REGISTRY)]["checksum"] != entry["crateChecksum"]
+            or vcs.get("git", {}).get("sha1") != entry["vcsCommit"]
+            or vcs.get("path_in_vcs") != entry["vcsPath"]):
+        raise ValueError("supplemental notice differs from the exact crate/commit/license")
+    directory = repository / "third-party/notices"
+    files = {record["path"]: record for record in index["files"]}
+    result = []
+    for name in entry["files"]:
+        record = files[name]
+        path = directory / name
+        if (Path(name).is_absolute() or ".." in Path(name).parts or path.is_symlink()
+                or path.resolve() != path or not path.is_file() or path.stat().st_size > MAX_TEXT_BYTES):
+            raise ValueError("supplemental notice path is invalid, linked or oversized")
+        data = path.read_bytes()
+        data.decode("utf8")
+        if (not data.strip() or sha(data) != record["sha256"] or len(data) != record["bytes"]
+                or record["kind"] not in ("license_text", "upstream_license_reference")
+                or not record["sourceUrl"].startswith("https://")):
+            raise ValueError("supplemental notice content/provenance changed")
+        result.append((record, data))
+    return result
+
+
 def collect(repository, metadata, lock):
     if lock.get("lockfileVersion") != 3:
         raise ValueError("npm lockfile version 3 is required")
+    index_path = repository / "third-party/notices/index.json"
+    if index_path.is_symlink() or index_path.resolve() != index_path or index_path.stat().st_size > MAX_TEXT_BYTES:
+        raise ValueError("supplemental notice index is linked or oversized")
+    index_bytes = index_path.read_bytes()
+    index = json.loads(index_bytes)
+    if index["schemaVersion"] != 1:
+        raise ValueError("unsupported supplemental notice index")
+    cargo_lock = tomllib.loads((repository / "app/src-tauri/Cargo.lock").read_text(encoding="utf8"))
+    locked = {(entry["name"], entry["version"], entry.get("source")): entry for entry in cargo_lock.get("package", [])}
     dependencies = []
     for package in cargo_packages(metadata):
         base = Path(package["manifest_path"]).parent
         dependencies.append(("cargo", package["name"], package["version"],
                              package.get("license"), package.get("repository"),
-                             notice_files(base, package.get("license_file"))))
+                             notice_files(base, package.get("license_file")),
+                             supplemental_files(repository, package, index, locked),
+                             ({"url": f"https://static.crates.io/crates/{package['name']}/{package['name']}-{package['version']}.crate",
+                               "sha256": locked[(package["name"], package["version"], REGISTRY)]["checksum"],
+                               "state": "source_reference_not_download_verified"}
+                              if package.get("source") == REGISTRY else None)))
     for location, package in sorted(lock["packages"].items()):
         if not location or package.get("dev") is True:
             continue
         parts = Path(location).parts
-        if (not parts or parts[0] != "node_modules" or ".." in parts
+        if (len(parts) < 2 or parts[0] != "node_modules" or ".." in parts
                 or Path(location).is_absolute() or package.get("link")):
             raise ValueError("npm dependency location is invalid or linked")
         base = repository / "app" / location
@@ -97,7 +155,7 @@ def collect(repository, metadata, lock):
         if installed["version"] != package["version"] or installed["name"] != expected_name:
             raise ValueError("installed npm name/version differs from the lockfile")
         dependencies.append(("npm", installed["name"], package["version"],
-                             package.get("license"), None, notice_files(base)))
+                             package.get("license"), None, notice_files(base), [], None))
     dependencies.sort(key=lambda item: item[:3])
     inventory = {"schemaVersion": 1, "target": "aarch64-apple-darwin",
                  "scope": "resolved Cargo normal/build dependencies and npm production dependencies",
@@ -106,18 +164,22 @@ def collect(repository, metadata, lock):
                               "separately obtained AI engines/models/runtime libraries"],
                  "lockHashes": {name: sha((repository / relative).read_bytes()) for name, relative in
                                 (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
-                 "packages": [], "missingNoticeTexts": []}
+                 "supplementManifestSha256": sha(index_bytes),
+                 "packages": [], "missingNoticeTexts": [], "referenceOnlyPackages": []}
     chunks = [b"MON third-party dependency notices\n\n"
               b"Collected package-provided texts, NOT a license clearance.\n"
               b"See third-party-inventory.json for scope, missing texts and exact versions.\n"
               b"Source availability, additional notices and model/engine licenses need review.\n\n"]
     total = 0
-    for ecosystem, name, version, license_id, repository_url, texts in dependencies:
+    for ecosystem, name, version, license_id, repository_url, texts, supplements, source in dependencies:
         key = f"{ecosystem}:{name}@{version}"
         entry = {"ecosystem": ecosystem, "name": name, "version": version,
-                 "declaredLicense": license_id, "repository": repository_url, "noticeFiles": []}
-        if not texts:
+                 "declaredLicense": license_id, "repository": repository_url, "noticeFiles": [],
+                 "supplementalFiles": [record for record, _ in supplements], "sourceArchive": source}
+        if not texts and not any(record["kind"] == "license_text" for record, _ in supplements):
             inventory["missingNoticeTexts"].append(key)
+            if supplements:
+                inventory["referenceOnlyPackages"].append(key)
         chunks.append(f"{'=' * 72}\n{key}\nDeclared license: {license_id or 'not supplied'}\n\n".encode())
         for relative, data in texts:
             total += len(data)
@@ -125,6 +187,15 @@ def collect(repository, metadata, lock):
                 raise ValueError("dependency notices exceed the total size limit")
             entry["noticeFiles"].append({"path": relative, "bytes": len(data), "sha256": sha(data)})
             chunks.extend([f"--- {relative} ---\n".encode(), data, b"\n\n"])
+        for record, data in supplements:
+            total += len(data)
+            if total > MAX_TOTAL_BYTES:
+                raise ValueError("dependency notices exceed the total size limit")
+            chunks.extend([f"--- Supplemental {record['kind']}: {record['path']} ---\nSource: {record['sourceUrl']}\n".encode(),
+                           data, b"\n\n"])
+        if source and license_id and "MPL-2.0" in license_id:
+            chunks.append(f"MPL source reference (retrieval not verified): {source['url']}\n"
+                          f"Expected source archive SHA-256: {source['sha256']}\n\n".encode())
         inventory["packages"].append(entry)
     notices = b"".join(chunks)
     inventory["noticesSha256"] = sha(notices)

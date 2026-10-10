@@ -15,8 +15,9 @@ class NoticeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.file("app/src-tauri/Cargo.lock", "cargo lock")
+        self.file("app/src-tauri/Cargo.lock", "version = 4\n")
         self.file("app/package-lock.json", "npm lock")
+        self.file("third-party/notices/index.json", json.dumps({"schemaVersion": 1, "files": [], "packages": []}))
         self.file("crate/Cargo.toml", "manifest")
         self.file("crate/LICENSE", "Copyright synthetic\nPermission synthetic\n")
         self.file("crate/vendor/NOTICE", "Additional synthetic notice\n")
@@ -98,6 +99,21 @@ class NoticeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notices.notice_files(self.root / "crate")
 
+    def test_license_directory_texts_are_included_but_copying_source_is_not_a_notice(self):
+        self.file("crate/LICENSES/MIT.txt", "Directory MIT text")
+        self.file("crate/LICENSES/Apache-2.0.txt", "Directory Apache text")
+        self.file("crate/LICENSE.MIT", "Named MIT text")
+        self.file("crate/LICENSE.BSD-3-Clause", "Named BSD text")
+        self.file("crate/src/copying.rs", "pub fn copying() {}")
+        self.file("crate/vendor/LICENSE.py", "print('not a notice')")
+        names = [name for name, _ in notices.notice_files(self.root / "crate")]
+        self.assertIn("LICENSES/MIT.txt", names)
+        self.assertIn("LICENSES/Apache-2.0.txt", names)
+        self.assertIn("LICENSE.MIT", names)
+        self.assertIn("LICENSE.BSD-3-Clause", names)
+        self.assertNotIn("src/copying.rs", names)
+        self.assertNotIn("vendor/LICENSE.py", names)
+
     def test_generated_pair_can_be_read_and_linked_output_does_not_change_target(self):
         text, inventory = notices.collect(self.root, self.metadata, self.lock)
         output = self.root / "generated"
@@ -111,6 +127,91 @@ class NoticeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notices.write_outputs(output, text, inventory)
         self.assertEqual(target.read_text(), "preserve")
+
+    def supplement(self, kind="license_text"):
+        self.file("crate/.cargo_vcs_info.json", json.dumps({"git": {"sha1": "a" * 40}, "path_in_vcs": "crate"}))
+        self.file("app/src-tauri/Cargo.lock", 'version = 4\n[[package]]\nname = "crate"\nversion = "1.0"\n'
+                  f'source = "{notices.REGISTRY}"\nchecksum = "' + "1" * 64 + '"\n')
+        package = next(p for p in self.metadata["packages"] if p["id"] == "crate")
+        package["source"] = notices.REGISTRY
+        data = b"Upstream synthetic license/reference\n"
+        self.file("third-party/notices/upstream.txt", data.decode())
+        index = {"schemaVersion": 1,
+                 "files": [{"path": "upstream.txt", "kind": kind, "sourceUrl": "https://example.invalid/fixed/LICENSE",
+                            "sha256": notices.sha(data), "bytes": len(data)}],
+                 "packages": [{"name": "crate", "version": "1.0", "declaredLicense": "MIT",
+                               "crateChecksum": "1" * 64, "vcsCommit": "a" * 40, "vcsPath": "crate",
+                               "files": ["upstream.txt"]}]}
+        self.file("third-party/notices/index.json", json.dumps(index))
+        (self.root / "crate/LICENSE").unlink()
+        (self.root / "crate/vendor/NOTICE").unlink()
+        return index, package
+
+    def test_exact_version_supplement_retains_origin_hash_and_source_reference_without_approval(self):
+        self.supplement()
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        entry = next(p for p in inventory["packages"] if p["name"] == "crate")
+        self.assertIn(b"Upstream synthetic license/reference\n", text)
+        self.assertEqual(entry["supplementalFiles"][0]["kind"], "license_text")
+        self.assertEqual(entry["sourceArchive"]["sha256"], "1" * 64)
+        self.assertEqual(entry["sourceArchive"]["url"], "https://static.crates.io/crates/crate/crate-1.0.crate")
+        self.assertNotIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
+        self.assertEqual(inventory["licenseReview"], "not_verified")
+
+    def test_reference_only_description_does_not_resolve_missing_license_text(self):
+        self.supplement("upstream_license_reference")
+        _, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
+        self.assertEqual(inventory["referenceOnlyPackages"], ["cargo:crate@1.0"])
+
+    def test_mpl_notice_informs_recipients_of_exact_source_without_automatic_fetch(self):
+        index, package = self.supplement()
+        package["license"] = "MPL-2.0"
+        index["packages"][0]["declaredLicense"] = "MPL-2.0"
+        self.file("third-party/notices/index.json", json.dumps(index))
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertIn(b"MPL source reference (retrieval not verified): https://static.crates.io/crates/crate/crate-1.0.crate", text)
+        self.assertIn(("Expected source archive SHA-256: " + "1" * 64).encode(), text)
+        entry = next(p for p in inventory["packages"] if p["name"] == "crate")
+        self.assertEqual(entry["sourceArchive"]["state"], "source_reference_not_download_verified")
+        self.assertFalse(inventory["distributionReady"])
+
+    def test_supplement_license_vcs_archive_hash_or_content_changes_are_refused(self):
+        original, package = self.supplement()
+        for key, value in [("declaredLicense", "Apache-2.0"), ("vcsCommit", "b" * 40),
+                           ("vcsPath", "other"), ("crateChecksum", "2" * 64)]:
+            changed = json.loads(json.dumps(original))
+            changed["packages"][0][key] = value
+            self.file("third-party/notices/index.json", json.dumps(changed))
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                notices.collect(self.root, self.metadata, self.lock)
+        self.file("third-party/notices/index.json", json.dumps(original))
+        self.file("third-party/notices/upstream.txt", "changed")
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock)
+
+    def test_missing_index_or_linked_supplement_and_foreign_source_are_refused(self):
+        original, package = self.supplement()
+        package["source"] = "git+https://example.invalid/foreign"
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock)
+        package["source"] = notices.REGISTRY
+        vcs_path = self.root / "crate/.cargo_vcs_info.json"
+        original_vcs = vcs_path.read_text()
+        vcs_path.unlink()
+        vcs_path.symlink_to(self.file("outside-vcs.json", original_vcs))
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock)
+        vcs_path.unlink()
+        self.file("crate/.cargo_vcs_info.json", original_vcs)
+        path = self.root / "third-party/notices/upstream.txt"
+        path.unlink()
+        path.symlink_to(self.file("outside.txt", "preserve"))
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock)
+        (self.root / "third-party/notices/index.json").unlink()
+        with self.assertRaises(OSError):
+            notices.collect(self.root, self.metadata, self.lock)
 
 
 if __name__ == "__main__":

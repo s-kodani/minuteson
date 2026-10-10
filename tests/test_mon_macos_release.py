@@ -44,6 +44,7 @@ class ReleaseTests(unittest.TestCase):
         self.notice_inventory = self.app / "Contents/Resources/third-party-inventory.json"
         self.inventory = {"schemaVersion": 1, "target": "aarch64-apple-darwin",
                           "licenseReview": "not_verified", "distributionReady": False,
+                          "supplementManifestSha256": release.digest(release.REPOSITORY / "third-party/notices/index.json"),
                           "lockHashes": {name: release.digest(release.REPOSITORY / relative) for name, relative in
                                          (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
                           "packages": [{"name": "synthetic"}], "missingNoticeTexts": ["synthetic"],
@@ -293,6 +294,7 @@ class ReleaseTests(unittest.TestCase):
     def test_notices_missing_tampered_stale_or_self_approved_are_rejected(self):
         self.assertEqual(release.verify_notices(self.app)["state"], "collected_not_reviewed")
         for key, value in [("lockHashes", {}), ("noticesSha256", "0" * 64), ("noticesBytes", 0),
+                           ("supplementManifestSha256", "0" * 64),
                            ("licenseReview", "approved"), ("distributionReady", True),
                            ("packages", []), ("missingNoticeTexts", None)]:
             self.file(self.notice_inventory, json.dumps({**self.inventory, key: value}).encode())

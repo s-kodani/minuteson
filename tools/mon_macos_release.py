@@ -212,6 +212,7 @@ def verify_notices(app):
     if (not isinstance(inventory, dict) or inventory.get("schemaVersion") != 1
             or inventory.get("target") != "aarch64-apple-darwin"
             or inventory.get("lockHashes") != expected_locks
+            or inventory.get("supplementManifestSha256") != digest(REPOSITORY / "third-party/notices/index.json")
             or inventory.get("licenseReview") != "not_verified"
             or inventory.get("distributionReady") is not False
             or not isinstance(inventory.get("packages"), list) or not inventory["packages"]
@@ -221,6 +222,7 @@ def verify_notices(app):
         raise ValueError("dependency notices are missing, stale or changed; no license approval")
     return {"state": "collected_not_reviewed", "packages": len(inventory["packages"]),
             "missingNoticeTexts": inventory["missingNoticeTexts"],
+            "supplementManifestSha256": inventory["supplementManifestSha256"],
             "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
 
 

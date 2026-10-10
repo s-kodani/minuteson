@@ -50,6 +50,8 @@ Macの準備ビルドはオフラインで依存通知文を収集し、`Content
 
 コピー後と最終検査後に通知文の容量／SHA・現在のlock・未承認状態を照合し、欠落・旧版・改変・自己承認を拒否する。build-resultの`dependencyNotices`は`collected_not_reviewed`であり、ライセンス全体の確認には昇格しない。
 
+パッケージに本文がない場合の補完資料はcrateの正確な版・申告・配布checksum・公開VCS commit／pathに固定し、出典／容量／SHAを保持する。`upstream_license_reference`は説明・参照だけで、不足本文を解消しない。配布時の照合は補完index SHAにも及ぶ。MPL対象の正確な版の公開ソースarchive URLとSHAは通知文にも含める。通常ビルドでは通信せず、ソースの実取得確認や最終的な配布条件確認は別。現在の不足12件、SDK由来等の残条件、実11件のarchive照合については[版固定補完の記録](verification/macos-notice-supplements-2026-10-10.md)を参照。
+
 正常なビルド結果は`build-result.json`に新規保存する。版・Team・DMG名・容量・SHA、公証要求ID／ticketの状態、工程時間と回収済みキャッシュの場所を含む。手動ビルドの結果であり、取得モデルの互換性や会議品質の証拠ではない。
 
 署名だけなら`notarization: not_requested`。ticketの検査まで成功しても、`runtimeQA`・`gatekeeper`・`licenseReview`・`manualUpdate`は`not_verified`、`distributionReady`はfalseのまま。配布条件の確認、ダウンロード由来のGatekeeper、分離した実機でのGUI・録音・外部推論ライブラリ、通常版の置換と設定・会議・モデルの保持を別に検証する。Gatekeeper・隔離属性・TCCを無効化して合格にしない。

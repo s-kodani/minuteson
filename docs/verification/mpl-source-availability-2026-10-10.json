@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-10",
+  "scope": "MPL-2.0 dependencies in the aarch64-apple-darwin normal/build graph",
+  "method": "HTTPS-only curl read, no redirects to HTTP, streamed SHA-256, at most 4MiB per archive; no unpacking, execution or persistent source archive",
+  "licenseReview": "not_verified",
+  "distributionReady": false,
+  "archives": [
+    {
+      "name": "cssparser",
+      "version": "0.37.0",
+      "url": "https://static.crates.io/crates/cssparser/cssparser-0.37.0.crate",
+      "expectedSha256": "8c9cdaae01d5ed7882b04d795e7f752f46ff52d2fa3b50a20d28c464510bba98",
+      "actualSha256": "8c9cdaae01d5ed7882b04d795e7f752f46ff52d2fa3b50a20d28c464510bba98",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "cssparser-macros",
+      "version": "0.7.1",
+      "url": "https://static.crates.io/crates/cssparser-macros/cssparser-macros-0.7.1.crate",
+      "expectedSha256": "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a",
+      "actualSha256": "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "dtoa-short",
+      "version": "0.3.5",
+      "url": "https://static.crates.io/crates/dtoa-short/dtoa-short-0.3.5.crate",
+      "expectedSha256": "cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87",
+      "actualSha256": "cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "option-ext",
+      "version": "0.2.0",
+      "url": "https://static.crates.io/crates/option-ext/option-ext-0.2.0.crate",
+      "expectedSha256": "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d",
+      "actualSha256": "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "selectors",
+      "version": "0.38.0",
+      "url": "https://static.crates.io/crates/selectors/selectors-0.38.0.crate",
+      "expectedSha256": "8adfa1c298912827b8a28b223b3b874357397ae706e6190acd9bf28cee99114d",
+      "actualSha256": "8adfa1c298912827b8a28b223b3b874357397ae706e6190acd9bf28cee99114d",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia/symphonia-0.5.5.crate",
+      "expectedSha256": "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039",
+      "actualSha256": "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia-bundle-flac",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia-bundle-flac/symphonia-bundle-flac-0.5.5.crate",
+      "expectedSha256": "c91565e180aea25d9b80a910c546802526ffd0072d0b8974e3ebe59b686c9976",
+      "actualSha256": "c91565e180aea25d9b80a910c546802526ffd0072d0b8974e3ebe59b686c9976",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia-bundle-mp3",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia-bundle-mp3/symphonia-bundle-mp3-0.5.5.crate",
+      "expectedSha256": "4872dd6bb56bf5eac799e3e957aa1981086c3e613b27e0ac23b176054f7c57ed",
+      "actualSha256": "4872dd6bb56bf5eac799e3e957aa1981086c3e613b27e0ac23b176054f7c57ed",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia-core",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia-core/symphonia-core-0.5.5.crate",
+      "expectedSha256": "ea00cc4f79b7f6bb7ff87eddc065a1066f3a43fe1875979056672c9ef948c2af",
+      "actualSha256": "ea00cc4f79b7f6bb7ff87eddc065a1066f3a43fe1875979056672c9ef948c2af",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia-metadata",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia-metadata/symphonia-metadata-0.5.5.crate",
+      "expectedSha256": "36306ff42b9ffe6e5afc99d49e121e0bd62fe79b9db7b9681d48e29fa19e6b16",
+      "actualSha256": "36306ff42b9ffe6e5afc99d49e121e0bd62fe79b9db7b9681d48e29fa19e6b16",
+      "exit_code": 0,
+      "verified": true
+    },
+    {
+      "name": "symphonia-utils-xiph",
+      "version": "0.5.5",
+      "url": "https://static.crates.io/crates/symphonia-utils-xiph/symphonia-utils-xiph-0.5.5.crate",
+      "expectedSha256": "ee27c85ab799a338446b68eec77abf42e1a6f1bb490656e121c6e27bfbab9f16",
+      "actualSha256": "ee27c85ab799a338446b68eec77abf42e1a6f1bb490656e121c6e27bfbab9f16",
+      "exit_code": 0,
+      "verified": true
+    }
+  ]
+}
