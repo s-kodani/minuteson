@@ -105,7 +105,7 @@ button:disabled { opacity:.5; }
 .minutes-split .workspace-drawer-trigger { font-size:12px; min-height:28px; padding:4px 8px; }
 .minutes-outline-tools { margin-bottom:12px; font-size:12px; }
 .minutes-outline-tools>summary { cursor:pointer; color:var(--muted); }
-.minutes-primary-toolbar { display:flex; flex-wrap:wrap; gap:6px; position:sticky; top:0; z-index:1; max-width:760px; margin:0 auto 12px; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+.minutes-primary-toolbar { display:flex; flex-wrap:wrap; gap:6px; max-width:760px; margin:0 auto 12px; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
 .minutes-primary-toolbar[hidden],.minutes-document>div[hidden] { display:none; }
 .minutes-primary-toolbar button { min-height:30px; padding:4px 10px; font-size:12px; }
 .minutes-editor .minutes-wysiwyg { padding:28px 32px; }
@@ -115,8 +115,8 @@ button:disabled { opacity:.5; }
 .minutes-edit-options>summary { cursor:pointer; }
 .minutes-edit-options[open] { max-width:280px; }
 .minutes-empty-state { padding:32px 16px; text-align:center; color:var(--muted); }
-.meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]),.minutes-workspace-tools:not([open]) { padding:0; border:0; background:transparent; }
-.meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary,.minutes-workspace-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
+.meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]),.minutes-workspace-tools:not([open]),.minutes-format-tools:not([open]) { padding:0; border:0; background:transparent; }
+.meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary,.minutes-workspace-tools:not([open])>summary,.minutes-format-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
 .transcript-main>.transcript-actions:first-child h2 { margin:0 auto 0 0; font-size:17px; }
 .speaker-panel-body .speaker-label { border:0; border-radius:6px; padding:4px 7px; }
 .utterance-meta .speaker-label { border:0; border-radius:6px; }
@@ -173,6 +173,11 @@ button:disabled { opacity:.5; }
 @media(max-width:760px) {
   .topbar:has(>.toast-host[data-docked=true]:not(:empty)) { grid-template-columns:minmax(0,1fr); }
   .main-column .topbar>.toast-host[data-docked=true] { grid-column:1; grid-row:3; max-height:80px; }
+}
+/* In the minimum desktop frame, expanded idle playback settings scroll inside
+   their existing dock instead of consuming the minutes editor's last row. */
+@media(max-width:1119px) and (max-height:760px) {
+  .meeting-playback-dock:has(.meeting-audio-details[open]):not(:has(.audio-player)) { max-height:80px; align-items:start; scroll-padding-block:8px; }
 }
 .mini-shell { padding:14px 16px; border-radius:12px; border-color:var(--border); }
 .mini-top strong { font-size:13px; font-weight:650; }

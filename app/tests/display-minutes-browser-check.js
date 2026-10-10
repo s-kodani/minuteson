@@ -20,17 +20,17 @@ async (page,capturePath,detailUI) => {
   const saves=await page.evaluate(()=>window.__mon.calls.filter(c=>c.cmd==="save_minutes_draft").length);
   for(const value of [13,20])for(const theme of ["light","dark"]){
     await size.selectOption(String(value));await expectFont(value);
-    await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
+    await detailUI.applyMinutesTheme(theme);
     check(await rich.textContent()==="文字サイズで未保存の議事録を保持"&&await rich.evaluate(e=>{const s=getSelection();return e===window.displayRich&&s.rangeCount===1&&s.getRangeAt(0).startContainer===e.firstChild&&s.getRangeAt(0).startOffset===2&&s.getRangeAt(0).endOffset===6;}),"font/theme replaced rich content or range");
     check(await page.locator(".minutes-wysiwyg").evaluate((e,value)=>parseFloat(getComputedStyle(e).fontSize)===value,value)&&await page.getByRole("button",{name:"編集を終了",exact:true}).isVisible(),"font not applied to rich editor or editing ended");
   }
   check(await page.evaluate(()=>window.__mon.calls.filter(c=>c.cmd==="save_minutes_draft").length)===saves,"display change retried a failed document save");
   results.push("failed rich-text save retains editing, field identity, content and range across sizes/themes; display changes never retry document publication");
   await page.screenshot({path:"display-minutes-unsaved-dark-20.png"});
-  await page.evaluate(()=>{window.__mon.failMinutesSave=false;});await page.getByRole("button",{name:"議事録保存を再試行",exact:true}).first().click();
+  await page.evaluate(()=>{window.__mon.failMinutesSave=false;});await page.getByRole("region",{name:"議事録生成と候補確認",exact:true}).getByRole("button",{name:"議事録保存を再試行",exact:true}).click();
   await page.waitForFunction(()=>window.__mon.drafts.a.payload.blocks[0].content[0].text==="文字サイズで未保存の議事録を保持");
   await page.getByRole("button",{name:"編集を終了",exact:true}).click();
-  await page.locator(".evidence-chip").first().click();
+  await page.locator(".minutes-document .evidence-chip").first().click();
   const evidence=page.getByRole("complementary",{name:"項目の固定根拠一覧",exact:true});await evidence.waitFor();
   await evidence.getByRole("button",{name:"固定文字起こし全文へ移動",exact:true}).first().click();
   const full=page.getByRole("region",{name:"固定文字起こし全文",exact:true});await full.waitFor();

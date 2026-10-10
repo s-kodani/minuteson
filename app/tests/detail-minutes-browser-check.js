@@ -1,5 +1,5 @@
 // Production minutes body in the real tab workspace, synthetic IPC only.
-async page => {
+async (page,capturePath,detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   await page.reload(); await page.waitForFunction(() => !!window.__mon);
   await page.evaluate(() => window.__mon.addLongDocument());
@@ -15,8 +15,7 @@ async page => {
   for (const width of [1280,1200,960]) for (const theme of ["light","dark"]) {
     await page.setViewportSize({ width,height:640 });
     await waitReferenceLayout();
-    await page.getByRole("banner").getByRole("combobox", { name:"表示テーマ", exact:true }).selectOption(theme);
-    await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
+    await detailUI.applyMinutesTheme(theme);
     for (const end of [false,true]) {
       await body.evaluate((e,end) => { e.scrollTop = end ? e.scrollHeight : 0; },end);
       check(await body.evaluate(e => { const b=e.getBoundingClientRect(), dock=document.querySelector(".meeting-playback-dock").getBoundingClientRect(); return b.height>=120 && b.bottom <= dock.top && document.querySelector(".content").scrollTop === 0 && document.documentElement.scrollHeight <= innerHeight + 1 && document.documentElement.scrollWidth <= innerWidth; }), "minutes body has less than 120px, overlaps chrome or scrolls workspace");
@@ -36,8 +35,7 @@ async page => {
   for (const width of [1280,1200,960]) for (const theme of ["light","dark"]) {
     await page.setViewportSize({ width,height:640 });
     await waitReferenceLayout();
-    await page.getByRole("banner").getByRole("combobox", { name:"表示テーマ", exact:true }).selectOption(theme);
-    await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
+    await detailUI.applyMinutesTheme(theme);
     check(await body.evaluate(e => e.clientHeight >= 80), "rich editing leaves less than 80px of body height");
   }
   const field = page.getByRole("textbox", { name:"議事録ブロック1", exact:true });
@@ -47,7 +45,7 @@ async page => {
   check(await minutes.getAttribute("aria-selected") === "true" && await field.textContent() === "タブ切替でも議事録入力を保持" && await field.evaluate(e => e === window.minutesField), "failed minutes save switched or discarded field");
   results.push("minutes save failure refuses tab switching and retains rich field identity and content");
   await page.evaluate(() => { window.__mon.failMinutesSave = false; });
-  await page.getByRole("button", { name:"議事録保存を再試行", exact:true }).first().click();
+  await page.getByRole("region",{name:"議事録生成と候補確認",exact:true}).getByRole("button", { name:"議事録保存を再試行", exact:true }).click();
   await page.waitForFunction(() => window.__mon.drafts.a.payload.blocks[0].content[0].text === "タブ切替でも議事録入力を保持");
   await transcript.click(); await minutes.click();
   check(await field.textContent() === "タブ切替でも議事録入力を保持" && await field.evaluate(e => e === window.minutesField) && await page.getByRole("button", { name:"編集を終了", exact:true }).isVisible(), "minutes return exited editing or replaced field");

@@ -71,6 +71,13 @@ export async function installMinutesFixture(page) {
     const stamp = () => data.drafts[data.current] ? { id: data.drafts[data.current].id, lockVersion: data.drafts[data.current].lockVersion } : null;
     window.__mon = data;
     data.ui = { id:"ui_preferences", payload:{ schemaVersion:1, theme:"system" }, lockVersion:0 };
+    // Synthetic other-window commit: preserve v2 reading fields, then exercise
+    // the real provider's event/read path, never assign DOM colors directly.
+    data.changeThemeFromOtherWindow = theme => {
+      if (!["light","dark"].includes(theme)) throw Error("invalid synthetic theme");
+      data.ui = { ...data.ui, payload:{ ...copy(data.ui.payload), theme }, lockVersion:data.ui.lockVersion + 1 };
+      emit("ui-preferences-changed",data.ui.lockVersion);
+    };
     data.complete = () => {
       const j=data.jobs.at(-1); if (!j) throw Error("no job"); j.state="succeeded"; j.completedUnits=3; j.outputMinutesId="b";
       data.views.b=view("b","fixed-b","点検日を確認することを決定"); data.versions.unshift({id:"b",revisionNo:3,contentHash:"h-b",publicationState:"candidate",inputAnalysisId:"fixed-b",inputUpdated:false,itemCount:2,createdAt:0,profile:{engine:"fixture",qualityStatus:"unverified"}});
