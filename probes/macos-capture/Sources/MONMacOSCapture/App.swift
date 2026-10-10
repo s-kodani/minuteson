@@ -1196,9 +1196,13 @@ final class MicrophoneRecorder: @unchecked Sendable {
     engine = nil
   }
 
-  private func suspend(_ reason: String, unavailable: Bool = false) {
+  private func suspend(_ reason: String? = nil, unavailable: Bool = false) {
     lock.withLock {
-      recovery?.interrupt(reason, unavailable: unavailable)
+      if let reason {
+        recovery?.interrupt(reason, unavailable: unavailable)
+      } else {
+        recovery?.interruptForRetry()
+      }
       inputUnit = nil
       selectedDeviceID = nil
       stats.inputLevel.invalidate()
@@ -1265,8 +1269,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
         // Continue only after invalidating the old engine binding.
       }
     }
-    let reason = lock.withLock { recovery?.status.reason }
-    suspend(reason == "clock_changed" ? "clock_changed" : "engine_changed")
+    suspend()
     let now = ContinuousClock.now
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now

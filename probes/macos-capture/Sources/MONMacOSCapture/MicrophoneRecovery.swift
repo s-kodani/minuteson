@@ -90,6 +90,15 @@ struct MicrophoneRecovery {
 
   func owns(_ token: Binding) -> Bool { !stopped && binding == token }
 
+  // A control-loop retry retires the engine but is not a new diagnosis.
+  mutating func interruptForRetry() {
+    if reason == "format_changed" {
+      interrupt("format_changed", unavailable: true)
+    } else {
+      interrupt(reason == "clock_changed" ? "clock_changed" : "engine_changed")
+    }
+  }
+
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
     guard !stopped else { return }
     let first = !interrupted

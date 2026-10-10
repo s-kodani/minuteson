@@ -75,6 +75,61 @@ final class MicrophoneRecoveryTests: XCTestCase {
     XCTAssertThrowsError(try recovery.activate(second))
   }
 
+  func testRetryRetainsFormatAndClockDiagnosisUntilAProvenNewBindingActivates() throws {
+    for reason in ["format_changed", "clock_changed"] {
+      var recovery = try MicrophoneRecovery(uid: first.uid)
+      let old = try recovery.begin(first)
+      try recovery.activate(old)
+      recovery.interrupt(reason, unavailable: reason == "format_changed")
+      let interrupted = recovery.status
+      for _ in 0..<100 {
+        recovery.interruptForRetry()
+        XCTAssertEqual(recovery.status, interrupted)
+      }
+      XCTAssertFalse(recovery.owns(old))
+      XCTAssertFalse(recovery.accepts(old))
+      XCTAssertEqual(recovery.history.events.count, 1)
+      let unproven = try recovery.begin(first)
+      XCTAssertEqual(recovery.status.reason, reason)
+      XCTAssertFalse(recovery.accepts(unproven))
+      recovery.interruptForRetry()
+      XCTAssertEqual(recovery.status.reason, reason)
+      XCTAssertEqual(recovery.status.state, interrupted.state)
+      XCTAssertEqual(recovery.status.interruptions, 1)
+      XCTAssertEqual(recovery.history.events.count, 1)
+      XCTAssertThrowsError(try recovery.activate(unproven))
+      let current = try recovery.begin(first)
+      XCTAssertEqual(recovery.status.reason, reason)
+      XCTAssertFalse(recovery.accepts(current))
+      XCTAssertThrowsError(try recovery.activate(old))
+      try recovery.activate(current)
+      XCTAssertNil(recovery.status.reason)
+      XCTAssertTrue(recovery.accepts(current))
+      XCTAssertFalse(recovery.accepts(old))
+      recovery.stop()
+      let stopped = recovery.status
+      recovery.interruptForRetry()
+      XCTAssertEqual(recovery.status, stopped)
+    }
+  }
+
+  func testRetryStillRetiresAnUnhealthyEngineAndAllowsFreshEvidenceToChangeDiagnosis() throws {
+    var recovery = try MicrophoneRecovery(uid: first.uid)
+    let old = try recovery.begin(first)
+    try recovery.activate(old)
+    recovery.interruptForRetry()
+    XCTAssertEqual(recovery.status.reason, "engine_changed")
+    XCTAssertEqual(recovery.status.state, "disconnected")
+    XCTAssertEqual(recovery.status.interruptions, 1)
+    XCTAssertFalse(recovery.accepts(old))
+    recovery.interrupt("format_changed", unavailable: true)
+    recovery.interruptForRetry()
+    XCTAssertEqual(recovery.status.reason, "format_changed")
+    recovery.interrupt("permission_unavailable", unavailable: true)
+    XCTAssertEqual(recovery.status.reason, "permission_unavailable")
+    XCTAssertEqual(recovery.status.interruptions, 1)
+  }
+
   func testInvalidUIDAndUnknownObjectNeverCreateBindingAndObjectIDsAreNotExported() throws {
     for uid in ["", "a\0b", String(repeating: "x", count: 1025)] {
       XCTAssertThrowsError(try MicrophoneRecovery(uid: uid))
@@ -257,6 +312,10 @@ final class MicrophoneRecoveryTests: XCTestCase {
     let tip = try Data(contentsOf: tipURL)
     for (index, changed) in [
       AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 2, interleaved: false),
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 8000, channels: 1, interleaved: false),
+      AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: 8000, channels: 2, interleaved: false),
       AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: 8000, channels: 2, interleaved: true),
@@ -268,6 +327,9 @@ final class MicrophoneRecoveryTests: XCTestCase {
         try receive(
           pcm(try XCTUnwrap(changed)), token: retired, sourceFrame: 34000,
           at: 5_000_000_000 + Int64(index) * 1_000_000_000))
+      XCTAssertEqual(recovery.status.reason, "format_changed")
+      XCTAssertEqual(recovery.status.state, "unavailable")
+      recovery.interruptForRetry()
       XCTAssertEqual(recovery.status.reason, "format_changed")
       XCTAssertEqual(recovery.status.state, "unavailable")
       XCTAssertEqual(stats.frames, before)
@@ -291,23 +353,24 @@ final class MicrophoneRecoveryTests: XCTestCase {
     try raw.finish()
     file = nil
     try stats.finishClock(originNanoseconds: 1_000_000_000)
-    XCTAssertEqual(stats.frames, 38000)
-    XCTAssertEqual(stats.clockSegments?.count, 3)
+    XCTAssertEqual(stats.frames, 42000)
+    XCTAssertEqual(stats.clockSegments?.count, 5)
     XCTAssertEqual(stats.clockSegments?[0].timelineEndUs, 4_250_000)
     XCTAssertEqual(stats.clockSegments?[1].timelineStartUs, 5_000_000)
     XCTAssertEqual(stats.clockSegments?[2].timelineStartUs, 6_000_000)
-    XCTAssertEqual(raw.snapshot().sealedFrames, 38000)
+    XCTAssertEqual(stats.clockSegments?[4].timelineStartUs, 8_000_000)
+    XCTAssertEqual(raw.snapshot().sealedFrames, 42000)
     XCTAssertTrue(raw.snapshot().producerClosed)
     XCTAssertEqual(try Data(contentsOf: prefixURL), prefix)
     XCTAssertEqual(try Data(contentsOf: entryURL), entry)
     let reader = try AVAudioFile(forReading: url)
-    XCTAssertEqual(reader.length, 38000)
+    XCTAssertEqual(reader.length, 42000)
     let read = try XCTUnwrap(
-      AVAudioPCMBuffer(pcmFormat: reader.processingFormat, frameCapacity: 38000))
+      AVAudioPCMBuffer(pcmFormat: reader.processingFormat, frameCapacity: 42000))
     try reader.read(into: read)
-    XCTAssertEqual(read.frameLength, 38000)
+    XCTAssertEqual(read.frameLength, 42000)
     for channel in 0..<2 {
-      for frame in 0..<38000 {
+      for frame in 0..<42000 {
         let value: Float = frame < 34000 ? 0.25 : 0.5
         XCTAssertEqual(read.floatChannelData![channel][frame], channel == 0 ? value : -value)
       }
