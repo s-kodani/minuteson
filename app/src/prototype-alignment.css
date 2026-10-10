@@ -62,6 +62,7 @@ button:disabled { opacity:.5; }
 .landing-tools>.workspace-tools-body { max-height:none; }
 .landing-tools>summary { display:list-item; }
 .content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
+.settings-management-toggle { margin:0 0 18px; font-size:13px; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
 .meeting-detail-content>.meetings-card:not([hidden]),.meeting-detail-content>.meeting-analysis-tools:not([hidden]) { flex:none; max-height:20dvh; overflow:auto; }
 .meeting-detail-tabs { gap:26px; padding-inline:28px; }

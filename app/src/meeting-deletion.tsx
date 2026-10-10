@@ -8,6 +8,7 @@ import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operati
 import { assertDeletionPathPage, deletionAttentionLabel, deletionPhaseLabel, isDeletionReconfirmation, type DeletionPathPage, type DeletionReceipt } from "./deletion-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
+import { quietMaintenance } from "./maintenance-visibility";
 
 export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted }: {
   operation: DataOperation; locked: boolean;
@@ -143,13 +144,14 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
     understood: currentUnderstood, setUnderstood, includeUnknown: currentIncludeUnknown, setIncludeUnknown, canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
 
-export function MeetingDeletionPanel({ operation, control, visible }: { operation: DataOperation; control: ReturnType<typeof useMeetingDeletion>; visible: boolean }) {
+export function MeetingDeletionPanel({ operation, control, visible, compact = false }: { operation: DataOperation; control: ReturnType<typeof useMeetingDeletion>; visible: boolean; compact?: boolean }) {
   const c = control, s = operation.snapshot, p = c.preview;
   const active = s?.kind === "deletion";
   const needed = !!c.listing?.writeBlocked || !!p?.pending;
+  const quiet = quietMaintenance({ compact, connected: operation.connected, supported: operation.deletionSupported, listed: !!c.listing, itemCount: c.listing?.items.length ?? 0, attention: !!(active || needed || c.error || c.unknown || c.rpcBusy || c.open || c.listing?.restartRequired || c.receipt?.restartRequired) });
   return <>
     <ToastNotice scope="deletion" type="meeting-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    {(visible || active || needed || c.error || c.unknown || c.rpcBusy || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="会議削除の確認と中断対応">
+    {(visible && !quiet || active || needed || c.error || c.unknown || c.rpcBusy || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="会議削除の確認と中断対応">
       <div className="heading-with-info"><h2 id="deletion-panel-heading" tabIndex={-1}>会議削除の確認と中断対応</h2><InfoPopover label="会議削除" details={<p>現在の保存領域にある会議の管理音声・文字起こし・議事録・下書き・版・処理履歴を削除します。外部の元音声・書き出し・バックアップ、AIモデル、共通用語、旧保存先や保持コピーは消しません。媒体の安全消去ではありません。</p>}>会議の管理音声・文書・履歴を完全削除する操作です。実行前に対象と消失範囲を確認します。外部の原本やバックアップは対象外です。</InfoPopover></div>
       {!operation.deletionSupported && operation.connected && <p>この環境の会議削除操作は保留中です。</p>}
       {!operation.connected && <p role="alert">データ操作の状態を確認できるまで変更を停止しています。{operation.error}</p>}

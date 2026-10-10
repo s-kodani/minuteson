@@ -1,5 +1,5 @@
 // CLI-first synthetic restart verification, not native WebView/device capture.
-async page => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const region = () => page.getByRole("region", { name: "保存済み部分救出の結果", exact: true });
   const trigger = () => region().getByRole("button", { name: "保存時の確定範囲を確認", exact: true }).first();
@@ -7,7 +7,7 @@ async page => {
   const nav = () => page.getByRole("button", { name: "会議一覧", exact: true });
   const refresh = () => page.getByRole("button", { name: "中断録音と救出結果を再読込", exact: true });
   const set = patch => page.evaluate(p => Object.assign(window.partialRecordingFixture, p), patch);
-  const boot = async () => { await page.reload(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "保存時の確定範囲を確認" && !b.disabled)); };
+  const boot = async () => { await page.reload(); await detailUI.openMaintenanceTools(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "保存時の確定範囲を確認" && !b.disabled)); };
   const noWrites = async () => check(await page.evaluate(() => !window.dataFixture.calls.some(c => ["review_partial_recording", "start_data_operation", "cancel_data_operation", "start_recording", "run_analysis", "start_analysis", "start_analysis_flow", "create_analysis_job", "start_analysis_job"].includes(c.command))), "history triggered recording, analysis or recovery authority");
   await boot();
   check((await region().innerText()).includes("取得終了・末尾損失は不明"), "cold-start notification missing");

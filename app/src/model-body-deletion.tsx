@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { quietMaintenance } from "./maintenance-visibility";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
@@ -136,11 +137,12 @@ export function useModelBodyDeletion({ operation, locked, withSavedEdits, onDele
 }
 export type ModelBodyDeletionControl = ReturnType<typeof useModelBodyDeletion>;
 
-export function ModelBodyDeletionPanel({ operation, control: c, visible }: { operation: DataOperation; control: ModelBodyDeletionControl; visible: boolean }) {
+export function ModelBodyDeletionPanel({ operation, control: c, visible, compact = false }: { operation: DataOperation; control: ModelBodyDeletionControl; visible: boolean; compact?: boolean }) {
   const s = operation.snapshot, p = c.preview, active = s?.kind === "model_deletion", needed = !!c.listing?.writeBlocked || !!p?.pending;
+  const quiet = quietMaintenance({ compact, connected: operation.connected, supported: operation.modelDeletionSupported, listed: !!c.listing, itemCount: c.listing?.items.length ?? 0, attention: !!(active || needed || c.error || c.protectedNow || c.open || c.listing?.restartRequired || c.receipt?.restartRequired) });
   return <>
     <ToastNotice scope="models" type="body-deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    {(visible || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="モデル本体削除と中断対応">
+    {(visible && !quiet || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="モデル本体削除と中断対応">
       <div className="heading-with-info"><h2 id="model-body-deletion-heading" tabIndex={-1}>モデル本体削除と中断対応</h2><InfoPopover label="モデル本体削除" details={<p>端末内の指定モデル本体だけを削除します。会議音声・本文・議事録・モデル名とSHA・構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は、再準備まで利用できません。外部の導入元、他モデル、バックアップは対象外です。</p>}>指定した管理モデル本体だけを削除します。会議と構成履歴は残りますが、対応するAI処理にはモデルの再準備が必要です。</InfoPopover></div>
       {!operation.modelDeletionSupported && operation.connected && <p>この環境のモデル本体削除は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { quietMaintenance, maintenanceReadRevision } from "./maintenance-visibility";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
@@ -12,8 +13,8 @@ import { assertRecoveryListing, recoveryOutcomeLabel, recoveryOutcomeStatus, rec
 
 class UnconfirmedRecovery extends Error {}
 
-export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onProtectionChange }: {
-  operation: DataOperation; visible: boolean; locked: boolean;
+export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onProtectionChange, compact = false }: {
+  operation: DataOperation; visible: boolean; locked: boolean; compact?: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onProtectionChange: (active: boolean) => void;
 }) {
@@ -58,7 +59,7 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   useEffect(() => {
     if (visible && isTauri()) void readList().catch(cause => setError(String(cause)));
     return () => { listEpoch.current++; };
-  }, [visible, s?.kind === "recovery" && s.phase === "completed" ? s.revision : -1]);
+  }, [visible, maintenanceReadRevision(s)]);
   useEffect(() => {
     if (!s || s.kind !== "recovery") { setOpen(false); return; }
     if (s.busy || s.phase === "completed") setOpen(false);
@@ -119,10 +120,11 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
   const receipt = s?.kind === "recovery" ? s.recoveryReceipt : null;
   const ready = canAct && s?.phase === "ready" && s.retryAllowed && !!preview;
   const operationError = error || (unknown ? uncertaintyMessage : "") || (s?.kind === "recovery" ? s.errorMessage || (receipt?.outcome === "attention" ? `${recoveryOutcomeLabel(receipt)} ${receipt.reason ?? ""}` : "") : "");
+  const quiet = quietMaintenance({ compact, connected: operation.connected, supported: !!listing?.supported, listed: !!listing, itemCount: listing?.items.length ?? 0, attention: !!(operationError || unknown || rpcBusy || confirm.pending || open || s?.kind === "recovery") });
   return <>
     <ToastNotice scope="recovery" type="completed" eventId={s?.token ?? undefined} message={s?.kind === "recovery" && s.phase === "completed" && receipt && receipt.outcome !== "attention" ? recoveryOutcomeLabel(receipt) : ""} />
     {!open && <IssueNotice scope="recovery" type="operation" label="要確認データの確認・回収" message={operationError} />}
-    {visible && <section className="analysis-card recovery-panel" aria-label="中断したデータ操作の確認">
+    {visible && !quiet && <section className="analysis-card recovery-panel" aria-label="中断したデータ操作の確認">
       <div className="heading-with-info"><h2 ref={panelHeading} tabIndex={-1}>中断したデータ操作の確認</h2><InfoPopover label="要確認データ" details={<p>未公開の復元追加物と構築用コピーだけが対象です。既存会議・公開済みデータ・元バックアップは変更しません。所有不明のファイルは削除しません。「保持して確認を完了」は回収ではなく、今後の自動回収からも保護する確認記録です。</p>}>未公開の追加復元物と移動途中のコピーを確認します。既存会議は変更しません。保持の確認と、対象を削除する回収は別の操作です。</InfoPopover></div>
       <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(async () => { await latest.current.refresh(); await readList(); })}>要確認一覧を再読込</button>
       {!listing && <p role="status">一覧を確認できるまで回収・保持確認はできません。</p>}

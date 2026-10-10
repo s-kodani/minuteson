@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { quietMaintenance } from "./maintenance-visibility";
 import { useEffect, useRef, useState } from "react";
 import { CommonModal } from "./common-modal";
 import { IssueNotice, ToastNotice } from "./toast";
@@ -12,8 +13,8 @@ import { stopAllPlayback } from "./playback-barrier";
 import { useActionConfirmation } from "./confirmation-service";
 import { withConfirmedEdits } from "./confirmed-action";
 
-export function PartialRecordingPanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRecovered }: {
-  operation: DataOperation; visible: boolean; locked: boolean;
+export function PartialRecordingPanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRecovered, compact = false }: {
+  operation: DataOperation; visible: boolean; locked: boolean; compact?: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onProtectionChange: (active: boolean) => void;
   onRecovered: (meetingId: string) => Promise<void>;
@@ -160,7 +161,8 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
   const items = [...(operation.partialRecordingListing?.items ?? []), ...(extra?.items ?? [])];
   const next = extra ? extra.next : operation.partialRecordingListing?.next;
   const canRecover = canAct && s?.phase === "ready" && !!preview && !!s.retryAllowed && understood === preview.confirmationId && canRecoverPartialRecording(preview.summary);
-  const show = visible || !!items.length || active || unknown || !!error;
+  const quiet = quietMaintenance({ compact, connected: operation.connected, supported: operation.partialRecordingSupported, listed: !!operation.partialRecordingListing, itemCount: items.length, attention: !!(active || unknown || error || rpcBusy || confirm.pending || open || savedActive || next || pageBusy) });
+  const show = visible && !quiet || !!items.length || active || unknown || !!error;
   return <>
     <ToastNotice scope="partial-recording" type="result" eventId={toastId} message={toast} onClose={() => setToast("")} />
     {show && <section className="analysis-card recovery-panel" aria-label="中断録音の部分救出">

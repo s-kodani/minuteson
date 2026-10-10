@@ -151,6 +151,7 @@ function MainWindow() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [meetingQuery, setMeetingQuery] = useState("");
+  const [settingsManagementOpen, setSettingsManagementOpen] = useState(false);
   const [meetingError, setMeetingError] = useState("");
   const [meetingBusy, setMeetingBusy] = useState(false);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
@@ -647,20 +648,21 @@ function MainWindow() {
             if(!meeting)throw Error("保存した会議が見つかりません。");
             setSelectedMeeting(meeting);setMeetingToolsOpen(false);setRenameTitle(meeting.title);setMeetings(items);setScreen("overview");
           }}/>
-          {screen === "settings" && <><h1>設定</h1><p className="lead">会議データのバックアップと追加復元、共通用語とAIモデルの設定を管理します。</p></>}
+          {screen === "settings" && <><h1>設定</h1><p className="lead">録音環境、ローカルAI、表示を管理します。</p></>}
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
           {screen !== "settings" && <ThemeReadNotice />}
           <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataPending} onRestored={async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); }} onShowMeetings={async ids => { await withSavedEdits(async () => { setMeetings(await invoke<Meeting[]>("list_meetings")); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); }} />
-          <MeetingDeletionPanel operation={dataOperation} control={deletion} visible={screen === "settings"} />
-          <ModelBodyDeletionPanel operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
-          <AudioDeletionPanel operation={dataOperation} control={audioDeletion} visible={screen === "settings"} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
-          <PartialRecordingPanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked || closingBusy} withSavedEdits={withSavedEdits} onProtectionChange={setPartialRecordingPending} onRecovered={async meetingId => {
+          {screen === "settings" && <button type="button" className="small-secondary settings-management-toggle" aria-expanded={settingsManagementOpen} onClick={() => setSettingsManagementOpen(open => !open)}>中断・削除の管理<span aria-hidden="true">{settingsManagementOpen ? " ▴" : " ▾"}</span></button>}
+          <MeetingDeletionPanel compact={!settingsManagementOpen} operation={dataOperation} control={deletion} visible={screen === "settings"} />
+          <ModelBodyDeletionPanel compact={!settingsManagementOpen} operation={dataOperation} control={modelDeletion} visible={screen === "settings"} />
+          <AudioDeletionPanel compact={!settingsManagementOpen} operation={dataOperation} control={audioDeletion} visible={screen === "settings"} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
+          <PartialRecordingPanel compact={!settingsManagementOpen} operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || recoveryPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || deletionBlocked || closingBusy} withSavedEdits={withSavedEdits} onProtectionChange={setPartialRecordingPending} onRecovered={async meetingId => {
             const [items, recovered] = await Promise.all([invoke<Meeting[]>("list_meetings"), invoke<Meeting | null>("get_meeting", { id: meetingId })]);
             setMeetings(items);
             setSelectedMeeting(current => current?.id === meetingId ? recovered : current);
             setAnalysisEpoch(epoch => epoch + 1);
           }} />
-          <RecoveryPanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
+          <RecoveryPanel compact={!settingsManagementOpen} operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || dataPending || deletion.protectedNow || modelDeletion.protectedNow || audioDeletion.protectedNow || partialRecordingPending || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setRecoveryPending} />
           {screen === "settings" ? <><VocabularyEditor locked={writeLocked} /><ModelInspectionPanel locked={writeLocked} deletionControl={modelDeletion} refreshEpoch={modelCatalogEpoch} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} /><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></> : screen==="recording" ? <>
             <RecordingWorkspace preparation={preparation} title={selectedMeeting?.title??preparation?.title??"録音対象を確認してください"} state={state} owner={captureOwner} locked={writeLocked}
               canStart={isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?!preparation.submitted&&validRecordingTitle(preparation.title):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}
