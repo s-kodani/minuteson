@@ -200,6 +200,30 @@ def digest(path):
     return hasher.hexdigest()
 
 
+def verify_notices(app):
+    """Verify collection/copy evidence, never elevate it to license approval."""
+    inventory_path = private_path(app / "Contents/Resources/third-party-inventory.json")
+    text_path = private_path(app / "Contents/Resources/THIRD_PARTY_NOTICES.txt")
+    if inventory_path.stat().st_size > 2 * 1024 ** 2 or text_path.stat().st_size > 17 * 1024 ** 2:
+        raise ValueError("dependency notice bundle exceeds the size limit")
+    inventory = json.loads(inventory_path.read_text(encoding="utf8"))
+    expected_locks = {name: digest(REPOSITORY / relative) for name, relative in
+                      (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))}
+    if (not isinstance(inventory, dict) or inventory.get("schemaVersion") != 1
+            or inventory.get("target") != "aarch64-apple-darwin"
+            or inventory.get("lockHashes") != expected_locks
+            or inventory.get("licenseReview") != "not_verified"
+            or inventory.get("distributionReady") is not False
+            or not isinstance(inventory.get("packages"), list) or not inventory["packages"]
+            or not isinstance(inventory.get("missingNoticeTexts"), list)
+            or inventory.get("noticesBytes") != text_path.stat().st_size
+            or inventory.get("noticesSha256") != digest(text_path)):
+        raise ValueError("dependency notices are missing, stale or changed; no license approval")
+    return {"state": "collected_not_reviewed", "packages": len(inventory["packages"]),
+            "missingNoticeTexts": inventory["missingNoticeTexts"],
+            "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
+
+
 def build(output, identity, team, profile, environment):
     # All explicit prerequisites precede mkdir, compilation, signing or upload.
     credentials(identity, team, profile)
@@ -235,6 +259,7 @@ def build(output, identity, team, profile, environment):
         app = output / "mon.app"
         command(["/usr/bin/ditto", str(built), str(app)], timeout=120)
         capture, embedding = layout(app, version)
+        verify_notices(app)
         started = time.monotonic()
         sign(capture, identity, team, policy / "capture.plist")
         sign(embedding, identity, team, policy / "embedding.plist")
@@ -267,6 +292,7 @@ def build(output, identity, team, profile, environment):
         for path, policy_file in ((capture, "capture.plist"), (embedding, "embedding.plist"), (app, "main.plist")):
             verify_signature(path, team, runtime=True, entitlements=policy / policy_file)
         verify_signature(dmg, team, runtime=False)
+        dependency_notices = verify_notices(app)
         # Only this newly-created cache is reclaimed, after all owned commands
         # have returned and final artifacts are verified. Failures preserve it.
         now = cache.lstat()
@@ -278,6 +304,7 @@ def build(output, identity, team, profile, environment):
                   "notarization": "tickets_validated" if profile else "not_requested",
                   "notaryRequestIds": requests, "runtimeQA": "not_verified", "gatekeeper": "not_verified",
                   "licenseReview": "not_verified", "manualUpdate": "not_verified", "distributionReady": False,
+                  "dependencyNotices": dependency_notices,
                   "timings": timings, "buildCache": str(cache), "buildCacheRetained": False}
         # Create-new-only; no credentials or secret material in the report.
         with (output / "build-result.json").open("x") as stream:

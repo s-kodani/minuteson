@@ -71,3 +71,10 @@ test("distribution preparation is explicit, production-only and leaves QA/defaul
   assert.equal(release.bundle.macOS.infoPlist, "release-entitlements/Info.plist");
   assert.equal(pkg.scripts["tauri:release:build"], "python3 ../tools/mon_macos_release.py");
 });
+
+test("macOS packages offline dependency texts and an explicit unreviewed inventory without adding UI", () => {
+  assert.equal(macos.bundle.resources["../../.cache/third-party-notices/THIRD_PARTY_NOTICES.txt"], "THIRD_PARTY_NOTICES.txt");
+  assert.equal(macos.bundle.resources["../../.cache/third-party-notices/third-party-inventory.json"], "third-party-inventory.json");
+  const build = readFileSync(new URL("../build-macos.sh", import.meta.url), "utf8");
+  assert.match(build, /^python3 "\$app_dir\/\.\.\/tools\/mon_third_party_notices\.py"$/m);
+});

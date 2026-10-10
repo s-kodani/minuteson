@@ -46,6 +46,10 @@ Invalid・処理中・不正応答・署名／ticket検証失敗は成功にし�
 
 ## 結果と未検証ゲート
 
+Macの準備ビルドはオフラインで依存通知文を収集し、`Contents/Resources/THIRD_PARTY_NOTICES.txt`と`third-party-inventory.json`を同梱する。現在のCargo normal/build依存・npm production依存を保守的に対象とし、正確な使用版・申告ライセンス・収集文の容量／SHA・lock SHA・候補が見つからない依存を記録する。MON自身、標準ライブラリ／Apple SDK、別導入のAIエンジン・モデル等は別確認。全収集物の存在は条件充足の証明ではなく、欠落文・追加NOTICE・対応ソースの取得案内等の確認を残す。[同梱範囲と実検証](verification/macos-dependency-notices-2026-10-10.md)を参照。
+
+コピー後と最終検査後に通知文の容量／SHA・現在のlock・未承認状態を照合し、欠落・旧版・改変・自己承認を拒否する。build-resultの`dependencyNotices`は`collected_not_reviewed`であり、ライセンス全体の確認には昇格しない。
+
 正常なビルド結果は`build-result.json`に新規保存する。版・Team・DMG名・容量・SHA、公証要求ID／ticketの状態、工程時間と回収済みキャッシュの場所を含む。手動ビルドの結果であり、取得モデルの互換性や会議品質の証拠ではない。
 
 署名だけなら`notarization: not_requested`。ticketの検査まで成功しても、`runtimeQA`・`gatekeeper`・`licenseReview`・`manualUpdate`は`not_verified`、`distributionReady`はfalseのまま。配布条件の確認、ダウンロード由来のGatekeeper、分離した実機でのGUI・録音・外部推論ライブラリ、通常版の置換と設定・会議・モデルの保持を別に検証する。Gatekeeper・隔離属性・TCCを無効化して合格にしない。

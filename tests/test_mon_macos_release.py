@@ -40,6 +40,15 @@ class ReleaseTests(unittest.TestCase):
         self.file(self.capture / "Contents/MacOS/mon-macos-capture")
         self.file(self.capture / "Contents/Resources/PrivacyInfo.xcprivacy")
         self.embedding = self.file(self.app / "Contents/Resources/mon-speaker-embedding")
+        self.notice_text = self.file(self.app / "Contents/Resources/THIRD_PARTY_NOTICES.txt", b"synthetic notices")
+        self.notice_inventory = self.app / "Contents/Resources/third-party-inventory.json"
+        self.inventory = {"schemaVersion": 1, "target": "aarch64-apple-darwin",
+                          "licenseReview": "not_verified", "distributionReady": False,
+                          "lockHashes": {name: release.digest(release.REPOSITORY / relative) for name, relative in
+                                         (("cargo", "app/src-tauri/Cargo.lock"), ("npm", "app/package-lock.json"))},
+                          "packages": [{"name": "synthetic"}], "missingNoticeTexts": ["synthetic"],
+                          "noticesSha256": release.digest(self.notice_text), "noticesBytes": self.notice_text.stat().st_size}
+        self.file(self.notice_inventory, json.dumps(self.inventory).encode())
         for executable in (self.app / "Contents/MacOS/mon-desktop", self.capture / "Contents/MacOS/mon-macos-capture", self.embedding):
             executable.chmod(0o755)
         self.policy = release.REPOSITORY / "app/src-tauri/release-entitlements"
@@ -238,6 +247,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(result["distributionReady"])
         self.assertEqual(result["runtimeQA"], "not_verified")
         self.assertEqual([result[key] for key in ["gatekeeper", "licenseReview", "manualUpdate"]], ["not_verified"] * 3)
+        self.assertEqual(result["dependencyNotices"]["state"], "collected_not_reviewed")
+        self.assertEqual(result["dependencyNotices"]["missingNoticeTexts"], ["synthetic"])
         self.assertEqual(result["dmgSha256"], release.digest(output / result["dmg"]))
         self.assertEqual(json.loads((output / "build-result.json").read_text()), result)
         self.assertEqual((output / "image-source/Applications").readlink(), Path("/Applications"))
@@ -278,6 +289,29 @@ class ReleaseTests(unittest.TestCase):
             release.build(target, IDENTITY, TEAM, None, {})
         command.assert_not_called()
         self.assertFalse(target.exists())
+
+    def test_notices_missing_tampered_stale_or_self_approved_are_rejected(self):
+        self.assertEqual(release.verify_notices(self.app)["state"], "collected_not_reviewed")
+        for key, value in [("lockHashes", {}), ("noticesSha256", "0" * 64), ("noticesBytes", 0),
+                           ("licenseReview", "approved"), ("distributionReady", True),
+                           ("packages", []), ("missingNoticeTexts", None)]:
+            self.file(self.notice_inventory, json.dumps({**self.inventory, key: value}).encode())
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                release.verify_notices(self.app)
+        self.file(self.notice_inventory, json.dumps(self.inventory).encode())
+        self.notice_text.write_bytes(b"changed")
+        with self.assertRaises(ValueError):
+            release.verify_notices(self.app)
+        self.notice_text.unlink()
+        with self.assertRaises(ValueError):
+            release.verify_notices(self.app)
+
+    def test_notice_collection_failure_refuses_before_any_sign_or_upload(self):
+        self.notice_text.unlink()
+        with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
+            self.pipeline("existing-explicit-profile")
+        self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
+        self.assertFalse((self.root / "distribution/build-result.json").exists())
 
 
 if __name__ == "__main__":
