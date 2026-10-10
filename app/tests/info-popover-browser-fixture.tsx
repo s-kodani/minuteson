@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { InfoPopover } from "../src/info-popover";
 import { CommonModal } from "../src/common-modal";
 import "../src/style.css";
+import "../src/prototype-alignment.css";
 
 declare global { interface Window { infoFixture: { updates: number; detailActions: number; setAnchor: (x: number, y: number) => void; setHidden: (value: boolean) => void; remove: () => void; update: () => void; confirm: () => void } } }
 function Fixture() {

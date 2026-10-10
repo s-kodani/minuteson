@@ -9,7 +9,7 @@ async (page, capturePath, detailUI) => {
     await page.evaluate(key => { window.monBrowserFixture.vocabulary[key] = { id: key, lockVersion: 0, payload: [{ id: "term", term: "点検日", reading: null, note: null, enabled: true }] }; }, scope);
     let panel;
     if (scope === "global") { await page.getByRole("button", { name: "設定", exact: true }).click(); panel = page.getByRole("region", { name: "共通用語", exact: true }); }
-    else { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools(); panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "会議の用語", exact: true }) }).last(); await panel.getByText("会議別用語（任意）", { exact: true }).click(); }
+    else { await page.locator(".meeting-name").first().click(); await detailUI.openMeetingTools(); panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "会議の用語", exact: true }) }).last(); await panel.getByText("会議別用語（任意）", { exact: true }).click(); }
     const term = panel.getByRole("textbox", { name: "用語（必須）", exact: true }); await term.waitFor();
     await term.fill("点検予定日"); await panel.getByRole("status").filter({ hasText: "用語は保存済み" }).waitFor();
     check(await host.locator(".toast-success").count() === 0, "routine vocabulary autosave generated success toast");

@@ -105,7 +105,7 @@ async (page, capturePath, detailUI) => {
     results.push(`${kind} verifies its own output kind and meeting instead of selected meeting`);
   }
 
-  await boot(); await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await boot(); await page.getByRole("button", { name: "会議一覧", exact: true }).click(); await page.locator(".meeting-name").first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   await editor.getByRole("button", { name: "編集を開始", exact: true }).click();
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();

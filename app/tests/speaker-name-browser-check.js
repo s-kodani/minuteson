@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
   const boot = async () => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools();
+    await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools();
     await editor.getByRole("button",{ name: "編集を開始",exact: true }).click(); await name("話者A").waitFor();
   };
   await boot(); await name("話者A").fill("入力中の名前"); await page.waitForTimeout(950);

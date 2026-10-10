@@ -32,7 +32,7 @@ async page => {
     await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "session-changed", payload: snapshot });
   }, s);
   await update(session); await open().waitFor();
-  for (const screen of ["設定", "会議一覧", "概要"]) {
+  for (const screen of ["設定", "会議一覧"]) {
     await nav.getByRole("button", { name: screen, exact: true }).click();
     await page.waitForFunction(name => document.querySelector('.nav-item[aria-current="page"]')?.getAttribute("aria-label") === name, screen);
     check((await recording.innerText()).includes("録音中") && (await recording.innerText()).includes("02:19:01") && await open().isVisible(), `${screen} lost shared recording state`);
@@ -53,7 +53,7 @@ async page => {
 
   await update({ ...session, revision: ++session.revision });
   await nav.getByRole("button",{name:"会議一覧",exact:true}).click();
-  await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await page.locator(".meeting-name").first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await editor.getByRole("button", { name: "編集を開始", exact: true }).click();
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();

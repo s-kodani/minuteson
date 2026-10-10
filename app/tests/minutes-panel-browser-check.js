@@ -19,7 +19,7 @@ async (page,capturePath,detailUI) => {
   const boot=async()=>{
     await page.setViewportSize({width:1200,height:820});await page.reload();await page.waitForFunction(()=>!!window.__mon);
     await page.evaluate(()=>{window.__mon.addEvidenceGroup();window.__mon.addOutlineDocument();});
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await page.getByRole("tab",{name:"議事録",exact:true}).click();await outline().waitFor();
   };
   const selectEvidence=async()=>{await doc().locator(".evidence-chip").first().click();await group().getByRole("article",{name:"固定根拠1",exact:true}).getByRole("region",{name:"生成時に固定した文字起こし",exact:true}).waitFor();};
@@ -185,7 +185,7 @@ async (page,capturePath,detailUI) => {
   check(await comparison.getByRole("group",{name:"発言の音声再生",exact:true}).count()===1&&await dock().getByRole("group",{name:"発言の音声再生",exact:true}).count()===0,"comparison audio was placed outside its operable modal or duplicated into dock");
   await page.keyboard.press("Escape");await comparison.waitFor({state:"hidden"});
   await page.waitForFunction(()=>Object.keys(window.__mon.playbacks).length===0);
-  await page.getByRole("button",{name:"会議一覧",exact:true}).click();await page.getByRole("button",{name:"開く",exact:true}).nth(1).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();
+  await page.getByRole("button",{name:"会議一覧",exact:true}).click();await page.locator(".meeting-name").nth(1).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();
   check(await page.locator(".minutes-reference-body").count()===0&&await page.getByRole("complementary",{name:"項目の固定根拠一覧",exact:true}).count()===0,"another meeting inherited previous outline/evidence");
   check(await page.evaluate(()=>!window.__mon.calls.some(c=>["start_recording","stop_recording","start_minutes_generation"].includes(c.cmd))),"reference UI started real recording or generation");
   results.push("read-only previous-version comparison uses its own frozen input without nested drawers or writes; another meeting receives no stale references");

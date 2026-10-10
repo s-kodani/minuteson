@@ -12,7 +12,7 @@ async page => {
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(v => v.command === c), command);
   const set = patch => page.evaluate(p => Object.assign(window.partialRecordingFixture, p), patch);
   const boot = async patch => {
-    await page.reload(); await trigger().waitFor();
+    await page.reload(); await page.getByRole("button", { name: "設定", exact: true }).click(); await trigger().waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "確定範囲と救出方法を確認" && !b.disabled));
     if (patch) await set(patch);
   };

@@ -11,7 +11,7 @@ async (page, capturePath, detailUI) => {
   const open = async () => {
     await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
     if (await page.locator(".meeting-workspace-tools").count()) await detailUI.openMeetingTools();
-    await page.getByRole("button",{ name: "開く",exact: true }).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button",{ name: "編集を開始",exact: true }).waitFor();
   };
   const boot = async () => { await page.reload(); await open(); };
@@ -83,9 +83,9 @@ async (page, capturePath, detailUI) => {
   results.push("failed saved-audio verification stays visible in dock instead of being reported as successful playback");
   await boot(); await play(); await nav.getByRole("button",{ name:"設定",exact:true }).click();
   await dock.waitFor({ state:"hidden" }); await page.waitForFunction(() => window.monBrowserFixture.calls.some(c => c.command === "close_playback"));
-  await nav.getByRole("button",{ name:"概要",exact:true }).click(); await dock.waitFor(); check(await player.count() === 0,"settings return resurrected old audio");
+  await nav.getByRole("button",{ name:"会議一覧",exact:true }).click(); await page.locator(".meeting-name").first().click(); await dock.waitFor(); check(await player.count() === 0,"settings return resurrected old audio");
   results.push("settings navigation hides dock and releases old token; returning does not auto-play");
-  await play(); const beforeSwitch = (await counts()).close; await detailUI.openMeetingTools(); await page.getByRole("button",{ name:"開く",exact:true }).nth(1).click();
+  await play(); const beforeSwitch = (await counts()).close; await detailUI.openMeetingTools(); await page.locator(".meeting-name").nth(1).click();
   await page.waitForFunction(() => document.querySelector(".meeting-playback-content")?.getAttribute("data-meeting-id") === "meeting-1");
   await page.waitForFunction(n => window.monBrowserFixture.calls.filter(c => c.command === "close_playback").length > n,beforeSwitch);
   check((await dock.innerText()).includes("会議B") && await player.count() === 0,"different meeting adopted old audio");
@@ -103,7 +103,7 @@ async (page, capturePath, detailUI) => {
   await nav.getByRole("button",{ name:"設定",exact:true }).click(); await dock.waitFor({ state:"hidden" });
   await page.evaluate(() => { window.monBrowserFixture.holdPlayback = false; window.monBrowserFixture.releasePlayback(); });
   await page.waitForFunction(() => window.monBrowserFixture.calls.some(c => c.command === "close_playback"));
-  await nav.getByRole("button",{ name:"概要",exact:true }).click(); await dock.waitFor(); check(await player.count() === 0,"late preparation populated a new dock");
+  await nav.getByRole("button",{ name:"会議一覧",exact:true }).click(); await page.locator(".meeting-name").first().click(); await dock.waitFor(); check(await player.count() === 0,"late preparation populated a new dock");
   results.push("late audio preparation after view exit releases its token and cannot populate the new dock");
   await boot(); await page.setViewportSize({ width:360,height:640 });
   const longTitle = "長い会議名".repeat(36);

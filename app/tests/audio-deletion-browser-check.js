@@ -10,7 +10,7 @@ async (page, capturePath, detailUI) => {
   const understand = () => dialog().getByRole("checkbox", { name: /対象を確認し、音声の再生/u }).check();
   const unknown = () => dialog().getByRole("checkbox", { name: /一覧にある未登録音声も/u });
   const publish = () => dialog().getByRole("button", { name: /音声だけを削除する|照合して音声削除を続行|新しい音声範囲へ別同意して削除/u });
-  const boot = async () => { await page.reload(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "音声だけを削除" && !b.disabled)); };
+  const boot = async () => { await page.reload(); await detailUI.openMeetingRow(); await trigger().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "音声だけを削除" && !b.disabled)); };
   const review = async () => { await trigger().click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
   const done = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "音声だけを削除しました" }).waitFor();
   const pending = async (phase, altered = false) => {
@@ -235,7 +235,7 @@ async (page, capturePath, detailUI) => {
   await page.evaluate(() => window.audioDeletionFixture.complete()); await done();
   check(await page.evaluate(() => window.audioDeletionFixture.deleted === 1 && window.audioDeletionFixture.kept === 0), "late cancel replaced completion"); results.push("committed completion wins late cancellation");
 
-  await boot(); await page.getByRole("button", { name: "開く", exact: true }).click();
+  await boot(); await page.locator(".meeting-name").click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   const text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();

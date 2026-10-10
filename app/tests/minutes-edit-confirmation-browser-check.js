@@ -4,7 +4,7 @@ async (page, capturePath, detailUI) => {
   const editor = () => page.getByRole("region", { name: "議事録文書と編集", exact: true });
   const modal = title => page.getByRole("dialog", { name: title, exact: true });
   const count = command => page.evaluate(c => window.__mon.calls.filter(x => x.cmd === c).length, command);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMinutes(); await editor().getByRole("button", { name: "議事録を編集", exact: true }).click(); await editor().getByRole("textbox", { name: "議事録ブロック2", exact: true }).waitFor(); };
+  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openMinutes(); await editor().getByRole("button", { name: "議事録を編集", exact: true }).click(); await editor().getByRole("textbox", { name: "議事録ブロック2", exact: true }).waitFor(); };
   await boot(); const text = editor().getByRole("textbox", { name: "議事録ブロック2", exact: true });
   const original = await text.textContent(); await text.fill("未保存の点検日メモ");
   await editor().getByRole("button", { name: "議事録編集を再読込", exact: true }).click();

@@ -36,7 +36,7 @@ async page => {
   await boot({ recoveryMode: "delay", failCancel: true }); await source().click(); await modal(reviewTitle).getByRole("button", { name: "保持して確認を完了", exact: true }).click();
   await stop().click(); await modal(stopTitle).getByRole("button", { name: "安全な停止を要求して待つ", exact: true }).click(); await modal(stopTitle).getByRole("alert").waitFor();
   check(await count("cancel_data_operation") === 1 && await modal(stopTitle).getByRole("button", { name: "安全な停止を要求して待つ", exact: true }).isDisabled(), "failed stop replayed");
-  await modal(stopTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click(); check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "failed stop unlocked recovery");
+  await modal(stopTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click(); check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "failed stop unlocked recovery");
   await page.evaluate(() => window.dataFixture.complete());
   results.push("failed stop remains uncertain and native write protection survives closing the error; original work is not replayed");
   return { passed: results.length, results };

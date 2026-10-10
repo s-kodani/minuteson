@@ -8,7 +8,7 @@ async (page, capturePath, detailUI) => {
   const fixture = values => page.evaluate(v => Object.assign(window.rebindingFixture, v), values);
   const boot = async () => {
     await page.reload();
-    await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools();
+    await page.locator(".meeting-name").first().click(); await detailUI.openMeetingTools();
     await page.getByRole("list", { name: "解析ジョブ", exact: true }).waitFor();
   };
   const prepare = async (list = "解析ジョブ", packageId = "11111111-1111-4111-8111-111111111111") => {
@@ -87,8 +87,8 @@ async (page, capturePath, detailUI) => {
   await boot(); await prepare(); await fixture({ mode: "lost", failReceipt: true }); await apply(); await receipt();
   await page.getByRole("alert").filter({ hasText: "結果を確認できません" }).waitFor();
   await page.getByRole("dialog").getByRole("button", { name: "閉じる", exact: true }).click();
-  await page.getByRole("button", { name: "開く", exact: true }).nth(1).click(); await detailUI.openMeetingTools();
-  await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools();
+  await page.locator(".meeting-name").nth(1).click(); await detailUI.openMeetingTools();
+  await page.locator(".meeting-name").first().click(); await detailUI.openMeetingTools();
   await page.getByRole("button", { name: "モデル再試行の受付結果を確認" }).click();
   await fixture({ failReceipt: false }); await receipt(); await closed();
   check(await count("apply_job_model_rebinding") === 1, "meeting switch replaced unknown operation");

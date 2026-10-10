@@ -1,5 +1,7 @@
 # macOS実機検証用MON QAの準備
 
+2026-10-10時点の最新QAは `/private/tmp/mon-prototype-simple-qa-artifact.WuwVHb/MON QA.app`、main SHA `5468530636a8b82918153403195daf9c1918aff91fbc173e417fc9a8a56ab897`、識別子 `jp.mon.desktop.qa`。モック準拠の会議一覧・3入口・設定内だけのテーマ切替、CSS／Mac小窓背景の角丸、明示的な説明のWebView焦点復帰を含む。コピー一致・アドホック署名・全arm64・capture help、録音なしの冷起動／検索／2タブ／準備から戻る／小窓を確認。反復focusの変動、全画面、実録音／モデル、配布署名／公証は残す。[範囲と工程時間](m4-01-native-nonrecording-ui-2026-10-10.md#モック準拠と画面操作の簡素化)を参照。以下の「最新」は当時の履歴である。
+
 MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
 
 現在の最新QAは `/private/tmp/mon-raw-duration-qa-artifact.nHNweS/MON QA.app`、main SHA `cd38dc862662d68d404d2e84a1d10a8efebc68cf7adcf0e33c3c02cdf2ca6d31`。共通dialogのネイティブmodal状態への統一に加えて、[未処理PCMの500ms上限を端数切捨てで超えない修正](live-raw-recording-segments-2026-10-09.md#2026-10-10の未処理pcm時間の端数保護)を含む。最新Swift全体・合成Swift／Rust連携・QA構築・コピー一致・アドホック署名・全arm64・識別子・capture help・未承認通知文照合を確認した。操作可能となった後、新QAの冷起動・既存3会議・復元プレビューの限定Tab／Escapeを確認し終了した。同条件の旧側もAX取得に成功したため、以前の欠落は今回再現できず、原因／解消の断定・VoiceOver等の全体合格にはしない。実復元・録音・実モデル・公証は未検証。[今回の実機比較](m4-01-native-nonrecording-ui-2026-10-10.md#再操作可能になった後の最新qaと旧qaの比較)を参照。以下の「最新」表記は当時の履歴として扱う。

@@ -4,7 +4,7 @@ async (page, capturePath, detailUI) => {
   const editor = () => page.getByRole("region", { name: "文字起こし編集", exact: true });
   const modal = name => page.getByRole("dialog", { name, exact: true });
   const boot = async () => {
-    await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openTranscriptTools();
+    await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools();
     await editor().getByRole("button", { name: "編集を開始", exact: true }).click();
     await page.waitForFunction(() => !!window.monBrowserFixture.draft);
   };

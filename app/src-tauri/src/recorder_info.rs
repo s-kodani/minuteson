@@ -47,6 +47,19 @@ fn placement(
     ))
 }
 
+// Only explicit show/close transitions call this. A native window becoming
+// key does not necessarily restore its WKWebView as the keyboard responder.
+// Visibility polls and confirmation-driven hiding must never acquire focus.
+fn focus_content(window: &WebviewWindow) -> Result<(), String> {
+    window.set_focus().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let webview: &tauri::Webview = window.as_ref();
+        webview.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn hide(app: &AppHandle, explicit: bool) -> Result<(), String> {
     let popup = app
         .get_webview_window(LABEL)
@@ -60,11 +73,7 @@ pub fn hide(app: &AppHandle, explicit: bool) -> Result<(), String> {
     let confirming = app.state::<StopDecisionStore>().snapshot().visible();
     let restore = was_visible && may_restore(explicit, visible, confirming);
     if restore {
-        recorder
-            .as_ref()
-            .unwrap()
-            .set_focus()
-            .map_err(|e| e.to_string())?;
+        focus_content(recorder.as_ref().unwrap())?;
     }
     if let Some(recorder) = recorder {
         let _ = recorder.emit("recorder-info-closed", restore);
@@ -118,7 +127,7 @@ pub fn show_recorder_info(window: WebviewWindow) -> Result<bool, String> {
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
     popup.show().map_err(|e| e.to_string())?;
-    if let Err(error) = popup.set_focus() {
+    if let Err(error) = focus_content(&popup) {
         let _ = hide(app, false);
         return Err(format!("録音の説明画面に移れません: {error}"));
     }

@@ -11,7 +11,7 @@ async page => {
   const boot=async patch=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     await page.evaluate(patch=>Object.assign(window.monBrowserFixture.preparation,{strict:true,...patch}),patch??{});
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button",{name:"編集を開始",exact:true}).waitFor();
   };
   const barrier=async()=>page.evaluate(async()=>{

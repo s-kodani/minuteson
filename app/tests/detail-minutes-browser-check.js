@@ -3,7 +3,7 @@ async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   await page.reload(); await page.waitForFunction(() => !!window.__mon);
   await page.evaluate(() => window.__mon.addLongDocument());
-  await page.getByRole("button", { name:"開く", exact:true }).first().click();
+  await page.locator(".meeting-name").first().click();
   const tabs = page.getByRole("tablist", { name:"会議詳細", exact:true });
   const transcript = tabs.getByRole("tab", { name:"文字起こし", exact:true }), minutes = tabs.getByRole("tab", { name:"議事録", exact:true });
   await minutes.click();

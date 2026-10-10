@@ -75,7 +75,7 @@ async (page) => {
     await region().getByRole("button", { name: "安全な停止を要求", exact: true }).click();
     const stopChoice = page.getByRole("dialog", { name: "回収操作の安全な停止を確認", exact: true });
     await stopChoice.getByRole("button", { name: "安全な停止を要求して待つ", exact: true }).click();
-    check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled() && await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked before worker end");
+    check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled() && await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "cancellation unlocked before worker end");
     await page.evaluate(() => window.dataFixture.complete()); await stopChoice.waitFor({ state: "hidden" });
     if (mode === "cancelRace") await retained();
     else {
@@ -131,7 +131,7 @@ async (page) => {
 
   await boot("scratch", { recoveryMode: "forged" }); await review(); await act("keep");
   await dialog().getByRole("alert").filter({ hasText: "状態が不正" }).waitFor();
-  check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled() && !(await region().innerText()).includes("保持して確認済み（回収なし）") && await host().locator(".toast-success").count() === 0, "forged receipt unlocked or displayed success");
+  check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled() && !(await region().innerText()).includes("保持して確認済み（回収なし）") && await host().locator(".toast-success").count() === 0, "forged receipt unlocked or displayed success");
   results.push("wrong-operation receipt rejected, no success, protection remains");
   console.log(JSON.stringify({ passed: results.length, results }));
   return { passed: results.length, results };

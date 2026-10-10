@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
   const boot = async (editing = false) => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    if (editing) { await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); }
+    if (editing) { await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools(); await editor.getByRole("button", { name: "編集を開始", exact: true }).click(); await edit(); }
   };
   const focused = locator => locator.evaluate(e => document.activeElement === e);
   const saved = async () => page.waitForFunction(() => document.querySelector('.transcript-actions [role="status"]')?.textContent === "保存済み");
@@ -127,7 +127,7 @@ async (page, capturePath, detailUI) => {
   await editor.getByRole("button", { name: "話者を追加", exact: true }).click(); const dialog = page.getByRole("dialog", { name: "新しい話者", exact: true }); await dialog.waitFor();
   const dialogName = dialog.getByRole("textbox").first(); await dialogName.fill("未確定の話者");
   await dialogName.press("Control+n"); await dialogName.press("Meta+f"); await dialogName.press("Control+z");
-  check(await dialog.isVisible() && await focused(dialogName) && await page.locator('.nav-item[aria-current="page"]').getAttribute("aria-label") === "概要", "workspace shortcut escaped modal focus");
+  check(await dialog.isVisible() && await focused(dialogName) && await page.locator('.nav-item[aria-current="page"]').getAttribute("aria-label") === "会議一覧", "workspace shortcut escaped modal focus");
   await dialogName.press("Escape"); await dialog.waitFor({ state: "hidden" });
   check((await calls("undo_transcript_edit")).length === undoCount + 3, "modal Undo invoked transcript history");
   results.push("modal controls take priority over workspace N/F/Z; Escape closes the dialog without stopping recording");

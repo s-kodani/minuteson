@@ -9,7 +9,7 @@ async page => {
   const boot = async () => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.evaluate(() => window.monBrowserFixture.setUtterances(Array.from({ length:103 }, (_,i) => ({ id:`speech-${i}`, trackId:"microphone", startUs:i * 1_000_000, endUs:(i + 1) * 1_000_000, recognizedText:`本文${i}です。`, effectiveText:`本文${i}です。`, attributionState:"assigned", speakerIds:[i % 2 ? "speaker-b" : "speaker-a"] }))));
-    await page.getByRole("button", { name: "開く", exact: true }).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button", { name: "編集を開始", exact: true }).waitFor();
   };
   await boot();
@@ -90,7 +90,7 @@ async page => {
   check(await page.evaluate(() => !window.monBrowserFixture.calls.some(c => /^(start_recording|stop_recording|request_recording_confirmation)$/u.test(c.command))), "tab/search operations mutated recording");
   results.push("recording end remains available on both tabs; Find returns to transcript after the save barrier without changing recording");
   await minutes.click(); await page.getByRole("navigation", { name:"メインナビゲーション" }).getByRole("button", { name:"会議一覧", exact:true }).click();
-  await tabs.waitFor({ state:"hidden" }); await page.getByRole("button", { name:"開く", exact:true }).nth(1).click();
+  await tabs.waitFor({ state:"hidden" }); await page.locator(".meeting-name").nth(1).click();
   check(await transcript.getAttribute("aria-selected") === "true" && (await page.locator(".playback-owner").innerText()).includes("会議B"), "new meeting inherited old tab or owner");
   results.push("meeting list navigation leaves detail; another meeting starts on transcript with the correct playback owner");
   return { passed:results.length, results };

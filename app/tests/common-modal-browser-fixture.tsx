@@ -3,6 +3,7 @@ import { StrictMode, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CommonModal } from "../src/common-modal";
 import "../src/style.css";
+import "../src/prototype-alignment.css";
 
 declare global { interface Window { modalFixture: { closeCalls: number; commands: number; setBlocked: (value: boolean) => void; finish: () => void; openBlocked: () => void; closeWhileLocked: () => void; removeOpenerAndClose: () => void } } }
 function Fixture() {

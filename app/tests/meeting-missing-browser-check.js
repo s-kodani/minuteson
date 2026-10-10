@@ -12,7 +12,7 @@ async (page,capturePath,detailUI)=>{
   const prepare=async(gaps,endUs=60000000)=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     await page.evaluate(({gaps,endUs})=>Object.assign(window.monBrowserFixture.meetingAudio,{gaps,endUs}),{gaps,endUs});
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await page.getByRole("region",{name:"文字起こし編集",exact:true}).getByRole("button",{name:"編集を開始",exact:true}).waitFor();
     await dock.getByRole("button",{name:"会議全体を再生",exact:true}).click();
     await player.getByRole("button",{name:"再生",exact:true}).waitFor();

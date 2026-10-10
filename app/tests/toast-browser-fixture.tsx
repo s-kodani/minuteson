@@ -5,6 +5,7 @@ import { CommonModal } from "../src/common-modal";
 import { IssueNotice, ToastHost, ToastNotice, toasts } from "../src/toast";
 import { toastKey, type ToastInput } from "../src/toast-state";
 import "../src/style.css";
+import "../src/prototype-alignment.css";
 
 declare global { interface Window { toastFixture: { keys: Set<string>; show: (input: ToastInput) => void; clear: () => void; issue: (message: string) => void; changeScope: () => void; detach: () => void; retryCalls: number; unsafeCommands: number; actionCalls: number; showAction: () => void } } }
 function Fixture() {

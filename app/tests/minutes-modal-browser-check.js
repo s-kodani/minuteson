@@ -5,7 +5,7 @@ async (page, capturePath, detailUI) => {
   const modal = name => page.getByRole("dialog", { name, exact: true });
   const restore = () => panel().getByRole("button", { name: "議事録直前版を確認・復元", exact: true });
   const count = command => page.evaluate(c => window.__mon.calls.filter(x => x.cmd === c).length, command);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMinutes(); await restore().waitFor(); };
+  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openMinutes(); await restore().waitFor(); };
   const close = async (name, trigger) => { await modal(name).waitFor({ state: "hidden" }); await page.waitForFunction(() => !document.querySelector("dialog[open]")); check(await trigger.evaluate(e => e === document.activeElement), "minutes opener focus missing"); };
   await boot(); const originalDraft = await page.evaluate(() => JSON.stringify(window.__mon.drafts.a));
   await restore().click(); const previous = "議事録直前版の復元確認 #1";

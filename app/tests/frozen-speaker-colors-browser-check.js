@@ -10,7 +10,7 @@ async (page,capturePath,detailUI) => {
     f.fixedSpeakers["fixed-a"]=[{id:"same-id",label:"話者1",displayName:"生成時の表示名"},{id:"unnamed",label:"固定話者2",displayName:null}];
     f.fixedSpeakers["fixed-p"]=[{id:"same-id",label:"話者1",displayName:"直前版の表示名"},{id:"unnamed",label:"直前話者2",displayName:null}];
   });
-  await page.getByRole("button",{name:"開く",exact:true}).first().click();
+  await page.locator(".meeting-name").first().click();
   // The workspace deliberately keeps the inactive transcript mounted but
   // hidden. Compare its same-ID CSS without making it visible or switching
   // away from the fixed evidence whose DOM/read ownership is under test.

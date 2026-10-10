@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
   const boot=async source=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     if(source!==undefined)await page.evaluate(source=>window.monBrowserFixture.setMeetingSource("meeting-0",source),source);
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button",{name:"編集を開始",exact:true}).waitFor();
   };
   const details=async()=>{const summary=dock.getByText("再生トラック",{exact:true});if(!await summary.evaluate(e=>e.parentElement.open))await summary.click();};
@@ -84,11 +84,11 @@ async (page, capturePath, detailUI) => {
 
   await boot();await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["both"]);await start.click();
   await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);await nav.getByRole("button",{name:"設定",exact:true}).click();
-  await dock.waitFor({state:"hidden"});await release(0);await nav.getByRole("button",{name:"概要",exact:true}).click();await start.waitFor();
+  await dock.waitFor({state:"hidden"});await release(0);await nav.getByRole("button",{name:"会議一覧",exact:true}).click();await page.locator(".meeting-name").first().click();await start.waitFor();
   check(await player.count()===0&&await count("prepare_meeting_playback")===1,"settings return adopted late audio or prepared automatically");
   results.push("settings unmount closes late preparation and return never revives or auto-prepares it");
   await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=[]);
-  await play();await detailUI.openMeetingTools();await page.getByRole("button",{name:"開く",exact:true}).nth(1).click();
+  await play();await detailUI.openMeetingTools();await page.locator(".meeting-name").nth(1).click();
   await page.waitForFunction(()=>document.querySelector(".meeting-playback-content")?.dataset.meetingId==="meeting-1");
   check(await player.count()===0&&(await dock.innerText()).includes("会議B"),"different meeting inherited the previous full player");
   results.push("meeting change releases full playback and changes the dock owner without auto-playing");

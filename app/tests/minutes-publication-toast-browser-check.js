@@ -4,7 +4,7 @@ async (page, capturePath, detailUI) => {
   const host = () => page.getByRole("complementary", { name: "通知", exact: true });
   const modal = name => page.getByRole("dialog", { name, exact: true });
   const count = cmd => page.evaluate(c => window.__mon.calls.filter(x => x.cmd === c).length, cmd);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMinutes(); await panel().getByRole("button", { name: "議事録直前版を確認・復元", exact: true }).waitFor(); };
+  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openMinutes(); await panel().getByRole("button", { name: "議事録直前版を確認・復元", exact: true }).waitFor(); };
   const restore = async () => { await panel().getByRole("button", { name: "議事録直前版を確認・復元", exact: true }).click(); await modal("議事録直前版の復元確認 #1").getByRole("button", { name: "この議事録直前版へ戻す", exact: true }).click(); await modal("議事録の直前版復元を確認").getByRole("button", { name: "直前版へ戻す", exact: true }).click(); };
   await boot(); check(await host().getByRole("status").filter({ hasText: "元データが変更" }).count() === 0, "historical stale minutes generated toast");
   const original = await page.evaluate(() => JSON.stringify(window.__mon.drafts.a));

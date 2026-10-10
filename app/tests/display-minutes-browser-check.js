@@ -2,7 +2,7 @@
 async (page,capturePath,detailUI) => {
   const results=[],check=(v,m)=>{if(!v)throw Error(m);};
   await page.reload();await page.waitForFunction(()=>!!window.__mon);
-  await page.getByRole("button",{name:"開く",exact:true}).first().click();await detailUI.openMinutes();
+  await page.locator(".meeting-name").first().click();await detailUI.openMinutes();
   const dock=page.getByRole("region",{name:"会議の共通音声プレーヤー",exact:true});
   await dock.getByText("再生トラック",{exact:true}).click();
   const size=dock.getByRole("combobox",{name:"本文の文字サイズ",exact:true});

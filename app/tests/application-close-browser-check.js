@@ -12,8 +12,8 @@ async (page, capturePath, detailUI) => {
   const count = command => page.evaluate(c => window.closeFixture.calls.filter(x => x.command === c).length, command);
   const boot = async (select = false) => {
     await page.goto("http://127.0.0.1:1420/");
-    await page.waitForFunction(() => !!window.closeFixture && !!document.querySelector(".meeting-list li"));
-    if (select) { await page.locator(".meeting-list li").first().getByRole("button", { name: "開く", exact: true }).click(); await detailUI.openMeetingTools(); await page.getByRole("button",{name:"録音準備を開く",exact:true}).click(); await page.waitForFunction(() => document.querySelector('.recording-workspace button')?.disabled === false); }
+    await page.waitForFunction(() => !!window.closeFixture && !!document.querySelector(".meeting-table tbody tr"));
+    if (select) { await page.locator(".meeting-table tbody tr").first().locator(".meeting-name").click(); await detailUI.openMeetingTools(); await page.getByRole("button",{name:"録音準備を開く",exact:true}).click(); await page.waitForFunction(() => document.querySelector('.recording-workspace button')?.disabled === false); }
   };
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
@@ -55,7 +55,7 @@ async (page, capturePath, detailUI) => {
     results.push("closing a ready import uses safe initial cancellation and preserves the exact review");
 
     stage = "close-import-wait"; await boot(); await configureImport(true); await Promise.all([request(), request()]); await accept().waitFor(); await accept().dblclick(); await page.waitForFunction(() => window.closeFixture.importing.phase === "cancelling");
-    for (let i = 0; i < 5; i++) await page.keyboard.press("Escape"); check(await modal(title).isVisible() && await count("cancel_audio_import") === 1 && await count("finish_main_close") === 0 && await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "close dismissed or quit before actual import stop");
+    for (let i = 0; i < 5; i++) await page.keyboard.press("Escape"); check(await modal(title).isVisible() && await count("cancel_audio_import") === 1 && await count("finish_main_close") === 0 && await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "close dismissed or quit before actual import stop");
     await page.evaluate(() => window.closeFixture.finishImport(false)); await modal(title).waitFor({ state: "hidden" }); check(await count("finish_main_close") === 1, "actual import stop did not continue closing once");
     results.push("one same-token import cancellation waits through repeated Escape until actual worker termination");
 

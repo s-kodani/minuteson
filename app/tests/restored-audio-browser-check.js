@@ -1,5 +1,5 @@
 // CLI-first checks of restored history UI; synthetic IPC, not native WebView.
-async (page) => {
+async (page, capturePath, detailUI) => {
   page.setDefaultTimeout(10000);
   const results = [], check = (v, msg) => { if (!v) throw Error(msg); };
   const set = patch => page.evaluate(p => Object.assign(window.audioDeletionFixture, p), patch);
@@ -12,7 +12,7 @@ async (page) => {
   const preview = () => page.evaluate(() => structuredClone(window.dataFixture.snapshot.audioDeletionPreview));
   const paths = () => dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor();
   const boot = async (patch = {}) => {
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }); await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).waitFor({ timeout: 30000 });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }); await detailUI.openMeetingRow(); await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).waitFor({ timeout: 30000 });
     await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "音声だけを削除" && !b.disabled));
     await page.evaluate(p => { window.audioDeletionFixture.pending("restored_unavailable"); Object.assign(window.audioDeletionFixture, p); }, patch);
     await page.getByRole("button", { name: "設定", exact: true }).click();

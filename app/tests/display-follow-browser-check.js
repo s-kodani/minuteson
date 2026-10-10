@@ -20,7 +20,7 @@ async (page, capturePath, detailUI) => {
   const boot=async()=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     await page.evaluate(()=>window.monBrowserFixture.setUtterances(Array.from({length:103},(_,i)=>({id:`speech-${i}`,trackId:i%2?"system":"microphone",startUs:i*1000000,endUs:(i+1)*1000000,recognizedText:`発言${i} 点検日を確認します。`,effectiveText:`発言${i} 点検日を確認します。`,attributionState:"assigned",speakerIds:[i%2?"speaker-b":"speaker-a"]}))));
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();await row(0).waitFor();await details();
+    await page.locator(".meeting-name").first().click();await row(0).waitFor();await details();
     await page.waitForFunction(()=>!document.querySelector(".text-size-choice select")?.disabled);
   };
   const play=async()=>{await start.click();await player.getByRole("button",{name:"一時停止",exact:true}).waitFor();};

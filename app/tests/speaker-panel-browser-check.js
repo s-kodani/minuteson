@@ -18,7 +18,7 @@ async (page, capturePath, detailUI) => {
       f.setUtterances(Array.from({ length:103 },(_,i) => ({ id:`speech-${i}`,trackId:"microphone",startUs:i*1_000_000,endUs:(i+1)*1_000_000,recognizedText:`本文${i}です。`,effectiveText:`本文${i}です。`,attributionState:i%3===2?"unknown":"assigned",speakerIds:i%3===2?[]:[i%3===0?"speaker-a":"speaker-b"] })));
       if (configured) Object.assign(f.diarizationPreferences.payload.standard,{ executablePath:"/synthetic/sherpa",segmentationModelPath:"/synthetic/segments.onnx",embeddingModelPath:"/synthetic/embedding.onnx" });
     },configured);
-    await page.getByRole("button",{ name:"開く",exact:true }).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button",{ name:"編集を開始",exact:true }).waitFor();
   };
   await boot();
@@ -115,7 +115,7 @@ async (page, capturePath, detailUI) => {
   check(await open().getAttribute("aria-expanded")==="false","tab return unexpectedly reopened a modal drawer");
   await detailUI.openDiarization(); check(await fixedCount().evaluate(e => e===window.tabCount) && await fixedCount().inputValue()==="7","tab return lost local count state or recreated the controller");
   await detailUI.closeSpeakerPanel(); await page.getByRole("button",{ name:"会議一覧",exact:true }).click();
-  await page.getByRole("button",{ name:"開く",exact:true }).nth(1).click(); await detailUI.openMeetingTools();
+  await page.locator(".meeting-name").nth(1).click(); await detailUI.openMeetingTools();
   check(await page.locator(".speaker-diarization-tools").count()===0 && await countMode().inputValue()==="auto" && await diar().isVisible(),"meeting without an adopted transcript inherited counts or lost fallback diarization controls");
   results.push("tab return retains the single hidden count editor without reopening a drawer; another meeting resets counts and keeps the no-transcript fallback");
 

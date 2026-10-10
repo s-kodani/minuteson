@@ -1,7 +1,7 @@
 async (page, capturePath, detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true });
-  await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await page.locator(".meeting-name").first().click();
   await detailUI.openTranscriptTools();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   const edit = () => editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();

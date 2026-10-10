@@ -4,7 +4,7 @@ async (page, capturePath, detailUI) => {
   const editor = () => page.getByRole("region", { name: "文字起こし編集", exact: true });
   const modal = title => page.getByRole("dialog", { name: title, exact: true });
   const calls = command => page.evaluate(c => window.monBrowserFixture.calls.filter(x => x.command === c), command);
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openTranscriptTools(); await editor().getByRole("button", { name: "編集を開始", exact: true }).click(); await page.waitForFunction(() => !!window.monBrowserFixture.draft); await editor().getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click(); };
+  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools(); await editor().getByRole("button", { name: "編集を開始", exact: true }).click(); await page.waitForFunction(() => !!window.monBrowserFixture.draft); await editor().getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click(); };
   await boot();
   const text = editor().getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await text.fill("未保存の点検日を保持"); await editor().getByRole("button", { name: "再読込", exact: true }).click();

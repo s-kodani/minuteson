@@ -1,11 +1,12 @@
 // CLI callback: synthetic IPC only, no native audio or files.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [];
   const check = (ok, message) => { if (!ok) throw Error(message); };
   const region = () => page.getByRole("region", { name: "音声だけの削除と中断対応", exact: true });
   const dialog = () => page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: /音声だけの削除を確認|再出現した音声への新しい同意|残り音声への新しい同意/u }) });
   for (const phase of ["files", "awaiting_ack"]) {
     await page.reload();
+    await detailUI.openMeetingRow();
     await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).waitFor();
     await page.evaluate(phase => {
       Object.assign(window.audioDeletionFixture, { unknownCount: 1, longPath: true, mode: "unknown" });

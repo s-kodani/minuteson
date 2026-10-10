@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
   };
   await page.reload(); await page.getByRole("combobox", { name: "表示テーマ", exact: true }).waitFor();
   await visit("録音セッション", "会議以外の音"); results.push("main recording range and consent help without recording");
-  await page.getByRole("button", { name: "開く", exact: true }).first().click();
+  await page.locator(".meeting-name").first().click();
   await detailUI.openMeetingTools(); await detailUI.openDiarization();
   const expected = [["音声保存後の解析工程", "自動推定"], ["ローカル文字起こし", "現在版と編集"], ["会議の用語", "自動置換"], ["話者分離", "同一人物"], ["話者の人数", "トラック全体"], ["議事録", "根拠"]];
   for (const [label, text] of expected) { if (label === "議事録") await detailUI.openMinutes(); await visit(label, text); results.push(`production ${label}: keyboard dismissal and bounds`); }

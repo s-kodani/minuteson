@@ -28,6 +28,18 @@ test("native confirmation dismisses explanation without restoring recorder focus
   const native = source("../src-tauri/src/recorder_info.rs");
   assert.doesNotMatch(native, /RecorderController|state::<Storage>|SessionStore/);
 });
+test("macOS explicit explanation transitions focus the WebView after its window", () => {
+  const native = source("../src-tauri/src/recorder_info.rs");
+  const focus = native.split("fn focus_content(")[1]?.split("pub fn hide(")[0] ?? "";
+  assert.ok(focus.includes("window.set_focus()"));
+  assert.ok(focus.includes('#[cfg(target_os = "macos")]'));
+  assert.ok(focus.includes("let webview: &tauri::Webview = window.as_ref();"));
+  assert.ok(focus.includes("webview.set_focus()"));
+  assert.ok(focus.indexOf("window.set_focus()") < focus.indexOf("webview.set_focus()"));
+  assert.ok(native.includes("focus_content(recorder.as_ref().unwrap())?;"));
+  assert.ok(native.includes("if let Err(error) = focus_content(&popup)"));
+  assert.match(native, /if restore \{\s*focus_content\(recorder\.as_ref\(\)\.unwrap\(\)\)\?;/);
+});
 test("mini explanation button reserves readable widths for both input labels", () => {
   const css = source("../src/style.css");
   assert.ok(css.includes(".mini-top:has(.mini-inputs) { gap:2px; }"));

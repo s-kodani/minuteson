@@ -12,7 +12,7 @@ async (page) => {
   const writes=()=>page.evaluate(()=>window.__mon.calls.filter(c=>["save_minutes_draft","adopt_minutes_candidate","restore_minutes_version"].includes(c.cmd)).length);
   const boot=async(width=1200)=>{
     await page.setViewportSize({width,height:820});await page.reload();await page.waitForFunction(()=>!!window.__mon);
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await page.getByRole("tab",{name:"議事録",exact:true}).click();await document().waitFor();
   };
   const pause=async(player)=>{await player.getByRole("button",{name:"一時停止",exact:true}).waitFor();await player.getByRole("button",{name:"一時停止",exact:true}).click();};

@@ -119,3 +119,11 @@ Rustのコマンド全体は重点1.15秒、全対象構築0.57秒で、内部�
 先行して大きなテスト増分を回収していたため、今回の重い構築を増分保持後の短縮効果とは扱わない。終了時cacheは8,426.3MiB、重点で構築しなかった対象を揃える全対象build-onlyは6.69秒、同じ全対象・無変更での次のbuild-onlyは0.23秒、両方終了コード0・実行0秒だった。最終cacheは8,812.0MiB（約8.61GiB）、完成したテスト用増分約5.41GiBと通常lib／binの増分を保持した。10GiB以内だったので、今回の実データに中間物優先回収が発動したとは扱わない。次の実Rustソース小変更後の速度と、容量超過時の保持効果は残件のままである。
 
 標準1プロセス・自動threads・4構築jobs・10GiBソフト予算・プロファイルを変更せず、構築／実行中のcache回収はない。全プロセス終了と、製品target約38MiBの保持を確認した。今回専用QA target約1.18GiBだけは成果物コピー／署名確認後に回収した。ログは `/private/tmp/mon-raw-duration-native-rust-roundtrip.log`、`/private/tmp/mon-raw-duration-rust-warm-build.log`、`/private/tmp/mon-raw-duration-rust-warm-build-final.log` に保持する。時間小計・重複・残件はリンク先に記録した。
+
+## 2026-10-10の実ソース小変更後の測定
+
+録音説明のMac WebView focusを加えた実Rust変更後、重点3件は構築59.23秒・実行7.62秒・コマンドreal67.58秒、3成功／1,890対象外。さらにMac小窓の角丸モジュールとsetup呼出しを追加した後は構築80.85秒・実行7.62秒・real89.13秒、同じ3件成功。後者のリンクには大きいeh_frameのcompact-unwind警告があるが、終了コード0。通常Rust全件は再実行していない。
+
+それぞれの終了後に共有ランナーが4,533.2MiB／4,109.6MiBを回収し、8,354.8MiB／8,282.5MiBまで収めた。最終の所有付きstatusは8,281.4MiB（約8.09GiB）、debug/incremental全体は6,021,480KiB（約5.74GiB）。小変更後も増分領域が残り、前回の約24分27秒の重点再構築に比べこの限定ケースは1分程度で済んだ。ただし変更内容・対象・OSキャッシュが異なり、一般的な短縮率や全変更／全件の保証にはしない。標準1プロセス・自動threads・4構築jobs・10GiBソフト予算は変更しない。
+
+ログは `/private/tmp/mon-recorder-webview-focus-rust.log` と `/private/tmp/mon-prototype-alignment-rust-tests.log`。実データで小変更後の速度と容量超過時の増分保持を限定確認したため、この測定待ち0.5〜1時間は独立した残件から外す。型検査・QA構築・実機・反復focusの安定性は別工程で、全体計画は進行中。最終QA／工程時間は [モック準拠の記録](m4-01-native-nonrecording-ui-2026-10-10.md#モック準拠と画面操作の簡素化) を参照。

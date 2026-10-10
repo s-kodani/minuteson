@@ -36,7 +36,7 @@ async (page, capturePath, detailUI) => {
         fixture.setUtterances(speakers.map((speaker,i)=>utterance(`palette-${i}`,"native-mic",[speaker.id])));
       }
     },{fail,imported,palette});
-    await page.getByRole("button",{name:"開く",exact:true}).first().click();
+    await page.locator(".meeting-name").first().click();
     await editor.getByRole("button",{name:"編集を開始",exact:true}).waitFor();
     const summary=dock.getByText("再生トラック",{exact:true});
     if(!await summary.evaluate(e=>e.parentElement.open))await summary.click();

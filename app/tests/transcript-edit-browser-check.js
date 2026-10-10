@@ -18,7 +18,7 @@ async page => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
     if (many) await page.evaluate(() => window.monBrowserFixture.setUtterances(Array.from({ length: 103 }, (_, i) => ({ id: `speech-${i}`, trackId: "microphone", startUs: i * 1_000_000, endUs: (i + 1) * 1_000_000, recognizedText: `本文${i}です。`, effectiveText: `本文${i}です。`, attributionState: "assigned", speakerIds: [i % 2 ? "speaker-b" : "speaker-a"] }))));
-    await page.getByRole("button", { name: "開く", exact: true }).first().click();
+    await page.locator(".meeting-name").first().click();
     await read("00:00:00").waitFor();
   };
   const begin = () => editor.getByRole("button", { name: "編集を開始", exact: true }).click();

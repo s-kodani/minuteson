@@ -13,7 +13,7 @@ async (page, capturePath, detailUI) => {
       f.jobs.push({ ...f.jobs[0], id: "diar-paused", kind: "diarization" }, { ...f.jobs[1], id: "diar-failed", kind: "diarization" });
       for (const key of ["global", "meeting-0"]) f.vocabulary[key] = { id: key, lockVersion: 0, payload: [{ id: `term-${key}`, term: "点検日", reading: "てんけんび", note: null, enabled: true }] };
     });
-    await page.getByRole("button", { name: "開く", exact: true }).first().click(); await detailUI.openMeetingTools();
+    await page.locator(".meeting-name").first().click(); await detailUI.openMeetingTools();
     await asr().getByRole("button", { name: "同じ条件で再試行", exact: true }).waitFor(); await detailUI.openDiarization();
   };
   const dismiss = async title => { await page.keyboard.press("Escape"); await modal(title).waitFor({ state: "hidden" }); };

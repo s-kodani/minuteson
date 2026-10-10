@@ -12,7 +12,7 @@ async (page,capturePath,detailUI) => {
       {startUs:4000000,endUs:5000000,speakerId:"unregistered",confidence:null},
     ],overlaps:[{startUs:1000000,endUs:2000000,speakerIds:["speaker-a","speaker-b"]}]}};
   });
-  await page.getByRole("button",{name:"開く",exact:true}).first().click();
+  await page.locator(".meeting-name").first().click();
   const editor=page.getByRole("region",{name:"文字起こし編集",exact:true});
   const row=editor.locator('[data-utterance-id="speech-a"]');
   const review=row.locator(".speaker-review");await review.locator(":scope > summary").click();

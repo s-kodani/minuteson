@@ -39,6 +39,8 @@ mod recording_segments;
 mod recording_writes;
 mod resampling;
 mod restored_processing;
+#[cfg(target_os = "macos")]
+mod rounded_windows;
 mod saved_artifact;
 mod session;
 mod startup_attention;
@@ -2426,6 +2428,8 @@ pub fn run() {
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            rounded_windows::configure(app.handle())?;
             let root = match app.path().app_data_dir() {
                 Ok(root) => root,
                 Err(error) => {

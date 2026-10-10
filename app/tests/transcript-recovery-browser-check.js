@@ -12,7 +12,7 @@ async (page, capturePath, detailUI) => {
   const savedInput = value => page.waitForFunction(v => { const f = window.monBrowserFixture; return f.recovery.records[f.draft?.id]?.payload.buffers.some(b => b.value === v); },value);
   const openMeeting = async () => {
     await page.waitForFunction(() => !!window.monBrowserFixture && !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
-    await page.getByRole("button",{ name: "開く",exact: true }).first().click(); await detailUI.openTranscriptTools(); await read("00:00:00").waitFor();
+    await page.locator(".meeting-name").first().click(); await detailUI.openTranscriptTools(); await read("00:00:00").waitFor();
   };
   const boot = async () => { await page.reload(); await openMeeting(); await editor.getByRole("button",{ name: "編集を開始",exact: true }).click(); await edit(); };
   const crash = async () => { await page.evaluate(() => window.monBrowserFixture.crashSeed()); await page.reload(); await openMeeting(); };

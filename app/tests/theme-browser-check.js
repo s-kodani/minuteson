@@ -1,8 +1,8 @@
 async (page, capturePath = path => path, detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
-  const select = () => page.getByRole("combobox", { name: "表示テーマ", exact: true });
+  const select = () => page.getByRole("combobox", { name: "テーマ", exact: true });
   const waitTheme = theme => page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
-  const reset = async () => { await page.evaluate(() => window.themeFixture.reset()); await page.reload(); await select().waitFor(); await page.waitForFunction(() => !document.querySelector(".theme-quick select")?.disabled); };
+  const reset = async () => { await page.evaluate(() => window.themeFixture.reset()); await page.reload(); await page.getByRole("button", { name: "設定", exact: true }).click(); await select().waitFor(); await page.waitForFunction(() => !document.querySelector(".theme-choice select")?.disabled); };
   const count = () => page.evaluate(() => window.themeFixture.calls.filter(c => c.command === "save_ui_preferences").length);
   await reset(); await page.emulateMedia({ colorScheme: "light" }); await waitTheme("light");
   await page.emulateMedia({ colorScheme: "dark" }); await waitTheme("dark");
@@ -11,10 +11,12 @@ async (page, capturePath = path => path, detailUI) => {
   await page.emulateMedia({ colorScheme: "dark" }); await waitTheme("light");
   await select().selectOption("dark"); await waitTheme("dark");
   await page.emulateMedia({ colorScheme: "light" }); await waitTheme("dark");
-  await page.reload(); await waitTheme("dark"); check(await select().inputValue() === "dark", "saved theme not reloaded");
+  await page.reload(); await waitTheme("dark"); await page.getByRole("button", { name: "設定", exact: true }).click(); check(await select().inputValue() === "dark", "saved theme not reloaded");
   results.push("three choices, live OS follow without writes, explicit override and reload persistence");
 
-  await page.getByRole("button", { name: "開く", exact: true }).click();
+  await select().selectOption("system"); await waitTheme("light");
+  await page.getByRole("button", { name: "会議一覧", exact: true }).click();
+  await page.locator(".meeting-name").click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   const text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
@@ -28,7 +30,7 @@ async (page, capturePath = path => path, detailUI) => {
   for (let step = 0; step < 5; step++) await seek.press("ArrowRight");
   await audio.getByRole("combobox", { name: "速度", exact: true }).selectOption("1.5");
   for (const theme of ["light", "dark"]) {
-    await select().selectOption(theme); await waitTheme(theme);
+    await page.emulateMedia({ colorScheme: theme }); await waitTheme(theme);
     check(await text.inputValue() === "編集中の点検日を保持します。" && await text.evaluate(node => node === window.themeFixture.editorNode), "theme remounted or reset editor");
     check(await text.evaluate(node => node.selectionStart === 2 && node.selectionEnd === 5), "theme lost text selection");
     check(await editor.getByRole("searchbox", { name: "発言を検索", exact: true }).inputValue() === "点検", "theme reset search");
@@ -49,7 +51,7 @@ async (page, capturePath = path => path, detailUI) => {
     node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   for (const theme of ["light", "dark"]) {
-    await select().selectOption(theme); await waitTheme(theme);
+    await page.emulateMedia({ colorScheme: theme }); await waitTheme(theme);
     check(await rich.textContent() === "編集中の点検日と議事録を保持します。" && await rich.evaluate(node => node === window.themeFixture.richNode), "theme remounted or reset rich editor");
     check(await rich.evaluate(node => { const s = getSelection(); return s.rangeCount === 1 && s.getRangeAt(0).startContainer === node.firstChild && s.getRangeAt(0).startOffset === 2 && s.getRangeAt(0).endOffset === 5; }), "theme lost rich selection");
     check(await page.getByRole("button", { name: "編集を終了", exact: true }).isVisible(), "theme exited rich editing");
@@ -63,7 +65,7 @@ async (page, capturePath = path => path, detailUI) => {
 
   const contrast = [];
   for (const theme of ["light", "dark"]) {
-    await select().selectOption(theme); await waitTheme(theme);
+    await page.emulateMedia({ colorScheme: theme }); await waitTheme(theme);
     const ratios = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
       const luminance = name => {
@@ -88,7 +90,7 @@ async (page, capturePath = path => path, detailUI) => {
   results.push({ case: "12 token pairs per theme meet text 4.5 or indicator 3 contrast; visible editor focus; no horizontal overflow at 960/1280", contrast });
 
   // Dialogs are modal: OS follow must recolor them without dismissing state.
-  await select().selectOption("system"); await waitTheme("light");
+  await page.emulateMedia({ colorScheme: "light" }); await waitTheme("light");
   await detailUI.openMeetingTools(); await page.getByRole("button", { name: "既存会議の音声だけを削除", exact: true }).click();
   const dialog = page.getByRole("dialog"); await dialog.waitFor();
   for (const theme of ["light", "dark"]) {
@@ -105,7 +107,7 @@ async (page, capturePath = path => path, detailUI) => {
   const settings = page.getByRole("region", { name: "表示設定", exact: true });
   const themeError = () => page.getByRole("complementary", { name: "通知", exact: true }).getByRole("alert").filter({ hasText: "表示設定の読込・保存" });
   await settings.getByRole("combobox", { name: "テーマ", exact: true }).selectOption("dark"); await waitTheme("dark");
-  check(await select().inputValue() === "dark", "settings and header diverged");
+  check(await select().inputValue() === "dark" && await page.getByRole("banner").getByRole("combobox").count() === 0, "theme must be available only in settings");
   await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).selectOption("18");
   await page.waitForFunction(()=>document.documentElement.style.getPropertyValue("--reading-font-size")==="18px");
   await settings.getByRole("checkbox",{name:"再生位置に追従",exact:true}).check();
@@ -129,7 +131,7 @@ async (page, capturePath = path => path, detailUI) => {
     check(await mini.evaluate(() => window.themeFixture.calls.filter(c => c.command === "save_ui_preferences").length) === 0, "mini wrote theme");
     await mini.screenshot({ path: capturePath("mini-light.png") });
   } finally { await mini.close(); }
-  results.push("settings/header sync; separate simulated recorder window reads full v2 size/follow/theme and follows later theme changes without events or writes");
+  results.push("settings-only theme control; separate simulated recorder window reads full v2 size/follow/theme and follows later theme changes without events or writes");
 
   await page.evaluate(() => { window.themeFixture.mode = "fail"; });
   await select().selectOption("dark"); await themeError().filter({ hasText: "保存できません" }).waitFor();
@@ -170,9 +172,9 @@ async (page, capturePath = path => path, detailUI) => {
   results.push("fresh main mount reads persisted theme, size and follow values without implicit preference writes (fixture storage only)");
 
   await page.evaluate(async () => { window.audioDeletionFixture.blocked = true; await window.dataFixture.changed({}); });
-  await page.waitForFunction(() => document.querySelector(".theme-quick select")?.disabled);
+  await page.waitForFunction(() => document.querySelector(".theme-choice select")?.disabled);
   check(await settings.getByRole("combobox", { name: "テーマ", exact: true }).isDisabled(), "data write fence failed to disable theme save");
   check(await settings.getByRole("combobox",{name:"本文の文字サイズ",exact:true}).isDisabled()&&await settings.getByRole("checkbox",{name:"再生位置に追従",exact:true}).isDisabled(),"data write fence did not disable display preference writers");
-  results.push("data-maintenance write fence disables both theme writers while saved colors remain");
+  results.push("data-maintenance write fence disables settings display preference writers while saved colors remain");
   return results;
 }

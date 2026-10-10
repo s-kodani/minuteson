@@ -30,7 +30,7 @@ async (page) => {
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled during native work");
-  check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "navigation enabled during native work");
+  check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
   check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
   await page.evaluate(() => window.dataFixture.complete()); await done();
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
@@ -132,7 +132,7 @@ async (page) => {
   for (const mode of ["delay", "cancelRace"]) {
     await boot(); await set({ mode }); await choose("restore"); await ready(); await confirm();
     await stop();
-    check(await page.getByRole("button", { name: "概要", exact: true }).isDisabled(), "cancel released write protection early");
+    check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "cancel released write protection early");
     await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
     if (mode === "cancelRace") { await done(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 3, "winning commit suppressed"); }
     else { await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 1, "cancel published meetings"); }
@@ -155,7 +155,7 @@ async (page) => {
   await boot(); await choose("restore"); await ready(); await set({ mode: "lostNoCommit" }); await confirm();
   await page.getByRole("dialog").getByRole("button", { name: "同じ操作を取り消して確認", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
-  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "概要" && !b.disabled));
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "会議一覧" && !b.disabled));
   check((await calls("start_data_operation")).length === 1 && (await calls("cancel_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.meetings.length) === 1, "unknown cancellation published or retried work");
   results.push("unknown unaccepted request: explicit native cancellation releases review without publication");
 

@@ -1,5 +1,5 @@
 // CLI-first browser verification, simulated IPC only; not a test spec.
-async (page) => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (v, message) => { if (!v) throw Error(message); };
   const set = values => page.evaluate(v => Object.assign(window.deletionFixture, v), values);
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
@@ -7,7 +7,7 @@ async (page) => {
   const notifications = () => page.getByRole("complementary", { name: "通知", exact: true });
   const dialog = () => page.getByRole("dialog", { name: "会議の完全削除を確認" });
   const understand = () => dialog().getByRole("checkbox", { name: "対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。", exact: true }).check();
-  const boot = async () => { await page.reload(); await page.getByRole("button", { name: "既存会議を削除", exact: true }).waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "既存会議を削除" && !b.disabled)); };
+  const boot = async () => { await page.reload(); await detailUI.openMeetingRow(); await page.getByRole("button", { name: "既存会議を削除", exact: true }).waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "既存会議を削除" && !b.disabled)); };
   const review = async () => { await page.getByRole("button", { name: "既存会議を削除", exact: true }).click(); await dialog().waitFor(); await dialog().getByText("1〜3 / 3 件", { exact: true }).waitFor(); };
   const deleted = () => notifications().getByRole("status").filter({ hasText: "会議の管理データを削除しました" }).waitFor();
   const publish = () => dialog().getByRole("button", { name: /会議を削除する|照合して残りの削除を続行/u }).click();
