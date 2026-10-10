@@ -96,8 +96,8 @@ export class ToastController {
     this.stop(entry); this.acknowledged.set(key, signature(entry.toast)); this.entries.delete(key);
     this.publish(); entry.toast.onClose?.();
   }
-  pause(key: string, reason: string, paused: boolean) {
-    const entry = this.entries.get(key); if (!entry || entry.pauses.has(reason) === paused) return;
+  pause(key: string, reason: string, paused: boolean, id?: number) {
+    const entry = this.entries.get(key); if (!entry || id !== undefined && entry.toast.id !== id || entry.pauses.has(reason) === paused) return;
     if (paused) entry.pauses.add(reason); else entry.pauses.delete(reason);
     this.publish();
   }

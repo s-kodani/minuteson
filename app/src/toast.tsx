@@ -36,8 +36,8 @@ function ToastCard({ toast, restoreFocus }: { toast: Toast; restoreFocus: () => 
   const element = useRef<HTMLElement>(null);
   useEffect(()=>{
     let disposed=false,frame=0,timer=0;
-    const check=()=>{if(disposed)return;frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{if(disposed)return;if(noticeElementVisible(element.current))toasts.markRendered(toast.key,toast.id);timer=window.setTimeout(check,250);});});};
-    check();return()=>{disposed=true;cancelAnimationFrame(frame);clearTimeout(timer);};
+    const check=()=>{if(disposed)return;frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{if(disposed)return;const visible=noticeElementVisible(element.current);toasts.pause(toast.key,"clipped",!visible,toast.id);if(visible)toasts.markRendered(toast.key,toast.id);timer=window.setTimeout(check,250);});});};
+    check();return()=>{disposed=true;cancelAnimationFrame(frame);clearTimeout(timer);toasts.pause(toast.key,"clipped",false,toast.id);};
   },[toast.key,toast.id]);
   useLayoutEffect(() => {
     const card = element.current;
@@ -71,7 +71,7 @@ export function noticeElementVisible(element:HTMLElement|null){
   return true;
 }
 
-export function ToastHost() {
+export function ToastHost({ docked = false }: { docked?: boolean }) {
   const notices = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
   const host = useRef<HTMLElement>(null), previous = useRef<HTMLElement | null>(null), restore = useRef(() => {});
   restore.current = () => {
@@ -88,5 +88,5 @@ export function ToastHost() {
     visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus);
     return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
   }, []);
-  return <aside ref={host} className="toast-host" aria-label="通知">{notices.map(toast => <ToastCard key={toast.key} toast={toast} restoreFocus={stableRestore} />)}{toasts.pendingCount > 0 && <p className="toast-queued">ほか {toasts.pendingCount} 件の通知があります</p>}</aside>;
+  return <aside ref={host} className="toast-host" data-docked={docked} aria-label="通知">{notices.map(toast => <ToastCard key={toast.key} toast={toast} restoreFocus={stableRestore} />)}{toasts.pendingCount > 0 && <p className="toast-queued">ほか {toasts.pendingCount} 件の通知があります</p>}</aside>;
 }

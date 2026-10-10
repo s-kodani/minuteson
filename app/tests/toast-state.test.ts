@@ -47,6 +47,23 @@ test("hover and keyboard focus independently pause and preserve remaining time",
   advance(20000); c.pause("one", "hover", false); advance(10000); assert.equal(c.getSnapshot().length, 1);
   c.pause("one", "focus", false); advance(2999); assert.equal(c.getSnapshot().length, 1); advance(1); assert.equal(c.getSnapshot().length, 0);
 });
+test("clipped cards preserve their remaining duration until fully visible", () => {
+  const { c, advance } = setup(); c.show(notice()); const id = c.getSnapshot()[0].id;
+  advance(1000); c.pause("one", "clipped", true, id); advance(20000);
+  assert.equal(c.getSnapshot()[0].id, id);
+  c.pause("one", "focus", true); c.pause("one", "clipped", false, id); advance(10000);
+  assert.equal(c.getSnapshot().length, 1);
+  c.pause("one", "focus", false); advance(2999); assert.equal(c.getSnapshot().length, 1);
+  advance(1); assert.equal(c.getSnapshot().length, 0);
+});
+test("a stale visibility check or cleanup cannot pause or resume a replacement", () => {
+  const { c, advance } = setup(); c.show(notice()); const old = c.getSnapshot()[0].id;
+  c.show(notice("one", { message:"新しい結果" })); const current = c.getSnapshot()[0].id;
+  c.pause("one", "clipped", true, current); c.pause("one", "clipped", false, old); advance(10000);
+  assert.equal(c.getSnapshot()[0].id, current);
+  c.pause("one", "clipped", false, current); c.pause("one", "clipped", true, old);
+  advance(3999); assert.equal(c.getSnapshot().length, 1); advance(1); assert.equal(c.getSnapshot().length, 0);
+});
 test("hidden document and confirmation modal pause all notifications including new ones", () => {
   const { c, advance } = setup(); c.pauseAll("hidden", true); c.show(notice()); advance(10000);
   c.pauseAll("modal", true); c.pauseAll("hidden", false); advance(10000); assert.equal(c.getSnapshot().length, 1);
