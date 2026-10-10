@@ -14,6 +14,20 @@ fn open(config: &Path, create: bool) -> Result<Option<Arc<Registry>>, String> {
         return Err("読取用一時領域の起動設定の親が変更されています".into());
     }
     let path = config.join(NAME);
+    open_in_root(config, &path, create).map_err(|error| {
+        format!(
+            "読取用一時コピーの確認を続けられません。\n対象（起動設定内）: {}\n\
+             元の会議DB・WAL・音声を削除・初期化したり、空の会議保存先へ変更したりしないでください。\n\
+             この対象や台帳も、一時という名前だけで削除・移動・上書きしないでください。\n\
+             所有不明・リンク・差し替えがある場合、残った内容を確認担当者へ伝え、所有と必要性を確認するまで保持してください。共有前に個人情報を確認してください。\n\
+             原因の確認後に明示的に再起動してください。再起動は検査の再実行であり、修復成功の保証ではありません。\n\
+             元の診断: {error}",
+            path.display()
+        )
+    })
+}
+
+fn open_in_root(config: &Path, path: &Path, create: bool) -> Result<Option<Arc<Registry>>, String> {
     let new = match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !create {

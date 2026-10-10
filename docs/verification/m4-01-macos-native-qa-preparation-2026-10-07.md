@@ -2,7 +2,7 @@
 
 MON QAは、通常利用のMONとは別のアプリ識別子とウィンドウ名で実機検証するためのビルド設定である。メイン・録音ミニパネル・録音確認・録音説明ウィンドウの操作経路と権限制限は本番と同じにする。起動や録音は設定追加だけでは行わず、操作権限と検証範囲の許可後に進める。M4-01と計画全体は進行中である。
 
-2026-10-10にユーザーからQAの起動・画面操作許可を得て、録音なしの合成WAV取り込み・保存・再生、日本語会議名と会議別用語、バックアップ・追加復元と冷起動後の保持を実画面で確認した。保存先変更後のQA起動設定は `/private/tmp/mon-native-ui-smoke.SOSoB9/MON-meetings-f352507d-7b63-4335-b953-6b063348c5fe` を選択している。旧QA領域と検証素材は保持する。最新成果物は `/private/tmp/mon-read-cache-qa-artifact.Cg9ssd/MON QA.app` で、[所有付きのWAL読取コピーと中断回収](owned-read-cache-recovery-2026-10-10.md)、[マイクの再取得中の原因保持修正](microphone-retry-diagnosis-2026-10-10.md)と[版固定で補完した通知文と未承認の一覧・MPLソース案内](macos-notice-supplements-2026-10-10.md)を含む。全コピー一致・アドホック署名・全arm64・QA識別子・同梱help・通知文照合は確認済み。Macのロック解除待ちにより修正後のGUI再確認は未完了。録音・TCC許可・実モデル・長時間・配布署名／公証は未検証。詳細は[録音なしMac実機検証](m4-01-native-nonrecording-ui-2026-10-10.md)を参照。以下の未起動記述は、その時点の履歴として扱う。
+2026-10-10にユーザーからQAの起動・画面操作許可を得て、録音なしの合成WAV取り込み・保存・再生、日本語会議名と会議別用語、バックアップ・追加復元と冷起動後の保持を実画面で確認した。保存先変更後のQA起動設定は `/private/tmp/mon-native-ui-smoke.SOSoB9/MON-meetings-f352507d-7b63-4335-b953-6b063348c5fe` を選択している。旧QA領域と検証素材は保持する。最新成果物は `/private/tmp/mon-read-cache-guidance-qa-artifact.tYCkOU/MON QA.app` で、[読取用一時領域の起動拒否案内](read-cache-startup-guidance-2026-10-10.md)、[所有付きのWAL読取コピーと中断回収](owned-read-cache-recovery-2026-10-10.md)、[マイクの再取得中の原因保持修正](microphone-retry-diagnosis-2026-10-10.md)と[版固定で補完した通知文と未承認の一覧・MPLソース案内](macos-notice-supplements-2026-10-10.md)を含む。全コピー一致・アドホック署名・全arm64・QA識別子・同梱help・通知文照合は確認済み。Macのロック解除待ちにより修正後のGUI再確認は未完了。録音・TCC許可・実モデル・長時間・配布署名／公証は未検証。詳細は[録音なしMac実機検証](m4-01-native-nonrecording-ui-2026-10-10.md)を参照。以下の未起動記述は、その時点の履歴として扱う。
 
 ## 本番との分離
 

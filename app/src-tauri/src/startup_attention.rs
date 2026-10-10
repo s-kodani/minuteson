@@ -298,6 +298,157 @@ mod tests {
     }
     #[cfg(target_os = "macos")]
     #[test]
+    fn read_cache_refusal_guides_the_exact_private_target_without_repair_or_fallback() {
+        use std::os::unix::fs::DirBuilderExt;
+        for kind in [
+            "initialization_gap",
+            "invalid_ledger",
+            "linked_root",
+            "attention",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let base = temp.path().canonicalize().unwrap();
+            let config = base.join("config");
+            let fallback = base.join("legacy");
+            let (storage, bootstrap) = admit_storage(&config, &fallback).unwrap();
+            let selected = storage.root().to_owned();
+            let meeting = storage
+                .create_meeting("SYNTHETIC RETAINED MEETING")
+                .unwrap();
+            let audio = selected.join("retained-audio.flac");
+            std::fs::write(&audio, b"SYNTHETIC KEEP AUDIO").unwrap();
+            drop(storage);
+            drop(bootstrap);
+            let controls = || {
+                [
+                    "meetings.sqlite3",
+                    "meetings.sqlite3-wal",
+                    "meetings.sqlite3-shm",
+                    ".mon-scratch.sqlite3",
+                ]
+                .map(|name| match std::fs::read(selected.join(name)) {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => panic!("source control read failed: {e}"),
+                })
+            };
+            let original = controls();
+            let record = std::fs::read(config.join("bootstrap.json")).unwrap();
+            let cache = config.join(".mon-read-cache");
+            let foreign = base.join("foreign");
+            std::fs::create_dir(&foreign).unwrap();
+            let foreign_payload = foreign.join("keep");
+            std::fs::write(&foreign_payload, b"SYNTHETIC FOREIGN DO NOT ERASE").unwrap();
+            let mut retained = None;
+            let mut bad_ledger = None;
+            match kind {
+                "initialization_gap" => {
+                    std::fs::DirBuilder::new()
+                        .mode(0o700)
+                        .create(&cache)
+                        .unwrap();
+                    let file = cache.join("unknown");
+                    std::fs::write(&file, b"SYNTHETIC UNOWNED DO NOT ERASE").unwrap();
+                    retained = Some(file);
+                }
+                "invalid_ledger" => {
+                    drop(crate::storage::read_cache::Snapshot::create(&config).unwrap());
+                    let ledger = cache.join(".mon-scratch.sqlite3");
+                    let connection = rusqlite::Connection::open(&ledger).unwrap();
+                    connection
+                        .execute_batch("CREATE TABLE unknown(value TEXT);")
+                        .unwrap();
+                    drop(connection);
+                    bad_ledger = Some((ledger.clone(), std::fs::read(ledger).unwrap()));
+                }
+                "linked_root" => std::os::unix::fs::symlink(&foreign, &cache).unwrap(),
+                "attention" => {
+                    let snapshot = crate::storage::read_cache::Snapshot::create(&config).unwrap();
+                    let file = snapshot.path().join("unknown");
+                    std::fs::write(&file, b"SYNTHETIC UNOWNED DO NOT ERASE").unwrap();
+                    retained = Some(file);
+                    drop(snapshot);
+                }
+                _ => unreachable!(),
+            }
+            let failure = match admit_storage(&config, &fallback) {
+                Err(failure) => failure,
+                Ok(_) => panic!("read-cache fault admitted: {kind}"),
+            };
+            assert_eq!(failure.stage, Stage::StorageAdmission);
+            assert_eq!(failure.meeting_root.as_deref(), selected.to_str());
+            assert_eq!(failure.config_root.as_deref(), config.to_str());
+            assert!(
+                failure
+                    .message
+                    .contains(&format!("対象（起動設定内）: {}", cache.display())),
+                "{kind}: {}",
+                failure.message
+            );
+            assert!(failure
+                .message
+                .contains("一時という名前だけで削除・移動・上書きしない"));
+            assert!(failure.message.contains("所有と必要性を確認するまで保持"));
+            assert!(failure.message.contains("元の診断:"));
+            assert!(!failure.message_truncated);
+            let startup = Startup::default();
+            startup.block(failure).unwrap();
+            let report = startup.snapshot().unwrap();
+            for _ in 0..3 {
+                assert_eq!(startup.snapshot().unwrap(), report);
+                assert!(startup
+                    .admit_command("main", "start_data_operation")
+                    .is_err());
+                assert!(startup.admit_command("main", "create_meeting").is_err());
+                assert!(startup.admit_command("main", "get_startup_report").is_ok());
+                assert!(startup
+                    .admit_command("main", "quit_blocked_startup")
+                    .is_ok());
+            }
+            assert_eq!(controls(), original, "source controls changed: {kind}");
+            assert_eq!(
+                std::fs::read(config.join("bootstrap.json")).unwrap(),
+                record
+            );
+            assert_eq!(std::fs::read(&audio).unwrap(), b"SYNTHETIC KEEP AUDIO");
+            assert_eq!(
+                std::fs::read(foreign_payload).unwrap(),
+                b"SYNTHETIC FOREIGN DO NOT ERASE"
+            );
+            if let Some(file) = retained {
+                assert_eq!(
+                    std::fs::read(file).unwrap(),
+                    b"SYNTHETIC UNOWNED DO NOT ERASE"
+                );
+            }
+            if let Some((ledger, before)) = bad_ledger {
+                assert_eq!(std::fs::read(ledger).unwrap(), before);
+            }
+            if kind == "initialization_gap" {
+                assert!(!cache.join(".mon-scratch.sqlite3").exists());
+            }
+            assert!(std::fs::symlink_metadata(&cache).is_ok());
+            // Verify the saved meeting through a read-only connection, not by
+            // bypassing the failed native admission with a writable Storage.
+            let db = rusqlite::Connection::open_with_flags(
+                selected.join("meetings.sqlite3"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                db.query_row(
+                    "SELECT title FROM meetings WHERE id=?1",
+                    [&meeting.id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "SYNTHETIC RETAINED MEETING"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn real_storage_refusal_retains_existing_meeting_audio_and_bad_ledger() {
         let temp = tempfile::tempdir().unwrap();
         let config = temp.path().join("config");
