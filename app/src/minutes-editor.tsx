@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useActionConfirmation } from "./confirmation-service";
 import { IssueNotice } from "./toast";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
 import { MinutesDocument } from "./minutes-document";
@@ -13,8 +14,8 @@ import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minute
 import { timeLabel } from "./transcript";
 
 export type EditorGuard = (nextId: string | null) => boolean;
-export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard, visible = true }: {
-  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean;
+export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard, visible = true, actionsHost = null }: {
+  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean; actionsHost?: HTMLElement | null;
 }) {
   const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<MinutesContent, MinutesDraft>(
@@ -36,6 +37,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const compositions = useRef(new Set<string>());
   const mounted = useRef(true);
   const editorRoot = useRef<HTMLElement>(null);
+  const editToggle = useRef<HTMLButtonElement>(null);
   const focusAddress = useRef<InlineAddress | null>(null);
   const focusAfterConfirmation = useRef(false);
   const doc = saved.payload ?? view.content;
@@ -159,15 +161,29 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const conversionAddress = selection ? { block: selection.address.block + (selectedBlock?.type === "list" && (selection.address.item ?? 0) > 0 ? 1 : 0) } : { block: 0 };
   const toolbarButton = (label: string, action: () => void, unavailable = false) => <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={action}>{label}</button>;
   const manualLabel = (id: string | null | undefined) => id && doc.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
-  return <section ref={editorRoot} className="minutes-editor" aria-label="議事録文書と編集">
-    <div className="transcript-actions" hidden={full}>
-      {!editing && <button type="button" className="small-secondary" disabled={locked || busy} onClick={() => void begin()}>議事録を編集</button>}
-      {editing && <button type="button" className="small-secondary" disabled={locked || busy} onClick={() => void run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください"); await queue.flush(); setEditing(false); setSelection(null); })}>編集を終了</button>}
+  const finishEditing = () => run(async () => {
+    if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください");
+    const focused = document.activeElement;
+    await queue.flush();
+    const restore = focused === document.activeElement && (editorRoot.current?.contains(focused) || editToggle.current === focused);
+    setEditing(false); setSelection(null);
+    if (restore) requestAnimationFrame(() => {
+      const target = editToggle.current;
+      if (target?.getClientRects().length && !target.disabled && !document.querySelector("dialog[open]")) target.focus({ preventScroll: true });
+    });
+  });
+  const primaryActions = <div className="transcript-actions minutes-edit-actions" hidden={full}>
+      {!editing && <button ref={editToggle} type="button" className="small-secondary" disabled={locked || busy} onClick={() => void begin()}>議事録を編集</button>}
+      {editing && <button ref={editToggle} type="button" className="small-secondary" disabled={locked || busy} onClick={() => void finishEditing()}>編集を終了</button>}
       {saved.draft && <span role="status">{saved.error ? "議事録の保存要確認" : saved.saving ? "議事録を保存中" : saved.dirty ? "議事録は未保存" : "議事録は保存済み"}</span>}
       {saved.error && <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); })}>議事録保存を再試行</button>}
+      <details className="minutes-edit-options"><summary>その他の編集操作</summary>
       {saved.draft && <button type="button" className="small-secondary" disabled={locked || busy || saved.saving || compositions.current.size > 0 || (!saved.dirty && saved.draft.lockVersion === 0)} onClick={() => void undo()}>直前の議事録編集を取り消す</button>}
       <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void reload()}>議事録編集を再読込</button>
-    </div>
+      </details>
+    </div>;
+  return <section ref={editorRoot} className="minutes-editor" aria-label="議事録文書と編集">
+    {actionsHost ? createPortal(primaryActions, actionsHost) : primaryActions}
     {editing && <>
       <details className="workspace-tools minutes-format-tools" hidden={full}><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>

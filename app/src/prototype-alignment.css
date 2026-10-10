@@ -64,11 +64,60 @@ button:disabled { opacity:.5; }
 .content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
 .settings-management-toggle { margin:0 0 18px; font-size:13px; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
+.meeting-detail-status { padding:18px 28px 12px; background:var(--surface); max-height:20dvh; }
+.meeting-detail-status h1 { margin:0; font-size:24px; font-weight:650; line-height:1.4; overflow-wrap:anywhere; }
+.meeting-detail-status .lead { margin:6px 0 0; font-size:13px; color:var(--muted); }
+.speaker-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.speaker-heading h3 { margin:0; }
+.speaker-heading button { padding:2px 9px; min-height:28px; }
+.speaker-panel-body .speaker-name-editor { padding:0; border:0; border-radius:0; }
+.speaker-panel-body .speaker-filters { display:grid; gap:4px; }
+.speaker-filters .speaker-filter { display:flex; width:100%; justify-content:space-between; }
+.speaker-name-tools { margin:4px 0 12px 30px; font-size:12px; color:var(--muted); }
+.speaker-name-tools summary { cursor:pointer; }
+.speaker-merge-tools,.speaker-diarization-tools { border-top:1px solid var(--border); padding-top:12px; margin-top:12px; font-size:12px; }
+.transcript-search { padding-bottom:10px; border-bottom:1px solid var(--border); }
+.transcript-search>label { flex:1; }
+.transcript-search input { width:100%; padding:9px 12px; background:var(--surface); border:1px solid var(--input-border); border-radius:8px; font:inherit; }
+.transcript-body-edit { display:block; width:100%; padding:0; margin:0; border:0; border-radius:4px; background:transparent; color:var(--text); font:inherit; line-height:inherit; text-align:left; white-space:pre-wrap; user-select:text; }
+.transcript-body-edit:disabled { opacity:1; cursor:text; background:transparent; color:var(--text); }
+.transcript-body-edit:hover:not(:disabled) { background:var(--background); }
+.utterance-stamp { padding:1px 5px; min-height:26px; border:0; background:transparent; color:var(--primary-strong); font-size:12px; font-variant-numeric:tabular-nums; }
+.utterance-edit-tools { margin-top:8px; font-size:12px; color:var(--muted); }
+.utterance-edit-tools>summary { cursor:pointer; }
+.utterance-edit-tools>label { display:flex; align-items:center; gap:6px; margin-block:10px; }
+.minutes-editor-actions-host,.minutes-edit-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.minutes-edit-actions[hidden] { display:none; }
+.minutes-edit-options { font-size:12px; color:var(--muted); }
+.minutes-edit-options>summary { cursor:pointer; }
+.minutes-edit-options[open] { max-width:280px; }
+.minutes-empty-state { padding:32px 16px; text-align:center; color:var(--muted); }
+.meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]),.minutes-workspace-tools:not([open]) { padding:0; border:0; background:transparent; }
+.meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary,.minutes-workspace-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
+.transcript-main>.transcript-actions:first-child h2 { margin:0 auto 0 0; font-size:17px; }
+.speaker-panel-body .speaker-label { border:0; border-radius:6px; padding:4px 7px; }
+.utterance-meta .speaker-label { border:0; border-radius:6px; }
+.minutes-editor .minutes-document>div:not([hidden]) { padding:28px 32px; background:var(--surface); border:1px solid var(--border); border-radius:12px; }
+.minutes-editor .minutes-document>div:not([hidden])>h3 { margin:0 0 18px; color:var(--muted); font-size:12px; font-weight:500; }
+.minutes-editor .minutes-document-layout article { line-height:1.9; }
+.minutes-editor .minutes-document-layout article h1 { font-size:24px; margin:0 0 22px; }
+.minutes-editor .minutes-document-layout article h2 { font-size:18px; margin:26px 0 10px; }
+.minutes-editor .minutes-document-layout article h3 { font-size:16px; }
+.meeting-detail-content .minutes-document-status .data-updated { margin:0; }
+.meeting-detail-content .minutes-document-status .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
+@media(max-width:1119px) {
+  .minutes-split .workspace-drawer-trigger { min-height:28px; padding:4px 8px; }
+}
+@media(max-width:760px) {
+  .meeting-detail-status { padding:16px; }
+  .meeting-detail-status h1 { font-size:20px; }
+  .minutes-editor .minutes-document>div:not([hidden]) { padding:22px 18px; }
+}
 .meeting-detail-content>.meetings-card:not([hidden]),.meeting-detail-content>.meeting-analysis-tools:not([hidden]) { flex:none; max-height:20dvh; overflow:auto; }
 .meeting-detail-tabs { gap:26px; padding-inline:28px; }
 .meeting-detail-tabs [role=tab] { padding:7px 3px; border-bottom-width:2px; font-weight:500; }
 .meeting-detail-tabs [aria-selected=true] { font-weight:650; }
-.meeting-detail-content .transcript-card,.meeting-detail-content .minutes-card { border:0; background:transparent; padding:16px 8px; border-radius:0; }
+.meeting-detail-content .transcript-card,.meeting-detail-content .minutes-card { border:0; background:transparent; padding:8px; border-radius:0; }
 .transcript-split { gap:24px; }
 .speaker-filter { border:0; background:transparent; border-radius:8px; padding:10px 8px; }
 .speaker-filter[aria-pressed=true] { background:var(--selection); box-shadow:none; color:var(--primary-strong); }

@@ -560,24 +560,23 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
       if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving && !textDirty && !nameDirty) || undoPending.current) return;
       event.preventDefault(); void undo(true);
     }}>
-      <div className="card-head">
-        <h2>文字起こし</h2>
-        <button type="button" className="small-secondary" onClick={confirmReload} disabled={loading || saving || busy || locked || confirm.pending}>再読込</button>
-      </div>
       {loading && <p>解析結果を読み込んでいます。</p>}
       {!loading && !analysis && !error && <p>確定済みの解析結果はまだありません。</p>}
       {analysis && <div className="transcript-split">
         <WorkspacePanel content={speakerMount} label="話者一覧" active={visible} />
         <div className="transcript-main">
         <div className="transcript-actions">
+          <h2>発言一覧</h2>
           {!draft && <button type="button" onClick={() => void begin()} disabled={busy || loading || locked}>編集を開始</button>}
           {draft && <span role="status">{saveError ? "保存要確認" : saving ? "保存中" : dirty || textDirty || nameDirty ? "未保存" : "保存済み"}</span>}
           {(saveError || bodyManual && dirty) && <button type="button" className="small-secondary" onClick={() => void runRecoveryAction(retryTextBuffers)} disabled={saving || busy || locked || discardPending || !!activeConfirmation}>保存を再試行</button>}
-          {matchingBase && <button type="button" className="small-secondary" disabled={saving || busy || loading || locked || discardPending || !!activeConfirmation || recoverySnapshot.saving || recoverySnapshot.bodyBusy} onClick={() => void inspectConflict().catch(() => {})}>最新保存版と入力を比較</button>}
-          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || nameDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
-          <button type="button" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>話者を追加</button>
+          {editable && <span className="hint">本文をクリックして編集</span>}
         </div>
         <details className="workspace-tools transcript-workspace-tools"><summary>回復入力・話者・一括編集操作</summary><div className="workspace-tools-body">
+          <button type="button" className="small-secondary" onClick={confirmReload} disabled={loading || saving || busy || locked || confirm.pending}>再読込</button>
+          <label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
+          {matchingBase && <button type="button" className="small-secondary" disabled={saving || busy || loading || locked || discardPending || !!activeConfirmation || recoverySnapshot.saving || recoverySnapshot.bodyBusy} onClick={() => void inspectConflict().catch(() => {})}>最新保存版と入力を比較</button>}
+          {matchingBase && <button type="button" className="small-secondary" onClick={() => void undo()} disabled={!editable || saving || dirty || textDirty || nameDirty || recoverySnapshot.pendingRequest !== null || recoverySnapshot.bodyPending || draft!.lockVersion === 0}>直前の編集を取り消す</button>}
         <TranscriptRecoveryPanel meetingId={meetingId} review={recoverySnapshot.review} currentDraftId={draft?.id}
           blocked={locked || loading || busy || saving || !!conflictPreview}
           canChangeCurrent={!dirty && !saving && !Object.keys(textSessions).length && !Object.keys(nameSessions).length && !recoverySnapshot.pendingRequest && !recoverySnapshot.bodyPending && !recoverySnapshot.saving}
@@ -613,12 +612,12 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         {draft && !matchingBase && <p className="action-error">下書きは別の解析版に基づいています。元版の編集を保持したまま、再基準化する機能は未接続です。</p>}
         {!splitting && !playbackHost && !audio.sharedSurface && audio.controls}
         {createPortal(<>
-        <h3>話者一覧</h3>
-        {draft && <p role="status" className="hint">{saveError ? "話者名の保存結果を確認してください。入力は保持しています。" : saving ? "保存を確認中" : nameDirty ? "名前は未確定" : "名前は保存済み"}</p>}
+        <div className="speaker-heading"><h3>話者</h3><button type="button" className="small-secondary" aria-label="話者を追加" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({});}}>＋</button></div>
+        {draft && (saveError || saving || nameDirty) && <p role="status" className="hint">{saveError ? "話者名の保存結果を確認してください。入力は保持しています。" : saving ? "保存を確認中" : "名前は未確定"}</p>}
         {saveError && <button type="button" className="small-secondary" disabled={saving || busy || locked || discardPending || !!activeConfirmation} onClick={() => void runRecoveryAction(retryTextBuffers)}>話者名の保存を再試行</button>}
         <div className="speaker-filters" aria-label="話者一覧から絞り込み">
-          <button type="button" className="small-secondary" aria-pressed={speakerFilter === ""} disabled={loading} onClick={() => setSpeakerFilter("")}>すべての発言</button>
-          <button type="button" className="small-secondary" aria-pressed={speakerFilter === "unknown"} disabled={loading} onClick={() => setSpeakerFilter("unknown")}>話者不明の発言</button>
+          <button type="button" className="speaker-filter" aria-pressed={speakerFilter === ""} disabled={loading} onClick={() => setSpeakerFilter("")}>すべての発言 <span>{view?.utterances.length ?? 0}</span></button>
+          {(speakerFilter === "unknown" || view?.utterances.some(u => u.speakerIds.length === 0)) && <button type="button" className="speaker-filter" aria-pressed={speakerFilter === "unknown"} disabled={loading} onClick={() => setSpeakerFilter("unknown")}>話者不明の発言</button>}
         </div>
         <div className="speaker-grid">
           {speakers.map((speaker) => {
@@ -627,18 +626,19 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
               <button type="button" className="speaker-filter" aria-label={`${speaker.displayName || speaker.label}の発言で絞り込み`} aria-pressed={speakerFilter === speaker.id} disabled={loading} onClick={() => setSpeakerFilter(speaker.id)}>
                 <strong><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} name={speaker.displayName || speaker.label}/></strong><span>{speakerCounts.get(speaker.id) ?? 0}発言</span>
               </button>
-              {!speaker.displayName && <small className="speaker-unset">名前未設定</small>}
+              <details className="speaker-name-tools"><summary>名前を変更</summary>
               <label>{speaker.label}<input ref={node => { if(node) nameInputs.current.set(speaker.id,node); else nameInputs.current.delete(speaker.id); }} value={session?.value ?? speaker.displayName ?? ""} onChange={event => changeName(speaker,event.target.value)} disabled={!editable} maxLength={200} placeholder="表示名"
                 onKeyDown={event => {
                   if(!session || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat || event.altKey || event.shiftKey || overlayOpen(event.currentTarget)) return;
                   if(event.key === "Enter" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); void finishName(speaker.id,event.key === "Enter" ? "commit" : "cancel"); }
                 }} /></label>
               {session && <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"commit")}>確定</button><button type="button" className="small-secondary" disabled={!editable || !!pending} onClick={() => void finishName(speaker.id,"cancel")}>キャンセル</button><span>{pending ? "保存を確認中" : "Enterで確定 · Escでキャンセル"}</span></div>}
+              </details>
             </div>;
           })}
         </div>
         {!!Object.keys(nameSessions).length && <p className="hint">未確定の話者名は本文と一緒に回復記録へ保存します。編集再開だけでは確定せず、確定・通常の画面移動で反映します。最後の入力は回復保存の確認前に終了すると失われる可能性があります。</p>}
-        <div className="transcript-actions" aria-label="話者統合">
+        <details className="speaker-merge-tools"><summary>話者を統合</summary><div className="transcript-actions" aria-label="話者統合">
           <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
           <label>統合先 <select value={mergeTarget} disabled={!editable} onChange={e=>setMergeTarget(e.target.value)}><option value="">選択</option>{speakers.filter(s=>s.id!==mergeSource).map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
           <button type="button" disabled={!editable||!mergeSource||!mergeTarget||mergeSource===mergeTarget} onClick={()=>{
@@ -648,7 +648,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
             const expected = JSON.stringify(saveQueue.snapshot().payload), source = mergeSource, target = mergeTarget;
             void confirm({ title: "話者の統合を確認", target: `${speakerLabels.get(source)} → ${speakerLabels.get(target)} · ${count}発言`, confirmLabel: "話者を統合する", message: `${message} 直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { if (await structuralEdit(p=>mergeSpeaker(analysis,p,source,target),"話者を統合しました。直前の編集を取り消すことができます。",true)) { setMergeSource("");setMergeTarget("");setBulkSpeaker(""); } } });
           }}>話者を統合</button>
-        </div>
+        </div></details>
         {!!payload?.speaker_merges?.length&&<p className="hint">統合済みラベルは割り当て候補から除外しています。推定区間には統合前のラベルを残します。</p>}
         <details className="speaker-diarization-tools"><summary>人数指定・話者分離</summary><div ref={bindDiarizationHost} /></details>
         </>,speakerMount)}
@@ -658,7 +658,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
           void confirm({ title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
         }}>選択した発言に適用</button><button type="button" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div>
         </div></details>
-        <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label>話者で絞り込み <select value={speakerFilter} disabled={loading} onChange={e=>setSpeakerFilter(e.target.value)}><option value="">すべて</option><option value="unknown">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><label>発言を検索 <input type="search" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
+        <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
         {following.enabled&&<div className="playback-follow-status" role="status">{following.suspended?<>手動操作のため再生追従を一時停止しています。<button type="button" className="small-secondary" onClick={following.resume}>再生位置への追従を再開</button></>:"再生位置に追従します。編集中・確認画面・文字選択中はスクロールしません。"}</div>}
         <div ref={followPort} {...following.handlers} className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>
           {following.meetingPlaying&&!tracks.kinds&&<p className="hint">{tracks.error?<>再生トラックと発言の対応を確認できないため、強調・追従を行いません。<button type="button" className="small-secondary" disabled={loading||locked} onClick={tracks.retry}>発言のトラック対応を再読込</button></>:"再生トラックと発言の対応を確認中です。"}</p>}
@@ -676,10 +676,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
               event.preventDefault();
               if (audio.selected === utterance.id && audio.available) audio.toggle(); else void play(utterance);
             }}>
-              <div className="utterance-meta"><time title={`${utterance.startUs}–${utterance.endUs} µs`}>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}–{utterance.recognitionIsSource?preciseTime(utterance.endUs):timeLabel(utterance.endUs)}</time><span>{speakerIds.length>1 ? "複数話者の割り当て" : speakerIds.length === 0 ? "話者不明" : "話者あり"}</span>{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}<button type="button" className="small-secondary" onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}>{audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"}</button></div>
+              <div className="utterance-meta"><SpeakerLabels meetingId={meetingId} speakerIds={speakerIds} speakers={view!.speakers}/><button type="button" className="utterance-stamp" aria-label={audio.selected === utterance.id ? "この発言を再生し直す" : "音声を再生"} title={`${timeLabel(utterance.startUs)}–${timeLabel(utterance.endUs)}を再生`} onClick={() => void play(utterance)} disabled={locked || loading || busy || audio.preparing}><time>{utterance.recognitionIsSource?preciseTime(utterance.startUs):timeLabel(utterance.startUs)}</time></button>{speakerIds.length>1 && <span>複数話者</span>}{utterance.sourceUtteranceId?<span>手動分割 · 単語時刻未推定</span>:<SpeakerReviewBadge review={review.reviews.get(utterance.id)}/>}</div>
               {playing && <span className="utterance-playing-label">再生中</span>}
-              <SpeakerLabels meetingId={meetingId} speakerIds={speakerIds} speakers={view!.speakers}/>
-              <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
               {session ? <div className="utterance-text-edit">
               <textarea ref={node => { if (node) textInputs.current.set(utterance.id, node); else textInputs.current.delete(utterance.id); }} aria-label={`${timeLabel(utterance.startUs)}の発言`} aria-keyshortcuts="Control+Enter Meta+Enter Escape" value={session.value}
                 onKeyDown={event => {
@@ -689,13 +687,16 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
                 }}
                 onChange={event => { const value = event.target.value; updateTextSessions(current => ({ ...current, [utterance.id]: { ...current[utterance.id], value } })); }} disabled={!editable} rows={2} maxLength={20000} />
                 <div className="transcript-actions"><button type="button" disabled={!editable || !!pending} onClick={event => void finishTextEdit(utterance.id, "commit", event.currentTarget)}>確定</button><button type="button" className="small-secondary" disabled={!editable || pending === "cancel"} onClick={event => void finishTextEdit(utterance.id, "cancel", event.currentTarget)}>キャンセル</button><span>{pending === "cancel" ? "元の本文の保存を確認中" : pending ? "確定した本文を保存中" : "Ctrl／Cmd＋Enterで確定 · Escでキャンセル"}</span></div>
-              </div> : <><p className="utterance-text" aria-label={`${timeLabel(utterance.startUs)}の発言本文`}>{utterance.effectiveText}</p><button type="button" className="small-secondary" aria-label={`${timeLabel(utterance.startUs)}の発言を編集`} disabled={!editable} onClick={() => beginTextEdit(utterance)}>発言を編集</button></>}
+              </div> : <p className="utterance-text" aria-label={`${timeLabel(utterance.startUs)}の発言本文`}>{editable ? <button type="button" className="transcript-body-edit" aria-label={`${timeLabel(utterance.startUs)}の発言を編集`} aria-describedby={`utterance-body-${utterance.id}`} disabled={!editable} onClick={() => beginTextEdit(utterance)}><span id={`utterance-body-${utterance.id}`}>{utterance.effectiveText}</span></button> : utterance.effectiveText}</p>}
+              <details className="utterance-edit-tools"><summary>話者・分割・認識原文</summary>
+              <label><input type="checkbox" aria-label={`${timeLabel(utterance.startUs)}の発言を選択`} disabled={!editable} checked={selection.includes(utterance.id)} onChange={e=>setSelection(ids=>e.target.checked?[...ids,utterance.id]:ids.filter(id=>id!==utterance.id))}/>一括変更の対象に選択</label>
               {(utterance.recognitionIsSource||utterance.effectiveText !== utterance.recognizedText) && <small>{utterance.recognitionIsSource?"分割元の認識原文（全文・単語位置未推定）":"認識原文"}: {utterance.recognizedText}</small>}
               {speakers.length > 0 && <div className="utterance-speakers" aria-label="話者割り当て">{speakers.map((speaker) => <label key={speaker.id}><input type="checkbox" checked={speakerIds.includes(speaker.id)} disabled={!editable} onChange={(event) => changeUtterance(utterance, { speaker_ids: event.target.checked ? [...speakerIds, speaker.id] : speakerIds.filter((id) => id !== speaker.id) })} /><SpeakerLabel meetingId={meetingId} speakerId={speaker.id} name={speaker.displayName || speaker.label}/></label>)}</div>}
               <button type="button" className="small-secondary" disabled={!editable||!view||view.speakers.length>=100} onClick={()=>{setPendingAdd(false);setError("");setNewName("");setAdding({utteranceId:utterance.id});}}>新しい話者を作成してこの発言に割り当て</button>
               <button type="button" className="small-secondary" disabled={!editable||!!pending||textPieces(splitText).length<2||utterance.endUs-utterance.startUs<2} onClick={()=>{setPendingSplit(false);setError("");setSplitting({...utterance,effectiveText:splitText});setSplitSeconds(((utterance.endUs-utterance.startUs)/2_000_000).toFixed(6));setSplitOffset(Math.floor(textPieces(splitText).length/2));setFirstSpeaker("keep");setSecondSpeaker("keep");}}>発言を手動分割</button>
               {utterance.sourceUtteranceId&&<small>推定区間と区間再生は分割元全体を参照します。この部分だけを聞くには「音声を再生」を使用してください。</small>}
               <SpeakerReviewDetails analysis={analysis} utteranceId={source.id} startUs={source.startUs} labels={speakerLabels} unconfirmedIds={unconfirmedSpeakerIds} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,source.id,undefined,at)}/>
+              </details>
             </article>;
           })}
         </div>

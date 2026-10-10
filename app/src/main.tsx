@@ -171,10 +171,13 @@ function MainWindow() {
     const measure = () => {
       column.style.setProperty("--playback-dock-height",`${Math.ceil(playbackHost.getBoundingClientRect().height)}px`);
       const tabs = column.querySelector<HTMLElement>(".meeting-detail-tabs");
-      column.style.setProperty("--workspace-header-height",`${Math.ceil(header.getBoundingClientRect().height + (tabs?.getBoundingClientRect().height ?? 0))}px`);
+      const heading = column.querySelector<HTMLElement>(".meeting-detail-status");
+      column.style.setProperty("--workspace-header-height",`${Math.ceil(header.getBoundingClientRect().height + (heading?.getBoundingClientRect().height ?? 0) + (tabs?.getBoundingClientRect().height ?? 0))}px`);
     };
     const observer = new ResizeObserver(measure);
-    observer.observe(playbackHost); observer.observe(header); measure();
+    observer.observe(playbackHost); observer.observe(header);
+    for (const element of column.querySelectorAll<HTMLElement>(".meeting-detail-status,.meeting-detail-tabs")) observer.observe(element);
+    measure();
     return () => { observer.disconnect(); column.style.removeProperty("--playback-dock-height"); column.style.removeProperty("--workspace-header-height"); };
   },[playbackHost,selectedMeeting?.id]);
   const [renameTitle, setRenameTitle] = useState("");
@@ -630,6 +633,7 @@ function MainWindow() {
         <ThemeNotifications locked={writeLocked} />
         <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage : state.kind === "error" ? state.message : ""} />
         <header className="topbar"><span>{detail ? "会議詳細" : screen === "recording" ? "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : "設定"}</span><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={() => void stopRecording()}>録音を終了</button>}</div></header>
+        {detail && <div className="meeting-detail-status"><div><h1 title={selectedMeeting!.title}>{selectedMeeting!.title}</h1><p className="lead">作成 {new Date(selectedMeeting!.createdAt).toLocaleString("ja-JP")}</p></div>{navigationBusy && <span role="status">編集の保存を確認中</span>}<IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
         {detail && <div className="meeting-detail-tabs" role="tablist" aria-label="会議詳細">
           {(["transcript", "minutes"] as const).map(tab => <button key={tab} type="button" role="tab" id={`meeting-tab-${tab}`} aria-controls={`meeting-panel-${tab}`} aria-selected={detailTab === tab} tabIndex={detailTab === tab ? 0 : -1} disabled={navigationLocked} onClick={() => void switchDetailTab(tab)} onKeyDown={event => {
             if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
@@ -675,7 +679,6 @@ function MainWindow() {
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {detail && <div className="meeting-detail-status"><strong title={selectedMeeting!.title}>{selectedMeeting!.title}</strong>{navigationBusy && <span role="status">編集の保存を確認中</span>}<IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
           <details className={detail ? "meeting-workspace-tools workspace-tools" : "landing-tools workspace-tools"} open={meetingToolsOpen} onToggle={event => setMeetingToolsOpen(event.currentTarget.open)}>
           <summary>会議管理・録音・解析操作</summary>
           <div className="workspace-tools-body">

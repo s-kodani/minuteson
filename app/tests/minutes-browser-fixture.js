@@ -1,4 +1,4 @@
-async (page) => {
+export async function installMinutesFixture(page) {
   await page.addInitScript(() => {
     const copy = value => structuredClone(value);
     const text = value => ({ type: "text", text: value, bold: false, italic: false });

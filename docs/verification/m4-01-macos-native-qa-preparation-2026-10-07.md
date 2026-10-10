@@ -1,5 +1,7 @@
 # macOS実機検証用MON QAの準備
 
+2026-10-10時点の最新QAは `/private/tmp/mon-detail-mock-qa-artifact.VHDtgY/MON QA.app`、main SHA `f6acd38018ed5e4db44905825e364760c08726a884c3135007e3aae4afbf4b2e`、識別子 `jp.mon.desktop.qa`。文字起こし／議事録の本文・主操作を優先し、名前／割当／分割・設定／履歴・参照ID等を必要時に開く整理を含む。最終フロント644件と合成ブラウザの限定編集／保存／取消・根拠・狭幅レイアウト検査、コピー一致・strict deepアドホック署名・全arm64・capture help・通知一覧一致を確認。Macの再ロックで起動は解除待ち、最終版の実機合格・録音・実モデル・公証は未検証。[範囲・工程時間・残件](m4-01-native-nonrecording-ui-2026-10-10.md#文字起こしと議事録のモック基準への整理)を参照。以下の「最新」は当時の履歴である。
+
 2026-10-10時点の最新QAは `/private/tmp/mon-settings-compact-final-qa.WFa7PG/MON QA.app`、main SHA `1a21a28e5822e483cb595515b9c255e7cfc11912b6f11a6f814e125e693a0102`、識別子 `jp.mon.desktop.qa`。正常な空状態だけ設定の中断・削除5カードを折りたたみ、対象／失敗／未知状態を隠さない表示整理と終了時の未完了データ再読取を含む。フロント641件、合成ブラウザの限定異常系／modal操作、録音なしMacの通常表示を確認。コピー一致・strict deepアドホック署名・全arm64・通知一覧一致・capture help確認済み。実録音・実モデル・実機異常系・公証は未検証。[範囲・工程時間・残件](m4-01-native-nonrecording-ui-2026-10-10.md#設定の通常表示と中断対応の分離)を参照。以下の「最新」は当時の履歴である。
 
 2026-10-10時点の最新QAは `/private/tmp/mon-prototype-simple-qa-artifact.WuwVHb/MON QA.app`、main SHA `5468530636a8b82918153403195daf9c1918aff91fbc173e417fc9a8a56ab897`、識別子 `jp.mon.desktop.qa`。モック準拠の会議一覧・3入口・設定内だけのテーマ切替、CSS／Mac小窓背景の角丸、明示的な説明のWebView焦点復帰を含む。コピー一致・アドホック署名・全arm64・capture help、録音なしの冷起動／検索／2タブ／準備から戻る／小窓を確認。反復focusの変動、全画面、実録音／モデル、配布署名／公証は残す。[範囲と工程時間](m4-01-native-nonrecording-ui-2026-10-10.md#モック準拠と画面操作の簡素化)を参照。以下の「最新」は当時の履歴である。
