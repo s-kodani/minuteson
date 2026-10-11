@@ -1,12 +1,32 @@
 import AVFoundation
-import XCTest
+import CoreAudio
 import ScreenCaptureKit
+import XCTest
 
 @testable import MONMacOSCapture
 
 final class CaptureFailureGuideTests: XCTestCase {
+  func testAudioOnlyPermissionFailureIsExplicitAndUnknownErrorsRemainUnknown() {
+    guard
+      case .permission(let message) = CaptureFailureGuide.coreAudioFailure(
+        kAudioDevicePermissionsError, operation: "start tap IO")
+    else { return XCTFail("permission") }
+    XCTAssertTrue(message.contains("システムオーディオ録音のみ"))
+    XCTAssertTrue(message.contains("画面の収録許可は要求しません"))
+    XCTAssertTrue(message.contains("start tap IO"))
+    for status in [
+      kAudioHardwareIllegalOperationError, kAudioHardwareBadDeviceError, OSStatus(-3801),
+    ] {
+      guard
+        case .capture(let message) = CaptureFailureGuide.coreAudioFailure(status, operation: "tap")
+      else { return XCTFail("unknown status is not permission denial") }
+      XCTAssertTrue(message.contains("権限拒否とは断定できません"))
+      XCTAssertTrue(message.contains(String(status)))
+    }
+  }
   func testSystemPermissionRejectionHasScopedGuidanceAndOriginalDetail() {
-    let error = NSError(domain: SCStreamErrorDomain,
+    let error = NSError(
+      domain: SCStreamErrorDomain,
       code: SCStreamError.Code.userDeclined.rawValue,
       userInfo: [NSLocalizedDescriptionKey: "capture denied evidence"])
     let result = CaptureFailureGuide.systemCaptureFailure(error)
@@ -45,7 +65,8 @@ final class CaptureFailureGuideTests: XCTestCase {
   }
 
   func testInitializationGuidePreservesEngineFailureDetail() {
-    let result = CaptureFailureGuide.microphoneInitialization(ProbeError.capture("engine failed -123"))
+    let result = CaptureFailureGuide.microphoneInitialization(
+      ProbeError.capture("engine failed -123"))
     XCTAssertTrue(result.contains("音声エンジン"))
     XCTAssertTrue(result.contains("engine failed -123"))
     XCTAssertFalse(result.contains("許可されていません"))

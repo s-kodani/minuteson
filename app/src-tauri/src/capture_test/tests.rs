@@ -363,7 +363,7 @@ fn saved_fixture() -> (files::TestDirectory, Request, serde_json::Value) {
     let directory = files::TestDirectory::new().unwrap();
     let request = request();
     let manifest = serde_json::json!({
-        "schemaVersion":2,"captureMode":"system","backend":"screencapturekit",
+        "schemaVersion":2,"captureMode":"system","backend":"coreaudio",
         "targetPIDs":[],"microphoneDeviceUID":request.microphone_uid,
         "targetApplicationIdentity":null,"state":"saved","errors":[],
         "captureTest":{"ownerId":request.run_id,"durationSeconds":5,
@@ -536,7 +536,7 @@ fn test_private_verification_rejects_changed_owner_scope_clock_and_saved_conditi
             serde_json::json!("other microphone"),
         ),
         ("/schemaVersion", serde_json::json!(1)),
-        ("/backend", serde_json::json!("coreaudio")),
+        ("/backend", serde_json::json!("screencapturekit")),
         ("/targetPIDs", serde_json::json!([123])),
         (
             "/targetApplicationIdentity",

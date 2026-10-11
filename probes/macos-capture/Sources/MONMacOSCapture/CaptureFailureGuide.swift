@@ -1,10 +1,21 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import ScreenCaptureKit
 
 /// Presentation only: keep status codes and evidence unchanged. Do not infer
 /// recovered audio, acquisition closure, a loss bound or permission to delete.
 enum CaptureFailureGuide {
+  static func coreAudioFailure(_ status: OSStatus, operation: String) -> ProbeError {
+    let detail = "\(operation): Core Audio status \(status)"
+    if status == kAudioDevicePermissionsError {
+      return .permission(
+        "PC音声の取得がOSで許可されていません。システム設定 → プライバシーとセキュリティ → システムオーディオ録音のみで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。許可する場合はご自身で設定を変更し、アプリを再起動してください。画面の収録許可は要求しません。自動で許可変更・再試行はしません。詳細: \(detail)"
+      )
+    }
+    return .capture(
+      "PC音声の音声専用取得に失敗しました。機器・選択アプリ・PC音声の許可を確認してください。権限拒否とは断定できません。画面取得への切替は行いません。詳細: \(detail)")
+  }
   static func systemCaptureFailure(_ error: Error) -> ProbeError {
     let detail = error as NSError
     // Only Apple's explicit authorization rejection is a permission failure.
@@ -33,7 +44,8 @@ enum CaptureFailureGuide {
     @unknown default:
       reason = "マイク権限の状態を確認できませんでした。"
     }
-    return reason + " システム設定 → プライバシーとセキュリティ → マイクで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。設定変更後はアプリを再起動してマイク一覧を再確認してください。"
+    return reason
+      + " システム設定 → プライバシーとセキュリティ → マイクで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。設定変更後はアプリを再起動してマイク一覧を再確認してください。"
   }
 
   static func microphoneInitialization(_ error: Error) -> String {

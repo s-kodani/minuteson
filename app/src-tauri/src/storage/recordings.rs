@@ -99,10 +99,7 @@ impl RecordingConfig {
     fn validate(&self) -> Result<(), String> {
         if let Some(identity) = &self.target_application_identity {
             identity.validate()?;
-            if self.mode != "application"
-                || self.backend != "screencapturekit"
-                || self.target_pids != [identity.pid]
-            {
+            if self.mode != "application" || self.target_pids != [identity.pid] {
                 return Err("録音対象アプリの識別情報と取得条件が一致しません".into());
             }
         }
@@ -120,7 +117,6 @@ impl RecordingConfig {
         }
         if (self.mode == "system" && !self.target_pids.is_empty())
             || (self.mode == "application" && self.target_pids.is_empty())
-            || (self.backend == "coreaudio" && self.mode != "application")
             || (self.backend == "screencapturekit" && self.target_pids.len() > 1)
             || self.target_pids.iter().any(|pid| *pid <= 0)
         {
@@ -1213,7 +1209,7 @@ pub(in crate::storage) mod tests {
         };
         for (mode, backend, pids) in [
             ("system", "screencapturekit", vec![]),
-            ("application", "coreaudio", vec![123]),
+            ("system", "coreaudio", vec![123]),
             ("application", "screencapturekit", vec![456]),
             ("application", "screencapturekit", vec![]),
         ] {
@@ -1244,6 +1240,87 @@ pub(in crate::storage) mod tests {
         assert!(storage
             .prepare_recording(&meeting.id, &cfg, &Uuid::new_v4().to_string())
             .is_ok());
+    }
+
+    #[test]
+    fn audio_only_config_accepts_global_or_exact_application_without_weakening_scope() {
+        let mut cfg = config();
+        cfg.backend = "coreaudio".into();
+        assert!(cfg.validate().is_ok());
+        cfg.target_pids = vec![123];
+        assert!(cfg.validate().is_err());
+        cfg.mode = "application".into();
+        cfg.target_application_identity = Some(crate::capture_scope::ApplicationIdentity {
+            pid: 123,
+            bundle_identifier: "com.example.confirmed".into(),
+            launch_time_us: 1791100000000001,
+        });
+        assert!(cfg.validate().is_ok());
+        cfg.target_pids = vec![456];
+        assert!(cfg.validate().is_err());
+        cfg.target_pids = vec![123, 456];
+        assert!(cfg.validate().is_err());
+        cfg.target_pids = vec![123];
+        cfg.backend = "unknown".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn audio_only_saved_output_requires_exact_stored_backend_and_application_identity() {
+        for application in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let storage = Storage::open(temp.path().into()).unwrap();
+            let (meeting, session, output, mut manifest) = saved_probe_fixture(&storage);
+            let mut selected = config();
+            selected.backend = "coreaudio".into();
+            selected.microphone_device_uid = Some("fixture-mic".into());
+            manifest["microphoneDeviceUID"] = serde_json::json!("fixture-mic");
+            if application {
+                selected.mode = "application".into();
+                selected.target_pids = vec![123];
+                selected.target_application_identity =
+                    Some(crate::capture_scope::ApplicationIdentity {
+                        pid: 123,
+                        bundle_identifier: "com.example.confirmed".into(),
+                        launch_time_us: 1791100000000001,
+                    });
+                manifest["captureMode"] = serde_json::json!("application");
+                manifest["targetPIDs"] = serde_json::json!([123]);
+                manifest["targetApplicationIdentity"] =
+                    serde_json::to_value(&selected.target_application_identity).unwrap();
+            }
+            selected.validate().unwrap();
+            storage.connection.lock().unwrap().execute(
+                "UPDATE recording_sessions SET capture_mode=?1,capture_config_json=?2 WHERE id=?3",
+                params![selected.mode, serde_json::to_string(&selected).unwrap(), session],
+            ).unwrap();
+            // A valid PCM file from the former screen backend must not satisfy
+            // an audio-only acquisition request, even with identical scope.
+            std::fs::write(
+                output.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            assert!(storage
+                .finalize_recording(&session)
+                .unwrap_err()
+                .contains("開始条件"));
+            assert_eq!(
+                storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                "recording"
+            );
+            manifest["backend"] = serde_json::json!("coreaudio");
+            std::fs::write(
+                output.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            storage.finalize_recording(&session).unwrap();
+            assert_eq!(
+                storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+                "recorded"
+            );
+        }
     }
 
     #[test]

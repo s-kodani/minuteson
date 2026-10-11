@@ -119,7 +119,6 @@ final class CaptureOptionsTests: XCTestCase {
     XCTAssertThrowsError(try Options.parse(output + ["--parent-pid", "1234"]))
     for arguments in [
       ["--mode", "application"], ["--pid", "1234"],
-      ["--backend", "coreaudio"],
       ["--mode", "application", "--pid", "1234", "--pid", "5678"],
       ["--mode", "application", "--backend", "coreaudio", "--pid", "1234", "--pid", "1234"],
     ] {
@@ -167,15 +166,42 @@ final class CaptureOptionsTests: XCTestCase {
       ["--application-identity", json],
       ["--mode", "application", "--pid", "456", "--application-identity", json],
       [
-        "--mode", "application", "--pid", "123", "--backend", "coreaudio", "--application-identity",
-        json,
-      ],
-      [
         "--mode", "application", "--pid", "123", "--application-identity", json,
         "--application-identity", json,
       ],
       ["--application-identity", "{}"],
       ["--application-identity", String(repeating: "x", count: 4097)],
     ] { XCTAssertThrowsError(try Options.parse(output + extra)) }
+  }
+
+  func testAudioOnlyOwnedRecordingAndFiveSecondTestUseSharedRecoveryWithoutScreenFallback() throws {
+    let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
+    let identity = CaptureApplicationIdentity(
+      pid: 123, bundleIdentifier: "com.example.confirmed",
+      launchTimeUs: 1_791_100_000_000_001)
+    let json = String(decoding: try JSONEncoder().encode(identity), as: UTF8.self)
+    let base = output + controlled + ["--backend", "coreaudio"]
+    for selection in [
+      [], ["--mode", "application", "--pid", "123", "--application-identity", json],
+    ] {
+      let recording = try Options.parse(
+        base + selection + ["--until-stopped", "--input-level-owner", owner])
+      XCTAssertEqual(recording.backend, "coreaudio")
+      XCTAssertFalse(recording.usesStandaloneTapProbe)
+      XCTAssertTrue(recording.recoversSystemAudio)
+      XCTAssertTrue(recording.recoversCaptureClock)
+      let test = try Options.parse(
+        base + selection + ["--microphone-uid", "fixed-mic", "--five-second-test", owner])
+      XCTAssertEqual(test.backend, "coreaudio")
+      XCTAssertFalse(test.usesStandaloneTapProbe)
+      XCTAssertFalse(test.recoversCaptureClock)
+      XCTAssertEqual(test.duration, 5)
+    }
+    XCTAssertThrowsError(
+      try Options.parse(
+        base + [
+          "--mode", "application", "--pid", "456",
+          "--application-identity", json,
+        ]))
   }
 }

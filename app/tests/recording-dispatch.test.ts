@@ -20,8 +20,19 @@ test("permission guidance is a modal and does not request or retry recording",()
   assert.match(help,/MON Capture Probe/);
   assert.match(help,/拒否されたとは判断できません/);
   assert.match(help,/端末の管理者/);
-  assert.match(help,/ScreenCaptureKit/);
-  assert.match(help,/「システムオーディオ録音のみ」とは別/);
-  assert.match(help,/画面へのアクセスも含む/);
+  assert.match(help,/Core Audio Taps/);
+  assert.match(help,/「システムオーディオ録音のみ」/);
+  assert.match(help,/画面の収録許可は要求しません/);
+  assert.doesNotMatch(help,/ScreenCaptureKit|画面へのアクセスも含む/);
   assert.doesNotMatch(help,/invoke\(|requestAccess|start_capture_test|start_recording/);
+});
+test("production recording and five-second tests select audio-only taps with no screen fallback",()=>{
+  for(const file of ["recorder.rs","capture_test.rs"]){
+    const native=readFileSync(new URL(`../src-tauri/src/${file}`,import.meta.url),"utf8");
+    assert.match(native,/\.arg\("--backend"\)\s*\.arg\("coreaudio"\)/);
+    assert.doesNotMatch(native,/\.arg\("screencapturekit"\)/);
+  }
+  const catalog=readFileSync(new URL("../../probes/macos-capture/Sources/MONMacOSCapture/CaptureApplications.swift",import.meta.url),"utf8");
+  assert.doesNotMatch(catalog,/CGPreflightScreenCaptureAccess|CGRequestScreenCaptureAccess/);
+  assert.match(catalog,/systemPermission: "unknown"/);
 });

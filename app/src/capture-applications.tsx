@@ -40,7 +40,7 @@ export function CaptureApplicationSelection({control,locked}:{control:ReturnType
       <button type="button" className="small-secondary" disabled={locked||loading} onClick={control.reload}>アプリ一覧を再確認</button>
       {loading&&<p role="status">OSのアプリ一覧を確認中です。録音や権限要求は開始しません。</p>}
       {applications&&!selected&&<p role="alert">対象アプリを明示選択してください。終了・再起動したアプリへ引き継いだり、全体録音へ自動切替したりはしません。</p>}
-      {applications?.systemPermission==="permissionRequired"&&<p>PC音声の取得権限を確認してください。macOSのシステム設定で録音ヘルパーの画面収録権限を確認し、一覧を再確認できます。</p>}
+      {applications?.systemPermission==="permissionRequired"&&<p>PC音声の取得権限を確認してください。macOSのシステム設定で「システムオーディオ録音のみ」の許可を確認してください。画面の収録許可は要求しません。</p>}
       {applications?.systemPermission==="unknown"&&<p>PC音声の権限は状態不明です。実際の取得処理で確認します。</p>}
       <p>選択したアプリ単位でPC音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの一覧にあることは音声取得の成功を示しません。</p>
       {error&&<p role="alert" className="action-error">{error}</p>}

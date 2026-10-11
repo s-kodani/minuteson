@@ -3,6 +3,7 @@ import CoreAudio
 import Foundation
 
 enum TapAudioProcesses {
+  static let maximumObjects = 4096
   static func list() throws -> [(pid: pid_t, objectID: AudioObjectID)] {
     var address = AudioObjectPropertyAddress(
       mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -13,7 +14,9 @@ enum TapAudioProcesses {
       AudioObjectGetPropertyDataSize(
         AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size),
       "get audio process list size")
-    guard size % UInt32(MemoryLayout<AudioObjectID>.stride) == 0 else {
+    guard size % UInt32(MemoryLayout<AudioObjectID>.stride) == 0,
+      size <= maximumObjects * MemoryLayout<AudioObjectID>.stride
+    else {
       throw ProbeError.capture("audio process list has an invalid byte length")
     }
     let count = Int(size) / MemoryLayout<AudioObjectID>.stride
@@ -25,6 +28,15 @@ enum TapAudioProcesses {
           AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size,
           buffer.baseAddress!), "get audio process list")
     }
+    guard size <= count * MemoryLayout<AudioObjectID>.stride,
+      size % UInt32(MemoryLayout<AudioObjectID>.stride) == 0
+    else {
+      throw ProbeError.capture("audio process list changed beyond its allocated capacity")
+    }
+    ids = Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.stride))
+    guard !ids.contains(AudioObjectID(kAudioObjectUnknown)), Set(ids).count == ids.count else {
+      throw ProbeError.capture("audio process list has invalid or duplicate objects")
+    }
     var result: [(pid: pid_t, objectID: AudioObjectID)] = []
     for id in ids {
       var pidAddress = AudioObjectPropertyAddress(
@@ -33,7 +45,9 @@ enum TapAudioProcesses {
         mElement: kAudioObjectPropertyElementMain)
       var pid: pid_t = 0
       var pidSize = UInt32(MemoryLayout<pid_t>.stride)
-      if AudioObjectGetPropertyData(id, &pidAddress, 0, nil, &pidSize, &pid) == noErr, pid > 0 {
+      if AudioObjectGetPropertyData(id, &pidAddress, 0, nil, &pidSize, &pid) == noErr,
+        pidSize == MemoryLayout<pid_t>.stride, pid > 0
+      {
         result.append((pid, id))
       }
     }

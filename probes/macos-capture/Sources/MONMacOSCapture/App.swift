@@ -21,8 +21,13 @@ struct Options {
   var publishesInputStatus: Bool {
     duration == nil && captureTestOwner == nil && inputLevelOwner != nil
   }
+  // Bounded multi-PID tap probes retain their independent measurement path.
+  // The application and its five-second test use the shared owned writer.
+  var usesStandaloneTapProbe: Bool {
+    backend == "coreaudio" && !targetPIDs.isEmpty && applicationIdentity == nil
+  }
   var recoversSystemAudio: Bool {
-    duration == nil && captureTestOwner == nil && backend == "screencapturekit"
+    duration == nil && captureTestOwner == nil && !usesStandaloneTapProbe
       && (targetPIDs.isEmpty || applicationIdentity != nil)
   }
   var recoversCaptureClock: Bool { publishesInputStatus && recoversSystemAudio }
@@ -145,9 +150,6 @@ struct Options {
     if mode == "system" && !targetPIDs.isEmpty {
       throw ProbeError.usage("--pid is only valid for application mode")
     }
-    if backend == "coreaudio" && mode != "application" {
-      throw ProbeError.usage("the coreaudio backend currently requires application mode")
-    }
     if backend == "screencapturekit" && targetPIDs.count > 1 {
       throw ProbeError.usage("multiple --pid values require the coreaudio backend")
     }
@@ -155,10 +157,10 @@ struct Options {
       throw ProbeError.usage("duplicate --pid values are not allowed")
     }
     if let identity = applicationIdentity {
-      guard mode == "application", backend == "screencapturekit", targetPIDs == [identity.pid]
+      guard mode == "application", targetPIDs == [identity.pid]
       else {
         throw ProbeError.usage(
-          "application identity requires the exact ScreenCaptureKit target PID")
+          "application identity requires the exact target PID")
       }
     }
     if parentPID != nil && !stopOnFile {
@@ -173,11 +175,11 @@ struct Options {
     }
     if let captureTestOwner {
       guard stopOnFile, parentPID != nil, microphoneUID != nil,
-        !durationSpecified, !untilStopped, backend == "screencapturekit", inputLevelOwner == nil,
+        !durationSpecified, !untilStopped, inputLevelOwner == nil,
         mode == "system" || applicationIdentity != nil
       else {
         throw ProbeError.usage(
-          "five-second test requires stop control, parent PID, microphone UID and exact application identity when selected; duration, until-stopped, input-level-owner and Core Audio are not accepted"
+          "five-second test requires stop control, parent PID, microphone UID and exact application identity when selected; duration, until-stopped and input-level-owner are not accepted"
         )
       }
       duration = 5
@@ -423,6 +425,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private var clockRecoveryRequest: CaptureClockRecoveryRequest?
   private var clockStopReceipt: StopReceipt?
   private let retries: Bool
+  private let backend: String
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
   private let testWindow: CaptureTestWindow?
@@ -437,6 +440,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, levelsEnabled: Bool = false,
     testWindow: CaptureTestWindow? = nil, retries: Bool = false,
+    backend: String = "screencapturekit",
     factory: Factory? = nil, now: @escaping @Sendable () -> Int64? = PCMInputLevel.nowNanoseconds,
     requireIdentity: @escaping @Sendable (CaptureApplicationIdentity) throws -> Void =
       CaptureApplications.current,
@@ -450,6 +454,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
     self.retries = retries && clock != nil && testWindow == nil
+    self.backend = backend
     self.factory = factory
     self.now = now
     self.requireIdentity = requireIdentity
@@ -555,6 +560,24 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       (recovery?.targetPID, recovery?.applicationIdentity)
     }
     if let applicationIdentity { try verifyIdentity(applicationIdentity) }
+    if backend == "coreaudio" {
+      guard targetPID == nil || applicationIdentity != nil else {
+        throw ProbeError.capture("audio-only application capture requires its exact identity")
+      }
+      let scope = applicationIdentity.map(CoreAudioTapScope.application) ?? .system
+      let allowed: @Sendable () -> Bool = { [weak self] in
+        guard let self else { return false }
+        return self.mayContinue()
+          && self.lock.withLock { !self.stopping && self.recovery?.owns(token) == true }
+      }
+      return CoreAudioCaptureStream(
+        driver: NativeCoreAudioCaptureDriver(scope: scope, mayContinue: allowed),
+        bundleIdentifier: applicationIdentity?.bundleIdentifier,
+        mayContinue: allowed,
+        deliver: { [weak self] source, sample in
+          self?.receive(from: source, sampleBuffer: sample)
+        }, ended: { [weak self] source, _ in self?.sourceEnded(source) })
+    }
     let content: SCShareableContent
     do {
       content = try await SCShareableContent.excludingDesktopWindows(
@@ -606,7 +629,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       stream: stream, output: self, applicationName: name, bundleIdentifier: bundle)
   }
 
-  /// Never stop ScreenCaptureKit on its delegate/sample queue. Awaiting OS
+  /// Never stop acquisition on its delegate/sample queue. Awaiting OS
   /// work happens in this owned task, leaving the microphone/control loop free.
   private func retireStream() async throws {
     let old = lock.withLock { (stream, captureStarted && !streamEnded) }
@@ -836,6 +859,13 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       streamStopError = result.0 ? result.1 : "system stream stop timed out"
     }
     queue.sync {}
+    if streamStopError == nil, let source = lock.withLock({ stream }),
+      lock.withLock({ recovery?.operation == nil })
+    {
+      do { try source.detach() } catch {
+        streamStopError = streamStopError ?? "system source detach failed: \(error)"
+      }
+    }
     if streamStopError == nil, proveEnding {
       do {
         guard let clock else { throw ProbeError.capture("system capture clock is missing") }
@@ -847,9 +877,6 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       drainingToken = nil
       captureStarted = false
       pcm.invalidateLevels()
-    }
-    if let source = lock.withLock({ stream }), lock.withLock({ recovery?.operation == nil }) {
-      try? source.detach()
     }
     do { try await pcm.finish() } catch {
       lock.withLock { stopFailure = String(describing: error) }
@@ -924,7 +951,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         else { throw ProbeError.capture("five-second test clock or audio format is missing") }
         let observation = clock.observe(
           presentation: sampleBuffer.presentationTimeStamp,
-          clock: stream.native?.synchronizationClock)
+          clock: stream.synchronizationClock)
         guard
           let selected = try testWindow.selection(
             observation: observation, frames: sampleBuffer.numSamples,
@@ -938,7 +965,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         ?? suppliedObservation
         ?? clock?.observe(
           presentation: sampleBuffer.presentationTimeStamp,
-          clock: stream.native?.synchronizationClock)
+          clock: stream.synchronizationClock)
       if case .suspended = observation {
         recovery?.interrupt("clock_changed")
         pcm.invalidateLevels()
@@ -1389,7 +1416,7 @@ public enum CaptureCommand {
         options.publishesInputStatus
         ? try InputEventJournal(
           output: options.output, owner: options.inputLevelOwner!,
-          supportsSystem: options.backend == "screencapturekit") : nil
+          supportsSystem: !options.usesStandaloneTapProbe) : nil
       let journalStatus = try inputEvents.map {
         try InputJournalStatusPublisher(
           output: options.output, owner: options.inputLevelOwner!, initial: $0.persistence())
@@ -1419,7 +1446,7 @@ public enum CaptureCommand {
       let system = SystemAudioRecorder(
         outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
         levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow,
-        retries: options.recoversSystemAudio,
+        retries: options.recoversSystemAudio, backend: options.backend,
         mayContinue: {
           !systemControlled
             || (!FileManager.default.fileExists(atPath: systemStopRequest.path)
@@ -1459,7 +1486,7 @@ public enum CaptureCommand {
         try await mic.start()
         manifest.microphoneDeviceUID = mic.deviceUID
         manifest.microphone = mic.snapshot()
-        if options.backend == "coreaudio" {
+        if options.usesStandaloneTapProbe {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
           try await system.start(
@@ -1504,9 +1531,9 @@ public enum CaptureCommand {
               try system.resumeAfterClockRecovery(request)
             }
             mic.maintain()
-            if options.backend == "screencapturekit" { system.maintain() }
+            if !options.usesStandaloneTapProbe { system.maintain() }
             let microphone = mic.snapshot()
-            let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+            let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
             try microphone.requireWritable()
             try systemStats.requireWritable()
             if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery
@@ -1534,7 +1561,7 @@ public enum CaptureCommand {
               }
               let microphone = microphone.inputLevel
               let systemLevel =
-                (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
+                (options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot())
                 .inputLevel
               let now = PCMInputLevel.nowNanoseconds()
               // Failure to publish telemetry must not stop or declare a saved recording.
@@ -1552,7 +1579,7 @@ public enum CaptureCommand {
           let deadline = ContinuousClock.now.advanced(by: .seconds(duration))
           while ContinuousClock.now < deadline {
             try mic.snapshot().requireWritable()
-            try (options.backend == "coreaudio" ? tap.snapshot() : system.snapshot())
+            try (options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot())
               .requireWritable()
             try await Task.sleep(for: .milliseconds(100))
           }
@@ -1562,13 +1589,13 @@ public enum CaptureCommand {
         var systemClosure: CaptureClosure?
         if options.publishesInputStatus {
           systemClosure =
-            options.backend == "coreaudio"
+            options.usesStandaloneTapProbe
             ? try tap.stopRecording() : try await system.stopRecording()
         } else {
-          if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
+          if options.usesStandaloneTapProbe { try tap.stop() } else { try await system.stop() }
         }
         let micStats = mic.snapshot()
-        let systemStats = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+        let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
         try micStats.requireWritable()
         try systemStats.requireWritable()
         if let testWindow, !testWindow.metadata().completed {
@@ -1601,7 +1628,7 @@ public enum CaptureCommand {
         testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
         do {
-          if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
+          if options.usesStandaloneTapProbe { try tap.stop() } else { try await system.stop() }
         } catch { manifest.errors.append(String(describing: error)) }
         manifest.state = "failed"
       }
@@ -1620,7 +1647,7 @@ public enum CaptureCommand {
       manifest.captureTest = testWindow?.metadata()
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()
-        manifest.system = options.backend == "coreaudio" ? tap.snapshot() : system.snapshot()
+        manifest.system = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
       } else if let testWindow, let micStart = manifest.microphone.firstCaptureNanoseconds,
         let systemStart = manifest.system.firstCaptureNanoseconds
       {

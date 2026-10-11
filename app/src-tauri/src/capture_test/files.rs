@@ -331,7 +331,7 @@ impl Manifest {
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
-            || self.backend != "screencapturekit"
+            || self.backend != "coreaudio"
             || self.target_pids
                 != request
                     .capture_scope
@@ -376,7 +376,7 @@ impl Manifest {
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
-            || self.backend != "screencapturekit"
+            || self.backend != "coreaudio"
             || self.state != "starting"
                 && self.target_application_identity != request.capture_scope.application
             || self.target_pids

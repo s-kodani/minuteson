@@ -1,5 +1,4 @@
 import AppKit
-import CoreGraphics
 import Darwin
 import Foundation
 
@@ -94,7 +93,9 @@ enum CaptureApplications {
       throw ProbeError.capture("application catalog exceeds capacity or has ambiguous identities")
     }
     return CaptureApplicationsReport(
-      systemPermission: CGPreflightScreenCaptureAccess() ? "authorized" : "permissionRequired",
+      // Screen permission is not evidence about audio-only tap permission.
+      // No public audio-only preflight is used; explicit capture validates PCM.
+      systemPermission: "unknown",
       applications: rows.sorted {
         $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
       })

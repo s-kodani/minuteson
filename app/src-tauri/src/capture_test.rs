@@ -140,7 +140,7 @@ fn command(
         .arg("--mode")
         .arg(&request.capture_scope.mode)
         .arg("--backend")
-        .arg("screencapturekit")
+        .arg("coreaudio")
         .arg("--scenario")
         .arg("mon-five-second-test")
         .arg("--stop-on-file")

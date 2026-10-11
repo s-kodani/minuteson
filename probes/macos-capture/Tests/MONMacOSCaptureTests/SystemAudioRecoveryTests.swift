@@ -1289,6 +1289,35 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  func testUnresponsiveNativeStopDoesNotEnterSynchronousDetachOrMintClosure() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = SilentSystemSource(holdStop: true)
+    let factory = SilentSystemFactory([source])
+    let time = SystemTestTime()
+    let recorder = try recorder(directory, factory, time)
+    try await recorder.start(targetPID: nil)
+    recorder.receive(
+      from: source, sampleBuffer: try sample(), observation: .timestamp(1_000_000_000))
+    let began = ContinuousClock.now
+    do {
+      _ = try await recorder.stopRecording()
+      XCTFail("unproven native stop cannot mint closure")
+    } catch { XCTAssertTrue(String(describing: error).contains("stop timed out")) }
+    XCTAssertLessThan(began.duration(to: .now), .seconds(7))
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(
+      source.counts.2, 0, "detach must not wait synchronously behind timed-out native IO")
+    source.releaseStop()
+    do {
+      _ = try await recorder.stopRecording()
+      XCTFail("late stop cannot turn prior failure into saved")
+    } catch {}
+    XCTAssertEqual(source.counts.2, 0)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: directory.appendingPathComponent("system.caf")).length, 480)
+  }
+
   func testFormatRetirementRetriesDetachWithoutRepeatingAnAlreadyCompletedStop() async throws {
     let directory = try directory()
     defer { try? FileManager.default.removeItem(at: directory) }

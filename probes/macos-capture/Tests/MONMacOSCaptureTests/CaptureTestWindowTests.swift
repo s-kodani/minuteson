@@ -412,7 +412,7 @@ final class CaptureTestWindowTests: XCTestCase, @unchecked Sendable {
         hostAfterNs: 20_000_000_020))
     var manifest = Manifest(
       schemaVersion: 2, scenario: "synthetic-five-second-test", captureMode: "system",
-      backend: "screencapturekit", targetPID: nil, targetPIDs: [], targetApplicationName: nil,
+      backend: "coreaudio", targetPID: nil, targetPIDs: [], targetApplicationName: nil,
       targetBundleIdentifier: nil, startedAtUTC: "2023-11-14T22:13:20Z",
       requestedDurationSeconds: 5, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: microphone, system: system, errors: [])

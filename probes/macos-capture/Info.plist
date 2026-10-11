@@ -11,7 +11,7 @@
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSUIElement</key><true/>
-  <key>NSAudioCaptureUsageDescription</key><string>Record selected meeting application audio for MON capture evaluation.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>MONの会議記録で、選択したアプリまたはPC全体の音声を保存するために使用します。画面は取得しません。</string>
   <key>NSMicrophoneUsageDescription</key><string>Record the local microphone for MON capture evaluation.</string>
 </dict>
 </plist>

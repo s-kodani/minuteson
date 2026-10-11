@@ -97,7 +97,7 @@ fn recording_command(
         .arg("--mode")
         .arg(&scope.mode)
         .arg("--backend")
-        .arg("screencapturekit")
+        .arg("coreaudio")
         .arg("--scenario")
         .arg(format!("mon-app-{}", scope.mode))
         .arg("--stop-on-file")
@@ -433,7 +433,7 @@ impl RecorderController {
         }
         let config = RecordingConfig {
             mode: scope.mode.clone(),
-            backend: "screencapturekit".into(),
+            backend: "coreaudio".into(),
             target_pids: scope
                 .application
                 .as_ref()
@@ -831,7 +831,7 @@ mod tests {
             "--mode",
             "system",
             "--backend",
-            "screencapturekit",
+            "coreaudio",
             "--scenario",
             "mon-app-system",
             "--stop-on-file",

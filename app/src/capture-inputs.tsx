@@ -39,14 +39,14 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
       <p>マイクとPC音声の許可は別々です。許可画面が出ないことだけでは、拒否されたとは判断できません。</p>
       <ol>
         <li>macOSの「システム設定 → プライバシーとセキュリティ → マイク」を開き、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。</li>
-        <li>現在のPC音声の録音方式（ScreenCaptureKit）は「画面収録とシステムオーディオ録音」の許可を確認します。「システムオーディオ録音のみ」とは別です。映像は保存しませんが、OS上の許可は画面へのアクセスも含むため、範囲を確認してご自身で判断してください。OSのバージョンによって項目名が異なります。</li>
+        <li>PC音声は音声専用方式（Core Audio Taps）で取得します。「システムオーディオ録音のみ」でMON QA または MON Capture Probeの許可を確認してください。画面の収録許可は要求しません。OSのバージョンによって項目名が異なります。</li>
         <li>設定変更後はMON QAを再起動し、マイク一覧を再確認してください。項目がない場合は、録音を開始する時間を決めてからOSの許可要求を確認してください。</li>
       </ol>
       {permission==="restricted"&&<p role="alert">システムの制限があるため、端末の管理者に確認してください。</p>}
       <p>この案内を開いても録音・権限要求・再試行は開始しません。機器が未接続の場合は接続して選び直してください。</p>
     </OptionsModal>
     {error&&<p role="alert" className="action-error">{error}</p>}
-    <div className="heading-with-info"><h3>PCの音声</h3><InfoPopover label="PCの音声の取得範囲" details={<p>ScreenCaptureKitで全体または選択したアプリの音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの権限と実際の音声入力は録音開始時に確認します。</p>}>詳細設定で全体録音またはアプリ選択録音を選べます。会議以外の音が含まれる範囲を確認してください。</InfoPopover></div>
+    <div className="heading-with-info"><h3>PCの音声</h3><InfoPopover label="PCの音声の取得範囲" details={<p>Core Audio Tapsで全体または選択したアプリの音声を取得します。画面は取得しません。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの権限と実際の音声入力は録音開始時に確認します。</p>}>詳細設定で全体録音またはアプリ選択録音を選べます。会議以外の音が含まれる範囲を確認してください。</InfoPopover></div>
     <p>取得範囲: {scopeControl.mode==="system"?"PCの再生音全体":scopeControl.selected?`選択したアプリ（${scopeControl.selected.name}）`:"アプリの明示選択待ち"}。実際の入力レベルは未確認です。</p>
     <CaptureApplicationSelection control={scopeControl} locked={locked}/>
     <p>選択したマイクとアプリは録音開始時に再確認します。入力確認には「5秒録音して確認」を使えます。</p>
