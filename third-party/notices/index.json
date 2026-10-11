@@ -64,6 +64,13 @@
       "sourceUrl": "https://www.mozilla.org/media/MPL/2.0/index.txt",
       "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
       "bytes": 16726
+    },
+    {
+      "path": "spdx-MIT-template.txt",
+      "kind": "license_template",
+      "sourceUrl": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt",
+      "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+      "bytes": 1087
     }
   ],
   "packages": [
@@ -86,7 +93,8 @@
       "vcsCommit": "b4167b582b2f75f9a1be75495c41b765344fd03c",
       "vcsPath": "crates/block2",
       "files": [
-        "objc2-b4167b5-LICENSE.md"
+        "objc2-b4167b5-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -109,7 +117,8 @@
       "vcsCommit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
       "vcsPath": "crates/dispatch2",
       "files": [
-        "objc2-8852b42-LICENSE.md"
+        "objc2-8852b42-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -120,7 +129,8 @@
       "vcsCommit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
       "vcsPath": "crates/objc2",
       "files": [
-        "objc2-8852b42-LICENSE.md"
+        "objc2-8852b42-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -131,7 +141,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-app-kit",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -142,7 +153,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-core-foundation",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -153,7 +165,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-core-graphics",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -164,7 +177,8 @@
       "vcsCommit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
       "vcsPath": "crates/objc2-encode",
       "files": [
-        "objc2-8d214f5-LICENSE.md"
+        "objc2-8d214f5-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -175,7 +189,8 @@
       "vcsCommit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
       "vcsPath": "crates/objc2-exception-helper",
       "files": [
-        "objc2-8d214f5-LICENSE.md"
+        "objc2-8d214f5-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -186,7 +201,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-foundation",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -197,7 +213,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-io-surface",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -208,7 +225,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-quartz-core",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {
@@ -219,7 +237,8 @@
       "vcsCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
       "vcsPath": "framework-crates/objc2-web-kit",
       "files": [
-        "objc2-7b1abfd-LICENSE.md"
+        "objc2-7b1abfd-LICENSE.md",
+        "spdx-MIT-template.txt"
       ]
     },
     {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DocumentPage } from "./minutes-pagination";
+import { IconButton } from "./action-icon";
 
 export function MinutesPages({ plan, mode, disabled = false, changePage }: {
   plan: DocumentPage; mode: "閲覧" | "編集"; disabled?: boolean; changePage: (page: number) => void;
@@ -8,11 +9,11 @@ export function MinutesPages({ plan, mode, disabled = false, changePage }: {
   const [error, setError] = useState("");
   useEffect(() => { setNumber(String(plan.page + 1)); setError(""); }, [plan.page]);
   if (plan.pages <= 1) return null;
-  return <nav aria-label={`議事録の${mode}ページ`}>
+  return <nav className="minutes-page-navigation" aria-label={`議事録の${mode}ページ`}>
     <div className="transcript-pages">
-      <button type="button" disabled={disabled || plan.page === 0} onClick={() => changePage(plan.page - 1)}>前の{mode}ページ</button>
+      <IconButton label={`前の${mode}ページ`} icon="previous" disabled={disabled || plan.page === 0} onClick={() => changePage(plan.page - 1)} />
       <span>{plan.page + 1} / {plan.pages}（本文・表の行・リスト項目を計50件ずつ表示）</span>
-      <button type="button" disabled={disabled || plan.page + 1 >= plan.pages} onClick={() => changePage(plan.page + 1)}>次の{mode}ページ</button>
+      <IconButton label={`次の${mode}ページ`} icon="next" disabled={disabled || plan.page + 1 >= plan.pages} onClick={() => changePage(plan.page + 1)} />
     </div>
     <form className="transcript-pages" onSubmit={(event) => {
       event.preventDefault(); if (disabled) return;

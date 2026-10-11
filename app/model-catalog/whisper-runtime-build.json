@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "engine": "whisper.cpp",
+  "engineVersion": "v1.9.4",
+  "sourceCommit": "927cfce34f31707e17f2bff35c349632fb9e2c3a",
+  "sourceUrl": "https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/927cfce34f31707e17f2bff35c349632fb9e2c3a",
+  "sourceBytes": 9357755,
+  "sourceSha256": "41b664fee09e79176ac277b5237debec34f8d74af3c7d71f333f1ec67989ecde",
+  "target": "macos_aarch64",
+  "minimumMacOS": "15.0",
+  "buildOptions": [
+    "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF",
+    "-DCMAKE_C_COMPILER=/usr/bin/clang", "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+    "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+    "-DGGML_NATIVE=OFF", "-DGGML_CPU_ARM_ARCH=armv8-a",
+    "-DGGML_METAL=OFF", "-DGGML_OPENMP=OFF", "-DGGML_ACCELERATE=ON",
+    "-DGGML_BLAS=ON", "-DGGML_BLAS_VENDOR=Apple", "-DGGML_CPU_KLEIDIAI=OFF",
+    "-DGGML_BACKEND_DL=OFF", "-DWHISPER_COREML=OFF", "-DWHISPER_OPENVINO=OFF",
+    "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_EXAMPLES=ON",
+    "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
+  ],
+  "cpuOnly": true,
+  "publisherAuthenticity": "not_verified",
+  "licenseReview": "not_verified",
+  "distributionReady": false
+}

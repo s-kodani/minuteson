@@ -1,12 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CommonModal } from "./common-modal";
+import { OptionsModal } from "./options-modal";
+import { IconButton } from "./action-icon";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { useVersionPublication } from "./version-publication";
 import { SourceUpdateTracker } from "./version-publication-state";
 import { useActionConfirmation } from "./confirmation-service";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { topOpenModal } from "./modal-state";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { canRetryJob, jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { JobModelRebinding } from "./model-rebinding";
@@ -38,6 +40,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [current, setCurrent] = useState<MinutesView | null>(null);
   const [currentDraft, setCurrentDraft] = useState<MinutesDraft | null>(null);
   const [editorActionsHost, setEditorActionsHost] = useState<HTMLDivElement | null>(null);
+  const [settingsActionsHost,setSettingsActionsHost] = useState<HTMLDivElement | null>(null);
+  const [editorOptionsHost,setEditorOptionsHost] = useState<HTMLDivElement | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -46,15 +50,27 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [exportEvent, setExportEvent] = useState("");
   const [exportState, setExportState] = useState<MinutesExport["state"] | null>(null);
   const pendingExport = useRef<MinutesExportRequest | null>(null);
+  const exportFocusReturn = useRef<HTMLElement | null>(null);
   const mounted = useRef(true);
   const busyRef = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const loadedCurrent = useRef("");
   const editorGuard = useRef<EditorGuard | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const operations = useRef(new Map<string, string>());
   const retryOperations = useRef(new Map<string, string>());
+  useLayoutEffect(() => {
+    // Native save panels can return while this action is still disabled.
+    // Wait for the busy render to finish, and restore only a lost focus.
+    const target = exportFocusReturn.current;
+    if (!target || busy || locked) return;
+    exportFocusReturn.current = null;
+    const modal = topOpenModal();
+    if (!visible || !target.isConnected || target.matches(":disabled") || !target.getClientRects().length
+      || target.closest("[hidden], [inert]") || modal && !modal.contains(target)) return;
+    const active = document.activeElement;
+    if (active === document.body || active === target || !active?.isConnected) target.focus({preventScroll:true});
+  }, [busy,locked,visible]);
   const publication = useVersionPublication(meetingId, "minutes", busy || locked, async () => {
     setPreview(null); setError(""); loadedCurrent.current = "";
     try { await onHeadChanged(); await refreshRef.current(); }
@@ -170,12 +186,15 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     });
   };
   const cancelJob = (job: Job) => run(async () => { await confirm({ title: "議事録生成の取消を確認", target: `会議「${meetingTitle}」 · ジョブ ${job.id}`, confirmLabel: "生成を取り消す", message: "この議事録生成を取り消します。現在版と編集は保持します。", onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshRef.current(); } }); });
-  const writeMarkdown = () => run(() => saved(async () => {
+  const writeMarkdown = (button: HTMLButtonElement) => {
+    button.focus({preventScroll:true});
+    return run(() => saved(async () => {
     setExportNotice("");
     // Inspect an unknown response before allowing a new dialog or file write.
     if (pendingExport.current) {
       const status = await invoke<{ active: boolean; record: MinutesExport | null }>("get_minutes_export_status", { request: pendingExport.current });
       if (status.active) throw new Error("保存ダイアログまたは書き出しが進行中です。完了・取消を待ってください。");
+      exportFocusReturn.current = button;
       pendingExport.current = null;
       if (!mounted.current) return;
       setExportEvent(status.record?.id ?? crypto.randomUUID()); setExportState(status.record?.state ?? null);
@@ -185,14 +204,19 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     const state = await invoke<MinutesVersions>("get_minutes_versions", { meetingId });
     pendingExport.current = minutesExportRequest(state, meetingId, crypto.randomUUID());
     const record = await invoke<MinutesExport | null>("export_minutes_markdown", { request: pendingExport.current });
+    // Arm only after a known response. An unknown native operation must not
+    // be treated as a dismissed panel or retried to regain focus.
+    exportFocusReturn.current = button;
     pendingExport.current = null;
     if (!mounted.current) return;
     setExportEvent(record?.id ?? crypto.randomUUID()); setExportState(record?.state ?? null);
     setExportNotice(record ? `${exportLabel(record.state)}: ${record.destinationPath}${record.errorMessage ? ` — ${record.errorMessage}` : ""}` : "書き出しを取り消しました。ローカルの編集内容は保存されています。");
     await refreshRef.current();
-  }));
+    }));
+  };
   const openPreview = (summary: MinutesVersion, restoring: boolean, button: HTMLElement) => {
     opener.current = button;
+    button.focus({ preventScroll: true });
     return run(() => saved(async () => {
       const state = await invoke<MinutesVersions>("get_minutes_versions", { meetingId });
       assertMinutesVersion(state, summary, restoring);
@@ -228,12 +252,25 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const pending = jobs.some((j) => ["queued", "running", "pausing"].includes(j.state));
   const previous = versions?.versions.find((v) => v.id === versions.previousId);
   const currentSummary = versions?.versions.find((v) => v.id === current?.id);
+  const reviewContent = preview && <>
+      <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2></div>
+      <p>全項目の内容・根拠・担当者・期限を確認してください。SHA-256: <code>{preview.view.contentHash}</code></p>{preview.summary.inputUpdated && <p className="data-updated">元データ更新あり。この版の根拠は生成時の入力を保持しています。</p>}
+      <details><summary>固定された議事録処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, inputAnalysisId: preview.view.inputAnalysisId, inputContentHash: preview.view.inputContentHash }, null, 2)}</pre></details>
+      <div className="preview-columns">{preview.current ? <MinutesDocument key={`current-${preview.current.id}`} view={preview.current} locked={disabled} content={preview.currentDraft?.payload ?? preview.current.content} title="比較する現在の議事録" /> : <section><h3>現在の議事録</h3><p>まだありません。</p></section>}<MinutesDocument key={preview.view.id} view={preview.view} locked={disabled} content={preview.draft?.payload ?? preview.view.content} title={preview.restoring ? "復元する議事録（保存済み編集を含む）" : "採用する議事録候補"} /></div>
+      <IssueStatus label="議事録操作" message={error} />
+      {publication.status}
+      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void apply(event.currentTarget)}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+    </>;
   return <section className="analysis-card minutes-card" aria-label="議事録生成と候補確認">
-    <div className="card-head"><div className="heading-with-info"><h2>議事録</h2><InfoPopover label="議事録">修正済みの文字起こし・話者を生成開始時に固定します。生成結果の正しさは未確認です。内容と根拠を照合してから採用してください。</InfoPopover></div><div className="analysis-actions minutes-primary-actions"><div ref={setEditorActionsHost} className="minutes-editor-actions-host" />{!current && <button type="button" disabled={disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine)} onClick={() => void start()}>議事録を生成</button>}{current && <button type="button" disabled={disabled} onClick={() => void writeMarkdown()}>{pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"}</button>}</div></div>
-    <details className="workspace-tools minutes-workspace-tools"><summary>議事録の設定・生成状況・候補</summary><div className="workspace-tools-body">
-    <button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>議事録を再読込</button>
+    <div className="card-head"><div className="heading-with-info"><h2>議事録</h2><InfoPopover label="議事録">修正済みの文字起こし・話者を生成開始時に固定します。生成結果の正しさは未確認です。内容と根拠を照合してから採用してください。「編集あり」は現在版に保存済みの手動編集を含むことを示します。</InfoPopover></div><div className="analysis-actions minutes-primary-actions"><div ref={setEditorActionsHost} className="minutes-editor-actions-host" />{!current && <button type="button" disabled={disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine)} onClick={() => void start()}>議事録を生成</button>}{current && <IconButton label={pendingExport.current ? "前回の書き出し結果を確認" : "Markdownを書き出す"} icon="download" disabled={disabled} onClick={event => void writeMarkdown(event.currentTarget)} />}<div ref={setSettingsActionsHost} className="minutes-settings-actions-host" /></div></div>
+    <OptionsModal className="workspace-tools minutes-workspace-tools" label="議事録の設定・生成状況・候補" triggerLabel="設定" icon="more" hidden={!visible} triggerHost={settingsActionsHost}
+      replacement={preview ? { key: `${preview.view.id}:${preview.restoring}`, labelledBy: "minutes-preview-title", className: "analysis-dialog", content: reviewContent, blocked: disabled, onDismiss: () => setPreview(null), restoreTarget: () => opener.current, dismissLabel: "閉じる", dismissText: "議事録プレビューを閉じる" } : null}><div className="workspace-tools-body">
+    <div className="minutes-settings-controls">
+    <div ref={setEditorOptionsHost} className="minutes-editor-options-host" />
+    <IconButton label="議事録を再読込" icon="refresh" disabled={disabled} onClick={() => void run(() => refreshRef.current())} />
     {current && <button type="button" disabled={disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine)} onClick={() => void start()}>議事録を再生成</button>}
-    <details className="analysis-settings"><summary>議事録エンジン設定（端末内に保存）</summary>
+    </div>
+    <section className="analysis-settings"><h3>議事録エンジン設定（端末内に保存）</h3>
       <p>導入済みの llama.cpp <code>llama-completion</code> と日本語対応GGUFの絶対パスを指定してください。対話用 llama-cli は使用しません。標準・高精度のモデル品質と性能は未検証です。</p>
       <div className="info-field"><div className="heading-with-info"><label htmlFor={profileSelectId}>議事録プロファイル</label><InfoPopover label="議事録の標準／高精度">別々のモデルと数値設定を保存します。大きなモデルや入力上限はメモリ・処理時間に影響します。標準・高精度の品質と性能は未検証で、プロファイル名だけで精度を保証しません。</InfoPopover></div><select id={profileSelectId} disabled={disabled} value={profile} onChange={(e) => setProfile(e.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></div>
       {engine ? <fieldset disabled={disabled}>
@@ -244,33 +281,24 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       </fieldset> : <p>議事録設定を読込中です。</p>}
       <div className="analysis-actions"><span role="status">{settings.error ? "議事録設定の保存に失敗" : settings.saving ? "議事録設定を保存中" : settings.dirty ? "議事録設定は未保存" : "議事録設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "議事録設定保存を再試行" : "議事録設定を保存"}</button></div>
       <IssueNotice scope={meetingId} type="minutes-settings" label="議事録設定の保存" message={settings.error} toastMessage="議事録設定を保存できません。入力は保持しています" action={{ kind: "retry", label: "議事録設定保存を再試行", disabled: disabled || settings.saving, run: () => run(() => queue.retry()) }} />
-    </details>
+    </section>
     {!source?.currentId && <p>先に文字起こし候補を確認・採用してください。</p>}
     {jobs.filter((j) => j.kind === "minutes_generation").length > 0 && <ul className="analysis-jobs" aria-label="議事録生成ジョブ">{jobs.filter((j) => j.kind === "minutes_generation").map((j) => <li key={j.id}><div><strong>{jobLabel(j.state)}{j.attempt > 1 ? ` · 試行 ${j.attempt}` : ""}</strong><span>保存済み {j.completedUnits} / {j.totalUnits ?? "?"} 単位{j.pauseReason === "recording" ? " · 録音・取り込み優先で停止" : ""}</span><small>ジョブ {j.id.slice(0, 8)}{j.retryOfJobId ? ` · 再試行元 ${j.retryOfJobId.slice(0, 8)}` : ""}</small>{j.errorCode && <span className="action-error">{j.errorCode}</span>}</div><div className="analysis-actions">
-      {["queued", "running"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", j.id)}>生成を一時停止</button>}
+      {["queued", "running"].includes(j.state) && <IconButton label="生成を一時停止" icon="pause" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", j.id)} />}
       {["paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", j.id)}>生成を再開</button>}
       {["queued", "running", "paused", "interrupted"].includes(j.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void cancelJob(j)}>生成を取消</button>}
       {canRetryJob(j, jobs, "minutes_generation") && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(j)}>議事録を同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={j} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
     <div className="analysis-versions"><h3>議事録の確認待ち候補</h3>{versions?.versions.filter((v) => v.publicationState === "candidate").map((v) => <div className="version-row" key={v.id}><span>議事録候補 #{v.revisionNo} · {v.itemCount} 項目 {v.inputUpdated && <small>元データ更新あり</small>}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(v, false, e.currentTarget)}>議事録候補を確認</button></div>)}{versions && !versions.versions.some((v) => v.publicationState === "candidate") && <p>議事録の確認待ち候補はありません。</p>}{previous && <div className="version-row"><span>議事録直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(e) => void openPreview(previous, true, e.currentTarget)}>議事録直前版を確認・復元</button></div>}</div>
-    <details className="minutes-export-history workspace-tools"><summary>Markdown出力履歴（最新50件）</summary><div className="workspace-tools-body"><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</div></details>
-    </div></details>
+    <section className="minutes-export-history"><h3>Markdown出力履歴（最新50件）</h3><p>書き出した時点の内容と結果です。外部ファイルの現在の存在・内容は自動追跡しません。</p>{exports.length === 0 ? <p>出力履歴はありません。</p> : <ul>{exports.map((record) => <li key={record.id}><strong>{exportLabel(record.state)}</strong> · <time>{new Date(record.exportedAt ?? record.createdAt).toLocaleString("ja-JP")}</time><p>{record.destinationPath}</p><small>元議事録: {record.minutesRevisionId ?? "整理済み"} · 内容SHA-256: {record.exportedContentHash} · ファイルSHA-256: {record.outputContentHash} · {record.outputSizeBytes} bytes</small>{record.errorMessage && <p className="action-error">{record.errorMessage}</p>}</li>)}</ul>}</section>
+    </div></OptionsModal>
     {jobs.some(j => j.kind === "minutes_generation" && ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)) && <p className="minutes-generation-status" role="status">議事録生成：{jobs.filter(j => j.kind === "minutes_generation" && ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)).map(j => `${jobLabel(j.state)} · 保存済み ${j.completedUnits} / ${j.totalUnits ?? "?"} 単位`).join("、")}</p>}
     {!current && <p className="minutes-empty-state">{versions?.versions.some(v => v.publicationState === "candidate") ? "確認待ちの議事録があります。「議事録の設定・生成状況・候補」から内容と根拠を確認して採用してください。" : !source?.currentId ? "先に文字起こし候補を確認・採用してください。" : !engine || !minutesConfigured(engine) ? "議事録用のローカルAIを準備してから生成できます。" : "この会議の議事録はまだありません。"}</p>}
-    {current && <><div className="minutes-document-status"><span>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 保存済み編集を含む"}</span>{currentSummary?.inputUpdated && <span className="heading-with-info data-updated"><span role="status">元データ更新あり</span><InfoPopover label="議事録の元データ更新">文字起こし・話者情報が生成後に変更されています。この議事録と根拠は生成時の版を保持し、自動では置き換えません。内容を確認して、必要なら「議事録を再生成」してください。</InfoPopover></span>}</div><MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} visible={visible} actionsHost={editorActionsHost} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
+    {current && <><div className="minutes-document-status"><span>現在版 #{currentSummary?.revisionNo ?? "?"} {currentDraft && "· 編集あり"}</span>{currentSummary?.inputUpdated && <span className="heading-with-info data-updated"><span role="status">元データ更新あり</span><InfoPopover label="議事録の元データ更新">文字起こし・話者情報が生成後に変更されています。この議事録と根拠は生成時の版を保持し、自動では置き換えません。内容を確認して、必要なら「議事録を再生成」してください。</InfoPopover></span>}</div><MinutesEditor key={current.id} view={current} meetingTitle={meetingTitle} initialDraft={currentDraft} locked={disabled} visible={visible} actionsHost={editorActionsHost} optionsHost={editorOptionsHost} registerGuard={(guard) => { editorGuard.current = guard; }} /></>}
     <ToastNotice scope={meetingId} type="minutes-source-updated" level="warning" eventId={sourceUpdateEvent ?? undefined} message={sourceUpdateEvent ? "議事録作成後に元データが変更されています。既存の議事録と根拠は保持しています" : ""} />
     {exportNoticeLevel(exportState) === "error" ? <IssueNotice scope={meetingId} type="minutes-export" label="議事録の書き出しを要確認" message={exportNotice} /> : <ToastNotice scope={meetingId} type="minutes-export" eventId={exportEvent} level={exportNoticeLevel(exportState)} message={exportNotice} onClose={() => setExportNotice("")} />}
     <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。状態を確認してください" />
     {!preview && publication.status}
-    <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => opener.current} className="analysis-dialog" aria-labelledby="minutes-preview-title">{preview && <>
-      <div className="card-head"><h2 id="minutes-preview-title">{preview.restoring ? "議事録直前版の復元確認" : "議事録候補の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>議事録プレビューを閉じる</button></div>
-      <p>全項目の内容・根拠・担当者・期限を確認してください。SHA-256: <code>{preview.view.contentHash}</code></p>{preview.summary.inputUpdated && <p className="data-updated">元データ更新あり。この版の根拠は生成時の入力を保持しています。</p>}
-      <details><summary>固定された議事録処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, inputAnalysisId: preview.view.inputAnalysisId, inputContentHash: preview.view.inputContentHash }, null, 2)}</pre></details>
-      <div className="preview-columns">{preview.current ? <MinutesDocument key={`current-${preview.current.id}`} view={preview.current} locked={disabled} content={preview.currentDraft?.payload ?? preview.current.content} title="比較する現在の議事録" /> : <section><h3>現在の議事録</h3><p>まだありません。</p></section>}<MinutesDocument key={preview.view.id} view={preview.view} locked={disabled} content={preview.draft?.payload ?? preview.view.content} title={preview.restoring ? "復元する議事録（保存済み編集を含む）" : "採用する議事録候補"} /></div>
-      <IssueStatus label="議事録操作" message={error} />
-      {publication.status}
-      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void apply(event.currentTarget)}>{preview.restoring ? "この議事録直前版へ戻す" : "この議事録候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
-    </>}</CommonModal>
   </section>;
 }

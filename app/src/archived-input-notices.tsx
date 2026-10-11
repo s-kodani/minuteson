@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
 import {useEffect,useRef,useState} from "react";
@@ -78,7 +79,7 @@ export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;lock
   return <section className="archived-input-notices" aria-label="終了済み録音の入力通知" hidden={!problems.length&&!readError&&!listenerError&&!readPending}>
     {views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>)}
     <IssueNotice scope="archived-input" type="read" message={readError} label="終了済み録音の通知読込" toastMessage="終了済み録音の通知履歴を確認できません" action={{kind:"retry",label:"通知履歴だけを再読込",disabled:paused||reading,run:()=>refresh.current()}}>
-      <button type="button" className="small-secondary" disabled={paused||reading} onClick={()=>refresh.current()}>通知履歴だけを再読込</button>
+      <IconButton label="通知履歴だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={paused||reading} onClick={()=>refresh.current()} />
     </IssueNotice>
     <IssueNotice scope="archived-input" type="listen" message={listenerError} label="終了済み録音の通知受信"/>
     <IssueStatus label="終了済み録音の通知読込待ち" message={readPending?"通知履歴の読込結果を確認中です。応答待ちの読込みは重ねず、受付期限を確認できなくなった通知の表示を止めています。音声の取得・保存結果を示す状態ではありません。":""}/>

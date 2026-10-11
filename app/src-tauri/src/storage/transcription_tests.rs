@@ -795,7 +795,14 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     )
     .unwrap();
     config.threads = 4;
-    let job = enqueue(&storage, &meeting, "real-integration", config, "standard").unwrap();
+    let job = enqueue(
+        &storage,
+        &meeting,
+        "real-integration",
+        config.clone(),
+        "standard",
+    )
+    .unwrap();
     storage
         .acquire_job_kind(Some(JobKind::Transcription))
         .unwrap()
@@ -836,9 +843,16 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
     let edited = storage
         .save_transcript_draft(&draft.id, draft.lock_version, payload)
         .unwrap();
-    let (mut spec, _) = storage.fixed_job_input(&job.id).unwrap();
-    spec.operation_id = "real-cancelled-source".into();
-    let source = storage.enqueue_job(spec).unwrap();
+    // A new operation must seal its own vocabulary snapshot. Copying another
+    // job's raw spec is not a retry and must fail the provenance check.
+    let source = enqueue(
+        &storage,
+        &meeting,
+        "real-cancelled-source",
+        config,
+        "standard",
+    )
+    .unwrap();
     storage.acquire_next_job().unwrap().unwrap();
     assert!(process(&storage, &source.id, &|| false, &|snapshot| {
         if snapshot.state == "running" && snapshot.completed_units == 1 {

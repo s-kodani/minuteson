@@ -115,7 +115,7 @@ async (page,capturePath,detailUI) => {
   await boot();await actions().getByRole("button",{name:"議事録を編集",exact:true}).click();
   const retained=editor().getByRole("textbox",{name:"議事録ブロック1",exact:true});await retained.evaluate(e=>{window.retainedRich=e;});
   await page.evaluate(()=>{window.__mon.failMinutesSave=true;});await retained.fill("全文参照から戻っても保持する未保存の見出し");
-  await actions().getByRole("status").filter({hasText:"議事録の保存要確認"}).waitFor();await selectEvidence();
+  await actions().getByRole("status").filter({hasText:"保存要確認"}).waitFor();await selectEvidence();
   await group().getByRole("article",{name:"固定根拠2",exact:true}).getByRole("button",{name:"固定文字起こし全文へ移動",exact:true}).click();
   await page.getByRole("region",{name:"固定文字起こし全文",exact:true}).getByRole("article",{name:"固定発言69・根拠の参照先",exact:true}).waitFor();
   check(await retained.isHidden()&&await page.evaluate(()=>window.retainedRich.isConnected&&window.retainedRich.closest(".minutes-wysiwyg").hidden),"full source exposed or unmounted rich editing fields");

@@ -20,12 +20,16 @@ mod input_status;
 mod local_engine;
 mod minutes_document;
 mod model_application;
+#[cfg(target_os = "macos")]
+mod model_bundled_runtime;
 mod model_compatibility;
 #[cfg(target_os = "macos")]
 mod model_download;
 mod model_download_ipc;
 mod model_download_recipe;
+mod model_file_dialog;
 mod model_inspection;
+mod model_official_catalog;
 mod model_placement;
 mod model_rebinding;
 mod playback;
@@ -91,6 +95,7 @@ async fn inspect_model_package(
     window: WebviewWindow,
     token: String,
     directory: std::path::PathBuf,
+    manifest: Option<model_inspection::PackageManifest>,
 ) -> Result<model_inspection::Report, String> {
     if window.label() != "main" {
         return Err("Only the main window can inspect models".into());
@@ -101,11 +106,28 @@ async fn inspect_model_package(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_inspection::inspect(&directory, &|| guard.cancelled() || lease.cancelled())
+            let cancelled = || guard.cancelled() || lease.cancelled();
+            match manifest {
+                Some(ref declared) => {
+                    model_inspection::inspect_declared(&directory, declared, &cancelled)
+                }
+                None => model_inspection::inspect(&directory, &cancelled),
+            }
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn select_model_files(
+    window: WebviewWindow,
+    multiple: bool,
+) -> Result<Option<Vec<std::path::PathBuf>>, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can select model files".into());
+    }
+    model_file_dialog::select(&window, multiple).await
 }
 
 #[tauri::command]
@@ -402,6 +424,7 @@ async fn place_model_package(
     token: String,
     directory: std::path::PathBuf,
     expected_review_hash: String,
+    manifest: Option<model_inspection::PackageManifest>,
 ) -> Result<model_placement::PlacementReceipt, String> {
     if window.label() != "main" {
         return Err("Only the main window can place models".into());
@@ -419,14 +442,26 @@ async fn place_model_package(
         .join("models");
     tauri::async_runtime::spawn_blocking(move || {
         AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            model_placement::place(
-                &app.state::<Storage>(),
-                &models_root,
-                &directory,
-                &token,
-                &expected_review_hash,
-                &|| guard.cancelled() || lease.cancelled(),
-            )
+            let cancelled = || guard.cancelled() || lease.cancelled();
+            match manifest {
+                Some(ref declared) => model_placement::place_with_manifest(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &directory,
+                    &token,
+                    &expected_review_hash,
+                    Some(declared),
+                    &cancelled,
+                ),
+                None => model_placement::place(
+                    &app.state::<Storage>(),
+                    &models_root,
+                    &directory,
+                    &token,
+                    &expected_review_hash,
+                    &cancelled,
+                ),
+            }
         })
     })
     .await
@@ -2506,7 +2541,9 @@ pub fn run() {
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
                 inspect_model_package,
+                select_model_files,
                 model_download_ipc::review_model_download,
+                model_official_catalog::get_official_model_options,
                 model_download_ipc::start_model_download,
                 model_download_ipc::get_model_download_lifetime,
                 model_download_ipc::get_model_download_catalog,

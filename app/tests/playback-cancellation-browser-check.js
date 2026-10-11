@@ -1,18 +1,19 @@
 // Production playback controls with synthetic native reservations and silence.
-async page => {
+async (page, capturePath, detailUI) => {
   const results=[],check=(v,m)=>{if(!v)throw Error(m);};
   const dock=page.getByRole("region",{name:"会議の共通音声プレーヤー",exact:true});
   const player=dock.getByRole("group",{name:"会議全体の音声再生",exact:true});
-  const start=dock.getByRole("button",{name:"会議全体を再生",exact:true});
+  const start=player.getByRole("button",{name:"再生",exact:true});
   const editor=page.getByRole("region",{name:"文字起こし編集",exact:true});
   const row=editor.getByRole("article",{name:"00:00:00の発言行",exact:true});
-  const mode=dock.getByRole("combobox",{name:"会議全体の再生トラック",exact:true});
+  const settings=page.getByRole("dialog",{name:"再生設定",exact:true});
+  const mode=settings.getByRole("combobox",{name:"会議全体の再生トラック",exact:true});
   const count=command=>page.evaluate(command=>window.monBrowserFixture.calls.filter(c=>c.command===command).length,command);
   const boot=async patch=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
     await page.evaluate(patch=>Object.assign(window.monBrowserFixture.preparation,{strict:true,...patch}),patch??{});
     await page.locator(".meeting-name").first().click();
-    await editor.getByRole("button",{name:"編集を開始",exact:true}).waitFor();
+    await row.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).waitFor();
   };
   const barrier=async()=>page.evaluate(async()=>{
     const {stopAllPlayback}=await import("/src/playback-barrier.ts");
@@ -22,6 +23,10 @@ async page => {
   const settled=()=>page.waitForFunction(()=>window.cancelBarrierState!=="pending");
   const released=()=>page.waitForFunction(()=>Object.keys(window.monBrowserFixture.preparation.reservations).length===0&&Object.keys(window.monBrowserFixture.meetingAudio.sessions).length===0);
   const holdMeeting=async()=>{await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["both"]);await start.click();await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);};
+
+  await boot();
+  check(await player.count()===1&&await start.isEnabled()&&await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).isDisabled()&&await count("register_playback_preparation")===0&&await count("prepare_meeting_playback")===0&&await count("read_playback_chunk")===0,"initial bar was absent or prepared audio without a user action");
+  results.push("initial paused bar is visible with disabled seek and no native reservation, preparation or PCM read");
 
   await boot({holdRegister:true});await start.click();
   await page.waitForFunction(()=>window.monBrowserFixture.preparation.registerPending.length===1);
@@ -33,8 +38,7 @@ async page => {
 
   await boot({responsive:true});await holdMeeting();
   for(const width of [1280,960,360])for(const theme of ["light","dark"]){
-    await page.setViewportSize({width,height:640});await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);
-    await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
+    await page.setViewportSize({width,height:640});await detailUI.applyPlaybackTheme(theme);
     check(await player.getByRole("button",{name:"再生準備を取り消す",exact:true}).evaluate(e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&r.right<=innerWidth;})&&await dock.evaluate(e=>e.scrollWidth<=e.clientWidth+1),"preparation cancellation is offscreen or overflows");
     await page.screenshot({path:`playback-preparation-${theme}-${width}.png`});
   }
@@ -75,15 +79,15 @@ async page => {
 
   await boot();await start.click();await player.getByRole("button",{name:"一時停止",exact:true}).click();
   await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).fill("960000");await player.getByRole("combobox",{name:"速度",exact:true}).selectOption("1.5");
-  const summary=dock.getByText("再生トラック",{exact:true});if(!await summary.evaluate(e=>e.parentElement.open))await summary.click();
+  await dock.getByRole("button",{name:"再生設定",exact:true}).click();await settings.waitFor();
   await page.evaluate(()=>window.monBrowserFixture.meetingAudio.holdModes=["system"]);await mode.selectOption("system");
-  await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);await mode.selectOption("both");await player.getByRole("button",{name:"再生",exact:true}).waitFor();
+  await page.waitForFunction(()=>window.monBrowserFixture.meetingAudio.pending.length===1);await mode.selectOption("both");await settings.press("Escape");await settings.waitFor({state:"hidden"});await player.getByRole("button",{name:"再生",exact:true}).waitFor();
   const newest=await page.evaluate(()=>Object.keys(window.monBrowserFixture.meetingAudio.sessions)[0]);
   await page.evaluate(()=>window.monBrowserFixture.meetingAudio.pending[0].release());await page.waitForFunction(()=>Object.keys(window.monBrowserFixture.preparation.reservations).length===0);
   check(await player.getByRole("slider",{name:"会議全体の再生位置",exact:true}).inputValue()==="960000"&&await player.getByRole("combobox",{name:"速度",exact:true}).inputValue()==="1.5"&&await page.evaluate(token=>!!window.monBrowserFixture.meetingAudio.sessions[token],newest),"old cancelled preparation released or replaced newer audio checkpoint");
   results.push("a late cancelled track preparation cannot replace or release newer playback, its exact position or speed");
 
-  await boot({responsive:true});await editor.getByRole("button",{name:"編集を開始",exact:true}).click();await row.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
+  await boot({responsive:true});await row.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).click();
   const field=row.getByRole("textbox",{name:"00:00:00の発言",exact:true});await field.fill("取消でも未確定本文を保持します。");
   await field.evaluate(e=>{window.cancelInput=e;e.setSelectionRange(2,5);});const saves=await count("save_transcript_draft");
   await page.evaluate(()=>window.monBrowserFixture.holdPlayback=true);await row.getByRole("button",{name:"音声を再生",exact:true}).click();

@@ -15,7 +15,7 @@ async (page,capturePath,detailUI) => {
   await page.getByRole("button",{name:"議事録を編集",exact:true}).click();
   const rich=page.getByRole("textbox",{name:"議事録ブロック1",exact:true});
   await page.evaluate(()=>{window.__mon.failMinutesSave=true;});await rich.fill("文字サイズで未保存の議事録を保持");
-  await page.getByRole("status").filter({hasText:"議事録の保存要確認"}).waitFor();
+  await page.getByRole("status").filter({hasText:"保存要確認"}).waitFor();
   await rich.evaluate(e=>{window.displayRich=e;const r=document.createRange();r.setStart(e.firstChild,2);r.setEnd(e.firstChild,6);getSelection().removeAllRanges();getSelection().addRange(r);});
   const saves=await page.evaluate(()=>window.__mon.calls.filter(c=>c.cmd==="save_minutes_draft").length);
   for(const value of [13,20])for(const theme of ["light","dark"]){

@@ -8,8 +8,14 @@ test("one notification owner remains in the header through detail navigation", (
   assert.match(main, /<ToastHost docked=\{detail\} \/><\/header>/);
   assert.match(main, /observer.observe\(header\)/);
   assert.match(toast, /data-docked=\{docked\}/);
-  assert.match(css, /\.main-column \.topbar>\.toast-host\[data-docked=true\] \{ position:static;/);
-  assert.match(css, /\.topbar>\.toast-host\[data-docked=true\]:empty \{ display:none;/);
+  assert.match(css, /\.toast-host \{ display:contents; position:static;/);
+  assert.doesNotMatch(css, /\.topbar:has\(>\.toast-host/);
+  assert.match(toast, /<Toaster id=\{notificationPresenterId\} position="top-right" visibleToasts=\{3\}/);
+  assert.match(toast, /duration: Infinity, dismissible: false/);
+  assert.doesNotMatch(toast, /onDismiss:|onAutoClose:/);
+  assert.match(toast, /getBoundingClientRect\(\)\.bottom \?\? 64\) \+ 12/);
+  assert.match(toast, /Math.max\(measured.current.height,/);
+  assert.match(toast, /measured.current.height = cardHeight/);
   assert.match(toast, /toasts.pause\(toast.key,"clipped",!visible,toast.id\)/);
   assert.match(toast, /toasts.pause\(toast.key,"clipped",false,toast.id\)/);
 });

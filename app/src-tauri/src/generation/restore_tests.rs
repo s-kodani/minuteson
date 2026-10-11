@@ -8,6 +8,13 @@ struct MemoryAssets {
     target: BTreeMap<String, Vec<u8>>,
 }
 impl MemoryAssets {
+    fn replace(&mut self, artifact: &mut Artifact, bytes: Vec<u8>) {
+        artifact.hash = format!("{:x}", Sha256::digest(&bytes));
+        let saved = self.source.get_mut(&artifact.id).unwrap();
+        assert_eq!(saved.0, role(artifact).unwrap());
+        saved.1 = artifact.hash.clone();
+        saved.2 = bytes;
+    }
     fn add(&mut self, name: &str, bytes: Vec<u8>) -> Artifact {
         let artifact = Artifact {
             name: name.into(),
@@ -142,9 +149,12 @@ fn fixture_stop(version: u32, long: bool, stop: Stop) -> Fixture {
             seed: 1,
         },
         prompt_budget: 2400,
-        plan: plan::build(&old_input, 2400).unwrap(),
+        plan: plan::build_versioned(&old_input, 2400, version).unwrap(),
     };
-    assert_eq!(parameters.plan, plan::build(&new_input, 2400).unwrap());
+    assert_eq!(
+        parameters.plan,
+        plan::build_versioned(&new_input, 2400, version).unwrap()
+    );
     let spec = |meeting: &str, operation: &str, input: &MinutesInput| JobSpec {
         meeting_id: meeting.into(),
         kind: JobKind::MinutesGeneration,
@@ -164,7 +174,7 @@ fn fixture_stop(version: u32, long: bool, stop: Stop) -> Fixture {
     let mut checkpoint = Checkpoint::default();
     let mut outputs = vec![];
     for (index, node) in parameters.plan.nodes.iter().enumerate() {
-        if version == 2 && matches!(node, plan::Node::Merge { .. }) {
+        if parameters.adaptive_merge() && matches!(node, plan::Node::Merge { .. }) {
             let mut cursor = merge_cursor(node, &outputs, &parameters).unwrap();
             let mut batches = vec![];
             while cursor.next().is_some() {
@@ -192,7 +202,7 @@ fn fixture_stop(version: u32, long: bool, stop: Stop) -> Fixture {
             if checkpoint.pending.is_some() {
                 break;
             }
-            let items = cursor.finish().unwrap();
+            let items = result::normalize_versioned(cursor.finish().unwrap(), version).unwrap();
             let normalized = assets.add("items.json", serde_json::to_vec(&items).unwrap());
             checkpoint.outputs.push(UnitOutput {
                 index,
@@ -222,7 +232,7 @@ fn fixture_stop(version: u32, long: bool, stop: Stop) -> Fixture {
                     adaptive::identity(&merge::sources(*left, *right, &outputs).unwrap())
                 }
             };
-            let items = parse_node(raw.clone(), &old_input, node, &outputs).unwrap();
+            let items = parse_node(raw.clone(), &old_input, node, &outputs, version).unwrap();
             let batch = assets.saved(&task, raw, &items);
             checkpoint.outputs.push(UnitOutput {
                 index,
@@ -283,21 +293,105 @@ fn restore_generation_replays_references_not_natural_language_or_models() {
 }
 #[test]
 fn restore_generation_replays_adaptive_completed_and_pending_cross_pass_batches() {
-    for pending in [false, true] {
-        let mut f = fixture(2, true, pending);
-        let value = f.run(&|| false).unwrap();
-        assert_eq!(
-            value["outputs"].as_array().unwrap().len(),
-            f.old_job.completed_units as usize
-        );
-        assert_eq!(value.get("pending").is_some(), pending);
-        if !pending {
-            assert!(value["outputs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|o| o["mergeBatches"].as_array().is_some_and(|b| b.len() > 2)));
+    for version in [2, 3, 4] {
+        for pending in [false, true] {
+            let mut f = fixture(version, true, pending);
+            let value = f.run(&|| false).unwrap();
+            assert_eq!(
+                value["outputs"].as_array().unwrap().len(),
+                f.old_job.completed_units as usize
+            );
+            assert_eq!(value.get("pending").is_some(), pending);
+            if !pending {
+                assert!(value["outputs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|o| o["mergeBatches"].as_array().is_some_and(|b| b.len() > 2)));
+            }
         }
+    }
+}
+
+#[test]
+fn restore_generation_never_upgrades_fixed_prompt_policy_or_accepts_substituted_system_bytes() {
+    for version in [1, 2, 3, 4] {
+        let mut f = fixture(version, false, false);
+        let expected = plan::extract_system(version).unwrap();
+        let value = f.run(&|| false).unwrap();
+        let restored_id = value["outputs"][0]["artifacts"][0]["id"].as_str().unwrap();
+        assert_eq!(f.assets.target[restored_id], expected.as_bytes());
+        let mut changed_version = fixture(version, false, false);
+        changed_version.new_spec.parameters["generation"]["schemaVersion"] =
+            json!(if version == 3 { 2 } else { 3 });
+        assert!(changed_version.run(&|| false).is_err());
+        let mut substituted = fixture(version, false, false);
+        let id = substituted.checkpoint["outputs"][0]["artifacts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        substituted.assets.source.get_mut(&id).unwrap().2 =
+            plan::extract_system(if version >= 3 { 2 } else { 3 })
+                .unwrap()
+                .into_bytes();
+        assert!(substituted.run(&|| false).is_err());
+    }
+}
+#[test]
+fn restore_repeated_extraction_preserves_raw_output_and_versioned_normalization() {
+    for version in [3, 4] {
+        let mut f = fixture(version, false, false);
+        let p: Parameters =
+            serde_json::from_value(f.old_spec.parameters["generation"].clone()).unwrap();
+        let mut cp: Checkpoint = serde_json::from_value(f.checkpoint.clone()).unwrap();
+        assert_eq!(cp.outputs.len(), 1);
+        let source: Vec<GeneratedItem> =
+            serde_json::from_slice(&f.assets.source[&cp.outputs[0].normalized.id].2).unwrap();
+        let distinct: Vec<_> = (0..3)
+            .map(|i| {
+                let mut item = source[0].clone();
+                item.body = format!("原文 utterance {i} 点検日を確認する");
+                item
+            })
+            .collect();
+        let raw_items: Vec<_> = distinct.iter().chain(distinct.iter()).cloned().collect();
+        let raw = json!({"schemaVersion":1,"items":raw_items});
+        let parsed = parse_node(raw.clone(), &f.old_input, &p.plan.nodes[0], &[], version).unwrap();
+        f.assets.replace(
+            &mut cp.outputs[0].artifacts[3],
+            serde_json::to_vec(&raw).unwrap(),
+        );
+        f.assets.replace(
+            &mut cp.outputs[0].normalized,
+            serde_json::to_vec(&parsed).unwrap(),
+        );
+        f.checkpoint = serde_json::to_value(cp).unwrap();
+        let value = f.run(&|| false).unwrap();
+        let saved_raw: Value = serde_json::from_slice(
+            &f.assets.target[value["outputs"][0]["artifacts"][3]["id"].as_str().unwrap()],
+        )
+        .unwrap();
+        let saved_items: Vec<GeneratedItem> = serde_json::from_slice(
+            &f.assets.target[value["outputs"][0]["normalized"]["id"].as_str().unwrap()],
+        )
+        .unwrap();
+        assert_eq!(saved_raw["items"].as_array().unwrap().len(), 6);
+        assert_eq!(saved_items.len(), if version == 4 { 3 } else { 6 });
+        assert!(saved_items
+            .iter()
+            .all(|i| i.evidence_utterance_ids == vec!["new-u-id!"]));
+        assert_eq!(saved_items, mapped(&mut f.assets, &parsed).unwrap());
+        assert_eq!(f.run(&|| false).unwrap(), value);
+        // Correct hashes alone must not authorize a different normalization.
+        let mut cp: Checkpoint = serde_json::from_value(f.checkpoint.clone()).unwrap();
+        let wrong = if version == 4 { raw_items } else { distinct };
+        f.assets.replace(
+            &mut cp.outputs[0].normalized,
+            serde_json::to_vec(&wrong).unwrap(),
+        );
+        f.checkpoint = serde_json::to_value(cp).unwrap();
+        f.assets.target.clear();
+        assert!(f.run(&|| false).is_err());
     }
 }
 #[test]

@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke,isTauri } from "@tauri-apps/api/core";
 import { useEffect,useState } from "react";
 import { checkedSpeakerReviews,preciseTime,type SpeakerReview,type SpeakerReviews } from "./diarization-state";
@@ -44,7 +45,7 @@ export function SpeakerReviewDetails({analysis,utteranceId,startUs,labels,unconf
     <summary>推定された話者区間を確認</summary>
     <p>現在の話者割り当てとは別に、保存された推定区間を表示します。重複は同じトラック内の区間交差です。音源分離やトラック間の同一人物照合は行いません。</p>
     {loading&&<p role="status">推定区間を照合しています。</p>}
-    {error&&<p className="action-error" role="alert">{error} <button type="button" disabled={locked||loading} onClick={()=>setRetry(n=>n+1)}>推定区間を再読込</button></p>}
+    {error&&<p className="action-error" role="alert">{error} <IconButton label="推定区間を再読込" icon="refresh" type="button" disabled={locked||loading} onClick={()=>setRetry(n=>n+1)} /></p>}
     {review&&<>
       <SpeakerReviewBadge review={review}/>
       {review.estimatedState==="needsSplit"&&<p>発言内で話者が交代しています。単語時刻を推測して本文を切り分けていません。音声と原区間を確認してください。</p>}
@@ -53,7 +54,7 @@ export function SpeakerReviewDetails({analysis,utteranceId,startUs,labels,unconf
       <ul>{review.segments.map((s,i)=><li key={i}><span>{preciseTime(s.startUs)}–{preciseTime(s.endUs)} · {s.speakerId?label(s.speakerId):"話者不明"}{s.confidence===null?" · 信頼度なし":` · エンジン出力値 ${s.confidence}`}</span><button type="button" className="small-secondary" disabled={locked} onClick={()=>void onPlay(Math.max(startUs,s.startUs))}>この区間から聞く</button></li>)}</ul>
       <h4>発言内の重複区間 · {review.overlapCount} 件</h4>
       <ul>{review.overlaps.map((s,i)=><li key={i}><span>{preciseTime(s.startUs)}–{preciseTime(s.endUs)} · <span className="estimated-speakers">{s.speakerIds.map(label)}</span></span><button type="button" className="small-secondary" disabled={locked} onClick={()=>void onPlay(s.startUs)}>重複区間から聞く</button></li>)}</ul>
-      {review.pageCount>1&&<div className="transcript-pages"><button type="button" disabled={locked||loading||page===0} onClick={()=>setPage(n=>n-1)}>前の推定区間</button><span>{page+1} / {review.pageCount} · 各一覧50件ずつ</span><button type="button" disabled={locked||loading||page+1>=review.pageCount} onClick={()=>setPage(n=>n+1)}>次の推定区間</button></div>}
+      {review.pageCount>1&&<div className="transcript-pages"><IconButton label="前の推定区間" icon="previous" type="button" disabled={locked||loading||page===0} onClick={()=>setPage(n=>n-1)} /><span>{page+1} / {review.pageCount} · 各一覧50件ずつ</span><IconButton label="次の推定区間" icon="next" type="button" disabled={locked||loading||page+1>=review.pageCount} onClick={()=>setPage(n=>n+1)} /></div>}
     </>}
   </details>;
 }

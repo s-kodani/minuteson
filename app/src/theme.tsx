@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -80,7 +81,7 @@ export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolea
     <PlaybackFollowingSelection locked={locked} />
     <p className="hint">文字サイズは文字起こし・議事録の本文に適用します。追従は文字起こしの時間位置へ移動します。手動スクロールで一時停止し、再開ボタンか新しい再生で戻ります。編集中・文字選択中・確認画面では移動しません。</p>
     <div className="analysis-actions">
-      <button type="button" className="small-secondary" disabled={state.busy || !isTauri()} onClick={() => void controller.reload()}>保存済み表示設定を再読込</button>
+      <IconButton label="保存済み表示設定を再読込" icon="refresh" type="button" className="small-secondary" disabled={state.busy || !isTauri()} onClick={() => void controller.reload()} />
       <span role="status">{state.busy ? "表示設定を保存中" : state.uncertain ? "表示設定は未確認" : state.pendingPreferences ? "選択は未保存" : state.snapshot ? "保存済み設定を使用しています。" : isTauri() ? "表示設定を確認しています。" : "ブラウザプレビューではOS設定に追従します。"}</span>
     </div>
     </SettingsDisclosure>

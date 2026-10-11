@@ -164,6 +164,35 @@ class NoticeTests(unittest.TestCase):
         self.assertIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
         self.assertEqual(inventory["referenceOnlyPackages"], ["cargo:crate@1.0"])
 
+    def test_standard_template_is_readable_offline_without_resolving_attribution_or_approval(self):
+        self.supplement("license_template")
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertIn(b"Upstream synthetic license/reference\n", text)
+        self.assertIn(b"Standard license template only; NOT a package-specific copyright notice.", text)
+        self.assertIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
+        self.assertEqual(inventory["referenceOnlyPackages"], ["cargo:crate@1.0"])
+        entry = next(p for p in inventory["packages"] if p["name"] == "crate")
+        self.assertEqual(entry["supplementalFiles"][0]["kind"], "license_template")
+        self.assertEqual(inventory["licenseReview"], "not_verified")
+        self.assertFalse(inventory["distributionReady"])
+
+    def test_reference_and_template_together_still_leave_missing_package_notice(self):
+        index, _ = self.supplement("upstream_license_reference")
+        template = b"Copyright (c) <year> <copyright holders>\nSynthetic permission template\n"
+        self.file("third-party/notices/template.txt", template.decode())
+        index["files"].append({"path": "template.txt", "kind": "license_template",
+                               "sourceUrl": "https://example.invalid/fixed/MIT.txt",
+                               "sha256": notices.sha(template), "bytes": len(template)})
+        index["packages"][0]["files"].append("template.txt")
+        self.file("third-party/notices/index.json", json.dumps(index))
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertIn(template, text)
+        self.assertIn("cargo:crate@1.0", inventory["missingNoticeTexts"])
+        self.assertEqual(inventory["referenceOnlyPackages"], ["cargo:crate@1.0"])
+        self.file("third-party/notices/template.txt", "modified")
+        with self.assertRaises(ValueError):
+            notices.collect(self.root, self.metadata, self.lock)
+
     def test_mpl_notice_informs_recipients_of_exact_source_without_automatic_fetch(self):
         index, package = self.supplement()
         package["license"] = "MPL-2.0"

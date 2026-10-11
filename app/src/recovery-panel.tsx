@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { quietMaintenance, maintenanceReadRevision } from "./maintenance-visibility";
 import { InfoPopover } from "./info-popover";
@@ -126,7 +127,7 @@ export function RecoveryPanel({ operation, visible, locked, withSavedEdits, onPr
     {!open && <IssueNotice scope="recovery" type="operation" label="要確認データの確認・回収" message={operationError} />}
     {visible && !quiet && <section className="analysis-card recovery-panel" aria-label="中断したデータ操作の確認">
       <div className="heading-with-info"><h2 ref={panelHeading} tabIndex={-1}>中断したデータ操作の確認</h2><InfoPopover label="要確認データ" details={<p>未公開の復元追加物と構築用コピーだけが対象です。既存会議・公開済みデータ・元バックアップは変更しません。所有不明のファイルは削除しません。「保持して確認を完了」は回収ではなく、今後の自動回収からも保護する確認記録です。</p>}>未公開の追加復元物と移動途中のコピーを確認します。既存会議は変更しません。保持の確認と、対象を削除する回収は別の操作です。</InfoPopover></div>
-      <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(async () => { await latest.current.refresh(); await readList(); })}>要確認一覧を再読込</button>
+      <IconButton label="要確認一覧を再読込" icon="refresh" type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(async () => { await latest.current.refresh(); await readList(); })} />
       {!listing && <p role="status">一覧を確認できるまで回収・保持確認はできません。</p>}
       {listing && !listing.supported && <p role="status">このOSの回収操作は保留中です。</p>}
       {listing?.supported && <><p>保存場所: <span className="data-path">{listing.root}</span></p><p role="status">未確認 {listing.items.filter(i => !i.retained).length} 件 · 保持して確認済み {listing.items.filter(i => i.retained).length} 件</p><ul className="recovery-list">{listing.items.map(item => <li key={`${item.source}:${item.operationId}`}><h3>{recoverySourceLabel(item.source)}</h3><p>{item.reason}</p>{item.paths.map(path => <p className="data-path" key={path}>{path}</p>)}<p>登録対象 {item.registeredPaths} 件</p>{item.retained ? <p role="status">保持して確認済み。ファイルは削除していません。</p> : <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void choose(item)}>対象と解決方法を確認</button>}</li>)}</ul></>}

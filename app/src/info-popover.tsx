@@ -1,6 +1,8 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { infoPosition } from "./info-position";
 import { appShortcut } from "./keyboard";
+import { topOpenModal } from "./modal-state";
+import { ActionIcon } from "./action-icon";
 
 let activeClose: ((restore: boolean) => void) | null = null;
 // A confirmation takes precedence; do not move focus away from its controls.
@@ -54,7 +56,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
       }
     };
     const focusChanged = () => {
-      const modal = document.querySelector("dialog[open]");
+      const modal = topOpenModal();
       if (modal && !modal.contains(button)) close(false);
     };
     const resize = new ResizeObserver(place); resize.observe(element); resize.observe(button);
@@ -84,7 +86,7 @@ export function InfoPopover({ label, children, details }: { label: string; child
   return <div className="info-shell">
     <button ref={trigger} type="button" className="info-trigger" aria-label={`${label}の説明を開く`} aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onClick={() => open ? liveClose.current(true) : setOpen(true)}><span aria-hidden="true">ⓘ</span></button>
     <div ref={popup} id={id} popover="manual" role="dialog" aria-modal="false" aria-labelledby={titleId} className="info-popover">
-      <div className="info-popover-head"><h3 id={titleId}>{label}</h3><button ref={closeButton} type="button" className="info-close" aria-label={`${label}の説明を閉じる`} onClick={() => liveClose.current(true)}>×</button></div>
+      <div className="info-popover-head"><h3 id={titleId}>{label}</h3><button ref={closeButton} type="button" className="info-close icon-button" aria-label={`${label}の説明を閉じる`} title="説明を閉じる" onClick={() => liveClose.current(true)}><ActionIcon name="close" /></button></div>
       <p>{children}</p>
       {details && <><a href={`#${detailsId}`} aria-expanded={expanded} aria-controls={detailsId} onClick={event => { event.preventDefault(); setExpanded(value => !value); }}>{expanded ? "詳しい説明を閉じる" : "詳しい説明"}</a><div id={detailsId} className="info-details" hidden={!expanded}>{details}</div></>}
     </div>

@@ -111,7 +111,7 @@ async (page, capturePath, detailUI) => {
   await page.waitForFunction(title => document.querySelector(".playback-owner")?.textContent.includes(title),longTitle);
   await page.evaluate(() => window.monBrowserFixture.showToast({ key:"fixed-player-long-notice",level:"warning",important:true,message:"長文の注意を確認してください。".repeat(300) }));
   const notice = page.getByRole("complementary",{ name:"通知",exact:true }); await notice.getByRole("alert").waitFor();
-  await page.waitForFunction(() => { const t = document.querySelector(".toast-host").getBoundingClientRect(),d = document.querySelector(".meeting-playback-dock").getBoundingClientRect(),h = document.querySelector(".topbar").getBoundingClientRect(); return t.bottom <= d.top - 8 && t.top >= h.bottom + 8; });
+  await page.waitForFunction(() => { const t = document.querySelector(".toast-host .toast-card").getBoundingClientRect(),d = document.querySelector(".meeting-playback-dock").getBoundingClientRect(),h = document.querySelector(".topbar").getBoundingClientRect(); return t.bottom <= d.top - 8 && t.top >= h.bottom + 8; });
   const b = await bounds(); check(b.dock.bottom - b.dock.top <= b.height * .4 + 1 && !b.dockOverflow && b.main.bottom <= b.dock.top + 1,"long owner broke dock allocation");
   await player.getByRole("button",{ name:"再生",exact:true }).focus();
   check(await player.getByRole("button",{ name:"再生",exact:true }).evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }),"long owner hides focused playback action");

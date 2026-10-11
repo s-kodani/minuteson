@@ -35,7 +35,7 @@ async (page) => {
   await boot(960);await document().getByRole("button",{name:"議事録を編集",exact:true}).click();
   const field=document().getByRole("textbox",{name:"議事録ブロック1",exact:true});
   await page.evaluate(()=>{window.__mon.failMinutesSave=true;});await field.fill("音声を切り替えても残る未保存の見出し");await field.evaluate(e=>{window.stagedMinutesField=e;});
-  await document().getByRole("status").filter({hasText:"議事録の保存要確認"}).waitFor();
+  await document().getByRole("status").filter({hasText:"保存要確認"}).waitFor();
   const failedWrites=await writes();await playWhole();const drawerWhole=await token();await select();await drawer().waitFor();
   await evidence().getByRole("button",{name:"根拠の音声を再生",exact:true}).click();await pause(drawer().getByRole("group",{name:"発言の音声再生",exact:true}));await gone(drawerWhole);
   check(await whole().count()===0&&await dock().getByRole("group",{name:"発言の音声再生",exact:true}).count()===0,"drawer left full meeting playing or placed fixed controls in inert dock");

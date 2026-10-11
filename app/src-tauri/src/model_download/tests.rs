@@ -7,6 +7,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+mod archives;
+
 const BIN: &[u8] = b"not-an-executable";
 const MODEL: &[u8] = b"not-a-real-model";
 fn hash(bytes: &[u8]) -> String {

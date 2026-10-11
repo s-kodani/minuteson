@@ -123,7 +123,7 @@ fn adaptive_merge_resumes_durable_subunits_after_reopen_and_preserves_every_item
     .unwrap();
     let fixed = storage.load_minutes_input(&job.id).unwrap();
     let spec = storage.fixed_job_input(&job.id).unwrap().0;
-    assert_eq!(spec.parameters["generation"]["schemaVersion"], 2);
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 4);
     let extracts = spec.parameters["generation"]["plan"]["nodes"]
         .as_array()
         .unwrap()
@@ -464,6 +464,51 @@ fn legacy_generation_still_resumes_its_original_artifacts_and_rejects_oversized_
         assert!(calls(root.path()) > before);
     }
 }
+#[test]
+fn previous_generation_policy_retries_after_reopen_without_upgrading_saved_prompts_or_plan() {
+    let root = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(root.path().into()).unwrap();
+    let req = request(&storage, true);
+    let job =
+        generation::enqueue_previous(&storage, req, wide_engine(root.path()), "standard", 2400)
+            .unwrap();
+    let spec = storage.fixed_job_input(&job.id).unwrap().0;
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 2);
+    let checkpoint = pause_in_merge(&storage, &job);
+    let before = calls(root.path());
+    let parent = storage
+        .finish_job(
+            &job.id,
+            storage.get_job(&job.id).unwrap().completed_units,
+            "failed",
+            Some("fixture"),
+        )
+        .unwrap();
+    drop(storage);
+    storage = Storage::open(root.path().into()).unwrap();
+    let child = retry_request(&parent, &Uuid::new_v4().to_string())
+        .enqueue(&storage)
+        .unwrap();
+    let (child_spec, saved) = storage.fixed_job_input(&child.id).unwrap();
+    assert_eq!(child_spec.parameters, spec.parameters);
+    assert_eq!(saved, Some(checkpoint.clone()));
+    assert_eq!(calls(root.path()), before);
+    storage.acquire_local_inference_job().unwrap();
+    assert!(generation::process(&storage, &child.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    let resumed = storage.fixed_job_input(&child.id).unwrap().1.unwrap();
+    let count = checkpoint["outputs"].as_array().unwrap().len();
+    assert_eq!(
+        &resumed["outputs"].as_array().unwrap()[..count],
+        checkpoint["outputs"].as_array().unwrap()
+    );
+    assert_eq!(
+        storage.fixed_job_input(&parent.id).unwrap().1,
+        Some(checkpoint)
+    );
+    assert!(current_minutes(&storage, &parent.meeting_id).is_none());
+}
 fn request(storage: &Storage, long: bool) -> MinutesJobRequest {
     let meeting = analysis::tests::saved_meeting(storage);
     std::fs::create_dir_all(storage.root.join("meetings").join(&meeting.id)).unwrap();
@@ -490,6 +535,70 @@ fn request(storage: &Storage, long: bool) -> MinutesJobRequest {
             id: draft.id,
             lock_version: draft.lock_version,
         }),
+    }
+}
+#[test]
+fn repeated_generation_preserves_raw_six_items_and_resumes_versioned_candidate_after_reopen() {
+    for version in [3, 4] {
+        let root = tempfile::tempdir().unwrap();
+        let mut storage = Storage::open(root.path().into()).unwrap();
+        let config = engine(
+            root.path(),
+            r#"p=json.loads(pathlib.Path(arg('--file')).read_text())
+refs=[u['utteranceId'] for u in p['utterances']]
+items=[{'kind':'summary','body':f'確認事項{i}','assigneeName':None,'assigneeSpeakerId':None,'dueDate':None,'dueText':None,'evidenceUtteranceIds':refs} for i in range(3)]
+print(json.dumps({'schemaVersion':1,'items':items+items},ensure_ascii=False))"#,
+        );
+        let req = request(&storage, false);
+        let protected = storage.load_transcript_draft(&req.meeting_id).unwrap();
+        let job = if version == 3 {
+            generation::enqueue_prompt_v3(&storage, req, config, "standard", 2400)
+        } else {
+            generation::enqueue(&storage, req, config, "standard", 2400)
+        }
+        .unwrap();
+        assert_eq!(job.total_units, Some(1));
+        pause_at(&storage, &job, 1);
+        assert_eq!(calls(root.path()), 1);
+        let (spec, checkpoint) = storage.fixed_job_input(&job.id).unwrap();
+        assert_eq!(spec.parameters["generation"]["schemaVersion"], version);
+        drop(storage);
+        storage = Storage::open(root.path().into()).unwrap();
+        storage.resume_job(&job.id).unwrap();
+        storage.acquire_local_inference_job().unwrap();
+        let candidate = generation::process(&storage, &job.id, &|| false, &|_| {})
+            .unwrap()
+            .unwrap();
+        let result = storage
+            .load_minutes_content(&job.meeting_id, &candidate)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.content.items.len(), if version == 4 { 3 } else { 6 });
+        assert_eq!(calls(root.path()), 1, "saved inference must not rerun");
+        assert_eq!(storage.fixed_job_input(&job.id).unwrap().1, checkpoint);
+        assert_eq!(
+            storage.load_transcript_draft(&job.meeting_id).unwrap(),
+            protected
+        );
+        assert!(current_minutes(&storage, &job.meeting_id).is_none());
+        let raw_id = checkpoint.unwrap()["outputs"][0]["artifacts"][3]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let raw_path: String = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT relative_path FROM file_assets WHERE id=?1",
+                params![raw_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let raw =
+            generation::llama::parse_output(&std::fs::read(storage.root.join(raw_path)).unwrap())
+                .unwrap();
+        assert_eq!(raw["items"].as_array().unwrap().len(), 6);
     }
 }
 fn calls(root: &Path) -> usize {

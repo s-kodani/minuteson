@@ -2,7 +2,7 @@ import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, 
 import { createPortal } from "react-dom";
 
 type Owner = { id: string; meetingId: string; label: string };
-type Surface = { target: HTMLElement | null; claim: (owner: Owner) => void; release: (id: string) => void };
+type Surface = { target: HTMLElement | null; occupied: boolean; claim: (owner: Owner) => void; release: (id: string) => void };
 const Context = createContext<Surface | null>(null);
 export const usePlaybackSurface = () => useContext(Context);
 
@@ -11,10 +11,10 @@ export const usePlaybackSurface = () => useContext(Context);
 export function MeetingPlaybackSurface({ host, meetingId, title, children }: { host: HTMLElement | null; meetingId: string | null; title?: string; children: ReactNode }) {
   const [owner,setOwner] = useState<Owner | null>(null);
   const [target,setTarget] = useState<HTMLDivElement | null>(null);
-  const surface = useMemo<Surface>(() => ({ target, claim:setOwner, release:id=>setOwner(current=>current?.id===id ? null : current) }), [target]);
   const current = owner?.meetingId===meetingId ? owner : null;
+  const surface = useMemo<Surface>(() => ({ target, occupied:!!current, claim:setOwner, release:id=>setOwner(current=>current?.id===id ? null : current) }), [target,!!current]);
   return <Context.Provider value={surface}>{children}{host && createPortal(<div className="meeting-playback-content" data-meeting-id={meetingId ?? ""}>
-    <span className="playback-owner"><span className="playback-meeting-title" title={title || "選択会議"}>{title || "選択会議"}</span><span> · {current?.label || "発言区間の音声"}</span></span>
+    <span className="playback-owner"><span className="playback-meeting-title" title={title || "選択会議"}>{title || "選択会議"}</span><span> · {current?.label || "保存音声"}</span></span>
     <div ref={setTarget} className="shared-playback-slot" />
     {!current && <p className="playback-empty">発言の時刻から保存音声を再生できます。</p>}
   </div>,host)}</Context.Provider>;

@@ -183,7 +183,8 @@ impl Snapshot {
             .filter(|f| {
                 // Whisper/llama runtime libraries are verified as part of the whole
                 // package even though their CLI configs have no library argument.
-                f.role != Role::RuntimeLibrary || execution.engine() == Engine::Sherpa
+                f.role != Role::Notice
+                    && (f.role != Role::RuntimeLibrary || execution.engine() == Engine::Sherpa)
             })
             .collect::<Vec<_>>();
         if proofs.len() != declared.len() {

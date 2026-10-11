@@ -1,0 +1,12 @@
+{
+  "files": [
+    {"relativePath":"models/ggml-small.bin","role":"asr","expectedSize":487601967,"expectedHash":"1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"},
+    {"relativePath":"notices/whisper-model-card.md","role":"notice","expectedSize":3196,"expectedHash":"21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758"},
+    {"relativePath":"notices/openai-whisper-MIT.txt","role":"notice","expectedSize":1063,"expectedHash":"b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"}
+  ],
+  "sources": [
+    {"relativePath":"models/ggml-small.bin","url":"https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin"},
+    {"relativePath":"notices/whisper-model-card.md","url":"https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/README.md"},
+    {"relativePath":"notices/openai-whisper-MIT.txt","url":"https://raw.githubusercontent.com/openai/whisper/31243bad24cc746f07d4c8bfdd2d974872cb1803/LICENSE"}
+  ]
+}

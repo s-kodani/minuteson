@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { IconButton } from "./action-icon";
 import { CommonModal } from "./common-modal";
 import type { AdvancedDraftReview } from "./transcript-recovery-editor";
 import type { ConflictChoice } from "./transcript-conflict";
@@ -44,8 +45,8 @@ export function TranscriptConflictPanel({ preview,blocked,onClose,onRefresh,onAc
         <option value="" disabled>選択してください</option><option value="local" disabled={!item.row.local}>手元の入力</option><option value="stored" disabled={!item.row.stored}>保存済み回復入力</option><option value="omit">この入力は再開しない</option>
       </select></label>
     </fieldset>)}
-    {rows.length > 10 && <div className="transcript-actions"><button type="button" disabled={!page || busy || blocked} onClick={() => setPage(n => n - 1)}>前の比較項目</button><button type="button" disabled={(page + 1) * 10 >= rows.length || busy || blocked} onClick={() => setPage(n => n + 1)}>次の比較項目</button></div>}
+    {rows.length > 10 && <div className="transcript-actions"><IconButton label="前の比較項目" icon="previous" type="button" disabled={!page || busy || blocked} onClick={() => setPage(n => n - 1)} /><IconButton label="次の比較項目" icon="next" type="button" disabled={(page + 1) * 10 >= rows.length || busy || blocked} onClick={() => setPage(n => n + 1)} /></div>}
     {error && <p role="alert" className="action-error">{error}</p>}
-    <div className="transcript-actions"><button type="button" disabled={busy || blocked || missing > 0} onClick={() => void run(() => onAccept(choices,inputs))}>選択した内容で編集を再開</button><button type="button" className="small-secondary" data-dialog-cancel disabled={busy} onClick={onClose}>閉じる</button></div>
+    <div className="transcript-actions"><button type="button" disabled={busy || blocked || missing > 0} onClick={() => void run(() => onAccept(choices,inputs))}>選択した内容で編集を再開</button><IconButton label="閉じる" icon="close" type="button" className="small-secondary" data-dialog-cancel disabled={busy} onClick={onClose} /></div>
   </CommonModal>;
 }

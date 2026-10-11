@@ -2,6 +2,8 @@
 //! IPC callers must hold the model-preparation
 //! lease for the whole operation (including child teardown and durable IO).
 //! Download recipes are explicit untrusted input, not an authenticated catalog.
+#[cfg(target_os = "macos")]
+mod archive;
 pub(crate) mod catalog;
 mod transport;
 #[cfg(test)]
@@ -209,7 +211,8 @@ pub(crate) fn place(
 }
 
 /// Explicit staging only. Never runs downloaded executables, mutates settings,
-/// registers a package, extracts archives, resumes, or deletes partial files.
+/// registers a package, resumes, or deletes partial files. Explicit archive
+/// members are streamed to private non-executable files, never disk-extracted.
 /// Successful download is not manual_import and is not installed/ready.
 pub(crate) fn download(
     staging_root: &Path,
@@ -219,6 +222,9 @@ pub(crate) fn download(
     cancelled: &impl Fn() -> bool,
     progress: &mut impl FnMut(u64, u64),
 ) -> Result<DownloadReceipt, String> {
+    if recipe.has_bundled() {
+        return Err("同梱実行ファイルはアプリの専用準備経路で照合してください".into());
+    }
     stage(
         staging_root,
         operation_id,
@@ -228,6 +234,48 @@ pub(crate) fn download(
         progress,
         &mut |url, size, hash, file, cancelled, progress| {
             transport::fetch(url, size, hash, file, cancelled, progress)
+        },
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn download_with_bundle(
+    staging_root: &Path,
+    bundle_root: &Path,
+    operation_id: &str,
+    recipe: &Recipe,
+    expected_recipe_hash: &str,
+    cancelled: &impl Fn() -> bool,
+    progress: &mut impl FnMut(u64, u64),
+) -> Result<DownloadReceipt, String> {
+    if !recipe.has_bundled() {
+        return download(
+            staging_root,
+            operation_id,
+            recipe,
+            expected_recipe_hash,
+            cancelled,
+            progress,
+        );
+    }
+    if recipe.review()?.recipe_hash != expected_recipe_hash {
+        return Err("同梱モデルの確認した取得定義と一致しません".into());
+    }
+    let mut bundle = crate::model_bundled_runtime::Bundle::open(bundle_root)?;
+    bundle.prepare(bundle_root, recipe, cancelled)?;
+    stage(
+        staging_root,
+        operation_id,
+        recipe,
+        expected_recipe_hash,
+        cancelled,
+        progress,
+        &mut |url, size, hash, output, cancelled, report| {
+            if url == crate::model_download_recipe::BUNDLED_WHISPER {
+                bundle.fetch(url, size, hash, output, cancelled)
+            } else {
+                transport::fetch(url, size, hash, output, cancelled, report)
+            }
         },
     )
 }
@@ -256,6 +304,7 @@ fn stage(
         return Err("ダウンロード操作IDが不正です".into());
     }
     let total = recipe.review()?.total_bytes;
+    let transfer_total = recipe.transfer_bytes()?;
     let recipe_hash = recipe.hash()?;
     if recipe_hash != expected_recipe_hash {
         return Err("ダウンロード定義が確認内容から変わっています。再確認してください".into());
@@ -271,6 +320,7 @@ fn stage(
     // though later placement must recheck free space on its actual filesystem.
     let required = total
         .checked_mul(2)
+        .and_then(|n| n.checked_add(recipe.archive_bytes().ok()?))
         .and_then(|n| n.checked_add(3 * MAX_RECIPE as u64 + 16 * 1024 * 1024))
         .ok_or("ダウンロード必要容量が範囲外です")?;
     let root = Directory::root(staging_root)?;
@@ -287,12 +337,61 @@ fn stage(
     let manifest_hash = format!("{:x}", Sha256::digest(&manifest_bytes));
     durable_file(&payload, model_inspection::MANIFEST, &manifest_bytes)?;
     let mut completed = 0_u64;
-    progress(0, total);
-    for (file, source) in recipe.manifest.files.iter().zip(&recipe.sources) {
+    progress(0, transfer_total);
+    let mut archives_seen = std::collections::BTreeSet::new();
+    for (index, (file, source)) in recipe
+        .manifest
+        .files
+        .iter()
+        .zip(&recipe.sources)
+        .enumerate()
+    {
         check(cancelled)?;
         root.verify()?;
         operation.verify()?;
         payload.verify()?;
+        if let Some(archive_source) = &source.archive {
+            if !archives_seen.insert(&source.url) {
+                continue;
+            }
+            #[cfg(not(target_os = "macos"))]
+            return Err("Windowsのアーカイブ取得は保留中です".into());
+            #[cfg(target_os = "macos")]
+            {
+                let archives = operation.child("archives", false)?;
+                let name = format!("source-{index}.tar");
+                let (mut output, parent) = archives.create(&name)?;
+                fetch(
+                    &source.url,
+                    archive_source.expected_size,
+                    &archive_source.expected_hash,
+                    &mut output,
+                    cancelled,
+                    &mut |n| {
+                        if source.url != crate::model_download_recipe::BUNDLED_WHISPER {
+                            progress(completed + n, transfer_total);
+                        }
+                    },
+                )?;
+                output
+                    .sync_all()
+                    .map_err(|_| "アーカイブを確定できません")?;
+                parent.sync()?;
+                drop(output);
+                let indices = recipe
+                    .sources
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| (s.url == source.url).then_some(i))
+                    .collect::<Vec<_>>();
+                archive::extract(&archives, &name, &payload, recipe, &indices, cancelled)?;
+                if source.url != crate::model_download_recipe::BUNDLED_WHISPER {
+                    completed += archive_source.expected_size;
+                }
+                progress(completed, transfer_total);
+                continue;
+            }
+        }
         let (mut output, parent) = payload.create(&file.relative_path)?;
         let size = file.expected_size.unwrap();
         fetch(
@@ -301,7 +400,7 @@ fn stage(
             file.expected_hash.as_ref().unwrap(),
             &mut output,
             cancelled,
-            &mut |n| progress(completed + n, total),
+            &mut |n| progress(completed + n, transfer_total),
         )?;
         output
             .sync_all()
@@ -309,7 +408,7 @@ fn stage(
         parent.sync()?;
         payload.verify()?;
         completed += size;
-        progress(completed, total);
+        progress(completed, transfer_total);
     }
     check(cancelled)?;
     // Re-read all physical files through the existing no-link preflight. The

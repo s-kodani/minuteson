@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useActionConfirmation } from "./confirmation-service";
 import { IssueNotice } from "./toast";
+import { OptionsModal } from "./options-modal";
+import { IconButton, type ActionIconName } from "./action-icon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
@@ -14,8 +16,12 @@ import type { Inline, MinutesContent, MinutesDraft, MinutesView } from "./minute
 import { timeLabel } from "./transcript";
 
 export type EditorGuard = (nextId: string | null) => boolean;
-export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard, visible = true, actionsHost = null }: {
-  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean; actionsHost?: HTMLElement | null;
+const formatIcons: Partial<Record<string, ActionIconName>> = {
+  "太字": "bold", "斜体": "italic", "見出し1": "heading1", "見出し2": "heading2", "見出し3": "heading3",
+  "箇条書き": "list", "番号付きリスト": "numberedList", "表を挿入": "table",
+};
+export function MinutesEditor({ view, meetingTitle, initialDraft, locked, registerGuard, visible = true, actionsHost = null, optionsHost = null }: {
+  view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean; actionsHost?: HTMLElement | null; optionsHost?:HTMLElement | null;
 }) {
   const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<MinutesContent, MinutesDraft>(
@@ -30,6 +36,10 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const [page, setPage] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [full,setFull] = useState(false);
+  const [formatOpen,setFormatOpen] = useState(false);
+  const [formatActionsHost,setFormatActionsHost] = useState<HTMLDivElement | null>(null);
+  const formatTrigger = useRef<HTMLButtonElement>(null);
+  const focusAfterOptions = useRef(false);
   const [referenceMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body minutes-reference-body"; return node; });
   const referenceHandle = useRef<WorkspacePanelHandle | null>(null);
   const documentHandle = useRef<MinutesDocumentHandle | null>(null);
@@ -47,22 +57,25 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     if (confirm.pending) { focusAfterConfirmation.current = true; return; }
     const afterConfirmation = focusAfterConfirmation.current;
     focusAfterConfirmation.current = false;
+    const afterOptions = focusAfterOptions.current;
+    focusAfterOptions.current = false;
     if (!editing || busy || locked || focusAddress.current === null) return;
     // The confirmation's layout effects close its native dialog and restore its
     // opener first. Focus the surviving rich field after that restoration; a
     // removed field must not leave focus on an unrelated preview heading.
     const focus = () => {
       if (document.querySelector("dialog[open]") || focusAddress.current === null) return;
+      if (afterOptions && document.activeElement !== formatTrigger.current && document.activeElement !== document.body) return;
       const key = inlineAddressKey(focusAddress.current);
       const field = [...(editorRoot.current?.querySelectorAll<HTMLElement>(".minutes-rich-field") ?? [])].find((field) => field.dataset.inlineAddress === key) ?? editorRoot.current?.querySelector<HTMLElement>(".minutes-rich-field");
       if (!field?.isConnected || !field.matches('[contenteditable="true"]')) return;
       focusAddress.current = null;
       field.focus({ preventScroll: true });
     };
-    if (!afterConfirmation) { focus(); return; }
+    if (!afterConfirmation && !afterOptions) { focus(); return; }
     const frame = requestAnimationFrame(focus);
     return () => cancelAnimationFrame(frame);
-  }, [epoch, editing, plan.page, confirm.pending, busy, locked]);
+  }, [epoch, editing, plan.page, confirm.pending, busy, locked,formatOpen]);
   useEffect(() => {
     mounted.current = true;
     const stop = queue.subscribe(() => setSaved(queue.snapshot()));
@@ -138,6 +151,10 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     const nextPage = documentPageForAddress(blocks, focusAddress.current ?? requested);
     if (!focusAddress.current) focusAddress.current = firstDocumentAddress(blocks, nextPage);
     setPage(nextPage); setSelection(null); setEpoch((v) => v + 1);
+    if (formatOpen) {
+      focusAfterOptions.current = true;
+      setFormatOpen(false);
+    }
     return true;
   };
   const changePage = (next: number) => {
@@ -160,7 +177,9 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     },
   };
   const conversionAddress = selection ? { block: selection.address.block + (selectedBlock?.type === "list" && (selection.address.item ?? 0) > 0 ? 1 : 0) } : { block: 0 };
-  const toolbarButton = (label: string, action: () => void, unavailable = false) => <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={action}>{label}</button>;
+  const toolbarButton = (label: string, action: (opener: HTMLButtonElement) => void, unavailable = false) => formatIcons[label]
+    ? <IconButton label={label} icon={formatIcons[label]!} disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={event => action(event.currentTarget)} />
+    : <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={event => action(event.currentTarget)}>{label}</button>;
   const manualLabel = (id: string | null | undefined) => id && doc.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
   const finishEditing = () => run(async () => {
     if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください");
@@ -174,19 +193,19 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     });
   });
   const primaryActions = <div className="transcript-actions minutes-edit-actions" hidden={full}>
-      {!editing && <button ref={editToggle} type="button" className="small-secondary" disabled={locked || busy} onClick={() => void begin()}>議事録を編集</button>}
-      {editing && <button ref={editToggle} type="button" className="small-secondary" disabled={locked || busy} onClick={() => void finishEditing()}>編集を終了</button>}
-      {saved.draft && <span role="status">{saved.error ? "議事録の保存要確認" : saved.saving ? "議事録を保存中" : saved.dirty ? "議事録は未保存" : "議事録は保存済み"}</span>}
+      {!editing && <IconButton ref={editToggle} label="議事録を編集" icon="edit" disabled={locked || busy} onClick={() => void begin()} />}
+      {editing && <IconButton ref={editToggle} label="編集を終了" icon="close" disabled={locked || busy} onClick={() => void finishEditing()} />}
+      {saved.draft && <span role="status" aria-label="議事録の保存状態" className="minutes-save-status">{saved.error ? "保存要確認" : saved.saving ? "保存中" : saved.dirty ? "未保存" : "保存済み"}</span>}
       {saved.error && <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); })}>議事録保存を再試行</button>}
-      <details className="minutes-edit-options"><summary>その他の編集操作</summary>
-      {saved.draft && <button type="button" className="small-secondary" disabled={locked || busy || saved.saving || compositions.current.size > 0 || (!saved.dirty && saved.draft.lockVersion === 0)} onClick={() => void undo()}>直前の議事録編集を取り消す</button>}
-      <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void reload()}>議事録編集を再読込</button>
-      </details>
+      <OptionsModal className="minutes-edit-options" label="その他の編集操作" triggerLabel="編集の管理" icon="edit" hidden={!visible} triggerHost={optionsHost}>
+      {saved.draft && <IconButton label="直前の議事録編集を取り消す" icon="undo" disabled={locked || busy || saved.saving || compositions.current.size > 0 || (!saved.dirty && saved.draft.lockVersion === 0)} onClick={() => void undo()} />}
+      <IconButton label="議事録編集を再読込" icon="refresh" disabled={locked || busy || saved.saving} onClick={() => void reload()} />
+      </OptionsModal>
     </div>;
   return <section ref={editorRoot} className="minutes-editor" aria-label="議事録文書と編集">
     {actionsHost ? createPortal(primaryActions, actionsHost) : primaryActions}
     {editing && <>
-      <details className="workspace-tools minutes-format-tools" hidden={full}><summary>議事録の書式・構造操作</summary><div className="workspace-tools-body">
+      <OptionsModal className="workspace-tools minutes-format-tools" hidden={full || !visible} label="議事録の書式・構造操作" triggerLabel="書式の詳細" icon="more" triggerHost={formatActionsHost} triggerRef={formatTrigger} open={formatOpen} onOpenChange={next=>{focusAfterOptions.current=!next;setFormatOpen(next);}}><div className="workspace-tools-body">
       <p>文字を選択して太字・斜体を適用できます。見出し・箇条書き・表は選択中の要素へ適用します。本文・担当者・期限の変更は手動修正として保存します。根拠の引用は変えません。</p>
       <div className="minutes-toolbar" role="toolbar" aria-label="議事録の書式と構造">
         {toolbarButton("斜体", () => { if (selection) edit((d) => editInline(d, selection.address, formatInline(inlineAt(d, selection.address), selection.start, selection.end, "italic"))); }, !selection || selection.end <= selection.start)}
@@ -197,13 +216,13 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
         {toolbarButton("項目を削除", () => { if (selection) structural((d) => changeList(d, selection.address, true)); }, selectedBlock?.type !== "list")}
         {(["paragraph", "heading", "list"] as const).map((type) => <span key={type}>{toolbarButton(({ paragraph: "段落を挿入", heading: "見出しを挿入", list: "リストを挿入" })[type], () => structural((d) => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, type), (selection?.address.block ?? doc.blocks.length - 1) + 1))}</span>)}
         {(["addRow", "removeRow", "addColumn", "removeColumn"] as const).map((action) => <span key={action}>{toolbarButton(({ addRow: "表の行を追加", removeRow: "表の行を削除", addColumn: "表の列を追加", removeColumn: "表の列を削除" })[action], () => { if (selection) structural((d) => changeTable(d, selection.address, action), action === "addRow" ? { block: selection.address.block, row: (selection.address.row ?? (selectedBlock?.type === "table" ? selectedBlock.rows.length - 1 : 0)) + 1, column: 0 } : selection.address); }, selectedBlock?.type !== "table" || (action === "removeRow" && selection?.address.header))}</span>)}
-        {toolbarButton("ブロックを削除", () => {
+        {toolbarButton("ブロックを削除", opener => {
           if (!selection) return;
           const block = selection.address.block, expected = JSON.stringify(queue.snapshot().payload);
-          void confirm({ title: "議事録ブロックの削除を確認", target: `議事録ブロック${block + 1}`, confirmLabel: "ブロックを削除する", message: "選択した文書ブロックと、その項目・根拠を下書きから削除します。保存済みの生成原文は保持し、直前の編集の取り消しで戻せます。", validate: () => !compositions.current.size && !failure.current && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await queue.flush(); if (!structural(d => removeBlock(d, block))) throw Error("ブロックを変更できませんでした。入力と選択を再確認してください。"); await queue.flush(); } });
+          void confirm({ opener, title: "議事録ブロックの削除を確認", target: `議事録ブロック${block + 1}`, confirmLabel: "ブロックを削除する", message: "選択した文書ブロックと、その項目・根拠を下書きから削除します。保存済みの生成原文は保持し、直前の編集の取り消しで戻せます。", validate: () => !compositions.current.size && !failure.current && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: async () => { await queue.flush(); if (!structural(d => removeBlock(d, block))) throw Error("ブロックを変更できませんでした。入力と選択を再確認してください。"); await queue.flush(); } });
         }, !selection)}
       </div>
-      </div></details>
+      </div></OptionsModal>
     </>}
     <div className="minutes-split" data-full={full}>
     <div className="minutes-body-scroll" role="region" aria-label="議事録本文" tabIndex={0}>
@@ -213,6 +232,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
         {toolbarButton("見出し2", () => { if (selection) structural(d => convertBlock(d, selection.address, "heading", 2), conversionAddress); }, !selection || selectedBlock?.type === "table")}
         {toolbarButton("箇条書き", () => { if (selection) structural(d => convertBlock(d, selection.address, "list")); }, !selection || selectedBlock?.type === "table")}
         {toolbarButton("表を挿入", () => structural(d => insertBlock(d, selection?.address.block ?? d.blocks.length - 1, "table"), (selection?.address.block ?? doc.blocks.length - 1) + 1))}
+        <div ref={setFormatActionsHost} className="minutes-format-actions-host" />
       </div>
       <div className="minutes-wysiwyg" aria-label="議事録リッチテキスト" hidden={full}>
         {plan.fragments.map(({ blockIndex: index, rowStart, rowEnd }) => {

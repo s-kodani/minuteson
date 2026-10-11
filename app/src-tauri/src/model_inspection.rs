@@ -54,6 +54,7 @@ impl Target {
 pub(crate) enum Role {
     Executable,
     RuntimeLibrary,
+    Notice,
     Asr,
     Vad,
     Segmentation,
@@ -104,7 +105,7 @@ fn hash(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn relative(value: &str) -> bool {
+pub(crate) fn relative(value: &str) -> bool {
     // Portable package names: no traversal, drive/ADS, Windows aliases or
     // case-insensitive collisions. The manifest cannot list itself as a model.
     !value.is_empty()
@@ -164,17 +165,30 @@ impl PackageManifest {
         }
         let count = |role| self.files.iter().filter(|f| f.role == role).count();
         let roles = match self.engine {
-            Engine::Whisper => vec![Role::Executable, Role::Asr, Role::Vad, Role::RuntimeLibrary],
+            Engine::Whisper => vec![
+                Role::Executable,
+                Role::Asr,
+                Role::Vad,
+                Role::RuntimeLibrary,
+                Role::Notice,
+            ],
             Engine::Sherpa => vec![
                 Role::Executable,
                 Role::Segmentation,
                 Role::SpeakerEmbedding,
                 Role::RuntimeLibrary,
+                Role::Notice,
             ],
-            Engine::Llama => vec![Role::Executable, Role::Llm, Role::RuntimeLibrary],
+            Engine::Llama => vec![
+                Role::Executable,
+                Role::Llm,
+                Role::RuntimeLibrary,
+                Role::Notice,
+            ],
         };
         if count(Role::Executable) != 1
             || count(Role::RuntimeLibrary) > 16
+            || count(Role::Notice) > 8
             || count(Role::Vad) > 1
             || self.files.iter().any(|f| !roles.contains(&f.role))
             || match self.engine {
@@ -313,13 +327,55 @@ fn inspect_for_target(
     }
     let manifest: PackageManifest =
         serde_json::from_slice(&bytes).map_err(|e| format!("モデルmanifestを読めません: {e}"))?;
+    let report = inspect_bytes(&root, manifest, &bytes, target, cancelled)?;
+    manifest_file.verify()?;
+    Ok(report)
+}
+
+/// A GUI declaration is held in memory, not written into a user's source folder.
+/// Canonical bytes are copied only after separate placement consent. These are
+/// user declarations, never publisher hashes or download provenance.
+pub(crate) fn inspect_declared(
+    directory: &Path,
+    manifest: &PackageManifest,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Report, String> {
+    check(cancelled)?;
+    if !directory.is_absolute()
+        || !std::fs::symlink_metadata(directory)
+            .map_err(|e| e.to_string())?
+            .is_dir()
+    {
+        return Err("モデルの取り込み元には通常フォルダーの絶対パスが必要です".into());
+    }
+    let root = directory.canonicalize().map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec(manifest).map_err(|e| e.to_string())?;
+    inspect_bytes(
+        &root,
+        manifest.clone(),
+        &bytes,
+        Target::current()?,
+        cancelled,
+    )
+}
+
+fn inspect_bytes(
+    root: &Path,
+    manifest: PackageManifest,
+    bytes: &[u8],
+    target: Target,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Report, String> {
+    if bytes.len() > MAX_MANIFEST {
+        return Err("モデルmanifestは64KiB以内です".into());
+    }
     manifest.validate(target)?;
     let mut files = Vec::new();
     let mut total = 0_u64;
     let mut sources = Vec::new();
     for entry in &manifest.files {
         check(cancelled)?;
-        let mut source = Source::open(&root, &entry.relative_path)?;
+        let mut source = Source::open(root, &entry.relative_path)?;
         let size = source.before.len();
         if size == 0 || size > i64::MAX as u64 || entry.expected_size.is_some_and(|n| n != size) {
             return Err(format!(
@@ -372,7 +428,6 @@ fn inspect_for_target(
         sources.push(source);
     }
     check(cancelled)?;
-    manifest_file.verify()?;
     for source in &sources {
         source.verify()?;
     }

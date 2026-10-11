@@ -119,7 +119,13 @@ async (page) => {
   await boot(); await set({ previewMode: "invalid" }); await choose("restore");
   await notifications().getByRole("alert").filter({ hasText: "不正な形式" }).waitFor();
   check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "invalid archive exposed confirmation");
-  results.push("invalid archive: no publication capability");
+  await page.waitForFunction(() => document.activeElement?.textContent === "バックアップから追加復元" && !document.activeElement.disabled);
+  results.push("invalid archive: no publication capability, enabled selection entry regains focus");
+
+  await boot(); await set({ previewMode: "cancel" }); await choose("restore");
+  await page.waitForFunction(() => document.activeElement?.textContent === "バックアップから追加復元" && !document.activeElement.disabled && window.dataFixture.snapshot.phase === "idle");
+  check((await calls("start_data_operation")).length === 0 && await page.getByRole("dialog").count() === 0, "native chooser cancellation exposed publication capability");
+  results.push("native chooser cancellation: idle completion restores focus without publication");
 
   await boot(); await set({ previewMode: "delay" }); await choose("restore");
   await stop();

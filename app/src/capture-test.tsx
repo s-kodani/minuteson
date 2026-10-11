@@ -1,4 +1,5 @@
 import {invoke,isTauri} from "@tauri-apps/api/core";
+import { IconButton } from "./action-icon";
 import {useEffect,useState,useSyncExternalStore} from "react";
 import {CaptureTestClient} from "./capture-test-client";
 import {InputLevelMeter,useCaptureTestLevels} from "./input-levels";
@@ -41,7 +42,7 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
         <button type="button" className="stop-button" disabled={control.commandBusy||locked||run.phase==="cancelling"} onClick={onCancel}>テストを取り消す</button>
       </>}
       {run.phase==="ready"&&<CaptureTestAudio key={run.runId} run={run} locked={locked||!control.connected||control.commandBusy||!matches}/>}
-      {!run.busy&&<button type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard}>テスト音声を閉じる</button>}
+      {!run.busy&&<IconButton label="テスト音声を閉じる" icon="close" type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={onDiscard} />}
       {run.cleanupPending&&<p role="alert">一時音声の回収が未完了です。閉じる操作を再確認するまで録音・終了はできません。</p>}
       {run.errorMessage&&<p role="alert" className="action-error">{run.errorMessage}</p>}
     </>}

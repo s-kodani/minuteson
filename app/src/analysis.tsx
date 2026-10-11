@@ -1,11 +1,13 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { IconButton } from "./action-icon";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, IssueStatus } from "./toast";
 import { useVersionPublication } from "./version-publication";
 import { useActionConfirmation } from "./confirmation-service";
-import { CommonModal } from "./common-modal";
+import { CommonModal, type ModalReplacement } from "./common-modal";
+import { OptionsModal } from "./options-modal";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { DraftSaveQueue, registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { assertReviewedVersion, canRetryJob, engineConfigured, jobLabel, type AnalysisJob, type AnalysisPreferences, type EnginePreferences, type VersionState, type VersionSummary } from "./analysis-state";
@@ -38,30 +40,48 @@ function PreviewText({ analysis, draft, title,locked }: { analysis: Analysis; dr
     <h3>{title} {draft && <small>保存済み編集を含む</small>}</h3>
     {analysis.utterances.length === 0 && <p>発言はありません。</p>}
     {audio.controls}
-    {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <button type="button" disabled={locked} onClick={review.retry}>推定表示を再読込</button></p>}
+    {review.error&&<p className="action-error" role="alert">推定区間を照合できません: {review.error} <IconButton label="推定表示を再読込" icon="refresh" type="button" disabled={locked} onClick={review.retry} /></p>}
     {shown.map((item) => {
       const source=analysis.utterances.find(u=>u.id===(item.sourceUtteranceId??item.id))!;
       const speakers = item.speakerIds.map((id) => {
         const speaker = view.speakers.find((value) => value.id === id);
         return speaker?.displayName || speaker?.label || "話者不明";
       });
-      return <article key={item.id}><small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small><button type="button" className="small-secondary" disabled={locked||audio.preparing} onClick={()=>void play(item)}>この発言を聞く</button>{item.sourceUtteranceId?<small>手動分割 · 推定区間は分割元全体</small>:<SpeakerReviewBadge review={review.reviews.get(item.id)}/>}<p>{item.effectiveText}</p>{item.recognitionIsSource&&<small>分割元の認識原文（全文・単語位置未推定）: {item.recognizedText}</small>}<SpeakerReviewDetails analysis={analysis} utteranceId={source.id} startUs={source.startUs} labels={labels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,source.id,undefined,at)}/></article>;
+      return <article key={item.id}>
+        <div className="preview-utterance-meta">
+          <small>{timeLabel(item.startUs)}–{timeLabel(item.endUs)} · {speakers.join(" / ") || "話者不明"}</small>
+          <button type="button" className="small-secondary utterance-play-icon" aria-label={`${timeLabel(item.startUs)}の発言を再生`} title="この発言を再生" disabled={locked||audio.preparing} onClick={()=>void play(item)}>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          </button>
+          {item.sourceUtteranceId?<small>手動分割 · 推定区間は分割元全体</small>:<SpeakerReviewBadge review={review.reviews.get(item.id)}/>}
+        </div>
+        <p>{item.effectiveText}</p>
+        {item.recognitionIsSource&&<small>分割元の認識原文（全文・単語位置未推定）: {item.recognizedText}</small>}
+        <SpeakerReviewDetails analysis={analysis} utteranceId={source.id} startUs={source.startUs} labels={labels} locked={locked||audio.preparing} onPlay={at=>audio.start(analysis.id,source.id,undefined,at)}/>
+      </article>;
     })}
-    {view.utterances.length > 50 && <div className="transcript-pages"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>前へ</button><span>{page + 1} / {Math.ceil(view.utterances.length / 50)}</span><button type="button" disabled={(page + 1) * 50 >= view.utterances.length} onClick={() => setPage(page + 1)}>次へ</button></div>}
+    {view.utterances.length > 50 && <div className="transcript-pages"><IconButton label="前へ" icon="previous" type="button" disabled={page === 0} onClick={() => setPage(page - 1)} /><span>{page + 1} / {Math.ceil(view.utterances.length / 50)}</span><IconButton label="次へ" icon="next" type="button" disabled={(page + 1) * 50 >= view.utterances.length} onClick={() => setPage(page + 1)} /></div>}
   </section>;
 }
 
-export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActive, locked, withSavedEdits, onHeadChanged, diarizationHost = null }: {
+export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActive, locked, withSavedEdits, onHeadChanged, diarizationHost = null, diarizationVisible = true, renderTools }: {
   meetingId: string; meetingTitle: string; recorded: boolean; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
   onHeadChanged: () => Promise<void>;
   diarizationHost?: HTMLElement | null;
+  diarizationVisible?: boolean;
+  // The workspace owns the native settings boundary. Review replaces its
+  // visible view, while this controller and the original fields stay mounted.
+  renderTools?: (tools: ReactNode, review: ModalReplacement | null, persistentViews: ReactNode) => ReactNode;
 }) {
   const [diarizationMount] = useState(() => document.createElement("div"));
   const localDiarization = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { (diarizationHost ?? localDiarization.current)?.append(diarizationMount); }, [diarizationHost,diarizationMount]);
   useLayoutEffect(() => () => diarizationMount.remove(), [diarizationMount]);
   const profileSelectId = useId();
+  const engineTitleId = useId();
+  const engineTrigger = useRef<HTMLButtonElement>(null);
+  const [engineOpen, setEngineOpen] = useState(false);
   const confirm = useActionConfirmation(locked);
   const [queue] = useState(() => new DraftSaveQueue<AnalysisPreferences, Preferences>(
     (_id, expectedLockVersion, payload) => invoke("save_analysis_preferences", { expectedLockVersion, payload }),
@@ -218,10 +238,21 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
   const pending = jobs.some((job) => ["queued", "running", "pausing"].includes(job.state));
   const previous = versions?.versions.find((item) => item.id === versions.previousId);
 
-  return <section className="analysis-card" aria-label="解析操作">
-    <AnalysisFlowStatus flow={flow} recorded={recorded} disabled={disabled||recordingActive} versions={versions?.versions??[]} start={()=>void run(()=>saved(async()=>{await invoke("start_analysis_flow",{meetingId});await refreshRef.current();}))} resume={f=>void run(()=>saved(async()=>{await invoke("continue_analysis_flow",{meetingId,expectedLockVersion:f.lockVersion});await refreshRef.current();}))} review={(summary,opener)=>void openPreview(summary,false,opener)}/>
-    <div className="card-head"><div className="heading-with-info"><h2>ローカル文字起こし</h2><InfoPopover label="ローカル文字起こし">結果は候補として保存し、採用まで現在版と編集内容を変更しません。話者分離は採用済み文字起こしから開始します。トラック間の時刻補正は未検証です。</InfoPopover></div><button type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())}>状態を再読込</button></div>
-    <details className="analysis-settings"><summary>エンジン設定（端末内に保存）</summary>
+  const reviewContent = preview && <>
+      <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2></div>
+      <p>比較する発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
+      <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
+      <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
+      <IssueStatus label="文字起こし操作" message={error} />
+      {publication.status}
+      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void applyPreview(event.currentTarget)}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
+    </>;
+  const review: ModalReplacement | null = preview ? {
+    key: `${preview.analysis.id}:${preview.restoring}`, labelledBy: "analysis-preview-title", className: "analysis-dialog", content: reviewContent,
+    blocked: disabled, onDismiss: () => setPreview(null), restoreTarget: () => returnFocus.current,
+    dismissLabel: "閉じる", dismissText: "文字起こしプレビューを閉じる",
+  } : null;
+  const engineContent = <>
       <p>導入済みの whisper.cpp 実行ファイルと多言語モデルの絶対パスを指定してください。モデル品質・速度は未検証です。開始時にファイルのハッシュを固定します。</p>
       <div className="info-field"><div className="heading-with-info"><label htmlFor={profileSelectId}>プロファイル</label><InfoPopover label="文字起こしの標準／高精度">標準と高精度は、別々に保存したモデルと数値設定の組です。開始時に条件とファイルのハッシュを固定します。品質・速度は未検証で、高精度の負荷は選んだモデルに依存します。</InfoPopover></div><select id={profileSelectId} value={profile} disabled={disabled} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></div>
       {engine ? <fieldset disabled={disabled}>
@@ -233,31 +264,44 @@ export function AnalysisPanel({ meetingId, meetingTitle, recorded, recordingActi
       </fieldset> : <p>設定を読込中です。</p>}
       <div className="analysis-actions"><span role="status">{settings.error ? "設定の保存に失敗" : settings.saving ? "設定を保存中" : settings.dirty ? "設定は未保存" : "設定は保存済み"}</span><button type="button" className="small-secondary" disabled={disabled || settings.saving || !settings.dirty} onClick={() => void run(() => queue.retry())}>{settings.error ? "設定保存を再試行" : "設定を保存"}</button></div>
       <IssueNotice scope={meetingId} type="analysis-settings" label="文字起こし設定の保存" message={settings.error} toastMessage="文字起こし設定を保存できません。入力は保持しています" action={{ kind: "retry", label: "文字起こし設定保存を再試行", disabled: disabled || settings.saving, run: () => run(() => queue.retry()) }} />
-    </details>
-    <VocabularyEditor meetingId={meetingId} meetingTitle={meetingTitle} locked={disabled} stampRef={vocabularyStamp} />
+  </>;
+  // Stable secondary fields: hiding or visiting a review must not recreate
+  // these inputs, their selection, or their save controller.
+  const persistentViews = <>
+    <div className="analysis-engine-view" hidden={!engineOpen || !!preview}>
+      <h2 id={engineTitleId}>エンジン設定（端末内に保存）</h2>
+      <div className="options-dialog-content">{engineContent}</div>
+    </div>
+    {reviewContent}
+  </>;
+  const visibleView = review ?? (engineOpen ? {
+    key: "analysis-engine", labelledBy: engineTitleId, content: null,
+    className: "analysis-engine-dialog", blocked: disabled,
+    onDismiss: () => setEngineOpen(false), restoreTarget: () => engineTrigger.current,
+    dismissLabel: "閉じる" as const,
+  } : null);
+  const tools = (vocabularyEntry: ReactNode) => <section className="analysis-card" aria-label="解析操作">
+    <AnalysisFlowStatus flow={flow} recorded={recorded} disabled={disabled||recordingActive} versions={versions?.versions??[]} start={()=>void run(()=>saved(async()=>{await invoke("start_analysis_flow",{meetingId});await refreshRef.current();}))} resume={f=>void run(()=>saved(async()=>{await invoke("continue_analysis_flow",{meetingId,expectedLockVersion:f.lockVersion});await refreshRef.current();}))} review={(summary,opener)=>void openPreview(summary,false,opener)}/>
+    <div className="card-head"><div className="heading-with-info"><h2>ローカル文字起こし</h2><InfoPopover label="ローカル文字起こし">結果は候補として保存し、採用まで現在版と編集内容を変更しません。話者分離は採用済み文字起こしから開始します。トラック間の時刻補正は未検証です。</InfoPopover></div><IconButton label="状態を再読込" icon="refresh" type="button" className="small-secondary" disabled={disabled} onClick={() => void run(() => refreshRef.current())} /></div>
+    {renderTools ? <div className="options-modal analysis-settings"><button ref={engineTrigger} type="button" className="small-secondary options-modal-trigger" aria-label="エンジン設定（端末内に保存）" aria-haspopup="dialog" aria-expanded={engineOpen} onClick={event=>{event.currentTarget.focus({preventScroll:true});setEngineOpen(true);}}>エンジン設定（端末内に保存）</button></div>
+      : <OptionsModal className="analysis-settings" label="エンジン設定（端末内に保存）">{engineContent}</OptionsModal>}
+    {vocabularyEntry}
     <label className="prompt-label">今回の用語ヒント（認識効果は未検証）<textarea value={prompt} maxLength={8000} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="例：点検日。自動置換ではなくエンジンへのヒントです。" /></label>
     <div className="analysis-actions"><button type="button" disabled={disabled || !recorded || recordingActive || pending || !engine || !engineConfigured(engine)} onClick={() => void start()}>文字起こしを開始</button><span>{profile === "highAccuracy" ? "高精度" : "標準"} · {recordingActive ? "録音を優先して解析を停止します" : "端末内で処理"}</span></div>
     {!recorded && <p>保存済み録音が必要です。音声ファイルの取り込みは今後接続します。</p>}
     {jobs.some((job) => job.kind === "transcription") && <ul className="analysis-jobs" aria-label="解析ジョブ">{jobs.filter((job) => job.kind === "transcription").map((job) => <li key={job.id}><div><strong>{jobLabel(job.state)}{job.attempt > 1 ? ` · 試行 ${job.attempt}` : ""}</strong><span>{job.kind} · 保存済み {job.completedUnits}{job.totalUnits === null ? "" : ` / ${job.totalUnits}`} 区間{job.pauseReason === "recording" ? " · 録音・取り込み優先で停止" : ""}</span><small>ジョブ {job.id.slice(0, 8)}{job.retryOfJobId ? ` · 再試行元 ${job.retryOfJobId.slice(0, 8)}` : ""}</small>{job.errorCode && <span className="action-error">{job.errorCode}</span>}</div><div className="analysis-actions">
-      {["queued", "running"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", job.id)}>一時停止</button>}
+      {["queued", "running"].includes(job.state) && <IconButton label="一時停止" icon="pause" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", job.id)} />}
       {["paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void jobAction("resume_analysis_job", job.id)}>再開</button>}
       {["queued", "running", "paused", "interrupted"].includes(job.state) && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void cancelJob(job)}>取消</button>}
       {canRetryJob(job, jobs) && <button type="button" className="small-secondary" disabled={disabled || recordingActive || pending} onClick={() => void retryJob(job)}>同じ条件で再試行</button>}
       <JobModelRebinding meetingId={meetingId} job={job} jobs={jobs} locked={disabled} recordingActive={recordingActive} withSavedEdits={withSavedEdits} refresh={() => refreshRef.current()} />
     </div></li>)}</ul>}
     <div ref={localDiarization} />
-    {createPortal(<DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} />,diarizationMount)}
     <div className="analysis-versions"><h3>確認待ちの候補</h3>{versions?.versions.filter((item) => item.publicationState === "candidate").map((item) => <div className="version-row" key={item.id}><span>候補 #{item.revisionNo} · {item.utteranceCount} 発言{item.config.diarization==="sherpa-onnx"?" · 話者分離":""}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(item, false, event.currentTarget)}>内容を確認</button></div>)}{versions && !versions.versions.some((item) => item.publicationState === "candidate") && <p>確認待ちの候補はありません。</p>}{previous && <div className="version-row"><span>直前版 #{previous.revisionNo}</span><button type="button" className="small-secondary" disabled={disabled} onClick={(event) => void openPreview(previous, true, event.currentTarget)}>直前版を確認・復元</button></div>}</div>
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし操作" message={error} toastMessage="文字起こし操作を完了できません。状態を確認してください" />
     {!preview && publication.status}
-    <CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} restoreReady={!disabled} restoreTarget={() => returnFocus.current} className="analysis-dialog" aria-labelledby="analysis-preview-title">{preview && <>
-      <div className="card-head"><h2 id="analysis-preview-title">{preview.restoring ? "直前版の復元確認" : "候補版の採用確認"} #{preview.summary.revisionNo}</h2><button type="button" className="small-secondary" disabled={disabled} data-dialog-cancel onClick={() => setPreview(null)}>閉じる</button></div>
-      <p>比較する発言は同じ位置に対応するとは限りません。話者・時刻は未検証です。内容SHA-256: <code>{preview.analysis.contentHash}</code></p>
-      <details><summary>固定された処理条件</summary><pre>{JSON.stringify({ profile: preview.summary.profile, config: preview.summary.config }, null, 2)}</pre></details>
-      <div className="preview-columns">{preview.current ? <PreviewText key={`current-${preview.current.id}`} analysis={preview.current} draft={preview.currentDraft} title="現在版" locked={disabled} /> : <section><h3>現在版</h3><p>まだありません。</p></section>}<PreviewText key={preview.analysis.id} analysis={preview.analysis} draft={preview.draft} title={preview.restoring ? "復元対象" : "候補版"} locked={disabled}/></div>
-      <IssueStatus label="文字起こし操作" message={error} />
-      {publication.status}
-      <div className="analysis-actions"><button type="button" disabled={disabled || publication.inFlight} onClick={event => void applyPreview(event.currentTarget)}>{preview.restoring ? "この直前版へ戻す" : "この候補を採用"}</button><span>保存済み編集は版ごとに保持します。</span></div>
-    </>}</CommonModal>
   </section>;
+  if (renderTools) return <DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} visible={diarizationVisible}
+    renderSettings={(diarizationEntry,diarizationView,diarizationBody)=><><VocabularyEditor meetingId={meetingId} meetingTitle={meetingTitle} locked={disabled} stampRef={vocabularyStamp} renderEditor={(entry, vocabularyView, vocabularyBody)=>renderTools(tools(entry), visibleView ?? diarizationView ?? vocabularyView, <>{persistentViews}{diarizationBody}{vocabularyBody}</>)} />{createPortal(diarizationEntry,diarizationMount)}</>} />;
+  return <>{tools(<VocabularyEditor meetingId={meetingId} meetingTitle={meetingTitle} locked={disabled} stampRef={vocabularyStamp} />)}{createPortal(<DiarizationPanel meetingId={meetingId} meetingTitle={meetingTitle} recorded={recorded} recordingActive={recordingActive} locked={disabled} jobs={jobs} versions={versions} withSavedEdits={withSavedEdits} refresh={()=>refreshRef.current()} visible={diarizationVisible} />,diarizationMount)}<CommonModal ref={dialog} open={!!preview} blocked={disabled} onDismiss={() => setPreview(null)} dismissLabel="閉じる" restoreReady={!disabled} restoreTarget={() => returnFocus.current} className="analysis-dialog" aria-labelledby="analysis-preview-title">{reviewContent}</CommonModal></>;
 }

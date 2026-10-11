@@ -7,6 +7,116 @@ use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+#[cfg(test)]
+mod sqlite_lock_tests {
+    use super::*;
+
+    #[test]
+    fn control_identity_verification_does_not_release_posix_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("synthetic.db"),
+            b"synthetic database identity",
+        )
+        .unwrap();
+        let shm = temp.path().join("synthetic.db-shm");
+        std::fs::write(&shm, b"synthetic control identity").unwrap();
+        let anchor = RootAnchor::owned_image(temp.path(), "synthetic.db").unwrap();
+        let held = &anchor
+            .controls
+            .iter()
+            .find(|(name, _)| name.ends_with("-shm"))
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap()
+            .0;
+        // Like SQLite's dead-man-switch, this lock must survive identity reads.
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_RDLCK;
+        lock.l_whence = libc::SEEK_SET as libc::c_short;
+        lock.l_start = 128;
+        lock.l_len = 1;
+        assert_eq!(
+            unsafe { libc::fcntl(held.as_raw_fd(), libc::F_SETLK, &lock) },
+            0
+        );
+        let probe = || {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::deletion::fs::sqlite_lock_tests::external_control_lock_fixture",
+                    "--ignored",
+                ])
+                .env("MON_CONTROL_LOCK_TEST_FILE", &shm)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed")
+            );
+        };
+        probe();
+        for _ in 0..3 {
+            anchor.verify().unwrap();
+            probe();
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess-only lock observation on parent-owned synthetic control file"]
+    fn external_control_lock_fixture() {
+        let path = std::env::var_os("MON_CONTROL_LOCK_TEST_FILE").expect("parent-owned fixture");
+        let held = File::open(path).unwrap();
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_WRLCK;
+        lock.l_whence = libc::SEEK_SET as libc::c_short;
+        lock.l_start = 128;
+        lock.l_len = 1;
+        assert_eq!(
+            unsafe { libc::fcntl(held.as_raw_fd(), libc::F_GETLK, &mut lock) },
+            0
+        );
+        assert_eq!(
+            lock.l_type,
+            libc::F_RDLCK,
+            "identity verification released the owner's lock"
+        );
+    }
+
+    #[test]
+    fn metadata_only_control_checks_still_reject_replacement_links_and_new_files() {
+        for mutation in ["replacement", "symlink", "hardlink", "new-control"] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::write(temp.path().join("synthetic.db"), b"database").unwrap();
+            let wal = temp.path().join("synthetic.db-wal");
+            std::fs::write(&wal, b"original control").unwrap();
+            let anchor = RootAnchor::owned_image(temp.path(), "synthetic.db").unwrap();
+            anchor.verify().unwrap();
+            match mutation {
+                "replacement" => {
+                    std::fs::rename(&wal, temp.path().join("retained.wal")).unwrap();
+                    std::fs::write(&wal, b"replacement control").unwrap();
+                }
+                "symlink" => {
+                    let retained = temp.path().join("retained.wal");
+                    std::fs::rename(&wal, &retained).unwrap();
+                    std::os::unix::fs::symlink(&retained, &wal).unwrap();
+                }
+                "hardlink" => std::fs::hard_link(&wal, temp.path().join("other.wal")).unwrap(),
+                "new-control" => {
+                    std::fs::write(temp.path().join("synthetic.db-journal"), b"new").unwrap()
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                anchor.verify().is_err(),
+                "accepted changed control: {mutation}"
+            );
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct Identity {
@@ -482,19 +592,19 @@ impl RootAnchor {
             return Err("起動時のDB実体が変更されています".into());
         }
         for (name, expected) in &self.controls {
-            let current = self.root.optional_regular(name)?;
-            match (expected, current) {
-                (Some((held, identity)), Some(current)) => {
+            // Opening and then closing another descriptor for SQLite's -shm
+            // file releases this process's POSIX locks, including SQLite's
+            // dead-man-switch. Verify the retained descriptor and path using
+            // metadata only; never reopen a live SQLite control file here.
+            match expected {
+                Some((held, identity)) => {
                     self.root.verify_file(name, held)?;
-                    if Identity::read(&current.metadata().map_err(|e| e.to_string())?)? != *identity
-                        || Identity::read(&held.metadata().map_err(|e| e.to_string())?)?
-                            != *identity
-                    {
+                    if Identity::read(&held.metadata().map_err(|e| e.to_string())?)? != *identity {
                         return Err("起動時のDB制御ファイルが変更されています".into());
                     }
                 }
-                (None, None) => {}
-                _ => return Err("起動時のDB制御ファイルの有無が変更されています".into()),
+                None if self.root.optional_kind(name)?.is_none() => {}
+                None => return Err("起動時のDB制御ファイルの有無が変更されています".into()),
             }
         }
         Ok(())

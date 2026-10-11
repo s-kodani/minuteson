@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
-import { CommonModal } from "./common-modal";
+import { IconButton } from "./action-icon";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { CommonModal, type ModalReplacement } from "./common-modal";
 import { useActionConfirmation } from "./confirmation-service";
 import { TranscriptRecoveryDiscard } from "./transcript-recovery-discard";
 import type { TranscriptRecovery } from "./transcript-recovery-save";
@@ -13,10 +14,12 @@ interface Summary {
   lockVersion: number; updatedAt: number; bufferCount: number; matchesDraft: boolean; currentContext: boolean;
 }
 interface Page { items: Summary[]; nextCursor: string | null }
-export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blocked, canChangeCurrent, onResume, onDiscarded, onPending }:
+export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blocked, canChangeCurrent, onResume, onDiscarded, onPending, renderPanel }:
   { meetingId: string; review: Record | null; currentDraftId?: string; blocked: boolean; canChangeCurrent: boolean;
     onResume: () => Promise<void>; onDiscarded: (record: Record) => void;
-    onPending: (pending: boolean) => void }) {
+    onPending: (pending: boolean) => void;
+    renderPanel?: (entry: ReactNode, view: ModalReplacement | null, persistentBody: ReactNode) => ReactNode }) {
+  const titleId = useId();
   const confirm = useActionConfirmation(blocked);
   const latest = useRef({ blocked, canChangeCurrent, onPending, onDiscarded });
   latest.current = { blocked, canChangeCurrent, onPending, onDiscarded };
@@ -81,10 +84,10 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
       onError: cause => setError(String(cause)),
     });
   };
-  return <>
+  const entry = <>
     {review && <p className="hint" role="status">保存済みの未確定入力 {inputCount(review)}件があります。確認してから編集を再開してください。{(!review.matchesDraft || !review.currentContext) && "現在の本文とは条件が異なるため、自動適用しません。"}
-      <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={() => { setPreview(review); setPreviewPage(0); setOpen(true); setError(""); }}>未確定入力を確認</button></p>}
-    <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={() => { setOpen(true); void run(() => list(0,[null])); }}>旧下書きを含む回復記録</button>
+      <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={event => { event.currentTarget.focus({preventScroll:true}); setPreview(review); setPreviewPage(0); setOpen(true); setError(""); }}>未確定入力を確認</button></p>}
+    <button type="button" className="small-secondary" disabled={busy || state.busy || blocked} onClick={event => { event.currentTarget.focus({preventScroll:true}); setOpen(true); void run(() => list(0,[null])); }}>旧下書きを含む回復記録</button>
     {state.pending && <div className="action-error" role="alert">
       回復記録の破棄結果が未確認です。入力を保持し、別の破棄と画面移動を止めています。
       <button type="button" disabled={blocked || busy || state.busy} onClick={() => void run(async () => {
@@ -93,21 +96,22 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
         else setMessage("回復記録は確認した内容のままです。結果確認では破棄していません。同じ要求の再試行は別操作です。");
       })}>破棄結果を確認</button>
       <button type="button" disabled={blocked || busy || state.busy} onClick={() => void run(async () => accepted(await discard.retry()))}>同じ破棄要求を再試行</button>
-      <button type="button" disabled={busy || state.busy} onClick={() => { setPreview(state.pending!.preview); setOpen(true); }}>確認した入力を見る</button>
+      <button type="button" disabled={busy || state.busy} onClick={event => { event.currentTarget.focus({preventScroll:true}); setPreview(state.pending!.preview); setOpen(true); }}>確認した入力を見る</button>
     </div>}
     {!open && message && <p role="status">{message}</p>}
     {!open && (error || state.error) && <p className="action-error" role="alert">{error || state.error}</p>}
-    <CommonModal open={open} className="transcript-recovery-dialog" blocked={busy || state.busy || confirm.pending} onDismiss={() => setOpen(false)} aria-labelledby="transcript-recovery-title" dismissLabel="閉じる">
-      <h3 id="transcript-recovery-title">未確定入力の回復記録</h3>
+  </>;
+  const body = <>
+      <h3 id={titleId}>未確定入力の回復記録</h3>
       <p>編集確定前の本文と話者名です。閲覧や編集再開だけでは確定せず、旧下書きや旧解析版も採用しません。</p>
-      <button type="button" disabled={busy || state.busy || blocked} onClick={() => void run(() => list(0,[null]))}>回復一覧を再読込</button>
+      <IconButton label="回復一覧を再読込" icon="refresh" type="button" disabled={busy || state.busy || blocked} onClick={() => void run(() => list(0,[null]))} />
       {inventory && <div className="recovery-inventory" aria-label="回復記録の一覧">
         <p>一覧 {page + 1}ページ · {inventory.items.length}件（最大20件）</p>
         {!inventory.items.length && <p>回復記録はありません。</p>}
-        {inventory.items.map(item => <p key={item.draftId}>解析版 {item.baseAnalysisId} · 入力 {item.bufferCount}件 · {item.currentContext ? "現在の下書き" : "旧下書き"} · {item.matchesDraft ? "本文と一致" : "本文更新あり"}
-          <button type="button" disabled={busy || state.busy || blocked} onClick={() => void run(() => detail(item))}>この記録を見る</button></p>)}
-        <button type="button" disabled={page === 0 || busy || blocked} onClick={() => void run(() => list(page - 1))}>前の一覧</button>
-        <button type="button" disabled={!inventory.nextCursor || busy || blocked} onClick={() => void run(() => list(page + 1,[...cursors.slice(0,page + 1),inventory.nextCursor]))}>次の一覧</button>
+        {inventory.items.map(item => <div className="recovery-inventory-item" key={item.draftId}><p>解析版 {item.baseAnalysisId} · 入力 {item.bufferCount}件 · {item.currentContext ? "現在の下書き" : "旧下書き"} · {item.matchesDraft ? "本文と一致" : "本文更新あり"}</p>
+          <button type="button" disabled={busy || state.busy || blocked} onClick={() => void run(() => detail(item))}>この記録を見る</button></div>)}
+        <div className="recovery-pagination"><IconButton label="前の一覧" icon="previous" type="button" className="small-secondary" disabled={page === 0 || busy || blocked} onClick={() => void run(() => list(page - 1))} />
+        <IconButton label="次の一覧" icon="next" type="button" className="small-secondary" disabled={!inventory.nextCursor || busy || blocked} onClick={() => void run(() => list(page + 1,[...cursors.slice(0,page + 1),inventory.nextCursor]))} /></div>
       </div>}
       {preview && <div aria-label="回復入力のプレビュー">
         <p>解析版 {preview.baseAnalysisId} · 回復版 {preview.lockVersion} · 入力 {previewInputs.length}件（本文 {preview.payload.buffers.length}件・話者名 {preview.payload.nameBuffers?.length ?? 0}件）</p>
@@ -117,7 +121,7 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
         </div> : <div key={`name:${item.buffer.speakerId}`}>
           <p>話者 {item.buffer.speakerId} · {item.buffer.hadOverride ? "開始時に手動名あり" : "開始時に手動名なし"}</p><label>入力開始時の話者名<textarea readOnly value={item.buffer.name ?? ""} rows={2}/></label><label>未確定の話者名<textarea readOnly value={item.buffer.value} rows={2}/></label>
         </div>)}
-        {previewInputs.length > 10 && <div><button type="button" disabled={previewPage === 0} onClick={() => setPreviewPage(n => n - 1)}>前の入力</button><span>{previewPage + 1} / {Math.ceil(previewInputs.length / 10)}</span><button type="button" disabled={(previewPage + 1) * 10 >= previewInputs.length} onClick={() => setPreviewPage(n => n + 1)}>次の入力</button></div>}
+        {previewInputs.length > 10 && <div className="recovery-pagination"><IconButton label="前の入力" icon="previous" type="button" className="small-secondary" disabled={previewPage === 0} onClick={() => setPreviewPage(n => n - 1)} /><span>{previewPage + 1} / {Math.ceil(previewInputs.length / 10)}</span><IconButton label="次の入力" icon="next" type="button" className="small-secondary" disabled={(previewPage + 1) * 10 >= previewInputs.length} onClick={() => setPreviewPage(n => n + 1)} /></div>}
         {!!previewInputs.length && <div className="recovery-actions">
           <button type="button" disabled={!resumeAllowed || destructiveBlocked} onClick={() => void run(async () => { await onResume(); if(live.current) { setOpen(false); setMessage("未確定入力の編集を再開しました。本文と話者名はまだ確定していません。"); } })}>確認した入力の編集を再開</button>
           <button type="button" className="stop-button" disabled={destructiveBlocked} onClick={requestDiscard}>この回復入力を破棄</button>
@@ -125,7 +129,13 @@ export function TranscriptRecoveryPanel({ meetingId, review, currentDraftId, blo
       </div>}
       {message && <p role="status">{message}</p>}
       {(error || state.error) && <p role="alert" className="action-error">{error || state.error}</p>}
-      <button type="button" className="small-secondary" data-dialog-cancel disabled={busy || state.busy || confirm.pending} onClick={() => setOpen(false)}>閉じる</button>
-    </CommonModal>
   </>;
+  // Keep the controller and its records mounted while switching presentation.
+  // The containing edit-options dialog owns native modality and confirmations.
+  if (renderPanel) return renderPanel(entry, open ? {
+    key: "transcript-recovery", labelledBy: titleId, content: null,
+    className: "transcript-recovery-view", blocked: busy || state.busy || confirm.pending,
+    onDismiss: () => setOpen(false), dismissLabel: "閉じる",
+  } : null, <div className="transcript-recovery-view" hidden={!open}>{body}</div>);
+  return <>{entry}<CommonModal open={open} className="transcript-recovery-dialog" blocked={busy || state.busy || confirm.pending} onDismiss={() => setOpen(false)} aria-labelledby={titleId} dismissLabel="閉じる">{body}</CommonModal></>;
 }

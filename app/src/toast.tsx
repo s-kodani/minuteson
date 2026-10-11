@@ -1,6 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { Toaster, toast as sonnerToast } from "sonner";
 import { InfoPopover } from "./info-popover";
+import { ActionIcon } from "./action-icon";
 import { ToastController, toastKey, type Toast, type ToastAction, type ToastLevel } from "./toast-state";
+import { notificationCapacity, notificationPresenterId, presentationId, removedPresentationIds, stackCardExposed } from "./toast-presentation";
 
 export const toasts = new ToastController();
 const labels: Record<ToastLevel, string> = { success: "成功", info: "情報", warning: "注意", error: "エラー" };
@@ -32,7 +35,7 @@ export function IssueStatus({ message, label, children }: { message: string | nu
   return message ? <div className="issue-status" aria-label={`${label}の要対応状態`}><strong>要対応：{label}</strong><InfoPopover label={label}>{message}</InfoPopover>{children}</div> : null;
 }
 
-function ToastCard({ toast, restoreFocus }: { toast: Toast; restoreFocus: () => void }) {
+function ToastCard({ toast, restoreFocus, pendingCount }: { toast: Toast; restoreFocus: () => void; pendingCount: number }) {
   const element = useRef<HTMLElement>(null);
   useEffect(()=>{
     let disposed=false,frame=0,timer=0;
@@ -48,12 +51,13 @@ function ToastCard({ toast, restoreFocus }: { toast: Toast; restoreFocus: () => 
   useEffect(() => { toasts.pause(toast.key, "focus", !!element.current?.contains(document.activeElement)); }, [toast.key, toast.id, toast.actionBusy, toast.action?.disabled, toast.action?.label]);
   return <section ref={element} className={`toast-card toast-${toast.level}`} data-toast-id={toast.id}
     onPointerEnter={() => toasts.pause(toast.key, "hover", true)} onPointerLeave={() => toasts.pause(toast.key, "hover", false)}
-    onFocusCapture={() => toasts.pause(toast.key, "focus", true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) toasts.pause(toast.key, "focus", false); }}>
+    onFocus={event => event.stopPropagation()} onBlur={event => event.stopPropagation()} onFocusCapture={() => toasts.pause(toast.key, "focus", true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) toasts.pause(toast.key, "focus", false); }}>
     <span className="toast-icon" aria-hidden="true">{icons[toast.level]}</span>
     <div className="toast-body"><p role={toast.important ? "alert" : "status"} aria-atomic="true"><span className="toast-label">{labels[toast.level]}： </span>{toast.message}</p>
-      {toast.action && <button type="button" className="small-secondary" disabled={toast.action.disabled || toast.actionBusy} onClick={() => { void toasts.act(toast.key, toast.id).catch(cause => toasts.show({ key: toastKey(toast.key, "action-failed"), level: "error", message: `通知の操作を完了できませんでした: ${String(cause)}` })); }}>{toast.actionBusy ? "実行中" : toast.action.label}</button>}
+      {toast.action && <button type="button" className="small-secondary" disabled={toast.action.disabled || toast.actionBusy} onClick={() => { void toasts.act(toast.key, toast.id).catch(cause => toasts.show({ key: toastKey(toast.key, "action-failed"), level: "error", message: `通知の操作を完了できませんでした: ${String(cause)}` })).finally(() => { if (document.activeElement === document.body) restoreFocus(); }); }}>{toast.actionBusy ? "実行中" : toast.action.label}</button>}
     </div>
-    <button type="button" className="toast-close" aria-label={`${labels[toast.level]}通知を閉じる`} onClick={() => {if(noticeElementVisible(element.current))toasts.markRendered(toast.key,toast.id);toasts.dismiss(toast.key, toast.id);}}>×</button>
+    <InfoPopover label={`${labels[toast.level]}通知の詳細`}>{toast.message}{pendingCount > 0 ? `（ほか ${pendingCount} 件の通知が待機しています）` : ""}</InfoPopover>
+    <button type="button" className="toast-close icon-button" aria-label={`${labels[toast.level]}通知を閉じる`} title="通知を閉じる" onClick={() => {if(noticeElementVisible(element.current))toasts.markRendered(toast.key,toast.id);if(element.current?.contains(document.activeElement))restoreFocus();toasts.dismiss(toast.key, toast.id);}}><ActionIcon name="close" /></button>
   </section>;
 }
 export function noticeElementVisible(element:HTMLElement|null){
@@ -61,6 +65,7 @@ export function noticeElementVisible(element:HTMLElement|null){
   const r=element.getBoundingClientRect();
   if(r.width<=0||r.height<=0||r.top<0||r.left<0||r.bottom>innerHeight||r.right>innerWidth)return false;
   for(let node:HTMLElement|null=element;node;node=node.parentElement){
+    if(node.hasAttribute("data-sonner-toast") && !stackCardExposed(node.dataset))return false;
     const style=getComputedStyle(node);
     if(style.visibility!=="visible"||style.display==="none"||Number(style.opacity)===0)return false;
     if(node!==element){const bounds=node.getBoundingClientRect();
@@ -73,20 +78,89 @@ export function noticeElementVisible(element:HTMLElement|null){
 
 export function ToastHost({ docked = false }: { docked?: boolean }) {
   const notices = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
+  const [focused, setFocused] = useState(false);
+  const [top, setTop] = useState(76);
+  const measured = useRef({ width: 0, height: 116 });
+  const presented = useRef(new Set<string>()), reading = useRef({ hover: false, focus: false });
   const host = useRef<HTMLElement>(null), previous = useRef<HTMLElement | null>(null), restore = useRef(() => {});
   restore.current = () => {
     const target = previous.current;
     if (target?.isConnected && !target.matches(":disabled") && target.getClientRects().length && !target.closest("[hidden], [inert], dialog:not([open])") && !document.querySelector("dialog[open]")) target.focus({ preventScroll: true });
   };
   const stableRestore = useRef(() => restore.current()).current;
+  const pauseStack = (reason: "hover" | "focus", paused: boolean) => {
+    reading.current[reason] = paused;
+    for (const toast of toasts.getSnapshot()) toasts.pause(toast.key, `stack-${reason}`, paused, toast.id);
+  };
   useEffect(() => {
-    const focus = (event: FocusEvent) => { if (event.target instanceof HTMLElement && !host.current?.contains(event.target)) previous.current = event.target; };
+    for (const id of removedPresentationIds(presented.current, notices)) {
+      const card = host.current?.querySelector(`[data-toast-id="${id.replace("mon-notice-", "")}"]`);
+      if (card?.contains(document.activeElement)) stableRestore();
+      sonnerToast.dismiss(id);
+    }
+    presented.current = new Set(notices.map(toast => presentationId(toast.id)));
+    // Sonner prepends new notices; present the highest-priority entry last.
+    for (const toast of [...notices].reverse()) {
+      for (const reason of ["hover", "focus"] as const) toasts.pause(toast.key, `stack-${reason}`, reading.current[reason], toast.id);
+      sonnerToast.custom(() => <ToastCard key={toast.id} toast={toast} restoreFocus={stableRestore} pendingCount={toasts.pendingCount} />, {
+        id: presentationId(toast.id), toasterId: notificationPresenterId,
+        duration: Infinity, dismissible: false,
+      });
+    }
+  }, [notices, stableRestore]);
+  useEffect(() => () => {
+    for (const id of presented.current) sonnerToast.dismiss(id);
+    presented.current.clear();
+    for (const toast of toasts.getSnapshot()) for (const reason of ["hover", "focus"] as const) toasts.pause(toast.key, `stack-${reason}`, false, toast.id);
+    toasts.setVisibleLimit(3);
+  }, []);
+  useEffect(() => {
+    const fit = () => {
+      const top = Math.ceil(host.current?.closest('.topbar')?.getBoundingClientRect().bottom ?? 64) + 12;
+      setTop(top);
+      const player = document.querySelector<HTMLElement>('.meeting-playback-dock:not([hidden]), .toast-fixture-player');
+      const bottom = Math.min(innerHeight - 12, player?.getBoundingClientRect().top ? player.getBoundingClientRect().top - 12 : innerHeight - 12);
+      // Retain the largest measurement at this width. Otherwise evicting a tall
+      // queued card could immediately increase capacity and reinsert it forever.
+      if (measured.current.width !== innerWidth) measured.current = { width: innerWidth, height: 116 };
+      const cardHeight = Math.max(measured.current.height, ...Array.from(host.current?.querySelectorAll<HTMLElement>('.toast-card') ?? [], card => card.offsetHeight));
+      measured.current.height = cardHeight;
+      toasts.setVisibleLimit(notificationCapacity(bottom - top, cardHeight));
+    };
+    fit(); window.addEventListener("resize", fit);
+    const observer = new ResizeObserver(fit);
+    const column = host.current?.closest('.main-column'); if (column) observer.observe(column);
+    const layoutChanges = new MutationObserver(fit); if (column) layoutChanges.observe(column, { childList: true, subtree: true });
+    const player = document.querySelector('.meeting-playback-dock, .toast-fixture-player'); if (player) observer.observe(player);
+    return () => { window.removeEventListener("resize", fit); observer.disconnect(); layoutChanges.disconnect(); };
+  }, []);
+  useEffect(() => {
+    const focus = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement && !host.current?.contains(event.target)) {
+        previous.current = event.target;
+        setFocused(false); pauseStack("focus", false);
+      }
+    };
     if (document.activeElement instanceof HTMLElement) previous.current = document.activeElement;
     const visibility = () => toasts.pauseAll("hidden", document.hidden);
     const modal = () => toasts.pauseAll("modal", !!document.querySelector("dialog[open]"));
+    const shortcut = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.code !== "KeyT" || event.isComposing || document.hidden || document.querySelector("dialog[open]")) return;
+      const target = host.current?.querySelector<HTMLButtonElement>('[data-sonner-toast][data-front=true]:not([data-removed=true]) button:not(:disabled)');
+      if (target) { event.preventDefault(); target.focus({ preventScroll: true }); }
+    };
     const observer = new MutationObserver(modal); observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"], childList: true });
-    visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus);
-    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
+    visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus); document.addEventListener("keydown", shortcut);
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus); document.removeEventListener("keydown", shortcut); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
   }, []);
-  return <aside ref={host} className="toast-host" data-docked={docked} aria-label="通知">{notices.map(toast => <ToastCard key={toast.key} toast={toast} restoreFocus={stableRestore} />)}{toasts.pendingCount > 0 && <p className="toast-queued">ほか {toasts.pendingCount} 件の通知があります</p>}</aside>;
+  return <aside ref={host} className="toast-host" data-docked={docked} data-pending-count={toasts.pendingCount} aria-label="通知"
+    onPointerEnter={() => pauseStack("hover", true)} onPointerLeave={() => pauseStack("hover", false)}
+    onFocusCapture={() => { setFocused(true); pauseStack("focus", true); }}
+    onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setFocused(false); pauseStack("focus", false); } }}>
+    <Toaster id={notificationPresenterId} position="top-right" visibleToasts={3} gap={12}
+      expand={focused || notices.some(toast => toast.important)} hotkey={[]}
+      customAriaLabel="通知（Option + Tで移動）" className="mon-notification-stack"
+      offset={{ top: `${top}px`, right: "16px" }} mobileOffset={{ top: `${top}px`, right: "16px" }}
+      style={{ "--width": "min(380px, calc(100vw - 96px))" } as CSSProperties} />
+  </aside>;
 }

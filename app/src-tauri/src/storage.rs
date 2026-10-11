@@ -289,8 +289,11 @@ impl Storage {
         let root_directory = deletion::fs::RootAnchor::directory(&root)?;
         let mut connection = Connection::open(root.join("meetings.sqlite3"))?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        // Set EXCLUSIVE before *any* access to an existing WAL database so
+        // SQLite keeps the wal-index on the heap rather than mmap'ing -shm.
+        // Switching after journal_mode has read the DB is too late on reopen.
         connection.execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA main.locking_mode = EXCLUSIVE; BEGIN IMMEDIATE; COMMIT;",
+            "PRAGMA main.locking_mode = EXCLUSIVE; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
         )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
@@ -815,6 +818,110 @@ mod tests {
         assert!(storage
             .managed_path(Path::new("meetings/id/audio/file.flac"))
             .is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_wal_reopen_uses_no_shared_index_and_preserves_large_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let title = "共有メモリなしで再起動";
+        let first = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = first.create_meeting(title).unwrap();
+        // Overflow pages exercise the same WAL lookup used to read minutes.
+        let payload = "synthetic saved minutes ".repeat(4096);
+        first
+            .connection
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE wal_reopen_fixture(id INTEGER PRIMARY KEY, body TEXT NOT NULL);",
+            )
+            .unwrap();
+        first
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO wal_reopen_fixture VALUES (1, ?1)",
+                params![payload],
+            )
+            .unwrap();
+        assert!(!temp.path().join("meetings.sqlite3-shm").exists());
+        drop(first);
+
+        for _ in 0..3 {
+            let reopened = Storage::open(temp.path().to_owned()).unwrap();
+            assert!(
+                !temp.path().join("meetings.sqlite3-shm").exists(),
+                "exclusive mode must precede the first access to an existing WAL database"
+            );
+            reopened.managed_anchor.verify().unwrap();
+            let db = reopened.connection.lock().unwrap();
+            // The unqualified pragma returns the connection's default for
+            // subsequently attached databases, not main's configured mode.
+            let mode: String = db
+                .query_row("PRAGMA main.locking_mode", [], |row| row.get(0))
+                .unwrap();
+            let sync: i64 = db
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .unwrap();
+            let restored: String = db
+                .query_row(
+                    "SELECT body FROM wal_reopen_fixture WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(mode, "exclusive");
+            assert_eq!(sync, 2); // FULL durability must not be weakened.
+            assert_eq!(restored, payload);
+            drop(db);
+            assert_eq!(
+                reopened.get_meeting(&meeting.id).unwrap().unwrap().title,
+                title
+            );
+            let probe = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::tests::exclusive_wal_external_reader_fixture",
+                    "--ignored",
+                ])
+                .env(
+                    "MON_WAL_REOPEN_TEST_DATABASE",
+                    temp.path().join("meetings.sqlite3"),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                probe.status.success()
+                    && String::from_utf8_lossy(&probe.stdout).contains("1 passed; 0 failed"),
+                "external reader must remain locked out after identity verification"
+            );
+            assert!(
+                !temp.path().join("meetings.sqlite3-shm").exists(),
+                "a rejected external reader must not introduce a shared index"
+            );
+            reopened.managed_anchor.verify().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "subprocess-only read-only check of parent-owned synthetic WAL database"]
+    fn exclusive_wal_external_reader_fixture() {
+        let path = std::env::var_os("MON_WAL_REOPEN_TEST_DATABASE").expect("parent-owned fixture");
+        let db =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        db.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let error = db
+            .query_row("SELECT COUNT(*) FROM wal_reopen_fixture", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::DatabaseBusy)
+        );
     }
 
     #[test]

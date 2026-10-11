@@ -5,6 +5,31 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub(crate) const RESULT_SCHEMA_VERSION: u32 = 1;
+
+// Apply only after strict parsing/grounding validation. Keep the first item's
+// text, metadata and evidence order; equality requires all seven fields, with
+// evidence treated as a set. Different sources or assignments remain distinct.
+// Saved v1-v3 jobs must replay their original (possibly repeated) items.
+pub(super) fn normalize_versioned(
+    items: Vec<GeneratedItem>,
+    version: u32,
+) -> Result<Vec<GeneratedItem>, String> {
+    match version {
+        1..=3 => return Ok(items),
+        4 => (),
+        _ => return Err("未対応の生成条件です".into()),
+    }
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        let mut key = item.clone();
+        key.evidence_utterance_ids.sort();
+        if seen.insert(serde_json::to_vec(&key).map_err(|e| e.to_string())?) {
+            normalized.push(item);
+        }
+    }
+    Ok(normalized)
+}
 const FIELDS: [&str; 7] = [
     "kind",
     "body",
@@ -146,6 +171,51 @@ mod tests {
     };
     fn output() -> Value {
         json!({"schemaVersion":1,"items":[item(ItemKind::Decision)]})
+    }
+    #[test]
+    fn exact_repeat_normalization_is_versioned_stable_and_metadata_sensitive() {
+        let a = item(ItemKind::Decision);
+        let mut b = a.clone();
+        b.body = "異なる決定事項".into();
+        let raw = vec![a.clone(), b.clone(), a.clone(), b.clone()];
+        for version in 1..=3 {
+            assert_eq!(normalize_versioned(raw.clone(), version).unwrap(), raw);
+        }
+        assert_eq!(normalize_versioned(raw, 4).unwrap(), vec![a.clone(), b]);
+        let mut variants = vec![a.clone()];
+        for field in 0..6 {
+            let mut changed = a.clone();
+            match field {
+                0 => changed.kind = ItemKind::Summary,
+                1 => changed.assignee_name = Some("田中".into()),
+                2 => changed.assignee_speaker_id = Some("speaker".into()),
+                3 => changed.due_date = Some("2026-10-12".into()),
+                4 => changed.due_text = Some("明日".into()),
+                _ => changed.evidence_utterance_ids = vec!["another-source".into()],
+            }
+            variants.push(changed);
+        }
+        assert_eq!(normalize_versioned(variants.clone(), 4).unwrap(), variants);
+        let mut ordered = a;
+        ordered.evidence_utterance_ids = vec!["second".into(), "first".into()];
+        let mut reversed = ordered.clone();
+        reversed.evidence_utterance_ids.reverse();
+        assert_eq!(
+            normalize_versioned(vec![ordered.clone(), reversed], 4).unwrap(),
+            vec![ordered]
+        );
+        for version in [0, 5, u32::MAX] {
+            assert!(normalize_versioned(vec![], version).is_err());
+        }
+    }
+    #[test]
+    fn normalization_cannot_bypass_validation_of_repeated_invalid_items() {
+        let input = input();
+        let ids = vec!["utterance".into()];
+        let mut invalid = item(ItemKind::Decision);
+        invalid.evidence_utterance_ids.push("utterance".into());
+        let raw = json!({"schemaVersion":1,"items":[invalid.clone(),invalid]});
+        assert!(parse_items(raw, &input, &ids).is_err());
     }
     #[test]
     fn result_protocol_builds_fixed_document_without_trusting_model_ids_or_times() {

@@ -573,23 +573,35 @@ fn read_copy_checkpoint(label: &str, path: &Path) {
     {
         return;
     }
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let marker = std::env::var_os("MON_SYNTHETIC_READ_COPY_READY").expect("owned ready marker");
-    let mut ready = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(marker)
-        .unwrap();
-    ready
-        .write_all(path.as_os_str().as_encoded_bytes())
-        .unwrap();
-    ready.sync_all().unwrap();
+    publish_read_copy_ready(Path::new(&marker), path, || {}).unwrap();
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+}
+
+#[cfg(test)]
+fn publish_read_copy_ready(
+    marker: &Path,
+    path: &Path,
+    before_publish: impl FnOnce(),
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = marker
+        .parent()
+        .ok_or_else(|| std::io::Error::other("marker parent missing"))?;
+    let mut ready = tempfile::Builder::new()
+        .prefix(".read-ready-")
+        .tempfile_in(parent)?;
+    ready.write_all(path.as_os_str().as_encoded_bytes())?;
+    ready.as_file().sync_all()?;
+    before_publish();
+    // A parent observing the marker must see the complete path, not the empty
+    // create_new/write gap. Never overwrite even an unexpected fixture marker.
+    ready
+        .persist_noclobber(marker)
+        .map_err(|error| error.error)?;
+    std::fs::File::open(parent)?.sync_all()
 }
 
 fn verify_registry_unchanged(
@@ -989,6 +1001,31 @@ mod tests {
                 "ok"
             );
         }
+    }
+
+    #[test]
+    fn read_copy_ready_marker_is_complete_at_publication_and_never_overwrites_existing_material() {
+        let base = tempfile::tempdir().unwrap();
+        let marker = base.path().join("ready");
+        let snapshot = base.path().join(".mon-read-cache/.mon-stage-synthetic");
+        publish_read_copy_ready(&marker, &snapshot, || {
+            assert!(
+                !marker.exists(),
+                "ready must not appear before the path is fully written"
+            );
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            snapshot.as_os_str().as_encoded_bytes()
+        );
+        let other = base.path().join("different-snapshot");
+        assert!(publish_read_copy_ready(&marker, &other, || {}).is_err());
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            snapshot.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 1);
     }
 
     #[test]

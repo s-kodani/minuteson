@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
@@ -155,7 +156,7 @@ export function MeetingDeletionPanel({ operation, control, visible, compact = fa
       <div className="heading-with-info"><h2 id="deletion-panel-heading" tabIndex={-1}>会議削除の確認と中断対応</h2><InfoPopover label="会議削除" details={<p>現在の保存領域にある会議の管理音声・文字起こし・議事録・下書き・版・処理履歴を削除します。外部の元音声・書き出し・バックアップ、AIモデル、共通用語、旧保存先や保持コピーは消しません。媒体の安全消去ではありません。</p>}>会議の管理音声・文書・履歴を完全削除する操作です。実行前に対象と消失範囲を確認します。外部の原本やバックアップは対象外です。</InfoPopover></div>
       {!operation.deletionSupported && operation.connected && <p>この環境の会議削除操作は保留中です。</p>}
       {!operation.connected && <p role="alert">データ操作の状態を確認できるまで変更を停止しています。{operation.error}</p>}
-      <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>削除と書込停止の状態を再読込</button>
+      <IconButton label="削除と書込停止の状態を再読込" icon="refresh" type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})} />
       {needed && <p role="alert">編集・録音・AI処理などの通常書込みを停止しています。{c.listing?.reason}</p>}
       {c.listing?.items.length ? <ul>{c.listing.items.map(i => <li key={i.operationId}><p>未完了削除 {i.operationId} · 記録状態 {i.state === "completed" ? "完了記録あり・残り処理の確認が必要" : i.state}{i.meetingId && ` · 会議 ${i.meetingId}`}</p>{deletionAttentionLabel(i.errorCode) && <p>{deletionAttentionLabel(i.errorCode)}</p>}<button type="button" className="small-secondary" disabled={!c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了削除の対象を確認</button></li>)}</ul> : null}
       {active && <p role="status">{s.busy ? "削除対象の検査・処理中です。停止要求後も実際の終了を待ちます。" : p ? deletionPhaseLabel(p.phase) : s.phase === "failed" ? "削除対象の確認に失敗しました。" : "削除の確認待ちです。"}</p>}
@@ -176,7 +177,7 @@ export function MeetingDeletionPanel({ operation, control, visible, compact = fa
       {p.resumeReason && <p role="alert">削除を進められません: {p.resumeReason}</p>}
       <h3>確認時の対象パス</h3>{c.pageBusy && <p role="status">一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
       {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map(e => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {e.directory ? "フォルダー" : e.missing ? "欠落" : `${bytesLabel(e.bytes!)} · ${e.registered ? "登録済み" : "未登録"}${e.changed ? "・登録時と変更" : ""}`}{e.stageHint && ` · 由来候補 ${e.stageHint}（所有証明ではありません）`}</li>)}</ul></>}
-      <div className="analysis-actions"><button type="button" className="small-secondary" disabled={c.pageBusy || !c.page || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))}>前の50件</button><button type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)}>次の50件</button>{c.pageError && <button type="button" className="small-secondary" onClick={() => void c.loadPage()}>一覧を再読込</button>}</div>
+      <div className="analysis-actions"><IconButton label="前の50件" icon="previous" type="button" className="small-secondary" disabled={c.pageBusy || !c.page || c.page.offset === 0} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))} /><IconButton label="次の50件" icon="next" type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)} />{c.pageError && <IconButton label="一覧を再読込" icon="refresh" type="button" className="small-secondary" onClick={() => void c.loadPage()} />}</div>
       {p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase) && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={event => c.setIncludeUnknown(event.target.checked)} />確認時の一覧にある未登録ファイルも削除対象に含める。由来候補は所有証明ではないことを確認しました。</label>}
       <label><input type="checkbox" checked={c.understood} disabled={!c.canResolve || !p.executeAllowed} onChange={event => c.setUnderstood(event.target.checked)} />対象と削除範囲を確認し、アプリ内では復元できないことを理解しました。</label>
       </>}

@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CommonModal } from "./common-modal";
 import { useActionConfirmation } from "./confirmation-service";
@@ -11,6 +12,8 @@ import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { modelNotice, type ModelNotice } from "./model-notification-state";
 import { ModelDownloadPanel } from "./model-download";
 import { SettingsDisclosure } from "./settings-disclosure";
+import { ModelImportGuide } from "./model-import-guide";
+import { assertGuidedInspection, type GuidedModelSource } from "./model-import-guide-state";
 
 type PendingApplication = { preview: ModelApplicationPreview; entry: ModelPlacementEntry; operationId: string };
 // Preserve an uncertain write across settings navigation. Never substitute a
@@ -22,10 +25,17 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const [directory, setDirectory] = useState("");
   const [manualBusy, setBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
-  const busy = manualBusy || downloadBusy;
+  const [pickerBusy, setPickerBusy] = useState(false);
+  const busy = manualBusy || downloadBusy || pickerBusy;
+  const reviewSource = useRef<{ directory: string; manifest?: GuidedModelSource["manifest"] } | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<ModelInspectionReport | null>(null);
+  // Only entry points and the explicit next-step action change this view.
+  // Inspection/copy receipts and background catalog reads never open it.
+  const [preparationView, setPreparationView] = useState<"manual" | "records" | null>(null);
+  const manualTrigger = useRef<HTMLButtonElement>(null);
+  const recordsTrigger = useRef<HTMLButtonElement>(null);
   const [placing, setPlacing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [placements, setPlacements] = useState<ModelPlacementEntry[]>([]);
@@ -163,14 +173,19 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   };
   const inspect = async (event: FormEvent) => {
     event.preventDefault();
+    await inspectSource({ directory: directory.trim() });
+  };
+  const inspectSource = async (source: { directory: string; manifest?: GuidedModelSource["manifest"] }) => {
     if (busy || locked || recordingActive || !isTauri()) return;
     const token = crypto.randomUUID();
     attempt.current.begin(token);
-    setBusy(true); setPlacing(false); setChecking(false); setCancelling(false); setError(""); setReport(null); setNotice(null);
+    setBusy(true); setPlacing(false); setChecking(false); setCancelling(false); setError(""); setReport(null); setNotice(null); reviewSource.current = null; setDirectory(source.directory);
     try {
-      const result = await invoke<ModelInspectionReport>("inspect_model_package", { token, directory: directory.trim() });
+      const result = await invoke<ModelInspectionReport>("inspect_model_package", { token, ...source });
       if (mounted.current && attempt.current.accepts(token)) {
         inspectionLabel(result);
+        if (source.manifest) assertGuidedInspection(result, source as GuidedModelSource);
+        reviewSource.current = structuredClone(source);
         setReport(result);
         setNotice(modelNotice("inspected", token));
       }
@@ -181,13 +196,13 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     }
   };
   const place = async () => {
-    if (!report || busy || locked || recordingActive || !isTauri()) return;
-    const review = report, source = directory.trim(), reviewHash = report.reviewHash;
-    await confirm({ title: "モデルのコピー配置を確認", target: review.manifest.modelName, confirmLabel: "管理領域へコピーする", message: `「${review.manifest.modelName}」の検査済みファイル（${review.totalBytes.toLocaleString()} bytes）をアプリのモデル管理領域へコピーします。\n元ファイル・既存会議・ジョブ・設定は変更しません。実行ファイルは起動せず、配置後も互換性検証待ちです。\n中断時の途中配置は削除せず保全します。配布元・ライセンスの確認は利用者が行ってください。`, validate: () => !confirmedState.current.busy && confirmedState.current.report?.reviewHash === reviewHash && confirmedState.current.directory.trim() === source, progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
+    if (!report || !reviewSource.current || busy || locked || recordingActive || !isTauri()) return;
+    const review = report, source = reviewSource.current, reviewHash = report.reviewHash;
+    await confirm({ title: "モデルのコピー配置を確認", target: review.manifest.modelName, confirmLabel: "管理領域へコピーする", message: `「${review.manifest.modelName}」の検査済みファイル（${review.totalBytes.toLocaleString()} bytes）をアプリのモデル管理領域へコピーします。\n元ファイル・既存会議・ジョブ・設定は変更しません。実行ファイルは起動せず、配置後も互換性検証待ちです。\n中断時の途中配置は削除せず保全します。配布元・ライセンスの確認は利用者が行ってください。`, validate: () => !confirmedState.current.busy && confirmedState.current.report?.reviewHash === reviewHash && reviewSource.current === source && confirmedState.current.directory.trim() === source.directory, progressAction: { label: "準備の停止を要求する", action: () => cancel(true) }, action: async () => {
     const token = crypto.randomUUID();
     attempt.current.begin(token); setBusy(true); setPlacing(true); setChecking(false); setCancelling(false); setError(""); setNotice(null);
     try {
-      const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, directory: source, expectedReviewHash: reviewHash });
+      const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, ...source, expectedReviewHash: reviewHash });
       if (mounted.current && attempt.current.accepts(token)) { assertPlacementReceipt(receipt, token, reviewHash); setNotice(modelNotice("placed", token)); setReport(null); }
     } catch (cause) {
       if (mounted.current && attempt.current.accepts(token)) setError(`${String(cause)} 未完了の配置は保全されます。再検査後、新しい操作として配置し直せます。`);
@@ -253,11 +268,19 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
   const unknownMessage = application && applicationUnknown && !applicationVisible ? applicationError : "";
   const standard = profiles?.find(view => view.name === "standard");
   const recordsAttention = !!catalogError || manualBusy || applicationUnknown || placements.some(entry => !entry.placementRecorded || entry.bodyRemoved !== true && entry.compatibility?.state !== "succeeded") || !!profiles?.some(view => view.components.some(component => !component.settingsMatch || !component.compatibilityCurrent));
+  const preparationStatus = manualBusy ? cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は配置・構成記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。" : "";
+  const preparationFeedback = (view: "manual" | "records") => preparationView === view && !confirm.pending && !(application && applicationVisible) && <div className="model-preparation-feedback">
+    {preparationStatus && <p role="status">{preparationStatus}</p>}
+    <IssueStatus label="モデル準備" message={error}><span role="alert">{error}</span></IssueStatus>
+    {notice && <div className="model-result-status" aria-label="モデル準備の結果"><span role="status">{notice.message}</span><InfoPopover label="モデル準備の結果">{notice.details}</InfoPopover></div>}
+  </div>;
   return <section className="analysis-card model-inspection" aria-label="AIモデルの事前検査">
-    <div className="heading-with-info"><h2>ローカルAI</h2><InfoPopover label="AIモデル" details={<p>手動取り込みとmacOSの明示的な取得定義からの初回取得・管理コピー・CPU互換性確認を利用できます。標準／高精度への選択は別の確認です。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。互換性確認だけは明示的な確認後に実行ファイルを起動します。検査・取得・コピー・適用では起動しません。配布先・実モデルの検証とWindowsの取得は保留です。</p>}>取得または手動取り込みを行い、別途互換性確認後に標準／高精度へ選択できます。取得・コピー・適用では実行ファイルを起動しません。</InfoPopover></div>
+    <div className="heading-with-info"><h2>ローカルAI</h2><InfoPopover label="AIモデル" details={<p>「モデルをダウンロード」から文字起こし・話者分離・議事録生成を選べます。手元の素材は「ローカルから取り込む」を使います。取得後は管理コピー・CPU動作確認・標準／高精度への適用を別々に確認します。AI処理・録音・取り込みを止めてから開始してください。準備中は新しいAI処理を待機させ、録音開始・アプリ終了時は取消と停止完了を待ちます。動作確認だけは明示的な確認後に実行ファイルを起動します。検査・取得・コピー・適用では起動しません。正式品質・性能とWindowsの取得は保留です。内包CLIの正式署名・公証は未検証です。</p>}>モデルを選び、コピー・動作確認後に標準／高精度へ適用できます。取得・コピー・適用では実行ファイルを起動しません。</InfoPopover></div>
     <p className="model-setup-summary"><strong>文字起こし・話者分離・議事録生成</strong><span>標準プロファイル · {catalogLoading ? "構成記録を確認中" : standard ? profileConfigurationLabel(standard) : "構成記録を確認できていません"}</span></p>
-    <SettingsDisclosure label="ローカルから取り込む" initialOpen={!compact} attention={manualBusy || !!report || !!error}>
+    <SettingsDisclosure label="ローカルから取り込む" className="model-inspection-settings" initialOpen={!compact} attention={manualBusy || !!report || !!error} open={preparationView === "manual"} onOpenChange={open => setPreparationView(open ? "manual" : null)} triggerRef={manualTrigger} restoreTarget={() => manualTrigger.current}>
     <p>AI処理・録音・取り込みを止めてから準備を開始してください。</p>
+    <ModelImportGuide disabled={manualBusy || downloadBusy || locked || recordingActive} onInspect={inspectSource} onPickingChange={setPickerBusy} onChanged={() => { reviewSource.current = null; setReport(null); setNotice(null); setError(""); }} />
+    <details className="model-import-legacy"><summary>既存の設定ファイルから取り込む</summary>
     <details className="analysis-settings"><summary>検査するフォルダーの準備方法</summary>
       <p>実行ファイルと、そのエンジン用のモデルを同じフォルダーへ置き、直下に <code>mon-model.json</code> を作成してください。ファイルのパスはフォルダー内の相対パスです。下記はmacOS Apple Silicon向けwhisper.cppの例です。版・ライセンス参照・ファイル名は実際の配布情報に合わせてください。対象Windowsの検証は保留中です。</p>
       <pre>{JSON.stringify({ schemaVersion: 1, engine: "whisper.cpp", engineVersion: "配布元の版", modelName: "モデル名", modelVersion: "モデルの版", quantization: null, licenseRef: "配布元のライセンス参照", target: "macos_aarch64", files: [{ relativePath: "whisper-cli", role: "executable", expectedSize: null, expectedHash: null }, { relativePath: "model.bin", role: "asr", expectedSize: null, expectedHash: null }] }, null, 2)}</pre>
@@ -265,12 +288,22 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>ローカルで計算したSHAや、取り込み元のmanifestとの一致だけでは配布元の真正性・ライセンス許諾・動作互換性を検証したことにはなりません。未記載のファイルは検査対象外です。ライブラリを含む必要な構成をすべて記載してください。</p>
     </details>
     <form onSubmit={event => void inspect(event)}>
-      <label className="prompt-label" htmlFor="model-package-directory">パッケージフォルダーの絶対パス<input id="model-package-directory" value={directory} maxLength={4096} disabled={busy || locked || recordingActive || !isTauri()} onChange={event => { setDirectory(event.target.value); setReport(null); setError(""); }} placeholder="/Users/…/model-package" /></label>
+      <label className="prompt-label" htmlFor="model-package-directory">パッケージフォルダーの絶対パス<input id="model-package-directory" value={directory} maxLength={4096} disabled={busy || locked || recordingActive || !isTauri()} onChange={event => { setDirectory(event.target.value); setReport(null); setError(""); setNotice(null); }} placeholder="/Users/…/model-package" /></label>
       <div className="analysis-actions"><button type="submit" disabled={busy || locked || recordingActive || !isTauri() || !directory.trim()}>ファイルを事前検査</button>{manualBusy && !application && <button type="button" className="secondary" disabled={cancelling} onClick={() => void cancel()}>{deletionReviewing ? "削除対象の検査を取り消す" : checking ? "互換性確認を取り消す" : placing ? "配置を取り消す" : reviewing ? "適用の事前確認を取り消す" : "検査を取り消す"}</button>}</div>
     </form>
+    </details>
+    {preparationFeedback("manual")}
+    {report && <section className="model-inspection-report" aria-label="モデル検査結果"><h3>{inspectionLabel(report)}</h3>
+      <p>{report.manifest.modelName} / {report.manifest.modelVersion} · {report.manifest.engine} / {report.manifest.engineVersion} · {report.manifest.target}</p>
+      <p>ファイル {report.files.length} 件・合計 {report.totalBytes.toLocaleString()} bytes。実行ファイルは起動していません。モデルの読み込み・推論互換性・精度・速度は未検証です。</p>
+      <details><summary>ファイルの検査記録</summary><p>manifest SHA: <code>{report.manifestHash}</code></p><ul>{report.files.map(file => <li key={file.relativePath}><strong>{file.relativePath}</strong>（{file.role}）<p>{file.actualSize.toLocaleString()} bytes · 容量指定: {file.expectedSizeChecked ? "一致" : "なし"} · SHA指定: {file.expectedHashChecked ? "一致" : "なし"}<br /><code>{file.actualHash}</code></p></li>)}</ul><p>ライセンス参照（未確認）: {report.manifest.licenseRef}</p></details>
+      <details><summary>検査とコピーの注意事項</summary><p>この検査結果は今回の読み取り時点の記録です。ファイルを変更した場合は再検査が必要です。この結果でAI処理を開始することはできません。コピーはOSのアプリデータ領域へ保存し、会議保存先と分離します。未完了の配置は自動削除しません。</p></details>
+      <button type="button" className="secondary" disabled={busy || locked || recordingActive || !isTauri()} onClick={() => void place()}>管理領域へコピー</button>
+    </section>}
+    {(notice?.outcome === "placed" || !!error) && <div className="model-preparation-next"><p>コピー後は、配置記録からCPU互換性確認とプロファイルへの適用を別々に確認できます。ここでは実行・適用を開始しません。</p><button type="button" className="small-secondary" disabled={busy} onClick={() => setPreparationView("records")}>配置・構成記録を開く</button></div>}
     </SettingsDisclosure>
-    <ModelDownloadPanel compact={compact} locked={locked || recordingActive || manualBusy || applying || !!application || !!deletionReview} onBusyChange={setDownloadBusy} onChanged={loadPlacements} />
-    {manualBusy && <p role="status">{cancelling ? "取消要求済み。処理の終了を待っています。確定した結果は下の記録を確認してください。" : deletionReviewing ? "選択した管理モデルの容量・SHA・参照記録を読み取り専用で検査しています。削除・実行はしません。大きなモデルは時間がかかります。" : applying ? "モデルと試行証拠を再照合し、確認した設定・構成版を保存しています。" : reviewing ? "モデルとCPU試行証拠を再照合し、変更内容を準備しています。" : checking ? "配置ファイルを再照合し、CPU・1スレッドで固定した合成入力の互換性を確認しています。" : placing ? "確認済みの素材を再照合し、管理領域へコピー・同期しています。" : "対象OS・CPU、構成、容量・SHAを検査しています。大きなモデルは時間がかかります。"}</p>}
+    <ModelDownloadPanel compact={compact} locked={locked || recordingActive || manualBusy || applying || !!application || !!deletionReview} onBusyChange={setDownloadBusy} onChanged={loadPlacements} placements={placements} onShowPlacements={() => setPreparationView("records")} />
+    {!preparationView && preparationStatus && <p role="status">{preparationStatus}</p>}
     {!isTauri() && <p>デスクトップアプリで利用できます。</p>}
     {recordingActive && <p>録音停止後に検査・配置・互換性確認・適用できます。録音開始要求があった場合は処理を取り消し、停止完了を待ちます。</p>}
     <IssueNotice scope="models" type="operation-error" label="モデル準備" message={(!applicationVisible || !application) && !confirm.pending ? error : ""} />
@@ -281,16 +314,10 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
     </IssueStatus>
     <ToastNotice scope="models" type="application-stopped" message={stoppedNotice?.message} level="warning" important eventId={stoppedNotice?.eventId} action={{ kind: "open", label: "同じ操作の結果を確認", disabled: busy || locked || recordingActive, run: () => setApplicationVisible(true) }} />
     <ToastNotice scope="models" type="preparation-result" message={notice?.outcome === "applicationStopped" ? "" : notice?.message} level={notice?.level} eventId={notice?.eventId} />
-    {notice && <div className="model-result-status" aria-label="モデル準備の結果"><span>{notice.message}</span><InfoPopover label="モデル準備の結果">{notice.details}</InfoPopover></div>}
-    <SettingsDisclosure label="モデルの配置・構成記録" initialOpen={!compact} attention={recordsAttention || !!report}>
-    {report && <div aria-label="モデル検査結果"><h3>{inspectionLabel(report)}</h3>
-      <p>{report.manifest.modelName} / {report.manifest.modelVersion} · {report.manifest.engine} / {report.manifest.engineVersion} · {report.manifest.target}</p>
-      <p>ファイル {report.files.length} 件・合計 {report.totalBytes.toLocaleString()} bytes。実行ファイルは起動していません。モデルの読み込み・推論互換性・精度・速度は未検証です。</p>
-      <details><summary>ファイルの検査記録</summary><p>manifest SHA: <code>{report.manifestHash}</code></p><ul>{report.files.map(file => <li key={file.relativePath}><strong>{file.relativePath}</strong>（{file.role}）<p>{file.actualSize.toLocaleString()} bytes · 容量指定: {file.expectedSizeChecked ? "一致" : "なし"} · SHA指定: {file.expectedHashChecked ? "一致" : "なし"}<br /><code>{file.actualHash}</code></p></li>)}</ul><p>ライセンス参照（未確認）: {report.manifest.licenseRef}</p></details>
-      <p>この検査結果は今回の読み取り時点の記録です。ファイルを変更した場合は再検査が必要です。この結果でAI処理を開始することはできません。コピーはOSのアプリデータ領域へ保存し、会議保存先と分離します。未完了の配置は自動削除しません。</p>
-      <button type="button" className="secondary" disabled={busy || locked || recordingActive || !isTauri()} onClick={() => void place()}>管理領域へコピー</button>
-    </div>}
-    <section aria-label="モデル配置記録"><div className="heading-with-info"><h3>モデル配置記録</h3><InfoPopover label="モデル配置記録" details={<p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>}>コピーと最後のCPU互換性試行の記録です。合成入力の成功は実会議の精度・速度を保証しません。バックアップにモデル本体は含まず、復元後は再準備が必要です。</InfoPopover></div><button type="button" className="small-secondary" disabled={busy || locked || catalogLoading || !isTauri()} onClick={() => void loadPlacements()}>配置・構成記録を再読込</button>
+    {!preparationView && notice && <div className="model-result-status" aria-label="モデル準備の結果"><span>{notice.message}</span><InfoPopover label="モデル準備の結果">{notice.details}</InfoPopover></div>}
+    <SettingsDisclosure label="モデルの配置・構成記録" className="model-inspection-settings" initialOpen={!compact} attention={recordsAttention} open={preparationView === "records"} onOpenChange={open => setPreparationView(open ? "records" : null)} triggerRef={recordsTrigger} restoreTarget={() => recordsTrigger.current}>
+    {preparationFeedback("records")}
+    <section aria-label="モデル配置記録"><div className="heading-with-info"><h3>モデル配置記録</h3><InfoPopover label="モデル配置記録" details={<p>コピーと最後のCPU互換性確認の記録です。容量は検査した素材の合計で、途中コピー済みの容量ではありません。互換性確認はwhisper.cpp・sherpa-onnxの10秒無音入力と、llama.cppの固定JSON生成のみです。申告版は実行ファイルから検証した版ではありません。成功後のファイル変更・実会議の精度・速度は保証しません。再起動時に未完了の処理を自動再開しません。バックアップではパッケージ名・SHA・構成と数値設定のメタデータを未配置の履歴として保持します。モデル本体・配置パス・端末内の利用可能状態・CPU互換性試行ログは移送しません。復元後は現在のモデル選択を変更せず、モデルの準備は別途行います。</p>}>コピーと最後のCPU互換性試行の記録です。合成入力の成功は実会議の精度・速度を保証しません。バックアップにモデル本体は含まず、復元後は再準備が必要です。</InfoPopover></div><IconButton label="配置・構成記録を再読込" icon="refresh" type="button" className="small-secondary" disabled={busy || locked || catalogLoading || !isTauri()} onClick={() => void loadPlacements()} />
       {catalogLoading && <p role="status">配置とプロファイル構成を再読込しています。</p>}
       <IssueNotice scope="models" type="catalog-error" label="モデル配置・構成記録" message={catalogError} action={{ kind: "retry", label: "配置・構成記録を再読込", disabled: busy || locked || catalogLoading || !isTauri(), run: loadPlacements }} />
       {placements.length === 0 ? <p>モデル配置記録はありません。</p> : <ul>{placements.map(entry => <li key={entry.packageId}>
@@ -320,7 +347,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>会議音声・本文・議事録・モデル名／SHA・構成履歴・ジョブ履歴・現在の設定は保持しています。他モデル、取り込み元、バックアップ、互換性試行ログは対象に含みません。リンク・特殊ファイル・検査中の変更を検出した場合は確認を拒否します。</p>
       <p>一覧 {deletionPage * 50 + 1}–{Math.min((deletionPage + 1) * 50, deletionReview.entries.length)} / {deletionReview.entries.length} 件</p>
       <ul className="model-deletion-paths" aria-label="モデル削除の検査対象">{deletionReview.entries.slice(deletionPage * 50, (deletionPage + 1) * 50).map(item => <li key={item.relativePath}><code>{item.relativePath || ".（対象フォルダー）"}</code> · {modelDeletionEntryLabel(item)}{item.bytes !== null && <> · {item.bytes.toLocaleString()} bytes</>}{item.sha256 && <details><summary>現在のファイルSHA</summary><code>{item.sha256}</code></details>}</li>)}</ul>
-      <div className="analysis-actions"><button type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)}>前の50件</button><button type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)}>次の50件</button><button type="button" data-dialog-cancel onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
+      <div className="analysis-actions"><IconButton label="前の50件" icon="previous" type="button" className="secondary" disabled={deletionPage === 0} onClick={() => setDeletionPage(page => page - 1)} /><IconButton label="次の50件" icon="next" type="button" className="secondary" disabled={(deletionPage + 1) * 50 >= deletionReview.entries.length} onClick={() => setDeletionPage(page => page + 1)} /><button type="button" data-dialog-cancel onClick={() => setDeletionReview(null)}>削除せず閉じる</button></div>
       <details><summary>検査結果の識別子（削除許可ではありません）</summary><p>配置ID: <code>{deletionReview.packageId}</code><br />検査操作ID: <code>{deletionReview.inspectionId}</code><br />配置確認SHA: <code>{deletionReview.reviewHash}</code><br />今回の観測SHA: <code>{deletionReview.censusHash}</code></p></details>
     </CommonModal>}
     {application && applicationVisible && <CommonModal ref={dialog} open blocked={busy} onDismiss={() => { if (applicationUnknown) setApplicationVisible(false); else setApplication(null); }} restoreTarget={() => opener.current} className="model-application-dialog" aria-labelledby="model-application-title">
@@ -329,7 +356,7 @@ export function ModelInspectionPanel({ locked, recordingActive, deletionControl,
       <p>構成版 #{application.preview.expectedProfileVersion} → #{application.preview.expectedProfileVersion + 1} · 解析設定版 #{application.preview.expectedPreferencesVersion}</p>
       <p>下記のファイルパスだけを変更します。他のプロファイル・エンジン、既存ジョブ・会議は変更しません。保存後の新規解析に使用し、解析を自動開始する操作ではありません。</p>
       <table className="model-application-changes"><caption>変更するファイルと維持する解析条件</caption><thead><tr><th scope="col">設定</th><th scope="col">変更前</th><th scope="col">適用後</th></tr></thead><tbody>{applicationChanges(application.preview).map(change => <tr key={change.key}><th scope="row">{settingLabel(change.key)}<small>{change.file ? "ファイル選択" : "維持"}</small></th><td>{settingText(change.before)}</td><td>{settingText(change.after)}</td></tr>)}</tbody></table>
-      <p>CPU試行は1スレッド・GPUなし等の固定条件です。ここに表示した通常条件のGPU・メモリ・実会議の互換性や品質・速度は未検証です。保存直前にモデル・試行証拠と設定版を再照合し、変更があれば拒否します。管理パッケージとジョブの構成版参照への統合は開発中です。</p>
+      <p>CPU試行は1スレッド・GPUなし等の固定条件です。ここに表示した通常条件のGPU・メモリ・実会議の互換性や品質・速度は未検証です。保存直前にモデル・試行証拠と設定版を再照合し、変更があれば拒否します。保存した構成は新規解析が参照し、既存ジョブの条件は変更しません。</p>
       <details><summary>確認内容の識別子</summary><p>配置ID: <code>{application.preview.packageId}</code><br />CPU確認操作ID: <code>{application.preview.checkOperationId}</code><br />確認内容SHA: <code>{application.preview.reviewDigest}</code><br />適用操作ID: <code>{application.operationId}</code></p></details>
       {applicationError && <p className="action-error" role="alert">{applicationError}</p>}
       {error && <p className="action-error" role="alert">{error}</p>}

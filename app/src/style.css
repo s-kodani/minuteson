@@ -150,11 +150,11 @@
 .job-issues li>span { overflow-wrap:anywhere; }
 .model-result-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; color:var(--muted); font-size:12px; }
 .toast-host { position:fixed; top:76px; right:16px; width:min(380px, calc(100vw - 96px)); max-height:min(420px, calc(100dvh - 220px)); overflow:auto; overscroll-behavior:contain; z-index:30; display:grid; gap:8px; pointer-events:none; }
-.toast-card { display:flex; align-items:flex-start; gap:10px; background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--info-text); border-radius:10px; padding:12px; box-shadow:0 6px 24px var(--backdrop); pointer-events:auto; }
+.toast-card { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--info-text); border-radius:10px; padding:12px; box-shadow:0 6px 24px var(--backdrop); pointer-events:auto; }
 .toast-success { border-left-color:var(--success-text); }.toast-warning { border-left-color:var(--warning-text); }.toast-error { border-left-color:var(--danger-text); }
-.toast-icon { flex:none; font-size:18px; font-weight:800; }.toast-success .toast-icon { color:var(--success-text); }.toast-info .toast-icon { color:var(--info-text); }.toast-warning .toast-icon { color:var(--warning-text); }.toast-error .toast-icon { color:var(--danger-text); }
+.toast-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; font-size:18px; font-weight:800; line-height:1; }.toast-success .toast-icon { color:var(--success-text); }.toast-info .toast-icon { color:var(--info-text); }.toast-warning .toast-icon { color:var(--warning-text); }.toast-error .toast-icon { color:var(--danger-text); }
 .toast-body { flex:1; min-width:0; }.toast-body p { margin:0; font-size:13px; line-height:1.6; overflow-wrap:anywhere; white-space:pre-wrap; }.toast-label { font-weight:700; }.toast-body button { margin-top:8px; }
-.toast-close { flex:none; padding:4px; min-width:32px; min-height:32px; color:var(--secondary-text); background:var(--raised); font-size:18px; }.toast-queued { margin:0; padding:8px; background:var(--surface); color:var(--secondary-text); font-size:12px; pointer-events:auto; }
+.toast-close { display:inline-flex; align-items:center; justify-content:center; flex:none; padding:4px; min-width:32px; min-height:32px; color:var(--secondary-text); background:var(--raised); font-size:18px; line-height:1; }.toast-queued { margin:0; padding:8px; background:var(--surface); color:var(--secondary-text); font-size:12px; pointer-events:auto; }
 .restore-badge { display:inline-block; color:var(--info-text); font-size:11px; }
 .data-dialog li { overflow-wrap:anywhere; }
 .recovery-list { list-style:none; padding:0; }

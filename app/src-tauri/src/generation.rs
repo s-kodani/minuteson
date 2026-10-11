@@ -119,6 +119,11 @@ struct Parameters {
     prompt_budget: usize,
     plan: plan::Plan,
 }
+impl Parameters {
+    fn adaptive_merge(&self) -> bool {
+        matches!(self.schema_version, 2 | 3 | 4)
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Envelope {
@@ -170,7 +175,7 @@ pub(crate) fn restore_checkpoint_references(
 ) -> Result<Value, String> {
     use crate::saved_artifact::Role;
     let parameters: Parameters = serde_json::from_value(parameters).map_err(|e| e.to_string())?;
-    if !matches!(parameters.schema_version, 1 | 2)
+    if !matches!(parameters.schema_version, 1 | 2 | 3 | 4)
         || parameters.template_version != TEMPLATE_VERSION
     {
         return Err("未対応の生成条件です".into());
@@ -208,7 +213,7 @@ pub(crate) fn restore_checkpoint_references(
         Ok(())
     };
     for output in &mut checkpoint.outputs {
-        let adaptive = parameters.schema_version == 2
+        let adaptive = parameters.adaptive_merge()
             && matches!(
                 parameters.plan.nodes.get(output.index),
                 Some(plan::Node::Merge { .. })
@@ -266,6 +271,26 @@ pub(crate) fn enqueue(
     name: &str,
     prompt_budget: usize,
 ) -> Result<JobSnapshot, String> {
+    enqueue_version(storage, request, engine, name, prompt_budget, 4)
+}
+#[cfg(test)]
+pub(crate) fn enqueue_prompt_v3(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: llama::LlamaConfig,
+    name: &str,
+    prompt_budget: usize,
+) -> Result<JobSnapshot, String> {
+    enqueue_version(storage, request, engine, name, prompt_budget, 3)
+}
+#[cfg(test)]
+pub(crate) fn enqueue_previous(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: llama::LlamaConfig,
+    name: &str,
+    prompt_budget: usize,
+) -> Result<JobSnapshot, String> {
     enqueue_version(storage, request, engine, name, prompt_budget, 2)
 }
 #[cfg(test)]
@@ -298,7 +323,7 @@ fn enqueue_version(
     )?;
     let profile = managed::attach(profile(&engine, name), selected)?;
     storage.enqueue_minutes_job_configured(request, profile, |input| {
-        let plan = plan::build(input, prompt_budget)?;
+        let plan = plan::build_versioned(input, prompt_budget, schema_version)?;
         let total = plan.nodes.len() as i64;
         let parameters = Parameters {
             schema_version,
@@ -326,7 +351,7 @@ fn checked_parameters(
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || !matches!(p.schema_version, 1 | 2)
+        || !matches!(p.schema_version, 1 | 2 | 3 | 4)
         || p.template_version != TEMPLATE_VERSION
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
@@ -337,7 +362,7 @@ fn checked_parameters(
                 managed::read(&spec.profile_snapshot)?,
             )?
         || p.prompt_budget > budget(&p.engine)?
-        || p.plan != plan::build(input, p.prompt_budget)?
+        || p.plan != plan::build_versioned(input, p.prompt_budget, p.schema_version)?
         || spec.total_units != Some(p.plan.nodes.len() as i64)
     {
         return Err("議事録の固定入力・モデル・処理計画が不正です".into());
@@ -365,7 +390,7 @@ fn task(
             let (prompt, scoped, ids) = plan::extract_prompt(input, slices)?;
             let empty = ids.is_empty();
             Task {
-                system: plan::EXTRACT_SYSTEM.into(),
+                system: plan::extract_system(p.schema_version)?,
                 prompt,
                 schema: if empty {
                     json!({"type":"object"})
@@ -402,6 +427,15 @@ fn task(
     Ok(task)
 }
 fn parse_node(
+    value: Value,
+    input: &MinutesInput,
+    node: &plan::Node,
+    outputs: &[Vec<GeneratedItem>],
+    version: u32,
+) -> Result<Vec<GeneratedItem>, String> {
+    result::normalize_versioned(parse_node_raw(value, input, node, outputs)?, version)
+}
+fn parse_node_raw(
     value: Value,
     input: &MinutesInput,
     node: &plan::Node,
@@ -577,7 +611,7 @@ fn checked_checkpoint(
         return Err("議事録の再開位置が固定計画と一致しません".into());
     }
     if checkpoint.pending.as_ref().is_some_and(|pending| {
-        p.schema_version != 2
+        !p.adaptive_merge()
             || pending.index != checkpoint.outputs.len()
             || pending.batches.len() > 4096
             || !matches!(
@@ -607,7 +641,7 @@ fn verify_saved_outputs(
             return Ok(None);
         }
         let node = &p.plan.nodes[saved.index];
-        let items = if p.schema_version == 2 && matches!(node, plan::Node::Merge { .. }) {
+        let items = if p.adaptive_merge() && matches!(node, plan::Node::Merge { .. }) {
             if !saved.artifacts.is_empty() || saved.merge_batches.is_empty() {
                 return Err("分割統合の完了結果形式が不正です".into());
             }
@@ -626,7 +660,7 @@ fn verify_saved_outputs(
             };
             let items = cursor.finish()?;
             from_generated(input, items.clone())?;
-            items
+            result::normalize_versioned(items, p.schema_version)?
         } else {
             if !saved.merge_batches.is_empty() {
                 return Err("従来の生成単位に統合結果が混入しています".into());
@@ -637,6 +671,7 @@ fn verify_saved_outputs(
                 input,
                 node,
                 &outputs,
+                p.schema_version,
             )?
         };
         verify_normalized(storage, &spec.meeting_id, &saved.normalized, &items)?;
@@ -832,6 +867,7 @@ fn run_merge(
     }
     let items = cursor.finish()?;
     from_generated(input, items.clone())?;
+    let items = result::normalize_versioned(items, p.schema_version)?;
     let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
     Ok(Some((
         items.clone(),
@@ -876,65 +912,65 @@ pub(crate) fn process(
                 return Ok(None);
             }
             let node = &p.plan.nodes[index];
-            let (items, output) =
-                if p.schema_version == 2 && matches!(node, plan::Node::Merge { .. }) {
-                    let cursor = match resumed_merge.take() {
-                        Some(cursor) => cursor,
-                        None => merge_cursor(node, &outputs, &p)?,
-                    };
-                    let Some((items, normalized)) = run_merge(
-                        storage,
-                        &spec,
-                        job_id,
-                        index,
-                        &input,
-                        &p,
-                        cursor,
-                        &mut checkpoint,
-                        &cancelled,
-                        progress,
-                    )?
-                    else {
-                        return Ok(None);
-                    };
-                    let pending = checkpoint
-                        .pending
-                        .take()
-                        .ok_or("統合の保存位置がありません")?;
-                    (
-                        items,
-                        UnitOutput {
-                            index,
-                            artifacts: vec![],
-                            normalized,
-                            merge_batches: pending.batches,
-                        },
-                    )
-                } else {
-                    let Some((raw, directory)) = run_task(
-                        storage,
-                        &spec,
-                        job_id,
-                        index,
-                        task(&input, node, &outputs, &p)?,
-                        &p,
-                        &cancelled,
-                    )?
-                    else {
-                        return Ok(None);
-                    };
-                    let items = parse_node(raw, &input, node, &outputs)?;
-                    let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
-                    (
-                        items,
-                        UnitOutput {
-                            index,
-                            artifacts: saved.artifacts,
-                            normalized: saved.normalized,
-                            merge_batches: vec![],
-                        },
-                    )
+            let (items, output) = if p.adaptive_merge() && matches!(node, plan::Node::Merge { .. })
+            {
+                let cursor = match resumed_merge.take() {
+                    Some(cursor) => cursor,
+                    None => merge_cursor(node, &outputs, &p)?,
                 };
+                let Some((items, normalized)) = run_merge(
+                    storage,
+                    &spec,
+                    job_id,
+                    index,
+                    &input,
+                    &p,
+                    cursor,
+                    &mut checkpoint,
+                    &cancelled,
+                    progress,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let pending = checkpoint
+                    .pending
+                    .take()
+                    .ok_or("統合の保存位置がありません")?;
+                (
+                    items,
+                    UnitOutput {
+                        index,
+                        artifacts: vec![],
+                        normalized,
+                        merge_batches: pending.batches,
+                    },
+                )
+            } else {
+                let Some((raw, directory)) = run_task(
+                    storage,
+                    &spec,
+                    job_id,
+                    index,
+                    task(&input, node, &outputs, &p)?,
+                    &p,
+                    &cancelled,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let items = parse_node(raw, &input, node, &outputs, p.schema_version)?;
+                let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
+                (
+                    items,
+                    UnitOutput {
+                        index,
+                        artifacts: saved.artifacts,
+                        normalized: saved.normalized,
+                        merge_batches: vec![],
+                    },
+                )
+            };
             checkpoint.outputs.push(output);
             let saved = storage.save_job_checkpoint(
                 job_id,

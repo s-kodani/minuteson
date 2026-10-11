@@ -71,7 +71,17 @@ pub(crate) fn review_model_download(
     }
     #[cfg(target_os = "macos")]
     {
-        json(Recipe::parse(definition.as_bytes())?.review()?)
+        let recipe = Recipe::parse(definition.as_bytes())?;
+        if recipe.has_bundled() {
+            let root = window
+                .app_handle()
+                .path()
+                .resource_dir()
+                .map_err(|e| e.to_string())?
+                .join("asr-runtime");
+            crate::model_bundled_runtime::Bundle::open(&root)?.bind(&recipe)?;
+        }
+        json(recipe.review()?)
     }
 }
 
@@ -102,7 +112,8 @@ pub(crate) async fn start_model_download(
             use tauri::Emitter;
             let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("model-downloads");
             let mut last = None::<std::time::Instant>;
-            let receipt = crate::model_download::download(&root, &operation, &recipe, &expected_recipe_hash, &|| cancelled(), &mut |received, total| {
+            let bundled = app.path().resource_dir().map_err(|e| e.to_string())?.join("asr-runtime");
+            let receipt = crate::model_download::download_with_bundle(&root, &bundled, &operation, &recipe, &expected_recipe_hash, &|| cancelled(), &mut |received, total| {
                 if received == 0 || received == total || last.is_none_or(|time| time.elapsed().as_millis() >= 200) {
                     last = Some(std::time::Instant::now());
                     // Progress is informational, never a success receipt. Lost

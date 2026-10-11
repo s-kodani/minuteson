@@ -5,12 +5,14 @@ async (page, capturePath, detailUI) => {
   const modal = name => page.getByRole("dialog", { name, exact: true });
   const restore = () => panel().getByRole("button", { name: "議事録直前版を確認・復元", exact: true });
   const count = command => page.evaluate(c => window.__mon.calls.filter(x => x.cmd === c).length, command);
-  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openMinutes(); await restore().waitFor(); };
-  const close = async (name, trigger) => { await modal(name).waitFor({ state: "hidden" }); await page.waitForFunction(() => !document.querySelector("dialog[open]")); check(await trigger.evaluate(e => e === document.activeElement), "minutes opener focus missing"); };
+  const settings = () => modal("議事録の設定・生成状況・候補");
+  const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await page.getByRole("tab", { name: "議事録", exact: true }).click(); await page.getByRole("button", { name: "議事録の設定・生成状況・候補", exact: true }).click(); await settings().waitFor(); await restore().waitFor(); };
+  const close = async (name, trigger) => { await modal(name).waitFor({ state: "hidden" }); check(await settings().isVisible() && await page.locator("dialog[open]").count() === 1, "parent minutes settings missing"); check(await trigger.evaluate(e => e === document.activeElement), "minutes opener focus missing"); };
   await boot(); const originalDraft = await page.evaluate(() => JSON.stringify(window.__mon.drafts.a));
   await restore().click(); const previous = "議事録直前版の復元確認 #1";
   await modal(previous).waitFor();
-  check(await modal(previous).getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "minutes safe focus missing");
+  check(await page.locator("dialog[open]").count() === 1, "comparison opened an additional native boundary");
+  check(await modal(previous).getByRole("button", { name: "議事録プレビューを閉じる", exact: true }).evaluate(e => e === document.activeElement), "minutes safe focus missing");
   check((await modal(previous).innerText()).includes("保存済みの手動追記を保持します。"), "comparison omitted saved draft");
   await page.keyboard.press("Escape"); await close(previous, restore());
   check(await count("restore_minutes_version") === 0 && await page.evaluate(() => JSON.stringify(window.__mon.drafts.a)) === originalDraft, "Escape changed minutes head or saved edit");
@@ -23,7 +25,7 @@ async (page, capturePath, detailUI) => {
 
   await page.setViewportSize({ width: 360, height: 640 }); await restore().click();
   const small = await modal(previous).boundingBox();
-  check(small.x >= 23.9 && small.x + small.width <= 336.1 && await modal(previous).evaluate(e => e.scrollWidth <= e.clientWidth + 1), "minutes comparison overflows small dialog");
+  check(small.x >= 15.9 && small.x + small.width <= 344.1 && await modal(previous).evaluate(e => e.scrollWidth <= e.clientWidth + 1), "minutes comparison overflows small dialog");
   await page.screenshot({ path: "minutes-modal-360.png" });
   await page.keyboard.press("Escape"); await close(previous, restore());
   results.push("production minutes documents and evidence controls fit 360px modal margins");
@@ -32,7 +34,7 @@ async (page, capturePath, detailUI) => {
   await modal(previous).getByRole("button", { name: "この議事録直前版へ戻す", exact: true }).click();
   const restoreChoice = "議事録の直前版復元を確認";
   await modal(restoreChoice).waitFor();
-  check(await page.locator("dialog[open]").count() === 1 && await count("restore_minutes_version") === 0, "restore stacked dialogs or ran before acceptance");
+  check(await page.locator("dialog[open]").count() === 1 && await count("restore_minutes_version") === 0, "restore stacked extra dialogs or ran before acceptance");
   await page.keyboard.press("Escape"); await modal(previous).waitFor();
   await page.waitForFunction(() => document.activeElement?.textContent === "この議事録直前版へ戻す");
   check(await count("restore_minutes_version") === 0 && await page.evaluate(() => JSON.stringify(window.__mon.drafts.a)) === originalDraft, "nested cancellation lost draft or restored minutes");
@@ -55,12 +57,12 @@ async (page, capturePath, detailUI) => {
   await modal(candidate).getByRole("button", { name: "この議事録候補を採用", exact: true }).click();
   const adoptChoice = "議事録候補の採用を確認";
   await modal(adoptChoice).waitFor();
-  check(await page.locator("dialog[open]").count() === 1 && await count("adopt_minutes_candidate") === 0, "candidate stacked dialogs or ran before acceptance");
+  check(await page.locator("dialog[open]").count() === 1 && await count("adopt_minutes_candidate") === 0, "candidate stacked extra dialogs or ran before acceptance");
   await modal(adoptChoice).getByRole("button", { name: "候補を採用する", exact: true }).click();
   await modal(candidate).waitFor({ state: "hidden" });
-  await page.waitForFunction(() => document.activeElement?.textContent === "議事録");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "議事録の設定・生成状況・候補" && !!document.activeElement.closest("dialog[open]"));
   check(await count("adopt_minutes_candidate") === 1 && await page.evaluate(() => window.__mon.current === "b" && window.__mon.previous === "a" && !!window.__mon.drafts.a), "adoption lost preserved edit or generated duplicate");
-  results.push("candidate cancellation is read-only; single explicit adoption retains prior draft and restores panel focus");
+  results.push("candidate cancellation is read-only; single explicit adoption retains prior draft and restores surviving settings focus");
   await boot(); await panel().getByRole("button", { name: "議事録を再生成", exact: true }).click();
   await page.waitForFunction(() => window.__mon.jobs.length === 1);
   await page.evaluate(() => { window.__mon.jobs[0].state = "failed"; window.__mon.jobs[0].completedUnits = 2; });

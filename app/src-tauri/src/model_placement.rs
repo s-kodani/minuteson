@@ -163,6 +163,26 @@ pub(crate) fn place(
     expected_review_hash: &str,
     cancelled: &impl Fn() -> bool,
 ) -> Result<PlacementReceipt, String> {
+    place_with_manifest(
+        storage,
+        models_root,
+        source,
+        package_id,
+        expected_review_hash,
+        None,
+        cancelled,
+    )
+}
+
+pub(crate) fn place_with_manifest(
+    storage: &Storage,
+    models_root: &Path,
+    source: &Path,
+    package_id: &str,
+    expected_review_hash: &str,
+    manifest: Option<&PackageManifest>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<PlacementReceipt, String> {
     #[cfg(not(unix))]
     {
         let _ = (
@@ -171,6 +191,7 @@ pub(crate) fn place(
             source,
             package_id,
             expected_review_hash,
+            manifest,
             cancelled,
         );
         return Err("Windowsのモデル配置は保留中です".into());
@@ -181,19 +202,27 @@ pub(crate) fn place(
             return Err("モデル配置の操作IDが不正です".into());
         }
         check(cancelled)?;
-        let report = model_inspection::inspect(source, cancelled)?;
+        let report = match manifest {
+            Some(declared) => model_inspection::inspect_declared(source, declared, cancelled)?,
+            None => model_inspection::inspect(source, cancelled)?,
+        };
         if report.review_hash != expected_review_hash {
             return Err(
                 "検査後にモデル構成・ファイルが変更されています。再検査してください".into(),
             );
         }
         let record = PlacementRecord::from_report(package_id, &report);
-        place_reviewed(
+        let manifest_bytes = manifest
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        place_reviewed_with_manifest(
             storage,
             models_root,
             source,
             &report,
             &record,
+            manifest_bytes.as_deref(),
             cancelled,
             &|| Ok(()),
         )
@@ -207,6 +236,29 @@ pub(crate) fn place_reviewed(
     source: &Path,
     report: &Report,
     record: &PlacementRecord,
+    cancelled: &impl Fn() -> bool,
+    verify_origin: &impl Fn() -> Result<(), String>,
+) -> Result<PlacementReceipt, String> {
+    place_reviewed_with_manifest(
+        storage,
+        models_root,
+        source,
+        report,
+        record,
+        None,
+        cancelled,
+        verify_origin,
+    )
+}
+
+#[cfg(unix)]
+fn place_reviewed_with_manifest(
+    storage: &Storage,
+    models_root: &Path,
+    source: &Path,
+    report: &Report,
+    record: &PlacementRecord,
+    manifest_bytes: Option<&[u8]>,
     cancelled: &impl Fn() -> bool,
     verify_origin: &impl Fn() -> Result<(), String>,
 ) -> Result<PlacementReceipt, String> {
@@ -256,7 +308,7 @@ pub(crate) fn place_reviewed(
         check(cancelled)?;
         // UUID directory is created after durable intent, never adopted.
         let destination = root.child(package_id, true)?;
-        copy_package(source, report, &destination, cancelled)?;
+        copy_package(source, report, &destination, manifest_bytes, cancelled)?;
         root.verify()?;
         destination.sync()?;
         let copied = model_inspection::inspect(destination.path(), cancelled)?;
@@ -294,11 +346,23 @@ fn copy_package(
     source: &Path,
     expected: &Report,
     destination: &fs::Directory,
+    manifest_bytes: Option<&[u8]>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let source = source.canonicalize().map_err(|e| e.to_string())?;
     let mut sources = Vec::new();
+    if let Some(bytes) = manifest_bytes {
+        check(cancelled)?;
+        if bytes.len() > 65_536 || format!("{:x}", Sha256::digest(bytes)) != expected.manifest_hash
+        {
+            return Err("確認した画面の構成とコピーするmanifestが一致しません".into());
+        }
+        let (mut output, parent) = destination.create(model_inspection::MANIFEST)?;
+        output.write_all(bytes).map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
+        parent.sync()?;
+    }
     for (relative, size, hash, executable) in std::iter::once((
         model_inspection::MANIFEST,
         None,
@@ -313,6 +377,9 @@ fn copy_package(
             f.role == Role::Executable,
         )
     })) {
+        if relative == model_inspection::MANIFEST && manifest_bytes.is_some() {
+            continue;
+        }
         check(cancelled)?;
         destination.verify()?;
         let mut input = Source::open(&source, relative)?;

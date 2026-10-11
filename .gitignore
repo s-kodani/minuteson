@@ -18,3 +18,4 @@ output/playwright/
 .cache/rust-tests/
 .cache/rust-tests.lock
 .cache/third-party-notices/
+.cache/whisper-runtime/

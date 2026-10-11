@@ -9,9 +9,12 @@ async (page, capturePath, detailUI) => {
     await page.waitForFunction(() => !!window.monBrowserFixture.draft);
   };
   const calls = command => page.evaluate(c => window.monBrowserFixture.calls.filter(x => x.command === c).length, command);
-  const cancelled = async (name, trigger) => {
+  const cancelled = async (name, trigger, parentName = null) => {
     await modal(name).waitFor({ state: "hidden" });
-    await page.waitForFunction(() => !document.querySelector("dialog[open]"));
+    if (parentName) {
+      await modal(parentName).waitFor();
+      check(await page.locator("dialog[open]").count() === 1, "review did not return to its single owner boundary");
+    } else await page.waitForFunction(() => !document.querySelector("dialog[open]"));
     check(await trigger.evaluate(e => document.activeElement === e), "cancel did not return to actual opener");
   };
   await boot();
@@ -70,10 +73,11 @@ async (page, capturePath, detailUI) => {
 
   await boot(); await detailUI.openMeetingTools(); const review = page.getByRole("region", { name: "解析操作", exact: true }).getByRole("button", { name: "内容を確認", exact: true });
   await review.click(); await modal("候補版の採用確認 #2").waitFor();
-  await page.keyboard.press("Escape"); await cancelled("候補版の採用確認 #2", review);
+  const analysisOwner = "会議管理・録音・解析操作";
+  await page.keyboard.press("Escape"); await cancelled("候補版の採用確認 #2", review, analysisOwner);
   check(await calls("adopt_analysis_candidate") === 0, "Escape adopted analysis");
   await review.click(); box = await modal("候補版の採用確認 #2").boundingBox();
-  await page.mouse.click(box.x - 10, box.y + 10); await cancelled("候補版の採用確認 #2", review);
+  await page.mouse.click(box.x - 10, box.y + 10); await cancelled("候補版の採用確認 #2", review, analysisOwner);
   results.push("analysis preview Escape and backdrop are read-only and restore opener");
   await review.click();
   await modal("候補版の採用確認 #2").getByRole("button", { name: "この候補を採用", exact: true }).click();
@@ -88,7 +92,8 @@ async (page, capturePath, detailUI) => {
   await modal("候補版の採用確認 #2").getByRole("button", { name: "この候補を採用", exact: true }).click();
   await modal(choice).getByRole("button", { name: "候補を採用する", exact: true }).click();
   await modal("候補版の採用確認 #2").waitFor({ state: "hidden" });
-  await page.waitForFunction(() => document.activeElement?.textContent === "ローカル文字起こし");
+  await modal(analysisOwner).waitFor();
+  check(await modal(analysisOwner).getByRole("heading", { name: analysisOwner, exact: true }).evaluate(e => document.activeElement === e), "removed review opener did not return to owner heading");
   check(await calls("adopt_analysis_candidate") === 1 && await page.evaluate(() => window.monBrowserFixture.currentId === "candidate" && window.monBrowserFixture.previousId === "analysis" && !!window.monBrowserFixture.archivedDrafts.analysis), "adoption changed version or draft identity");
   results.push("explicit analysis adoption is single and retains prior draft; removed opener focus fallback");
   const previous = page.getByRole("region", { name: "解析操作", exact: true }).getByRole("button", { name: "直前版を確認・復元", exact: true });

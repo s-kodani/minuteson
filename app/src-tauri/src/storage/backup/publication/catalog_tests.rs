@@ -9,12 +9,20 @@ fn source() -> (tempfile::TempDir, tempfile::TempDir, Storage, String) {
 #[test]
 fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installing_or_selecting_models(
 ) {
+    downloaded_history_roundtrip(1);
+}
+#[test]
+fn bundled_runtime_provenance_survives_restore_and_rebackup_without_current_app_resource_or_model_execution(
+) {
+    downloaded_history_roundtrip(3);
+}
+fn downloaded_history_roundtrip(schema: u32) {
     let (_root, _models, storage, _) = source();
     let mut record = {
         let db = storage.connection.lock().unwrap();
         let id: String = db
             .query_row(
-                "SELECT id FROM model_packages ORDER BY id LIMIT 1",
+                "SELECT id FROM model_packages WHERE engine='whisper.cpp' ORDER BY id LIMIT 1",
                 [],
                 |r| r.get(0),
             )
@@ -24,6 +32,9 @@ fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installin
             .unwrap()
             .0
     };
+    if schema == 3 {
+        record.manifest.engine_version = "v1.9.4".into();
+    }
     record.package_id = Uuid::new_v4().to_string();
     for (declared, actual) in record.manifest.files.iter_mut().zip(&mut record.files) {
         declared.expected_size = Some(actual.actual_size);
@@ -42,7 +53,7 @@ fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installin
     )
     .unwrap();
     let recipe = crate::model_download_recipe::Recipe {
-        schema_version: 1,
+        schema_version: schema,
         manifest: record.manifest.clone(),
         sources: record
             .manifest
@@ -50,7 +61,23 @@ fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installin
             .iter()
             .map(|file| crate::model_download_recipe::DownloadSource {
                 relative_path: file.relative_path.clone(),
-                url: format!("https://example.com/{}", file.relative_path),
+                url: if schema == 3 && file.role == crate::model_inspection::Role::Executable {
+                    crate::model_download_recipe::BUNDLED_WHISPER.into()
+                } else {
+                    format!("https://example.com/{}", file.relative_path)
+                },
+                archive: (schema == 3 && file.role == crate::model_inspection::Role::Executable)
+                    .then(|| crate::model_download_recipe::ArchiveMember {
+                        format: "tar".into(),
+                        expected_size: 4096,
+                        expected_hash: format!(
+                            "{:x}",
+                            Sha256::digest(
+                                b"synthetic historical archive; not physical availability"
+                            )
+                        ),
+                        member_path: "bin/whisper-cli".into(),
+                    }),
             })
             .collect(),
     };

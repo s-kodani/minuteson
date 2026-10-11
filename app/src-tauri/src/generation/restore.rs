@@ -164,49 +164,67 @@ impl<A: Assets> Replay<'_, A> {
     fn unit(&mut self, saved: &mut UnitOutput, check: &impl Fn() -> bool) -> Result<(), String> {
         cancelled(check)?;
         let node = &self.old_parameters.plan.nodes[saved.index];
-        let (old_items, new_items) = if self.old_parameters.schema_version == 2
-            && matches!(node, plan::Node::Merge { .. })
-        {
-            if !saved.artifacts.is_empty() || saved.merge_batches.is_empty() {
-                return Err("復元する分割統合の完了形式が不正です".into());
-            }
-            let (old, new) = self.batches(saved.index, &mut saved.merge_batches, check)?;
-            let (old, new) = (old.finish()?, new.finish()?);
-            from_generated(self.old.input, old.clone())?;
-            from_generated(self.new.input, new.clone())?;
-            (old, new)
-        } else {
-            if !saved.merge_batches.is_empty() {
-                return Err("抽出・従来統合に分割統合成果物が混入しています".into());
-            }
-            let old_task = task(
-                self.old.input,
-                node,
-                &self.old_outputs,
-                &self.old_parameters,
-            )?;
-            let new_task = task(
-                self.new.input,
-                node,
-                &self.new_outputs,
-                &self.new_parameters,
-            )?;
-            let raw = verify_task_bytes(&old_task, &saved.artifacts, |a| read(self.assets, a))?;
-            let old = parse_node(raw.clone(), self.old.input, node, &self.old_outputs)?;
-            let new_raw = if matches!(node, plan::Node::Extract { .. }) {
-                // Old parse has already enforced all required/unknown fields.
-                // Only typed references change; natural-language bytes survive.
-                json!({"schemaVersion":1,"items":mapped(self.assets, &old)?})
+        let (old_items, new_items) =
+            if self.old_parameters.adaptive_merge() && matches!(node, plan::Node::Merge { .. }) {
+                if !saved.artifacts.is_empty() || saved.merge_batches.is_empty() {
+                    return Err("復元する分割統合の完了形式が不正です".into());
+                }
+                let (old, new) = self.batches(saved.index, &mut saved.merge_batches, check)?;
+                let (old, new) = (old.finish()?, new.finish()?);
+                from_generated(self.old.input, old.clone())?;
+                from_generated(self.new.input, new.clone())?;
+                (
+                    result::normalize_versioned(old, self.old_parameters.schema_version)?,
+                    result::normalize_versioned(new, self.new_parameters.schema_version)?,
+                )
             } else {
-                raw
+                if !saved.merge_batches.is_empty() {
+                    return Err("抽出・従来統合に分割統合成果物が混入しています".into());
+                }
+                let old_task = task(
+                    self.old.input,
+                    node,
+                    &self.old_outputs,
+                    &self.old_parameters,
+                )?;
+                let new_task = task(
+                    self.new.input,
+                    node,
+                    &self.new_outputs,
+                    &self.new_parameters,
+                )?;
+                let raw = verify_task_bytes(&old_task, &saved.artifacts, |a| read(self.assets, a))?;
+                let old = parse_node(
+                    raw.clone(),
+                    self.old.input,
+                    node,
+                    &self.old_outputs,
+                    self.old_parameters.schema_version,
+                )?;
+                let new_raw = if matches!(node, plan::Node::Extract { .. }) {
+                    // Old parse has already enforced all required/unknown fields.
+                    // Only typed references change; natural-language bytes survive.
+                    // Map the validated raw items, not the normalized subset:
+                    // repeated model output remains part of portable provenance.
+                    let raw_items =
+                        parse_node_raw(raw.clone(), self.old.input, node, &self.old_outputs)?;
+                    json!({"schemaVersion":1,"items":mapped(self.assets, &raw_items)?})
+                } else {
+                    raw
+                };
+                let new = parse_node(
+                    new_raw.clone(),
+                    self.new.input,
+                    node,
+                    &self.new_outputs,
+                    self.new_parameters.schema_version,
+                )?;
+                if mapped(self.assets, &old)? != new {
+                    return Err("再構成した生成原文の意味・参照が一致しません".into());
+                }
+                save_task(self.assets, &mut saved.artifacts, &new_task, &new_raw)?;
+                (old, new)
             };
-            let new = parse_node(new_raw.clone(), self.new.input, node, &self.new_outputs)?;
-            if mapped(self.assets, &old)? != new {
-                return Err("再構成した生成原文の意味・参照が一致しません".into());
-            }
-            save_task(self.assets, &mut saved.artifacts, &new_task, &new_raw)?;
-            (old, new)
-        };
         normalized(self.assets, &mut saved.normalized, &old_items, &new_items)?;
         self.old_outputs.push(old_items);
         self.new_outputs.push(new_items);

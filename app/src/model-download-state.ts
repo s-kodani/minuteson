@@ -4,12 +4,15 @@ export const downloadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const hash = /^[0-9a-f]{64}$/u, maximum = 32 * 1024 ** 3;
 type File = { relativePath: string; role: string; expectedSize: number; expectedHash: string };
 export type DownloadManifest = { schemaVersion: 1; engine: string; engineVersion: string; modelName: string; modelVersion: string; quantization: string | null; licenseRef: string; target: string; files: File[] };
-export type DownloadRecipe = { schemaVersion: 1; manifest: DownloadManifest; sources: { relativePath: string; url: string }[] };
-export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
+export type DownloadArchive = { format: "tar"; expectedSize: number; expectedHash: string; memberPath: string };
+export const bundledWhisperSource = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
+export type DownloadRecipe = { schemaVersion: 1 | 2 | 3; manifest: DownloadManifest; sources: { relativePath: string; url: string; archive?: DownloadArchive }[] };
+export type DownloadReview = Omit<DownloadRecipe, "schemaVersion"> & { recipeSchemaVersion?: 2 | 3; downloadBytes?: number; archiveBytes?: number; bundledBytes?: number; recipeHash: string; totalBytes: number; publisherAuthenticity: "not_verified"; installed: false; ready: false };
 export type DownloadReceipt = { operationId: string; recipeHash: string; directory: string; report: ModelInspectionReport & { manifest: DownloadManifest }; installed: false; ready: false };
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded" }[] };
 export type DownloadProgress = { operationId: string; recipeHash: string; receivedBytes: number; totalBytes: number };
+export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview };
 function fail(): never { throw Error("取得の定義・操作・応答が一致しません。同じ操作の結果を確認してください。"); }
 function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) fail(); return value as Record<string, unknown>; }
 function keys(value: Record<string, unknown>, allowed: string[]) { if (Object.keys(value).some(key => !allowed.includes(key))) fail(); }
@@ -23,22 +26,58 @@ function identity(value: unknown): string { if (typeof value !== "string" || !do
 export function canonicalRecipe(value: unknown): DownloadRecipe {
   const recipe = object(value); keys(recipe, ["schemaVersion", "manifest", "sources"]);
   const m = object(recipe.manifest); keys(m, ["schemaVersion", "engine", "engineVersion", "modelName", "modelVersion", "quantization", "licenseRef", "target", "files"]);
-  if (recipe.schemaVersion !== 1 || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
+  if (![1, 2, 3].includes(Number(recipe.schemaVersion)) || typeof recipe.schemaVersion !== "number" || m.schemaVersion !== 1 || !Array.isArray(m.files) || m.files.length < 1 || m.files.length > 64 || !Array.isArray(recipe.sources) || recipe.sources.length !== m.files.length) fail();
   const manifest: DownloadManifest = {
     schemaVersion: 1, engine: text(m.engine, 32), engineVersion: text(m.engineVersion, 128), modelName: text(m.modelName, 256), modelVersion: text(m.modelVersion, 128),
     quantization: m.quantization == null ? null : text(m.quantization, 128), licenseRef: text(m.licenseRef, 4096), target: text(m.target, 32),
     files: m.files.map(value => { const f = object(value); keys(f, ["relativePath", "role", "expectedSize", "expectedHash"]); return { relativePath: text(f.relativePath, 4096), role: text(f.role, 32), expectedSize: size(f.expectedSize), expectedHash: sha(f.expectedHash) }; }),
   };
   const sources = recipe.sources.map((value, index) => {
-    const s = object(value); keys(s, ["relativePath", "url"]);
+    const s = object(value); keys(s, ["relativePath", "url", "archive"]);
     if (s.relativePath !== manifest.files[index].relativePath) fail();
-    return { relativePath: text(s.relativePath, 4096), url: text(s.url, 4096) };
+    const result: DownloadRecipe["sources"][number] = { relativePath: text(s.relativePath, 4096), url: text(s.url, 4096) };
+    if (s.archive != null) {
+      const a = object(s.archive); keys(a, ["format", "expectedSize", "expectedHash", "memberPath"]);
+      if (![2, 3].includes(Number(recipe.schemaVersion)) || a.format !== "tar" || size(a.expectedSize) === 0) fail();
+      const memberPath = text(a.memberPath, 4096);
+      if (memberPath.split("/").some(part => !part || part === "." || part === "..") || /[\\:]/u.test(memberPath)) fail();
+      result.archive = { format: "tar", expectedSize: size(a.expectedSize), expectedHash: sha(a.expectedHash), memberPath };
+    }
+    if (result.url === bundledWhisperSource) {
+      const file = manifest.files[index], member = result.archive?.memberPath;
+      if (recipe.schemaVersion !== 3 || manifest.engine !== "whisper.cpp" || manifest.engineVersion !== "v1.9.4" || manifest.target !== "macos_aarch64"
+        || !(file.role === "executable" && member === "bin/whisper-cli" || file.role === "notice" && ["notices/whisper-MIT.txt", "build-info.json"].includes(member ?? ""))) fail();
+    } else if (result.url.startsWith("mon-bundled:")) fail();
+    return result;
   });
-  const result: DownloadRecipe = { schemaVersion: 1, manifest, sources };
+  const result: DownloadRecipe = { schemaVersion: recipe.schemaVersion as 1 | 2 | 3, manifest, sources };
+  if (result.schemaVersion === 2 && !sources.some(source => source.archive)) fail();
+  if (result.schemaVersion === 3 && (!sources.some(source => source.url === bundledWhisperSource)
+    || !manifest.files.some((file, i) => file.role === "asr" && sources[i].url.startsWith("https://")))) fail();
+  downloadByteTotals(result);
   size(manifest.files.reduce((n, f) => n + f.expectedSize, 0));
   if (new TextEncoder().encode(JSON.stringify(result)).length > 65_536) fail();
   return result;
 }
+export function downloadByteTotals(recipe: DownloadRecipe): { downloadBytes: number; archiveBytes: number; bundledBytes?: number } {
+  let downloadBytes = 0, archiveBytes = 0, bundledBytes = 0;
+  const archives = new Map<string, DownloadArchive>(), members = new Set<string>();
+  recipe.sources.forEach((source, index) => {
+    if (source.archive) {
+      const previous = archives.get(source.url), key = JSON.stringify([source.url, source.archive.memberPath]);
+      if (members.has(key) || previous && (previous.expectedHash !== source.archive.expectedHash || previous.expectedSize !== source.archive.expectedSize)) fail();
+      members.add(key);
+      if (!previous) {
+        if (source.url === bundledWhisperSource) bundledBytes += source.archive.expectedSize;
+        else downloadBytes += source.archive.expectedSize;
+        archiveBytes += source.archive.expectedSize; archives.set(source.url, source.archive);
+      }
+    } else downloadBytes += recipe.manifest.files[index].expectedSize;
+  });
+  if (recipe.sources.some(source => !source.archive && archives.has(source.url))) fail();
+  return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.schemaVersion === 3 ? { bundledBytes: size(bundledBytes) } : {}) };
+}
+export function downloadTransferBytes(review: DownloadReview): number { return review.downloadBytes ?? review.totalBytes; }
 export function parseDownloadDefinition(definition: string): DownloadRecipe {
   if (new TextEncoder().encode(definition).length > 65_536) fail();
   return canonicalRecipe(JSON.parse(definition));
@@ -49,15 +88,33 @@ export async function downloadDigest(value: unknown): Promise<string> {
 }
 export async function assertDownloadReview(value: unknown, expectedRecipeHash?: string): Promise<DownloadReview> {
   const review = object(value); unready(review);
-  const recipe = canonicalRecipe({ schemaVersion: 1, manifest: review.manifest, sources: review.sources });
+  if (review.recipeSchemaVersion !== undefined && ![2, 3].includes(Number(review.recipeSchemaVersion))) fail();
+  const recipe = canonicalRecipe({ schemaVersion: review.recipeSchemaVersion ?? 1, manifest: review.manifest, sources: review.sources });
   const recipeHash = await downloadDigest(recipe), totalBytes = recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0);
   if (review.recipeHash !== recipeHash || (expectedRecipeHash !== undefined && recipeHash !== expectedRecipeHash) || review.totalBytes !== totalBytes) fail();
-  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, totalBytes, publisherAuthenticity: "not_verified", installed: false, ready: false };
+  const totals = downloadByteTotals(recipe);
+  if (recipe.schemaVersion >= 2 ? review.downloadBytes !== totals.downloadBytes || review.archiveBytes !== totals.archiveBytes : review.downloadBytes !== undefined || review.archiveBytes !== undefined) fail();
+  if (recipe.schemaVersion === 3 ? review.bundledBytes !== totals.bundledBytes : review.bundledBytes !== undefined) fail();
+  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash, totalBytes, ...(recipe.schemaVersion >= 2 ? { recipeSchemaVersion: recipe.schemaVersion as 2 | 3, ...totals } : {}), publisherAuthenticity: "not_verified", installed: false, ready: false };
+}
+export async function assertOfficialModelOptions(value: unknown): Promise<OfficialModelOption[]> {
+  if (!Array.isArray(value) || value.length > 12) fail();
+  const seen = new Set<string>();
+  const result: OfficialModelOption[] = [];
+  for (const entry of value) {
+    const option = object(entry); keys(option, ["id", "label", "description", "definition", "review"]);
+    const id = text(option.id, 128);
+    if (!/^[a-z0-9-]+$/u.test(id) || seen.has(id)) fail(); seen.add(id);
+    const definition = text(option.definition, 65_536), recipe = parseDownloadDefinition(definition);
+    result.push({ id, label: text(option.label, 128), description: text(option.description, 1024), definition,
+      review: await assertDownloadReview(option.review, await downloadDigest(recipe)) });
+  }
+  return result;
 }
 export async function assertDownloadReceipt(value: unknown, operationId: string, review: DownloadReview): Promise<DownloadReceipt> {
   const receipt = object(value), report = object(receipt.report); unready(report);
   if (receipt.operationId !== identity(operationId) || receipt.recipeHash !== review.recipeHash || receipt.installed !== false || receipt.ready !== false || report.engineCompatibility !== "not_verified" || report.totalBytes !== review.totalBytes || !Array.isArray(report.files) || report.files.length !== review.manifest.files.length) fail();
-  const manifest = canonicalRecipe({ schemaVersion: 1, manifest: report.manifest, sources: review.sources }).manifest;
+  const manifest = canonicalRecipe({ schemaVersion: review.recipeSchemaVersion ?? 1, manifest: report.manifest, sources: review.sources }).manifest;
   if (JSON.stringify(manifest) !== JSON.stringify(review.manifest)) fail();
   const files = report.files.map((value, index) => {
     const f = object(value), expected = review.manifest.files[index];
@@ -101,8 +158,8 @@ export function assertDownloadLifetime(value: unknown): { active: boolean; cance
 export function acceptDownloadProgress(value: unknown, operationId: string, review: DownloadReview, previous: number): number | null {
   try {
     const progress = object(value);
-    if (progress.operationId !== operationId || progress.recipeHash !== review.recipeHash || progress.totalBytes !== review.totalBytes) return null;
-    const received = size(progress.receivedBytes, review.totalBytes);
+    if (progress.operationId !== operationId || progress.recipeHash !== review.recipeHash || progress.totalBytes !== downloadTransferBytes(review)) return null;
+    const received = size(progress.receivedBytes, downloadTransferBytes(review));
     return received >= previous ? received : null;
   } catch { return null; }
 }

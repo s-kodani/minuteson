@@ -21,6 +21,9 @@ fn fixture(long: bool, partial: bool) -> NativeFixture {
     f
 }
 fn queued(long: bool) -> NativeFixture {
+    queued_version(long, 4)
+}
+fn queued_version(long: bool, version: u32) -> NativeFixture {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = crate::storage::backup::archive::tests::meeting(&storage, "generation-workspace");
@@ -52,7 +55,13 @@ fn queued(long: bool) -> NativeFixture {
     } else {
         crate::storage::generation_tests::normal_engine(root.path())
     };
-    let job = crate::generation::enqueue(&storage, request, engine, "standard", 2400).unwrap();
+    let job = match version {
+        2 => crate::generation::enqueue_previous(&storage, request, engine, "standard", 2400),
+        3 => crate::generation::enqueue_prompt_v3(&storage, request, engine, "standard", 2400),
+        4 => crate::generation::enqueue(&storage, request, engine, "standard", 2400),
+        _ => panic!("unsupported fixture version"),
+    }
+    .unwrap();
     NativeFixture {
         root,
         storage,
@@ -154,6 +163,60 @@ fn generation_workspace_rebuilds_worker_files_and_all_checkpoint_hashes_without_
     assert_eq!(f.storage.get_job(&f.job.id).unwrap(), f.job);
     drop(work);
     assert!(!stage.exists());
+}
+
+#[test]
+fn generation_workspace_preserves_previous_and_current_prompt_policies_without_inference() {
+    for version in [2, 3, 4] {
+        let mut f = queued_version(false, version);
+        f.storage.acquire_local_inference_job().unwrap();
+        crate::generation::process(&f.storage, &f.job.id, &|| false, &|_| {})
+            .unwrap()
+            .unwrap();
+        f.job = f.storage.get_job(&f.job.id).unwrap();
+        let before = calls(&f);
+        let old_checkpoint = f.storage.fixed_job_input(&f.job.id).unwrap().1.unwrap();
+        let old_system_id = old_checkpoint["outputs"][0]["artifacts"][0]["id"]
+            .as_str()
+            .unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let source = archive(&f, output.path());
+        let original_system = std::fs::read(&source.assets[old_system_id]).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&original_system).contains("同じ事実や同じ要約を繰り返さない"),
+            version >= 3
+        );
+        let ids = prepared(&source, output.path());
+        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false)
+            .unwrap()
+            .with_generation_artifacts(&fixed, &|| false)
+            .unwrap();
+        let new_job = ids.get("processing_jobs", &f.meeting, &f.job.id).unwrap();
+        let tx = work.database.unchecked_transaction().unwrap();
+        let (spec, cp) = crate::storage::jobs::read_fixed_input(&tx, &new_job).unwrap();
+        assert_eq!(spec.parameters["generation"]["schemaVersion"], version);
+        let cp = cp.unwrap();
+        let system_id = cp["outputs"][0]["artifacts"][0]["id"].as_str().unwrap();
+        let relative: String = tx
+            .query_row(
+                "SELECT relative_path FROM file_assets WHERE id=?1",
+                params![system_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read(work.stage.path().join(relative)).unwrap(),
+            original_system
+        );
+        tx.commit().unwrap();
+        assert_eq!(calls(&f), before);
+        assert_eq!(
+            f.storage.fixed_job_input(&f.job.id).unwrap().1,
+            Some(old_checkpoint)
+        );
+        assert_eq!(f.storage.get_job(&f.job.id).unwrap(), f.job);
+    }
 }
 
 #[test]

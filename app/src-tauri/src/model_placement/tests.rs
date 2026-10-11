@@ -3,6 +3,103 @@ use crate::model_inspection::{Engine, PackageFile};
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
+#[test]
+fn guided_model_placement_copies_canonical_manifest_without_touching_sources_and_retries_same_receipt(
+) {
+    let f = fixture();
+    std::fs::remove_file(f.source.path().join(model_inspection::MANIFEST)).unwrap();
+    let manifest = f.report.manifest.clone();
+    let report = model_inspection::inspect_declared(f.source.path(), &manifest, &|| false).unwrap();
+    let token = uuid::Uuid::new_v4().to_string();
+    let root = f.app_data.path().join("models");
+    let before = std::fs::read(f.source.path().join("weights/model.bin")).unwrap();
+    let receipt = place_with_manifest(
+        &f.storage,
+        &root,
+        f.source.path(),
+        &token,
+        &report.review_hash,
+        Some(&manifest),
+        &|| false,
+    )
+    .unwrap();
+    assert!(!receipt.ready);
+    assert!(receipt.placement_recorded);
+    assert!(!f.source.path().join(model_inspection::MANIFEST).exists());
+    assert_eq!(
+        std::fs::read(f.source.path().join("weights/model.bin")).unwrap(),
+        before
+    );
+    let placed = model_inspection::inspect(&root.join(&token), &|| false).unwrap();
+    assert_eq!(placed.review_hash, report.review_hash);
+    assert_eq!(
+        std::fs::read(root.join(&token).join(model_inspection::MANIFEST)).unwrap(),
+        serde_json::to_vec(&manifest).unwrap()
+    );
+    let retry = place_with_manifest(
+        &f.storage,
+        &root,
+        f.source.path(),
+        &token,
+        &report.review_hash,
+        Some(&manifest),
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(retry.review_hash, receipt.review_hash);
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 1);
+    assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
+    assert!(PlacementRecord::from_report(&token, &report)
+        .download
+        .is_none());
+}
+
+#[test]
+fn guided_model_placement_rejects_changed_declaration_bytes_and_cancel_before_any_write() {
+    let f = fixture();
+    std::fs::remove_file(f.source.path().join(model_inspection::MANIFEST)).unwrap();
+    let mut manifest = f.report.manifest.clone();
+    let report = model_inspection::inspect_declared(f.source.path(), &manifest, &|| false).unwrap();
+    let root = f.app_data.path().join("models");
+    let token = uuid::Uuid::new_v4().to_string();
+    assert!(place_with_manifest(
+        &f.storage,
+        &root,
+        f.source.path(),
+        &token,
+        &report.review_hash,
+        Some(&manifest),
+        &|| true
+    )
+    .is_err());
+    manifest.model_name = "different declaration".into();
+    assert!(place_with_manifest(
+        &f.storage,
+        &root,
+        f.source.path(),
+        &token,
+        &report.review_hash,
+        Some(&manifest),
+        &|| false
+    )
+    .is_err());
+    manifest.model_name = report.manifest.model_name.clone();
+    std::fs::write(f.source.path().join("weights/model.bin"), b"changed bytes").unwrap();
+    assert!(place_with_manifest(
+        &f.storage,
+        &root,
+        f.source.path(),
+        &token,
+        &report.review_hash,
+        Some(&manifest),
+        &|| false
+    )
+    .is_err());
+    assert!(!root.exists());
+    assert!(!f.source.path().join(model_inspection::MANIFEST).exists());
+    assert_eq!(f.storage.list_meetings().unwrap().len(), 1);
+}
+
 struct Fixture {
     source: tempfile::TempDir,
     meetings: tempfile::TempDir,

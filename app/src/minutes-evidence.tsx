@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { IconButton } from "./action-icon";
 import { useEffect, useRef, useState } from "react";
 import { evidenceRequest, assertEvidenceSource, itemEvidencePage, type Evidence, type MinutesContent, type MinutesEvidenceSource, type MinutesView } from "./minutes-state";
 import { useTranscriptAudio } from "./transcript-audio";
@@ -13,11 +14,11 @@ export function MinutesEvidenceGroup({ view, content, selectedId, page, changePa
   const group = itemEvidencePage(content, selectedId, page);
   if (!group) return null;
   return <aside className="fixed-evidence-group" aria-label="項目の固定根拠一覧">
-    <div className="card-head"><h4>根拠の発言 · {group.total}件</h4><button type="button" className="small-secondary" disabled={locked} onClick={close}>根拠一覧を閉じる</button></div>
+    <div className="card-head"><h4>根拠の発言 · {group.total}件</h4><IconButton label="根拠一覧を閉じる" icon="close" disabled={locked} onClick={close} /></div>
     <p className="document-text">対象項目: {group.item.body}</p>
     <InfoPopover label="根拠の確認" details={<p>{verify ? "項目と個々の根拠の対応を確認した場合だけ、確認済みを指定してください。本文・担当者・期限を修正すると、その項目の根拠は未確認へ戻ります。" : "確認状態の変更は、現在版の「議事録を編集」から行えます。候補・直前版は読取り専用です。"}</p>}>各引用・話者・元発言は生成時の固定版です。表示・再生だけでは確認済みになりません。</InfoPopover>
     <p>{group.first + 1}–{group.first + group.evidence.length} / {group.total}件</p>
-    {group.pages > 1 && <nav className="transcript-pages" aria-label="根拠一覧のページ"><button type="button" className="small-secondary" disabled={locked || group.page === 0} onClick={() => changePage(group.page - 1)}>前の10根拠</button><span>{group.page + 1} / {group.pages}</span><button type="button" className="small-secondary" disabled={locked || group.page + 1 === group.pages} onClick={() => changePage(group.page + 1)}>次の10根拠</button></nav>}
+    {group.pages > 1 && <nav className="transcript-pages" aria-label="根拠一覧のページ"><IconButton label="前の10根拠" icon="previous" type="button" className="small-secondary" disabled={locked || group.page === 0} onClick={() => changePage(group.page - 1)} /><span>{group.page + 1} / {group.pages}</span><IconButton label="次の10根拠" icon="next" type="button" className="small-secondary" disabled={locked || group.page + 1 === group.pages} onClick={() => changePage(group.page + 1)} /></nav>}
     {group.evidence.map((e, i) => <MinutesEvidencePanel key={`${view.id}:${e.id}`} view={view} evidence={e} index={group.first + i + 1} selected={e.id === selectedId} suspended={suspended} locked={locked} dockPlayback={dockPlayback} showTranscript={() => showTranscript(e.id)} verify={verify ? (verified) => verify(e.id, verified) : undefined} />)}
   </aside>;
 }
@@ -61,7 +62,7 @@ function MinutesEvidencePanel({ view, evidence, index, selected, suspended, lock
     {verify && <label className="evidence-verification"><input type="checkbox" checked={evidence.verificationState === "user_verified"} disabled={locked} onChange={(event) => verify(event.target.checked)} />この根拠を確認済みにする</label>}
     <div className="audio-controls">
       <button type="button" className="small-secondary" disabled={locked || loading} onClick={() => void showSource()}>{loading ? "固定発言を確認中" : "固定した元発言を表示"}</button>
-      <button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => void play()}>根拠の音声を再生</button>
+      <IconButton label="根拠の音声を再生" icon="play" disabled={locked || audio.preparing} onClick={() => void play()} />
       <button type="button" className="small-secondary" data-fixed-transcript-opener={evidence.id} disabled={locked} onClick={showTranscript}>固定文字起こし全文へ移動</button>
     </div>
     {error && <p className="action-error" role="alert">固定発言を表示できません: {error}</p>}

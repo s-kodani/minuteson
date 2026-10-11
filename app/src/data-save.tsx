@@ -5,11 +5,12 @@ import { withConfirmedEdits } from "./confirmed-action";
 import { waitForDataStop } from "./data-stop";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataPhaseLabel, dataRequest, type DataKind, type DataRequest, type DataSnapshot, type RestoreReceipt } from "./data-operation-state";
 import { bytesLabel } from "./import-state";
 import { assertStorageView, type StorageView } from "./storage-placement-state";
+import { topOpenModal } from "./modal-state";
 
 export function DataSavePanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRestored, onShowMeetings }: {
   operation: DataOperation; visible: boolean; locked: boolean;
@@ -37,6 +38,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   const review = useRef<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  const selectionFocusReturn = useRef<{ token: string; target: HTMLElement } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const [storage, setStorage] = useState<StorageView | null>(null);
   const [storageError, setStorageError] = useState("");
@@ -78,9 +80,10 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       await send(request);
     }));
   };
-  const choose = async (kind: DataKind, pendingMove = false) => {
+  const choose = async (kind: DataKind, pendingMove = false, button?: HTMLButtonElement) => {
     if (rpcRunning.current || locked || unknown || s?.busy || !connected || !availability?.available) return;
-    const selectionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    button?.focus({ preventScroll: true });
+    const selectionOpener = button ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const expected = latest.current.getSnapshot(), moveId = storage?.pendingOperationId;
     const sameTarget = () => latest.current.connected && !!latest.current.availability?.available && latest.current.getSnapshot()?.revision === expected?.revision && !latest.current.getSnapshot()?.busy && (!pendingMove || conditions.current.storage?.pendingOperationId === moveId);
     const select = async (propagate = false) => {
@@ -90,7 +93,11 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         setOpen(false); setToast(""); setOpenError("");
         pending.current = null; pendingChoice.current = { kind, revision: latest.current.snapshot?.revision ?? -1 };
         try {
-          latest.current.accept(pendingMove ? await invoke<DataSnapshot>("review_storage_move") : await invoke<DataSnapshot>("select_data_operation", { kind }));
+          const selected = pendingMove ? await invoke<DataSnapshot>("review_storage_move") : await invoke<DataSnapshot>("select_data_operation", { kind });
+          // The RPC acknowledges selection, not native-panel completion. Wait
+          // for this same token's terminal snapshot and enabled UI below.
+          if (selected.token && selectionOpener) selectionFocusReturn.current = { token: selected.token, target: selectionOpener };
+          latest.current.accept(selected);
           pendingChoice.current = null; setUnknown(false);
         } catch (cause) {
           setUnknown(true); throw Error(`選択の受付状態を確認してください。新しい復元はまだ確定していません: ${String(cause)}`);
@@ -160,6 +167,17 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     }
   }, [s, rpcBusy, locked, unknown, confirm.pending, connected, availability?.available, visible]);
   const canAct = isTauri() && connected && !locked && !rpcBusy && !confirm.pending && !s?.busy && !s?.restartRequired && !storage?.restartRequired && !unknown && !!availability?.available;
+  useLayoutEffect(() => {
+    const entry = selectionFocusReturn.current;
+    if (!entry || open || !canAct || !visible || !s) return;
+    if (s.token !== entry.token) { selectionFocusReturn.current = null; return; }
+    if (!["idle", "failed", "cancelled", "completed"].includes(s.phase)) return;
+    selectionFocusReturn.current = null;
+    const target = entry.target, modal = topOpenModal();
+    if (!target.isConnected || target.matches(":disabled") || !target.getClientRects().length || target.closest("[hidden],[inert]") || modal && !modal.contains(target)) return;
+    const active = document.activeElement;
+    if (active === document.body || active === target || !active?.isConnected || active.matches('main[aria-label="会議ワークスペース"][tabindex="-1"]')) target.focus({ preventScroll: true });
+  }, [canAct, open, visible, s]);
   const requestReady = s?.kind !== "recovery" && s?.kind !== "deletion" && s?.kind !== "model_deletion" && s?.kind !== "audio_deletion" && !!s?.retryAllowed && !s.attentionRequired;
   const restore = s?.restorePreview;
   const moving = s?.relocationPreview;
@@ -170,7 +188,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     <IssueNotice scope="data" type="save-operation" label="データの保存・復元" message={error || operation.error || (s?.kind && ["backup", "restore", "relocation"].includes(s.kind) ? s.errorMessage : "")} />
     {visible && <section className="analysis-card data-save" aria-label="データと保存">
       <div className="heading-with-info"><h2>データと保存</h2><InfoPopover label="バックアップと追加復元" details={<p>会議・管理音声・文字起こし・議事録・下書き・用語を保存します。AIモデル本体・一時PCM・ログ・端末固有の設定は含みません。追加復元は現在の会議を置き換えず、同じ会議も新しい別会議として追加します。独自暗号化やクラウド同期ではありません。内容を含むファイルは安全な場所へ保管してください。</p>}>会議と管理音声・文書・用語を保存します。復元は別会議として追加し、現在の会議を置き換えません。AIモデル本体は含みません。</InfoPopover></div>
-      <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={() => void choose("backup")}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={() => void choose("restore")}>バックアップから追加復元</button></div>
+      <div className="analysis-actions"><button type="button" disabled={!canAct} onClick={event => void choose("backup", false, event.currentTarget)}>バックアップを作成</button><button type="button" className="secondary" disabled={!canAct} onClick={event => void choose("restore", false, event.currentTarget)}>バックアップから追加復元</button></div>
       {storage && <><p>会議保存先: <span className="data-path">{storage.meetingRoot}</span></p><p>AIモデル保存先（移動しません）: <span className="data-path">{storage.modelsRoot}</span></p><button type="button" className="secondary" disabled={!canAct || !!storage.pendingOperationId} onClick={() => void choose("relocation")}>会議保存先を変更</button>{storage.pendingOperationId && <><p role="alert">未完了の保存先変更があります。旧保存先と途中コピーを保持しています。新たな保存先変更は開始しません。途中コピー: <span className="data-path">{storage.pendingTarget}</span></p><button type="button" disabled={!canAct} onClick={() => void choose("relocation", true)}>未完了移動を確認</button></>}{storage.keptMoves.length > 0 && <details><summary>保持した途中コピー（{storage.keptMoves.length} 件）</summary><p>利用中の会議ではありません。ファイルを削除・採用しません。別の保存先変更を開始しても残ります。</p><ul>{storage.keptMoves.map(m => <li key={m.operationId}><span className="data-path">{m.destination}</span> — {m.decisionPending ? "保持判断を保存済み。未完了移動を確認して中止を完了してください。" : "保持して中止済み"}</li>)}</ul></details>}</>}
       {storageError && <p role="status">保存先の確認・変更は利用できません: {storageError}</p>}
       {(s?.restartRequired || storage?.restartRequired) && <p role="alert">保存先切替の書込停止中です。新しい録音・編集・AI処理は開始できません。アプリを終了して再起動してください。現在開いている保存先: <span className="data-path">{storage?.activeMeetingRoot ?? moving?.source}</span>。旧保存先は削除しません。</p>}

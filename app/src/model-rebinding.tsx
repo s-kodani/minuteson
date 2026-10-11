@@ -1,4 +1,5 @@
 import { CommonModal } from "./common-modal";
+import { IconButton } from "./action-icon";
 import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
@@ -172,13 +173,13 @@ export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActiv
     {noticeLevel === "warning" && <IssueStatus label="取消後のモデル再試行受付" message={notice} />}
     <IssueNotice scope={key} type="model-rebinding-operation" label="同条件モデル再試行" message={error} toastMessage="同条件モデル再試行を確定できません。確認情報を保持しています" />
     {open && <CommonModal ref={dialog} open blocked={!!busy} onDismiss={() => { if (!active.current) setOpen(false); }} restoreTarget={() => opener.current} className="analysis-dialog model-rebinding-dialog" aria-labelledby={titleId}>
-      <div className="card-head"><h2 id={titleId} tabIndex={-1}>再配置モデルによる同条件の再試行</h2><button type="button" className="small-secondary" disabled={!!busy} data-dialog-cancel onClick={() => setOpen(false)}>閉じる</button></div>
+      <div className="card-head"><h2 id={titleId} tabIndex={-1}>再配置モデルによる同条件の再試行</h2><IconButton label="閉じる" icon="close" disabled={!!busy} data-dialog-cancel onClick={() => setOpen(false)} /></div>
       <p>元のジョブの音声・入力版・用語・人数・数値条件と保存済み途中結果を固定し、同じ構成・同じバイトのモデルだけを再照合します。モデル変更や設定変更による新規解析とは別の操作です。</p>
       {!review?.sent && <>
         <p>先に「モデルの手動検査」で配置と明示的なCPU互換性確認を完了してください。同じエンジンの成功記録だけを表示します。元モデルとの一致は下の確認時に照合します。自動選択・自動試行は行いません。</p>
         <label className="prompt-label">再配置先モデル<select value={selected} disabled={!!busy || locked || recordingActive} onChange={e => { setSelected(e.target.value); setReview(null); setError(""); }}><option value="">明示的に選択してください</option>{entries.map(e => <option key={e.packageId} value={e.packageId}>{e.modelName} {e.modelVersion} · {e.packageId.slice(0, 8)}</option>)}</select></label>
         {!entries.length && !busy && <p>この工程でCPU互換性確認済みの配置記録はありません。</p>}
-        <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!!busy || locked || recordingActive} onClick={() => void load()}>配置記録を再読込</button><button type="button" disabled={!!busy || !selected || locked || recordingActive} onClick={() => void prepare()}>元の固定条件と配置先を照合</button></div>
+        <div className="analysis-actions"><IconButton label="配置記録を再読込" icon="refresh" type="button" className="small-secondary" disabled={!!busy || locked || recordingActive} onClick={() => void load()} /><button type="button" disabled={!!busy || !selected || locked || recordingActive} onClick={() => void prepare()}>元の固定条件と配置先を照合</button></div>
       </>}
       {review && <>
         <h3>変更しない条件</h3>

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalRecipe, parseDownloadDefinition, downloadDigest, assertDownloadReview, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult } from "../src/model-download-state.ts";
+import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteTotals, assertDownloadReview, assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadCatalog, assertDownloadLifetime, acceptDownloadProgress, assertDownloadCopyResult, bundledWhisperSource } from "../src/model-download-state.ts";
+import { readFileSync } from "node:fs";
 import { placementLabel } from "../src/model-inspection-state.ts";
 const id = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", hash = "a".repeat(64);
 const recipe = canonicalRecipe({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成素材", modelVersion: "1", licenseRef: "fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: hash }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: hash }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
@@ -90,4 +91,94 @@ test("placement catalog source type and origin are mutually bound without changi
   assert.match(placementLabel(base), /配置記録/);
   assert.match(placementLabel({ ...base, sourceType: "download", download: { operationId: id, recipeHash: hash } }), /配置記録/);
   for (const bad of [{ ...base, sourceType: "download" as const }, { ...base, sourceType: "manual_import" as const, download: { operationId: id, recipeHash: hash } }, { ...base, sourceType: "download" as const, download: { operationId: "../x", recipeHash: hash } }]) assert.throws(() => placementLabel(bad));
+});
+function archivedRecipe() {
+  const value = structuredClone(recipe); value.schemaVersion = 2;
+  value.sources = value.sources.map(source => ({ ...source, url: "https://example.com/engine.tar.gz", archive: { format: "tar" as const, expectedSize: 100, expectedHash: hash, memberPath: `package/${source.relativePath}` } }));
+  return canonicalRecipe(value);
+}
+function bundledRecipe() {
+  const value = structuredClone(recipe); value.schemaVersion = 3; value.manifest.engineVersion = "v1.9.4";
+  value.sources[0] = { ...value.sources[0], url: bundledWhisperSource, archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "bin/whisper-cli" } };
+  return canonicalRecipe(value);
+}
+test("hybrid bundle recipe separates wire traffic and storage; strict review and receipt survive readback", async () => {
+  const value = bundledRecipe(), totals = downloadByteTotals(value);
+  assert.deepEqual(totals, { downloadBytes: 17, archiveBytes: 100, bundledBytes: 100 });
+  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 3, ...totals, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  const checked = await assertDownloadReview(native);
+  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 17, totalBytes: 17 }, id, checked, 0), 17);
+  for (const patch of [{ bundledBytes: 0 }, { downloadBytes: 117 }, { archiveBytes: 0 }, { recipeSchemaVersion: 2 }, { recipeSchemaVersion: "3" }, { ready: true }]) await assert.rejects(assertDownloadReview({ ...native, ...patch }));
+  const body = await receipt(); body.recipeHash = checked.recipeHash; body.report.manifest = value.manifest;
+  body.report.manifestHash = await downloadDigest(value.manifest);
+  body.report.reviewHash = await downloadDigest([1, value.manifest, body.report.manifestHash, body.report.files]);
+  assert.equal((await assertDownloadReadback({ state: "complete", review: checked, receipt: body }, id, checked.recipeHash)).state, "complete");
+  assert.equal((await assertDownloadReadback({ state: "incomplete", review: checked, receipt: null }, id, checked.recipeHash)).receipt, null);
+});
+test("bundled source is a fixed native ID, not legacy network or arbitrary local input", () => {
+  for (const variant of ["schema1", "schema2", "id", "member", "raw", "engine", "version", "target", "network-only", "network-asr"]) {
+    const value = bundledRecipe();
+    if (variant === "schema1") value.schemaVersion = 1;
+    else if (variant === "schema2") value.schemaVersion = 2;
+    else if (variant === "id") value.sources[0].url = "mon-bundled://other/runtime.tar";
+    else if (variant === "member") value.sources[0].archive!.memberPath = "bin/other";
+    else if (variant === "raw") delete value.sources[0].archive;
+    else if (variant === "engine") value.manifest.engine = "llama.cpp";
+    else if (variant === "version") value.manifest.engineVersion = "v0";
+    else if (variant === "target") value.manifest.target = "windows_x86_64";
+    else if (variant === "network-only") value.sources[0].url = "https://example.com/engine.tar";
+    else value.sources[1].url = bundledWhisperSource;
+    assert.throws(() => canonicalRecipe(value), variant);
+  }
+});
+test("archive transfer is deduplicated, while installed payload and archive storage are separate", async () => {
+  const value = archivedRecipe();
+  assert.deepEqual(downloadByteTotals(value), { downloadBytes: 100, archiveBytes: 100 });
+  const native = { manifest: value.manifest, sources: value.sources, recipeSchemaVersion: 2, downloadBytes: 100, archiveBytes: 100, recipeHash: await downloadDigest(value), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  const checked = await assertDownloadReview(native);
+  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 100, totalBytes: 100 }, id, checked, 0), 100);
+  assert.equal(acceptDownloadProgress({ operationId: id, recipeHash: checked.recipeHash, receivedBytes: 33, totalBytes: 33 }, id, checked, 0), null);
+  for (const patch of [{ recipeSchemaVersion: 1 }, { downloadBytes: 200 }, { archiveBytes: 0 }, { totalBytes: 100 }, { recipeSchemaVersion: undefined }]) await assert.rejects(assertDownloadReview({ ...native, ...patch }));
+  const body = await receipt(); body.recipeHash = checked.recipeHash;
+  assert.equal((await assertDownloadReceipt(body, id, checked)).ready, false);
+});
+test("archive definition rejects duplicate members, mixed use, inconsistent metadata and invalid paths", () => {
+  for (const variant of ["version", "duplicate", "raw", "size", "sha", "path", "format", "extra", "zero"]) {
+    const value = archivedRecipe();
+    if (variant === "version") value.schemaVersion = 1;
+    else if (variant === "duplicate") value.sources[1].archive!.memberPath = value.sources[0].archive!.memberPath;
+    else if (variant === "raw") delete value.sources[1].archive;
+    else if (variant === "size") value.sources[1].archive!.expectedSize++;
+    else if (variant === "sha") value.sources[1].archive!.expectedHash = "b".repeat(64);
+    else if (variant === "path") value.sources[0].archive!.memberPath = "../outside";
+    else if (variant === "format") Object.assign(value.sources[0].archive!, { format: "zip" });
+    else if (variant === "extra") Object.assign(value.sources[0].archive!, { execute: true });
+    else value.sources[0].archive!.expectedSize = 0;
+    assert.throws(() => canonicalRecipe(value), variant);
+  }
+});
+test("built-in choices bind fixed recipes and archives without downloaded or ready claims", async () => {
+  const choices = JSON.parse(readFileSync(new URL("../model-catalog/macos.json", import.meta.url), "utf8"));
+  const native = await Promise.all(choices.map(async (choice: any) => {
+    const recipe = canonicalRecipe(choice.recipe);
+    return { id: choice.id, label: choice.label, description: choice.description, definition: JSON.stringify(recipe), review: {
+      manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 2, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe),
+      totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0), publisherAuthenticity: "not_verified", installed: false, ready: false,
+    } };
+  }));
+  const options = await assertOfficialModelOptions(native);
+  assert.equal(options.length, 2);
+  assert.equal(options[0].review.manifest.engine, "llama.cpp");
+  assert.equal(options[0].review.manifest.files.filter(f => f.role === "notice").length, 2);
+  assert.equal(options[0].review.downloadBytes, 1_129_407_950);
+  assert.equal(options[0].review.recipeHash, "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba");
+  assert.equal(options[1].review.manifest.engine, "sherpa-onnx");
+  assert.equal(options[1].review.manifest.files.filter(f => f.role === "notice").length, 5);
+  assert.equal(options[1].review.downloadBytes, 65_153_215);
+  assert.equal(options[1].review.archiveBytes, 25_210_612);
+  assert.equal(options[1].review.totalBytes, 75_117_137);
+  assert.equal(options[1].review.recipeHash, "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8");
+  await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));
+  await assert.rejects(assertOfficialModelOptions([{ ...native[0], definition: JSON.stringify(recipe) }]));
+  await assert.rejects(assertOfficialModelOptions([{ ...native[0], review: { ...native[0].review, ready: true } }]));
 });

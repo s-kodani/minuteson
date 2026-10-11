@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { CommonModal } from "./common-modal";
@@ -60,7 +61,7 @@ export function PartialRecordingResultsPanel({ operation, locked, onProtectionCh
       {!operation.connected && <p role="alert">一覧の最新状態を確認できません。再読込するまで結果の確認を停止しています。</p>}
       <ul>{items.map(item => <li key={item.summary.sessionId}><h3>{item.title}</h3><p>会議ID {item.summary.meetingId}</p>
         <button type="button" className="small-secondary" disabled={locked || reading || !!selected || !operation.connected} onClick={() => void read(item)}>保存時の確定範囲を確認</button></li>)}</ul>
-      {next && <button type="button" className="small-secondary" disabled={locked || pageBusy || !operation.connected} onClick={() => void loadMore()}>次の保存済み結果を表示</button>}
+      {next && <IconButton label="次の保存済み結果を表示" icon="next" type="button" className="small-secondary" disabled={locked || pageBusy || !operation.connected} onClick={() => void loadMore()} />}
       {reading && <p role="status">保存済み結果を照合しています。</p>}
       {error && <p role="alert">{error}</p>}
     </section>

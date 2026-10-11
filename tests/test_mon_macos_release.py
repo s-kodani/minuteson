@@ -50,6 +50,12 @@ class ReleaseTests(unittest.TestCase):
                           "packages": [{"name": "synthetic"}], "missingNoticeTexts": ["synthetic"],
                           "noticesSha256": release.digest(self.notice_text), "noticesBytes": self.notice_text.stat().st_size}
         self.file(self.notice_inventory, json.dumps(self.inventory).encode())
+        runtime_spec = importlib.util.spec_from_file_location("release_test_runtime", release.REPOSITORY / "tools/mon_whisper_runtime.py")
+        runtime = importlib.util.module_from_spec(runtime_spec)
+        runtime_spec.loader.exec_module(runtime)
+        asr_directory = self.app / "Contents/Resources/asr-runtime"
+        asr_directory.mkdir()
+        runtime.package(self.embedding, self.notice_text, asr_directory)
         for executable in (self.app / "Contents/MacOS/mon-desktop", self.capture / "Contents/MacOS/mon-macos-capture", self.embedding):
             executable.chmod(0o755)
         self.policy = release.REPOSITORY / "app/src-tauri/release-entitlements"
@@ -250,6 +256,9 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual([result[key] for key in ["gatekeeper", "licenseReview", "manualUpdate"]], ["not_verified"] * 3)
         self.assertEqual(result["dependencyNotices"]["state"], "collected_not_reviewed")
         self.assertEqual(result["dependencyNotices"]["missingNoticeTexts"], ["synthetic"])
+        self.assertEqual(result["asrRuntime"]["state"], "packaged_onboarding_unverified")
+        self.assertEqual(result["asrRuntime"]["runtimeSigning"], "ad_hoc_only")
+        self.assertEqual(result["asrRuntime"]["standaloneNotarization"], "not_verified")
         self.assertEqual(result["dmgSha256"], release.digest(output / result["dmg"]))
         self.assertEqual(json.loads((output / "build-result.json").read_text()), result)
         self.assertEqual((output / "image-source/Applications").readlink(), Path("/Applications"))
@@ -312,6 +321,19 @@ class ReleaseTests(unittest.TestCase):
         self.notice_text.unlink()
         with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
             self.pipeline("existing-explicit-profile")
+        self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
+
+    def test_asr_resource_verification_does_not_claim_inner_cli_signed_or_notarized(self):
+        proof = release.verify_asr_runtime(self.app)
+        self.assertEqual(proof["runtimeSigning"], "ad_hoc_only")
+        self.assertEqual(proof["developerIdSigning"], "not_verified")
+        self.assertEqual(proof["nativeOnboarding"], "not_verified")
+
+    def test_changed_asr_archive_refuses_release_before_sign_or_upload(self):
+        archive = self.app / "Contents/Resources/asr-runtime/whisper-runtime.tar"
+        archive.write_bytes(archive.read_bytes() + b"changed")
+        with self.assertRaises(ValueError):
+            self.pipeline()
         self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
         self.assertFalse((self.root / "distribution/build-result.json").exists())
 

@@ -3,7 +3,7 @@ async (page, capturePath, detailUI) => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true });
   const write = () => page.getByRole("button", { name: "Markdownを書き出す", exact: true }).click();
-  const boot = async mode => { await page.reload(); await page.locator(".meeting-name").first().click(); await detailUI.openMinutes(); await page.getByRole("button", { name: "Markdownを書き出す", exact: true }).waitFor(); await page.evaluate(m => { window.__mon.exportMode = m; }, mode); };
+  const boot = async mode => { await page.reload(); await page.locator(".meeting-name").first().click(); await page.getByRole("tab", { name: "議事録", exact: true }).click(); await page.getByRole("button", { name: "Markdownを書き出す", exact: true }).waitFor(); await page.evaluate(m => { window.__mon.exportMode = m; }, mode); };
   await boot("success"); await write(); await host.getByRole("status").filter({ hasText: "書き出し完了" }).waitFor();
   check((await host.innerText()).includes("成功：") && await page.evaluate(() => window.__mon.exports.length) === 1, "persisted export was not a single successful result");
   results.push("a successful export receipt emits a success toast once after persistence");
@@ -12,7 +12,8 @@ async (page, capturePath, detailUI) => {
   results.push("cancelled export is information, not a successful file write");
   await boot("fail"); await write(); await host.getByRole("alert").filter({ hasText: "書き出し失敗" }).waitFor();
   await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
-  await page.getByText("Markdown出力履歴（最新50件）", { exact: true }).click();
+  await page.getByRole("button", { name: "議事録の設定・生成状況・候補", exact: true }).click();
+  await page.getByRole("dialog", { name: "議事録の設定・生成状況・候補", exact: true }).waitFor();
   check(await page.getByLabel("議事録の書き出しを要確認の要対応状態", { exact: true }).isVisible() && await page.getByText("書き出し失敗", { exact: true }).isVisible(), "error close cleared its retained issue or failed output history");
   check(await page.evaluate(() => window.__mon.calls.filter(c => c.cmd === "export_minutes_markdown").length) === 1, "closing failed export retried writing");
   results.push("failed export is important and retains its issue and failed history after dismissal without rewriting");

@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { useState } from "react";
 import { missingAtFrame, nextSavedFrame, type PlaybackInfo } from "./playback";
 
@@ -19,7 +20,7 @@ export function PlaybackMissing({info,frame,disabled,onSeek}:{info:PlaybackInfo;
     <p role="status">音声欠損があります（{gaps.length}区間）。欠損を無音として補いません。</p>
     {!!active.length && <div className="audio-missing-position">
       <p role="status">現在位置は{Array.from(new Set(active.map(gap=>kind(gap.trackKind)))).join("・")}の欠損区間です。保存音声の再生を停止しています。</p>
-      <button type="button" className="small-secondary" disabled={disabled || next===null} onClick={()=>{if(next!==null)onSeek(next);}}>次の保存音声へ</button>
+      <IconButton label="次の保存音声へ" icon="next" type="button" className="small-secondary" disabled={disabled || next===null} onClick={()=>{if(next!==null)onSeek(next);}} />
       {next===null && <p>この先に保存音声はありません。</p>}
     </div>}
     <details><summary>欠損区間を確認</summary>
@@ -29,7 +30,7 @@ export function PlaybackMissing({info,frame,disabled,onSeek}:{info:PlaybackInfo;
         return <li key={current*10+index}><span>{kind(gap.trackKind)}：{time(gap.startUs)}〜{time(gap.endUs)}（{reason(gap.reasonCode)}）</span>
           <button type="button" className="small-secondary" disabled={disabled || after===null} onClick={()=>{if(after!==null)onSeek(after);}}>この欠損の後へ</button></li>;
       })}</ol>
-      {pages>1 && <div className="audio-controls"><button type="button" disabled={disabled || current===0} onClick={()=>setPage(current-1)}>前の欠損一覧</button><span>{current+1} / {pages}</span><button type="button" disabled={disabled || current+1===pages} onClick={()=>setPage(current+1)}>次の欠損一覧</button></div>}
+      {pages>1 && <div className="audio-controls"><IconButton label="前の欠損一覧" icon="previous" type="button" disabled={disabled || current===0} onClick={()=>setPage(current-1)} /><span>{current+1} / {pages}</span><IconButton label="次の欠損一覧" icon="next" type="button" disabled={disabled || current+1===pages} onClick={()=>setPage(current+1)} /></div>}
     </details>
   </div>;
 }

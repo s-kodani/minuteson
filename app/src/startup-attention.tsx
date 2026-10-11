@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { acceptStartupReport, startupStageLabels, type StartupReport } from "./startup-attention-state";
@@ -50,7 +51,7 @@ function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport
       <p>終了後、原因を確認してから明示的に再起動してください。再起動は既存の起動検証を再び行う操作であり、修復成功の保証ではありません。通常の起動検証が既に更新した状態を、この画面が巻き戻すこともありません。</p>
     </section>}
     {report?.phase === "ready" && <p role="status">保存先の起動確認は完了しています。<a href={normal.href}>通常画面を開く</a></p>}
-    <div className="analysis-actions"><button type="button" className="secondary" disabled={!isTauri() || busy || quitting} onClick={() => void read()}>保持した診断だけを再読込</button>{report?.phase === "blocked" && <button type="button" disabled={busy || quitting} onClick={() => void quit()}>このアプリを終了</button>}</div>
+    <div className="analysis-actions"><IconButton label="保持した診断だけを再読込" icon="refresh" type="button" className="secondary" disabled={!isTauri() || busy || quitting} onClick={() => void read()} />{report?.phase === "blocked" && <button type="button" disabled={busy || quitting} onClick={() => void quit()}>このアプリを終了</button>}</div>
     <p>再読込はメモリに保持した診断だけを読みます。保存先を再び開く、検査・回収する、自動再試行する操作ではありません。</p>
     {error && <p className="action-error" role="alert">{error}</p>}
   </main>;

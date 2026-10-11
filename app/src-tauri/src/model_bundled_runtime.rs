@@ -1,0 +1,258 @@
+//! A single native-owned resource ID, not general local URL support. Index reads
+//! are bounded/read-only; acquisition binds the whole recipe again, holds the
+//! no-link resource handles, and checks every byte without executing anything.
+use crate::model_download_recipe::{ArchiveMember, DownloadSource, Recipe, BUNDLED_WHISPER};
+use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role, Source, Target};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
+
+const MAX_PACKAGE: u64 = 16 * 1024 * 1024;
+const MEMBERS: [&str; 3] = [
+    "bin/whisper-cli",
+    "notices/whisper-MIT.txt",
+    "build-info.json",
+];
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Index {
+    schema_version: u32,
+    engine: String,
+    engine_version: String,
+    source_commit: String,
+    source_url: String,
+    source_bytes: u64,
+    source_sha256: String,
+    target: String,
+    #[serde(rename = "minimumMacOS")]
+    minimum_macos: String,
+    build_options: Vec<String>,
+    cpu_only: bool,
+    publisher_authenticity: String,
+    license_review: String,
+    distribution_ready: bool,
+    archive: Archive,
+    files: Vec<Member>,
+    runtime_signing: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Archive {
+    file: String,
+    bytes: u64,
+    sha256: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Member {
+    relative_path: String,
+    bytes: u64,
+    sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Network {
+    files: Vec<PackageFile>,
+    sources: Vec<DownloadSource>,
+}
+pub(crate) struct Bundle {
+    index: Index,
+    evidence: Source,
+    archive: Option<Source>,
+}
+fn check(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+    if cancelled() {
+        Err("同梱モデル素材の準備を中断しました".into())
+    } else {
+        Ok(())
+    }
+}
+impl Bundle {
+    pub(crate) fn open(root: &Path) -> Result<Self, String> {
+        // Do NOT canonicalize a caller-supplied link into a trusted root.
+        let mut evidence = Source::open(root, "runtime-index.json")
+            .map_err(|_| "文字起こし用の同梱情報を読めません。アプリを再確認してください")?;
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut evidence.file)
+            .take(65_537)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "同梱情報を読み取れません")?;
+        evidence.verify()?;
+        if bytes.is_empty() || bytes.len() > 65_536 {
+            return Err("同梱情報の容量が不正です".into());
+        }
+        let index: Index =
+            serde_json::from_slice(&bytes).map_err(|_| "同梱情報の形式が不正です")?;
+        let mut info = serde_json::to_value(&index).map_err(|e| e.to_string())?;
+        for key in ["archive", "files", "runtimeSigning"] {
+            info.as_object_mut().unwrap().remove(key);
+        }
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../../model-catalog/whisper-runtime-build.json"
+        ))
+        .map_err(|_| "固定された同梱定義が不正です")?;
+        if info != expected
+            || index.runtime_signing != "ad_hoc_only"
+            || index.archive.file != "whisper-runtime.tar"
+            || index.archive.bytes == 0
+            || index.archive.bytes > MAX_PACKAGE
+            || !crate::model_download_ipc::hash(&index.archive.sha256)
+            || index.files.len() != MEMBERS.len()
+        {
+            return Err("同梱情報が固定されたCPU実行ファイルの定義と一致しません".into());
+        }
+        for (i, member) in index.files.iter().enumerate() {
+            let limit = if i == 0 { MAX_PACKAGE } else { 65_536 };
+            if member.relative_path != MEMBERS[i]
+                || member.bytes == 0
+                || member.bytes > limit
+                || !crate::model_download_ipc::hash(&member.sha256)
+            {
+                return Err("同梱ファイルの構成・容量・SHAが不正です".into());
+            }
+        }
+        Ok(Self {
+            index,
+            evidence,
+            archive: None,
+        })
+    }
+    pub(crate) fn recipe(&self) -> Result<Recipe, String> {
+        self.evidence.verify()?;
+        let network: Network = serde_json::from_str(include_str!(
+            "../../model-catalog/whisper-small-network.json"
+        ))
+        .map_err(|_| "文字起こしモデルの固定配布情報が不正です")?;
+        let mut files = Vec::new();
+        let mut sources = Vec::new();
+        for (i, member) in self.index.files.iter().enumerate() {
+            files.push(PackageFile {
+                relative_path: member.relative_path.clone(),
+                role: if i == 0 {
+                    Role::Executable
+                } else {
+                    Role::Notice
+                },
+                expected_size: Some(member.bytes),
+                expected_hash: Some(member.sha256.clone()),
+            });
+            sources.push(DownloadSource {
+                relative_path: member.relative_path.clone(),
+                url: BUNDLED_WHISPER.into(),
+                archive: Some(ArchiveMember {
+                    format: "tar".into(),
+                    expected_size: self.index.archive.bytes,
+                    expected_hash: self.index.archive.sha256.clone(),
+                    member_path: member.relative_path.clone(),
+                }),
+            });
+        }
+        files.extend(network.files);
+        sources.extend(network.sources);
+        let recipe = Recipe { schema_version: 3, manifest: PackageManifest {
+            schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
+            model_name: "Whisper small（多言語）".into(), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
+            quantization: None, target: Target::MacosAarch64,
+            license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt; model card: notices/whisper-model-card.md; app-built CPU provenance: build-info.json".into(),
+            files,
+        }, sources };
+        recipe.review()?;
+        Ok(recipe)
+    }
+    pub(crate) fn bind(&self, recipe: &Recipe) -> Result<(), String> {
+        if *recipe != self.recipe()? {
+            return Err(
+                "同梱モデルの準備内容がこのアプリの固定構成と一致しません。再確認してください"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn prepare(
+        &mut self,
+        root: &Path,
+        recipe: &Recipe,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
+        check(cancelled)?;
+        self.bind(recipe)?;
+        self.archive = Some(Source::open(root, "whisper-runtime.tar")?);
+        // Before any staging/intent or network, reject a replaced archive.
+        self.copy(None, cancelled)?;
+        self.verify()
+    }
+    fn verify(&self) -> Result<(), String> {
+        self.evidence.verify()?;
+        if let Some(source) = &self.archive {
+            source.verify()?;
+        }
+        Ok(())
+    }
+    fn copy(
+        &mut self,
+        mut output: Option<&mut std::fs::File>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
+        self.verify()?;
+        let source = self
+            .archive
+            .as_mut()
+            .ok_or("同梱実体の事前照合がありません")?;
+        source
+            .file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| e.to_string())?;
+        let start = std::time::Instant::now();
+        let mut digest = Sha256::new();
+        let mut count = 0_u64;
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            check(cancelled)?;
+            if start.elapsed().as_secs() > 60 {
+                return Err("同梱素材の読取時間の上限を超えました".into());
+            }
+            let n = source
+                .file
+                .read(&mut buffer)
+                .map_err(|_| "同梱素材を読み取れません")?;
+            if n == 0 {
+                break;
+            }
+            count += n as u64;
+            if count > self.index.archive.bytes {
+                return Err("同梱素材の容量が一致しません".into());
+            }
+            digest.update(&buffer[..n]);
+            if let Some(file) = output.as_mut() {
+                file.write_all(&buffer[..n])
+                    .map_err(|_| "同梱素材を保存できません")?;
+            }
+        }
+        if count != self.index.archive.bytes
+            || format!("{:x}", digest.finalize()) != self.index.archive.sha256
+        {
+            return Err("同梱素材の容量・SHAが一致しません".into());
+        }
+        self.verify()
+    }
+    pub(crate) fn fetch(
+        &mut self,
+        url: &str,
+        size: u64,
+        hash: &str,
+        output: &mut std::fs::File,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), String> {
+        if url != BUNDLED_WHISPER
+            || size != self.index.archive.bytes
+            || hash != self.index.archive.sha256
+        {
+            return Err("同梱素材の参照が確認した構成と一致しません".into());
+        }
+        self.copy(Some(output), cancelled)
+    }
+}
+
+#[cfg(test)]
+mod tests;

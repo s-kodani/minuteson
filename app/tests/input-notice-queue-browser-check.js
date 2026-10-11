@@ -38,13 +38,13 @@ async page => {
     await page.evaluate(() => { const d = document.createElement("dialog"); d.id = "render-cover"; d.textContent = "合成表示遮蔽"; document.body.append(d); d.showModal(); });
     await release("receive"); await page.waitForFunction(() => !!window.closeFixture.queueState.lanes.microphone[0].recipientId); await mic().waitFor({state:"attached"}); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "modal-covered card acknowledged rendering");
-    await page.evaluate(() => { document.querySelector(".toast-host").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.waitForTimeout(400);
+    await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.opacity="0"; document.querySelector("#render-cover").close(); }); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "transparent ancestor acknowledged rendering");
     results.push("transparent ancestors prevent rendering confirmation despite an attached card");
-    await page.evaluate(() => { const host=document.querySelector(".toast-host"); host.style.opacity="1"; host.style.transform="translateY(-2000px)"; }); await page.waitForTimeout(400);
+    await page.evaluate(() => { const host=document.querySelector(".mon-notification-stack"); host.style.opacity="1"; host.style.transform="translateY(-2000px)"; }); await page.waitForTimeout(400);
     check(await calls("render_recording_input_notice") === 0, "off-viewport card acknowledged rendering");
     results.push("off-viewport cards do not acknowledge rendering");
-    await page.evaluate(() => { document.querySelector(".toast-host").style.transform=""; document.querySelector("#render-cover").showModal(); });
+    await page.evaluate(() => { document.querySelector(".mon-notification-stack").style.transform=""; document.querySelector("#render-cover").showModal(); });
     await page.evaluate(() => { window.closeFixture.showQueueBlockers(); document.querySelector("#render-cover").close(); });
     await page.waitForTimeout(500); check(await mic().count() === 0 && await calls("render_recording_input_notice") === 0, "queued card acknowledged before promotion");
     results.push("modal-covered and queued cards do not emit rendering confirmation");

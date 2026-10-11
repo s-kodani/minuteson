@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyMinutesFixtureTheme } from "./minutes-browser-helpers.js";
+import { applyPlaybackFixtureTheme } from "./playback-browser-helpers.js";
 const tests = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 if (!args.includes("--cli") || !args.includes("--session")) throw Error("Provide --cli PATH and --session NAME for an existing local Playwright CLI browser.");
@@ -16,11 +17,16 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"],
+  ["keyboard-primary", "browser-fixture.js", "keyboard-primary-browser-check.js"],
   ["common", "common-modal-browser-fixture.tsx", "common-modal-browser-check.js"],
   ["action", "action-confirmation-browser-fixture.tsx", "action-confirmation-browser-check.js"],
   ["info", "info-popover-browser-fixture.tsx", "info-popover-browser-check.js"],
   ["production", "browser-fixture.js", "action-confirmation-production-browser-check.js"],
   ["document", "browser-fixture.js", "document-modal-browser-check.js"],
+  ["analysis-engine-modal", "browser-fixture.js", "analysis-engine-modal-browser-check.js"],
+  ["diarization-modal", "browser-fixture.js", "diarization-modal-browser-check.js"],
+  ["transcript-recovery-owner", "browser-fixture.js", "transcript-recovery-owner-browser-check.js"],
   ["document-action", "browser-fixture.js", "document-action-confirmation-browser-check.js"],
   ["import", "import-browser-fixture.js", "import-modal-browser-check.js"],
   ["data", "data-save-browser-fixture.js", "data-save-browser-check.js"],
@@ -126,7 +132,7 @@ for (const [name, fixture, source] of suites) {
   // Explicit drivers for the production workspace: real tab/summary clicks,
   // never forcing hidden controls visible or replacing the application's UI.
   const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const waitSpeakerLayout=()=>page.waitForFunction(()=>{const panel=document.querySelector(".workspace-panel-shell");return !panel||panel.dataset.narrow===String(matchMedia("(max-width: 1119px)").matches);});const detailUI={openMeetingRow:async(title="既存会議")=>{const row=page.locator(".meeting-table tbody tr").filter({has:page.locator(".meeting-name").filter({hasText:title})}).first();await row.waitFor();const actions=row.locator(".meeting-row-actions");if(!await actions.evaluate(e=>e.open))await actions.locator(":scope > summary").click();},openMaintenanceTools:async()=>{await page.getByRole("button",{name:"設定",exact:true}).click();const toggle=page.getByRole("button",{name:"中断・削除の管理",exact:true});if(await toggle.getAttribute("aria-expanded")!=="true")await toggle.click();},openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:async()=>{await openDetails(".transcript-workspace-tools");await detailUI.openSpeakerPanel();for(const selector of [".speaker-name-tools",".speaker-merge-tools"]){for(const details of await page.locator(selector).all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();}await detailUI.closeSpeakerPanel();for(const details of await page.locator(".utterance-edit-tools").all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();},openSpeakerPanel:async()=>{await waitSpeakerLayout();const button=page.getByRole("button",{name:"話者一覧を開く",exact:true});if(await button.isVisible()&&await button.getAttribute("aria-expanded")!=="true")await button.click();},closeSpeakerPanel:async()=>{await waitSpeakerLayout();const dialog=page.locator(".workspace-drawer[open]");if(await dialog.count())await dialog.getByRole("button",{name:"話者一覧を閉じる",exact:true}).click();},openDiarization:async()=>{const tools=page.locator(".speaker-diarization-tools");if(await tools.count()){await detailUI.openSpeakerPanel();await openDetails(".speaker-diarization-tools");}},openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
-  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}detailUI.applyMinutesTheme=theme=>(${applyMinutesFixtureTheme.toString()})(page,theme);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
+  const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}detailUI.applyMinutesTheme=theme=>(${applyMinutesFixtureTheme.toString()})(page,theme);detailUI.applyPlaybackTheme=theme=>(${applyPlaybackFixtureTheme.toString()})(page,theme);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
   const wrapper = cli.endsWith(".sh");
   const run = spawnSync(wrapper ? cli : process.execPath, [...(wrapper ? [] : [cli]), `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
   const log = (run.stdout ?? "") + (run.stderr ?? "");

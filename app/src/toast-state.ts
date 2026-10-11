@@ -36,6 +36,7 @@ export class ToastController {
   private pauses = new Set<string>();
   private serial = 0;
   private snapshot: readonly Toast[] = [];
+  private visibleLimit = 3;
   private clock: Clock;
   constructor(clock: Clock = {
     now: () => Date.now(), start: (run, delay) => globalThis.setTimeout(run, delay),
@@ -44,6 +45,11 @@ export class ToastController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
   get pendingCount() { return Math.max(0, this.entries.size - this.snapshot.length); }
+  setVisibleLimit(limit: number) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw Error("Invalid notification display limit");
+    if (limit === this.visibleLimit) return;
+    this.visibleLimit=limit; this.publish();
+  }
   private stop(entry: Entry) {
     if (entry.started !== null) entry.remaining = Math.max(0, entry.remaining - Math.max(0, this.clock.now() - entry.started));
     if (entry.timer !== null) this.clock.stop(entry.timer);
@@ -51,7 +57,7 @@ export class ToastController {
   }
   private publish() {
     const ordered = [...this.entries.values()].sort((a, b) => priority(a.toast) - priority(b.toast) || b.toast.id - a.toast.id);
-    const visible = ordered.slice(0, 3), keys = new Set(visible.map(e => e.toast.key));
+    const visible = ordered.slice(0, this.visibleLimit), keys = new Set(visible.map(e => e.toast.key));
     for (const entry of ordered) {
       if (!keys.has(entry.toast.key)) { entry.pauses.delete("hover"); entry.pauses.delete("focus"); }
       if (!keys.has(entry.toast.key) || entry.toast.important || this.pauses.size || entry.pauses.size) this.stop(entry);

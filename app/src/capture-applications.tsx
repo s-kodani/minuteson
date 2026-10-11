@@ -1,5 +1,6 @@
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {useEffect,useState} from "react";
+import {OptionsModal} from "./options-modal";
 import {captureApplicationKey,captureApplicationScope,checkedCaptureApplicationIdentity,checkedCaptureApplications,type CaptureApplicationIdentity,type CaptureApplications,type CaptureScope} from "./capture-scope-state";
 
 // Scope is deliberately unset until an application is explicitly chosen.
@@ -27,8 +28,7 @@ export function useCaptureScope(enabled:boolean,meetingId:string|null){
 export function CaptureApplicationSelection({control,locked}:{control:ReturnType<typeof useCaptureScope>;locked:boolean}){
   const {mode,application,applications,loading,error,selected}=control;
   const value=application?captureApplicationKey(application):"";
-  return <details className="capture-scope-details">
-    <summary>録音の詳細設定</summary>
+  return <OptionsModal className="capture-scope-details" label="録音の詳細設定">
     <label>PC音声の取得範囲<select aria-label="PC音声の取得範囲" value={mode} disabled={locked} onChange={e=>{const mode=e.target.value;if(mode==="system"||mode==="application")control.changeMode(mode);}}>
       <option value="system">全体録音</option><option value="application">アプリ選択録音</option>
     </select></label>
@@ -45,5 +45,5 @@ export function CaptureApplicationSelection({control,locked}:{control:ReturnType
       <p>選択したアプリ単位でPC音声を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。OSの一覧にあることは音声取得の成功を示しません。</p>
       {error&&<p role="alert" className="action-error">{error}</p>}
     </>}
-  </details>;
+  </OptionsModal>;
 }

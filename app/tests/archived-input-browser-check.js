@@ -20,12 +20,12 @@ async page=>{
     results.push("closed recordings claim independent microphone/system events without inventing current input state or rendering");
     await release("receive");await card().waitFor({state:"attached"});await page.waitForTimeout(350);
     check((await calls()).every(c=>c.action==="receive"),"modal-covered archive toast was rendered");
-    await page.evaluate(()=>{document.querySelector(".toast-host").style.opacity="0";document.querySelector("#archive-cover").close();});await page.waitForTimeout(350);
+    await page.evaluate(()=>{document.querySelector(".mon-notification-stack").style.opacity="0";document.querySelector("#archive-cover").close();});await page.waitForTimeout(350);
     check((await calls()).every(c=>c.action==="receive"),"transparent archive toast was rendered");
-    await page.evaluate(()=>{const host=document.querySelector(".toast-host");host.style.opacity="1";host.style.transform="translateY(-2000px)";});await page.waitForTimeout(350);
+    await page.evaluate(()=>{const host=document.querySelector(".mon-notification-stack");host.style.opacity="1";host.style.transform="translateY(-2000px)";});await page.waitForTimeout(350);
     check((await calls()).every(c=>c.action==="receive"),"off-viewport archive toast was rendered");
     results.push("modal coverage, transparency and off-viewport cards cannot acknowledge archived rendering");
-    await page.evaluate(()=>{document.querySelector(".toast-host").style.transform="";document.querySelector("#archive-cover").showModal();window.closeFixture.showQueueBlockers();document.querySelector("#archive-cover").close();});
+    await page.evaluate(()=>{document.querySelector(".mon-notification-stack").style.transform="";document.querySelector("#archive-cover").showModal();window.closeFixture.showQueueBlockers();document.querySelector("#archive-cover").close();});
     await page.waitForTimeout(400);check(await card().count()===0&&(await calls()).every(c=>c.action==="receive"),"queued archive card fabricated render");
     const old=(await calls())[0];await reload();await card().waitFor();
     await page.waitForFunction(()=>Object.values(window.closeFixture.archived.rows[0].lanes).every(l=>l[0].delivery.rendered));

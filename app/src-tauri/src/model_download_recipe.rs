@@ -6,6 +6,9 @@ use sha2::{Digest, Sha256};
 
 pub(crate) const MAX_RECIPE: usize = 65_536;
 pub(crate) const MAX_TOTAL: u64 = 32 * 1024 * 1024 * 1024;
+// An identifier, never a user-selected local path. Resolution happens only at
+// the native acquisition boundary against the app's own resource directory.
+pub(crate) const BUNDLED_WHISPER: &str = "mon-bundled://whisper-v1.9.4/whisper-runtime.tar";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -19,6 +22,16 @@ pub(crate) struct Recipe {
 pub(crate) struct DownloadSource {
     pub(super) relative_path: String,
     pub(super) url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) archive: Option<ArchiveMember>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ArchiveMember {
+    pub(super) format: String,
+    pub(super) expected_size: u64,
+    pub(super) expected_hash: String,
+    pub(super) member_path: String,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +40,14 @@ pub(crate) struct Review {
     pub(crate) manifest: PackageManifest,
     pub(crate) sources: Vec<DownloadSource>,
     pub(crate) total_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recipe_schema_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) download_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) archive_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bundled_bytes: Option<u64>,
     pub(crate) publisher_authenticity: &'static str,
     pub(crate) installed: bool,
     pub(crate) ready: bool,
@@ -49,6 +70,16 @@ impl Recipe {
             manifest: self.manifest.clone(),
             sources: self.sources.clone(),
             total_bytes: self.validate()?,
+            recipe_schema_version: (self.schema_version >= 2).then_some(self.schema_version),
+            download_bytes: (self.schema_version >= 2)
+                .then(|| self.transfer_bytes())
+                .transpose()?,
+            archive_bytes: (self.schema_version >= 2)
+                .then(|| self.archive_bytes())
+                .transpose()?,
+            bundled_bytes: (self.schema_version == 3)
+                .then(|| self.bundled_bytes())
+                .transpose()?,
             publisher_authenticity: "not_verified",
             installed: false,
             ready: false,
@@ -121,7 +152,7 @@ impl Recipe {
         self.validate_for(Target::current()?)
     }
     fn validate_for(&self, target: Target) -> Result<u64, String> {
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2 | 3) {
             return Err("ダウンロード定義の形式版が未対応です".into());
         }
         self.manifest.validate(target)?;
@@ -129,6 +160,7 @@ impl Recipe {
             return Err("モデルファイルと配布元の構成が一致しません".into());
         }
         let mut total = 0_u64;
+        let mut archives = std::collections::BTreeMap::new();
         for (file, source) in self.manifest.files.iter().zip(&self.sources) {
             if file.relative_path != source.relative_path
                 || file.expected_size.is_none()
@@ -136,20 +168,132 @@ impl Recipe {
             {
                 return Err("全ダウンロードファイルに同順の配布元・容量・SHA-256が必要です".into());
             }
-            validate_url(&source.url)?;
+            if source.url == BUNDLED_WHISPER {
+                if self.schema_version != 3
+                    || self.manifest.engine != crate::model_inspection::Engine::Whisper
+                    || self.manifest.target != Target::MacosAarch64
+                    || self.manifest.engine_version != "v1.9.4"
+                    || source.archive.is_none()
+                    || !matches!(
+                        (
+                            file.role,
+                            source.archive.as_ref().map(|a| a.member_path.as_str())
+                        ),
+                        (
+                            crate::model_inspection::Role::Executable,
+                            Some("bin/whisper-cli")
+                        ) | (
+                            crate::model_inspection::Role::Notice,
+                            Some("notices/whisper-MIT.txt" | "build-info.json")
+                        )
+                    )
+                {
+                    return Err("同梱実行ファイルの識別子・版・対象・構成が不正です".into());
+                }
+            } else {
+                validate_url(&source.url)?;
+            }
+            if let Some(archive) = &source.archive {
+                if !matches!(self.schema_version, 2 | 3)
+                    || archive.format != "tar"
+                    || archive.expected_size == 0
+                    || archive.expected_size > MAX_TOTAL
+                    || !crate::model_inspection::relative(&archive.member_path)
+                    || !crate::model_download_ipc::hash(&archive.expected_hash)
+                {
+                    return Err("アーカイブの形式・容量・SHA・対象パスが不正です".into());
+                }
+                let metadata = (archive.expected_size, &archive.expected_hash);
+                if archives
+                    .insert(&source.url, metadata)
+                    .is_some_and(|previous| previous != metadata)
+                {
+                    return Err("同じアーカイブURLの容量・SHAが一致しません".into());
+                }
+            }
             total = total
                 .checked_add(file.expected_size.unwrap())
                 .filter(|n| *n <= MAX_TOTAL)
                 .ok_or("ダウンロード合計容量の上限は32GiBです")?;
         }
+        if self.schema_version == 2 && archives.is_empty() {
+            return Err("形式版2にはアーカイブの指定が必要です".into());
+        }
+        if self.schema_version == 3
+            && (!self.has_bundled()
+                || !self.manifest.files.iter().zip(&self.sources).any(|(f, s)| {
+                    f.role == crate::model_inspection::Role::Asr && s.url.starts_with("https://")
+                }))
+        {
+            return Err("形式版3には同梱実行ファイルとHTTPSの文字起こしモデルが必要です".into());
+        }
+        for (index, source) in self.sources.iter().enumerate() {
+            if source.archive.is_none() && archives.contains_key(&source.url) {
+                return Err("同じURLを通常ファイルとアーカイブには指定できません".into());
+            }
+            if source.archive.is_some()
+                && self.sources[..index].iter().any(|previous| {
+                    previous.url == source.url
+                        && previous.archive.as_ref().map(|a| &a.member_path)
+                            == source.archive.as_ref().map(|a| &a.member_path)
+                })
+            {
+                return Err("同じアーカイブ内ファイルを重複指定できません".into());
+            }
+        }
+        self.transfer_bytes()?;
+        self.archive_bytes()?;
+        self.bundled_bytes()?;
         self.bytes()?;
         Ok(total)
+    }
+    pub(crate) fn transfer_bytes(&self) -> Result<u64, String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut total = 0_u64;
+        for (file, source) in self.manifest.files.iter().zip(&self.sources) {
+            if source.url == BUNDLED_WHISPER {
+                continue;
+            }
+            let size = match &source.archive {
+                Some(archive) if seen.insert(&source.url) => archive.expected_size,
+                Some(_) => 0,
+                None => file.expected_size.ok_or("取得容量がありません")?,
+            };
+            total = total
+                .checked_add(size)
+                .filter(|n| *n <= MAX_TOTAL)
+                .ok_or("通信容量の上限は32GiBです")?;
+        }
+        Ok(total)
+    }
+    pub(crate) fn has_bundled(&self) -> bool {
+        self.sources.iter().any(|s| s.url == BUNDLED_WHISPER)
+    }
+    pub(crate) fn bundled_bytes(&self) -> Result<u64, String> {
+        Ok(self
+            .sources
+            .iter()
+            .find(|s| s.url == BUNDLED_WHISPER)
+            .and_then(|s| s.archive.as_ref())
+            .map_or(0, |a| a.expected_size))
+    }
+    pub(crate) fn archive_bytes(&self) -> Result<u64, String> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.sources
+            .iter()
+            .filter_map(|source| source.archive.as_ref().filter(|_| seen.insert(&source.url)))
+            .try_fold(0_u64, |n, a| {
+                n.checked_add(a.expected_size)
+                    .filter(|n| *n <= MAX_TOTAL)
+                    .ok_or_else(|| "アーカイブ容量の上限は32GiBです".into())
+            })
     }
     pub(crate) fn origin(&self, operation_id: &str) -> Result<DownloadOrigin, String> {
         Ok(DownloadOrigin {
             operation_id: operation_id.into(),
             recipe_hash: self.hash()?,
             sources: self.sources.clone(),
+            recipe_schema_version: self.schema_version,
         })
     }
 }
@@ -162,6 +306,14 @@ pub(crate) struct DownloadOrigin {
     operation_id: String,
     recipe_hash: String,
     sources: Vec<DownloadSource>,
+    #[serde(default = "legacy_schema", skip_serializing_if = "is_legacy_schema")]
+    recipe_schema_version: u32,
+}
+fn legacy_schema() -> u32 {
+    1
+}
+fn is_legacy_schema(value: &u32) -> bool {
+    *value == 1
 }
 impl DownloadOrigin {
     pub(crate) fn matches(&self, operation: &str, recipe: &str) -> bool {
@@ -181,7 +333,7 @@ impl DownloadOrigin {
             return Err("ダウンロード由来の操作IDが不正です".into());
         }
         let recipe = Recipe {
-            schema_version: 1,
+            schema_version: self.recipe_schema_version,
             manifest: manifest.clone(),
             sources: self.sources.clone(),
         };

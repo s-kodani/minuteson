@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { quietMaintenance } from "./maintenance-visibility";
 import { useEffect, useRef, useState } from "react";
@@ -170,11 +171,11 @@ export function PartialRecordingPanel({ operation, visible, locked, withSavedEdi
       <p>元録音の検証済み確定範囲だけを救出します。録音を再開せず、正常終了や損失5秒以内とは扱いません。</p>
       {!operation.partialRecordingSupported && operation.connected && <p>この環境の部分救出は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
-      <button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(() => latest.current.operation.refresh())}>中断録音と救出結果を再読込</button>
+      <IconButton label="中断録音と救出結果を再読込" icon="refresh" type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void run(() => latest.current.operation.refresh())} />
       {operation.partialRecordingSupported && !items.length && <p role="status">現在、未救出の中断録音はありません。</p>}
       <ul>{items.map(item => <li key={item.sessionId}><h3>{item.title}</h3><p>{item.state === "failed" ? "失敗した録音" : "中断した録音"} · 会議ID {item.meetingId}</p>
         <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void choose(item)}>確定範囲と救出方法を確認</button></li>)}</ul>
-      {next && <button type="button" className="small-secondary" disabled={pageBusy || !operation.connected} onClick={() => void loadMore()}>次の中断録音を表示</button>}
+      {next && <IconButton label="次の中断録音を表示" icon="next" type="button" className="small-secondary" disabled={pageBusy || !operation.connected} onClick={() => void loadMore()} />}
       {active && s.busy && <><p role="status">{dataPhaseLabel(s.phase)}。停止要求後も、実際の処理終了まで保護を維持します。</p><button type="button" className="stop-button" disabled={rpcBusy || s.phase === "cancelling"} onClick={() => void cancel()}>部分救出の安全な停止を要求</button></>}
       {preview && !s?.busy && !receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>部分救出の確認内容を開く</button><button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>確定範囲と保存結果を再確認</button></div>}
       {unknown && <button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ部分救出操作の結果を確認</button>}

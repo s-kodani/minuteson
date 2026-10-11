@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
@@ -88,11 +89,11 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   return <section className="job-notifications" aria-label="解析の通知と要対応状態">
     {[...notices].map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
     <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" toastMessage="解析通知の読込・結果確認に失敗しました" action={{ kind: "retry", label: "状態だけを再読込", disabled: locked || reading, run: retryRead }}>
-      <button type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()}>状態だけを再読込</button>
+      <IconButton label="状態だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()} />
     </IssueNotice>
     <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。再起動後に受信状態を確認してください。` : ""} label="解析通知の受信" toastMessage="解析通知の受信に失敗しました"><span>定期読込は継続</span></IssueNotice>
     <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? "解析ワーカーから異常の通知がありました。状態を確認してください" : ""} level="error" important />
-    <IssueStatus message={workerError ? `${workerError}\n通知を閉じても解決にはなりません。再起動後にジョブの再開状態を確認してください。` : ""} label="解析ワーカー"><button type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()}>状態だけを再読込</button></IssueStatus>
+    <IssueStatus message={workerError ? `${workerError}\n通知を閉じても解決にはなりません。再起動後にジョブの再開状態を確認してください。` : ""} label="解析ワーカー"><IconButton label="状態だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()} /></IssueStatus>
     {issues.length > 0 && <details ref={issueDetails} className="job-issues"><summary>解析の要対応：{issues.length}件</summary>
       <ul>{shown.map(job => <li key={job.id}><span>「{job.meetingTitle}」の{jobName(job.kind)}：{job.state === "failed" ? "失敗" : "中断"}</span>
         <InfoPopover label={`「${job.meetingTitle}」の${jobName(job.kind)}の要対応`}><p>ジョブID：{job.id}</p><p>{job.errorCode ?? "再開状態を確認してください。"}</p><p>通知を閉じてもジョブや現在版は変わりません。会議を開き、固定条件と再開・再試行の可否を確認してください。</p></InfoPopover>

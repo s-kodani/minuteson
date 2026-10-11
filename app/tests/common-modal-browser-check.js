@@ -77,6 +77,22 @@ async (page) => {
   check(await dialog().getByRole("textbox", { name: "確認欄", exact: true }).evaluate(e => e === document.activeElement), "readiness stole user-selected focus");
   await page.keyboard.press("Escape"); await closed();
   results.push("initial readiness never steals focus after user moves into a field");
+  await open();
+  await page.getByRole("button", { name: "同じ確認内の用語設定を開く", exact: true }).click();
+  await page.getByRole("textbox", { name: "切り替えで保持する用語", exact: true }).fill("点検日・入力保持");
+  check(await page.locator("dialog[open]").count() === 1, "persistent settings introduced another native modal");
+  await page.getByRole("button", { name: "切り替え設定内で確認を開く", exact: true }).click();
+  check(await page.locator("dialog[open]").count() === 1, "persistent settings confirmation stacked native modals");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.activeElement?.textContent === "切り替え設定内で確認を開く");
+  check(await page.getByRole("textbox", { name: "切り替えで保持する用語", exact: true }).inputValue() === "点検日・入力保持", "confirmation cancellation remounted persistent fields");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.activeElement?.textContent === "同じ確認内の用語設定を開く");
+  await page.getByRole("button", { name: "同じ確認内の用語設定を開く", exact: true }).click();
+  check(await page.getByRole("textbox", { name: "切り替えで保持する用語", exact: true }).inputValue() === "点検日・入力保持", "reopening remounted persistent fields");
+  await page.keyboard.press("Escape"); await page.keyboard.press("Escape"); await closed();
+  results.push("one native boundary keeps uncontrolled secondary fields through confirmation cancellation, close and reopen");
+
   await open(); await page.evaluate(() => window.modalFixture.removeOpenerAndClose());
   await dialog().waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.textContent === "共通モーダル検証");

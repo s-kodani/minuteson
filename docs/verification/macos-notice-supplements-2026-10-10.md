@@ -1,5 +1,15 @@
 # macOS依存通知文の版固定補完とソース参照
 
+## 2026-10-11 MIT参照本文のオフライン同梱
+
+objc2の上流4commitの説明はMITを選択肢として示すが、12件の個別著作権通知の不足は解消していない。[SPDX v3.26.0のMIT template](https://github.com/spdx/license-list-data/blob/v3.26.0/text/MIT.txt)を参照用に追加した。HTTPS取得した原文と保存資料は全バイト一致、1087bytes／SHA256 `6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9`。著作権の年・名義placeholderを推測して置換しない。上流説明とApple SDKに関する注意も保持する。
+
+`license_template`は`license_text`とは別の資料種別とし、生成通知に「個別著作権通知ではない」と明示する。既存のcrate版・checksum・VCS・path・原文SHA・UTF-8・容量・非リンク検査を維持し、templateはmissingNoticeTextsを解消しない。説明とtemplateを両方持つ場合の不足維持・改変拒否、およびtemplate単独でも未承認状態を保持する回帰2件を追加した。275依存（Cargo271／npm4）、template添付12、missing／referenceOnlyも12、警告12。`licenseReview: not_verified`／`distributionReady: false`を維持する。必要な個別通知・SDK由来条件・他の除外対象の条件確認は引き続き未完了。
+
+Python全127件成功（runner11.265秒）、フロント727件成功（runner1.754秒）。QA構築はCargo表示1分18秒、Vite1.42秒、Swift0.14秒（内数、単純合算しない）。QAのコピー全一致・strict deepアドホック署名・identifier `jp.mon.desktop.qa`・main arm64、独立生成物との通知文／一覧byte一致、製品配布ツールのnotice検査成功を確認。更新前QAは新indexとの差異により拒否することも実確認した。公証・Developer ID署名の証拠ではない。
+
+保持QA `/private/tmp/mon-notice-template-qa.Dp8N6r/MON QA.app` は57.13MiB、本体SHA256 `58b8149c75a9e400e306915cd7f6e8651366f64ad4a54fe31581ac4faa38a72e`。通知文2,527,554bytes／SHA256 `42aab1b9ea2d5f40ff2d49950acc2acdeaabe0cbaa9162661022726a48a31916`、一覧 `fdc0135499bf342184c11fa7547e4711871db5b62f7fe2886e76cb6163d5f9b2`、index `d28f031194354a42b4a97e2e6cf883ff225114abb23f0c6c8bd0d938c31d8ba7`。既存の専用非増分構築target約1.38GiBを再利用し、別の大容量targetは作らない。新QAは起動せず、UI・録音・モデル・会議データを変更しない。通常Rust／Swift全試験・GUIの再検証・CI・コミット／Pushなし。HTTPS取得のsandbox DNS拒否は承認された読取り実行で再試行し成功。資料原文の末尾空白は改変せず保持し、それ以外の今回変更の差分空白検査は成功。以下は先行検証の履歴。
+
 - 日付: 2026-10-10
 - 基準: M4-02、仕様11章。前回の`fb0bb41`を継続し、画面機能・録音・AIの動作は変更しない。
 - 状態: 収集判定の修正、版固定の補完、実取得比較・QA同梱を確認。ライセンス全体の承認・配布完了ではない。

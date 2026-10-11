@@ -87,6 +87,10 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
         "--predict\n256",
         "--gpu-layers\n0",
         "--temp\n0",
+        "--fit\noff",
+        "--device\nnone",
+        "--no-kv-offload",
+        "--no-op-offload",
     ] {
         assert!(args.contains(fixed), "{fixed}: {args}");
     }
@@ -120,6 +124,30 @@ fn fixed_arguments_inputs_and_existing_artifacts_are_protected() {
     )
     .is_err());
     assert!(!second.join("result.json").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn explicit_gpu_selection_is_not_silently_overridden_by_cpu_flags() {
+    let (dir, mut config) = fake("printf '%s\\n' \"$@\" > args.log\nprintf '{\"items\":[]}'");
+    config.gpu_layers = 3;
+    let path = unit(dir.path(), "gpu-argument-contract-only");
+    run_unit(
+        &config,
+        &path,
+        "fixed",
+        "input",
+        &json!({}),
+        Duration::from_secs(5),
+        &|| false,
+    )
+    .unwrap();
+    let args = std::fs::read_to_string(path.join("args.log")).unwrap();
+    assert!(args.contains("--gpu-layers\n3") && args.contains("--fit\noff"));
+    for cpu_only in ["--device", "--no-kv-offload", "--no-op-offload"] {
+        assert!(!args.contains(cpu_only), "{cpu_only}: {args}");
+    }
+    // A fake CLI checks the contract only; this is not a real GPU trial.
 }
 
 #[test]

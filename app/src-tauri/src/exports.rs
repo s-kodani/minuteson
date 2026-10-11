@@ -282,13 +282,15 @@ pub(crate) async fn save_dialog_with(
                         .ok_or("保存ダイアログはメインスレッドが必要です")?;
                     let panel = NSSavePanel::savePanel(mtm);
                     panel.setTitle(Some(&NSString::from_str(title)));
-                    panel.setNameFieldStringValue(&NSString::from_str(&filename));
                     panel.setCanCreateDirectories(true);
                     panel.setAllowsOtherFileTypes(false);
                     #[allow(deprecated)]
                     panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[
                         NSString::from_str(extension),
                     ])));
+                    // File-type changes can rewrite the name field. Set the full
+                    // default last so a reused panel does not append it twice.
+                    panel.setNameFieldStringValue(&NSString::from_str(&filename));
                     let response = panel.runModal();
                     if response == NSModalResponseCancel {
                         return Ok(None);

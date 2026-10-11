@@ -1,16 +1,12 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { type ReactNode, type Ref } from "react";
+import { OptionsModal } from "./options-modal";
 
-// Presentation only. Keep inputs/controllers mounted, and retain an automatic
-// opening after attention clears so a focused control is not suddenly hidden.
-export function SettingsDisclosure({ label, attention = false, initialOpen = false, children }: {
-  label: string; attention?: boolean; initialOpen?: boolean; children: ReactNode;
+// Attention is visible at the entry point; background polling never opens a
+// modal or steals focus. Retain initialOpen as a caller compatibility option.
+export function SettingsDisclosure({ label, className = "", attention = false, children, open, onOpenChange, triggerRef, restoreTarget }: {
+  label: string; className?: string; attention?: boolean; initialOpen?: boolean; children: ReactNode;
+  open?: boolean; onOpenChange?: (open: boolean)=>void;
+  triggerRef?: Ref<HTMLButtonElement>; restoreTarget?: ()=>HTMLElement | null;
 }) {
-  const [open, setOpen] = useState(initialOpen);
-  const id = useId();
-  const expanded = open || attention;
-  useEffect(() => { if (attention) setOpen(true); }, [attention]);
-  return <div className="settings-disclosure">
-    <button type="button" className="small-secondary settings-disclosure-toggle" aria-expanded={expanded} aria-controls={id} disabled={attention} onClick={() => setOpen(!expanded)}>{label}<span aria-hidden="true">{expanded ? " ▴" : " ▾"}</span></button>
-    <div id={id} className="settings-disclosure-body" hidden={!expanded}>{children}</div>
-  </div>;
+  return <OptionsModal label={label} className={`settings-disclosure ${className}`} attention={attention} open={open} onOpenChange={onOpenChange} triggerRef={triggerRef} restoreTarget={restoreTarget}>{children}</OptionsModal>;
 }

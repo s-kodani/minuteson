@@ -1,3 +1,4 @@
+import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { quietMaintenance } from "./maintenance-visibility";
 import { InfoPopover } from "./info-popover";
@@ -146,7 +147,7 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible, compact
       <div className="heading-with-info"><h2 id="model-body-deletion-heading" tabIndex={-1}>モデル本体削除と中断対応</h2><InfoPopover label="モデル本体削除" details={<p>端末内の指定モデル本体だけを削除します。会議音声・本文・議事録・モデル名とSHA・構成履歴・ジョブ履歴・現在の設定は保持します。本体を失った構成は、再準備まで利用できません。外部の導入元、他モデル、バックアップは対象外です。</p>}>指定した管理モデル本体だけを削除します。会議と構成履歴は残りますが、対応するAI処理にはモデルの再準備が必要です。</InfoPopover></div>
       {!operation.modelDeletionSupported && operation.connected && <p>この環境のモデル本体削除は保留中です。</p>}
       {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
-      <button type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})}>モデル削除と書込停止の状態を再読込</button>
+      <IconButton label="モデル削除と書込停止の状態を再読込" icon="refresh" type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})} />
       {needed && <p role="alert">編集・録音・AI処理などの通常書込みを停止しています。{c.listing?.reason}</p>}
       {!!c.listing?.items.length && <ul>{c.listing.items.map(i => <li key={i.operationId}><p>{i.modelName ?? "確認できないモデル"} · 操作 {i.operationId} · 記録状態 {i.startupReason ? "完了記録あり・対象確認が必要" : i.state}</p>{i.startupReason && <p role="alert">{modelDeletionStartupLabel(i.startupReason)}</p>}{i.errorMessage && <p role="alert">{i.errorMessage}</p>}<button type="button" className="small-secondary" disabled={!i.reviewAllowed || !c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了モデル削除の対象を確認</button></li>)}</ul>}
       {active && <p role="status">{s.busy ? "モデル本体の検査・処理中です。停止要求後も実際の終了を待ちます。" : p ? modelDeletionPhaseLabel(p.phase) : "モデル削除の確認待ちです。"}</p>}
@@ -169,7 +170,7 @@ export function ModelBodyDeletionPanel({ operation, control: c, visible, compact
         {p.reconfirmationAllowed && <button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("review_remaining")}>モデル本体の変更後の残りを確認（まだ削除しない）</button>}
         <h3>確認時の対象パス（現在の実在一覧ではありません）</h3>{c.pageBusy && <p role="status">モデル対象一覧を読み込み中です。</p>}{c.pageError && <p role="alert">一覧を確認できません: {c.pageError}</p>}
         {c.page && <><p>{c.page.total ? c.page.offset + 1 : 0}〜{c.page.offset + c.page.entries.length} / {c.page.total} 件</p><ul className="deletion-paths">{c.page.entries.map((e, i) => <li key={e.relativePath}><span className="data-path">{e.relativePath}</span> — {e.directory ? "フォルダー" : !e.present ? "確認時に欠落" : bytesLabel(e.bytes!)} · {e.registered ? "登録済み" : "未登録"}{e.changed && "・登録時と変更"}{modelDeletionPathProcessed(p, c.page!.offset + i) && " · 処理済み"}</li>)}</ul></>}
-        <div className="analysis-actions"><button type="button" className="small-secondary" disabled={c.pageBusy || !c.page || !c.page.offset} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))}>モデル対象の前の50件</button><button type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)}>モデル対象の次の50件</button>{c.pageError && <button type="button" className="small-secondary" onClick={() => void c.loadPage()}>モデル対象一覧を再読込</button>}</div>
+        <div className="analysis-actions"><IconButton label="モデル対象の前の50件" icon="previous" type="button" className="small-secondary" disabled={c.pageBusy || !c.page || !c.page.offset} onClick={() => void c.loadPage(Math.max(0, (c.page?.offset ?? 0) - 50))} /><IconButton label="モデル対象の次の50件" icon="next" type="button" className="small-secondary" disabled={c.pageBusy || c.page?.nextOffset == null} onClick={() => void c.loadPage(c.page!.nextOffset!)} />{c.pageError && <IconButton label="モデル対象一覧を再読込" icon="refresh" type="button" className="small-secondary" onClick={() => void c.loadPage()} />}</div>
         {modelDeletionNewScope(p) && p.unregisteredCount > 0 && <label><input type="checkbox" checked={c.includeUnknown} disabled={!c.canResolve} onChange={e => c.setIncludeUnknown(e.target.checked)} />確認時の一覧にある未登録パスもモデル本体の削除対象に含めます。</label>}
         <label><input type="checkbox" checked={c.understood} disabled={!c.canResolve || !p.executeAllowed} onChange={e => c.setUnderstood(e.target.checked)} />対象を確認し、モデル本体はアプリ内では復元できず、会議データと履歴は保持されることを理解しました。</label>
       </>}

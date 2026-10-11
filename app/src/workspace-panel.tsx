@@ -1,12 +1,12 @@
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { CommonModal } from "./common-modal";
+import { IconButton } from "./action-icon";
 
 export type WorkspacePanelHandle = { reveal: (opener?: HTMLElement | null) => void; dismiss: (target?: () => HTMLElement | null) => void };
 
 // Reparent one portal mount rather than render a second editor. Inputs, their
 // selection, scroll position and the controller behind them survive resizing.
-export function WorkspacePanel({ content, label, active = true, side: placement = "left", handle, collapsible = false }: { content: HTMLElement; label: string; active?: boolean; side?: "left" | "right"; handle?: Ref<WorkspacePanelHandle>; collapsible?: boolean }) {
-  const query = "(max-width: 1119px)";
+export function WorkspacePanel({ content, label, active = true, side: placement = "left", handle, collapsible = false, query = "(max-width: 1119px)" }: { content: HTMLElement; label: string; active?: boolean; side?: "left" | "right"; handle?: Ref<WorkspacePanelHandle>; collapsible?: boolean; query?: string }) {
   const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -47,7 +47,7 @@ export function WorkspacePanel({ content, label, active = true, side: placement 
     };
     media.addEventListener("change", change);
     return () => media.removeEventListener("change", change);
-  }, [content,collapsible]);
+  }, [content,collapsible,query]);
   useLayoutEffect(() => {
     const destination = narrow ? drawer.current : side.current;
     if (destination && content.parentElement !== destination) destination.append(content);
@@ -75,7 +75,7 @@ export function WorkspacePanel({ content, label, active = true, side: placement 
       <button ref={trigger} type="button" className="small-secondary workspace-drawer-trigger" hidden={!narrow && (!collapsible || open)}
         aria-haspopup={narrow ? "dialog" : undefined} aria-expanded={open} aria-controls={narrow ? id : `${id}-side`} onClick={() => reveal()}>{label}を開く</button>
       <div id={`${id}-side`} className="workspace-panel-side-host" hidden={narrow || collapsible && !open}>
-        {collapsible && <button type="button" className="small-secondary workspace-panel-close" onClick={() => dismiss()}>{label}を閉じる</button>}
+        {collapsible && <IconButton className="workspace-panel-close" label={`${label}を閉じる`} icon="close" onClick={() => dismiss()} />}
         <div ref={side} className="workspace-panel-side-content" />
       </div>
     </aside>

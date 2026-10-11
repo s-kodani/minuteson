@@ -50,7 +50,7 @@ async (page,capturePath,detailUI) => {
   await transcript.click(); await minutes.click();
   check(await field.textContent() === "タブ切替でも議事録入力を保持" && await field.evaluate(e => e === window.minutesField) && await page.getByRole("button", { name:"編集を終了", exact:true }).isVisible(), "minutes return exited editing or replaced field");
   results.push("explicit retry enables switching without exiting rich editing or replacing its field");
-  const tools = page.getByText("議事録の設定・生成状況・候補", { exact:true }); await tools.click();
+  const tools = page.getByRole("button", { name:"議事録の設定・生成状況・候補", exact:true }); await tools.click();
   await page.getByRole("button", { name:"議事録を再生成", exact:true }).click();
   const confirm = page.getByRole("dialog", { name:"議事録の再生成を確認", exact:true });
   if (await confirm.isVisible()) await confirm.getByRole("button", { name:"議事録を再生成する", exact:true }).click();

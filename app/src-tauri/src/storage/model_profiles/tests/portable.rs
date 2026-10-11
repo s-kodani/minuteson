@@ -43,6 +43,7 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
             .map(|file| crate::model_download_recipe::DownloadSource {
                 relative_path: file.relative_path.clone(),
                 url: format!("https://example.com/{}", file.relative_path),
+                archive: None,
             })
             .collect(),
     };

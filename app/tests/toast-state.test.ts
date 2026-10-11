@@ -22,6 +22,24 @@ test("ordinary notices expire after four visible seconds and acknowledge only th
   c.show(notice()); assert.equal(c.getSnapshot().length, 0);
   c.resolve("one"); c.show(notice()); assert.equal(c.getSnapshot().length, 1);
 });
+
+test("a compact one-card host retains queued identities and remaining duration", () => {
+  const {c,advance}=setup(); c.show(notice("normal")); advance(1000);
+  c.show(notice("error",{level:"error"})); const before=c.getSnapshot().map(t=>[t.key,t.id]);
+  c.setVisibleLimit(1); assert.equal(c.getSnapshot().length,1); assert.equal(c.getSnapshot()[0].key,"error"); assert.equal(c.pendingCount,1);
+  advance(60000); c.dismiss("error",c.getSnapshot()[0].id);
+  assert.deepEqual([c.getSnapshot()[0].key,c.getSnapshot()[0].id],before.find(([key])=>key==="normal"));
+  advance(2999); assert.equal(c.getSnapshot().length,1); advance(1); assert.equal(c.getSnapshot().length,0);
+});
+
+test("display capacity changes do not acknowledge notices or allow invalid limits", () => {
+  const {c}=setup(); let acknowledged=0;
+  for(const key of ["a","b","c"])c.show(notice(key,{level:"error",onClose:()=>acknowledged++}));
+  c.setVisibleLimit(1); const current=c.getSnapshot();
+  for(const limit of [0,4,1.5,NaN]) assert.throws(()=>c.setVisibleLimit(limit));
+  assert.equal(c.getSnapshot(),current); c.setVisibleLimit(3);
+  assert.equal(c.getSnapshot().length,3); assert.equal(c.pendingCount,0); assert.equal(acknowledged,0);
+});
 test("meeting/type keys are unambiguous and separate simultaneous problems", () => {
   assert.notEqual(toastKey("a:b", "c"), toastKey("a", "b:c"));
   const { c } = setup(); c.show(notice(toastKey("a", "save"))); c.show(notice(toastKey("b", "save")));

@@ -256,6 +256,9 @@ pub(crate) fn run_unit(
             "--no-escape",
             "--offline",
             "--no-warmup",
+            // Job limits are fixed; the CLI must not auto-fit them to a device.
+            "--fit",
+            "off",
             "--reasoning",
             "off",
             "--color",
@@ -266,6 +269,11 @@ pub(crate) fn run_unit(
             "2",
             "--simple-io",
         ]);
+    if config.gpu_layers == 0 {
+        // Zero model layers alone still permits Metal KV/host-op offload in
+        // official shared builds. CPU trials and CPU jobs must stay on CPU.
+        command.args(["--device", "none", "--no-kv-offload", "--no-op-offload"]);
+    }
     let mut child = launch
         .spawn()
         .map_err(|e| format!("llama.cppを起動できません: {e}"))?;

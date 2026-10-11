@@ -6,6 +6,7 @@ entitlements. Uploads require an explicit --notary-profile argument.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -226,6 +227,23 @@ def verify_notices(app):
             "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
 
 
+def verify_asr_runtime(app):
+    """Sealed build-time resource proof, NOT signed runtime/onboarding proof.
+
+    The payload CLI is still ad-hoc and inside a data TAR. Outer app signing or
+    notarization must not be reported as Developer ID signing of that CLI.
+    """
+    spec = importlib.util.spec_from_file_location("mon_release_asr_runtime", REPOSITORY / "tools/mon_whisper_runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    index = runtime.verify_package(private_path(app / "Contents/Resources/asr-runtime", directory=True))
+    return {"state": "packaged_onboarding_unverified", "engineVersion": index["engineVersion"],
+            "sourceCommit": index["sourceCommit"], "archiveSha256": index["archive"]["sha256"],
+            "archiveBytes": index["archive"]["bytes"], "runtimeSigning": index["runtimeSigning"],
+            "developerIdSigning": "not_verified", "standaloneNotarization": "not_verified",
+            "nativeOnboarding": "not_verified", "licenseReview": "not_verified"}
+
+
 def build(output, identity, team, profile, environment):
     # All explicit prerequisites precede mkdir, compilation, signing or upload.
     credentials(identity, team, profile)
@@ -262,6 +280,7 @@ def build(output, identity, team, profile, environment):
         command(["/usr/bin/ditto", str(built), str(app)], timeout=120)
         capture, embedding = layout(app, version)
         verify_notices(app)
+        verify_asr_runtime(app)
         started = time.monotonic()
         sign(capture, identity, team, policy / "capture.plist")
         sign(embedding, identity, team, policy / "embedding.plist")
@@ -295,6 +314,7 @@ def build(output, identity, team, profile, environment):
             verify_signature(path, team, runtime=True, entitlements=policy / policy_file)
         verify_signature(dmg, team, runtime=False)
         dependency_notices = verify_notices(app)
+        asr_runtime = verify_asr_runtime(app)
         # Only this newly-created cache is reclaimed, after all owned commands
         # have returned and final artifacts are verified. Failures preserve it.
         now = cache.lstat()
@@ -307,6 +327,7 @@ def build(output, identity, team, profile, environment):
                   "notaryRequestIds": requests, "runtimeQA": "not_verified", "gatekeeper": "not_verified",
                   "licenseReview": "not_verified", "manualUpdate": "not_verified", "distributionReady": False,
                   "dependencyNotices": dependency_notices,
+                  "asrRuntime": asr_runtime,
                   "timings": timings, "buildCache": str(cache), "buildCacheRetained": False}
         # Create-new-only; no credentials or secret material in the report.
         with (output / "build-result.json").open("x") as stream:

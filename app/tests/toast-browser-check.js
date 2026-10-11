@@ -1,7 +1,7 @@
 async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const host = page.getByRole("complementary", { name: "通知", exact: true }), input = page.getByRole("textbox", { name: "保持する入力", exact: true });
-  const clear = async () => { await page.evaluate(() => window.toastFixture.clear()); await host.locator(".toast-card").waitFor({ state: "hidden" }); };
+  const clear = async () => { await page.evaluate(() => window.toastFixture.clear()); await page.waitForFunction(() => !document.querySelector('.toast-host .toast-card')); };
   const show = async notice => { await page.evaluate(n => window.toastFixture.show(n), notice); };
   await input.focus(); await show({ key: "ordinary", level: "success", message: "会議を書き出しました" });
   await host.getByRole("status").waitFor(); check(await input.evaluate(e => e === document.activeElement), "notification stole typing focus");
@@ -47,20 +47,23 @@ async page => {
   const before = await host.locator(".toast-card").getAttribute("data-toast-id");
   for (let i = 0; i < 5; i++) await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
   check(await host.locator(".toast-card").count() === 1 && await host.locator(".toast-card").getAttribute("data-toast-id") === before, "polling duplicated or re-announced the same problem");
-  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click(); await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
+  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click(); await page.waitForFunction(() => !document.querySelector('.toast-host .toast-card')); await show({ key: "dedup", level: "error", message: "マイクの入力が失われました" });
   check(await host.locator(".toast-card").count() === 0, "acknowledged polling problem reappeared");
   await show({ key: "dedup", level: "error", message: "保存も失敗しました" }); await host.getByRole("alert").waitFor(); await clear();
   results.push("same problem updates in place and stays acknowledged after dismissal; a changed problem is notified again");
   await show({ key: "receipt", eventId: "operation-1", level: "success", message: "バックアップを作成しました" });
   const firstReceipt = await host.locator(".toast-card").getAttribute("data-toast-id");
   await show({ key: "receipt", eventId: "operation-2", level: "success", message: "バックアップを作成しました" });
+  await page.waitForFunction(old => { const cards = document.querySelectorAll('.toast-host .toast-card'); return cards.length === 1 && cards[0].getAttribute('data-toast-id') !== old; }, firstReceipt);
   check(await host.locator(".toast-card").count() === 1 && await host.locator(".toast-card").getAttribute("data-toast-id") !== firstReceipt, "a distinct completed operation reused the old notification");
   await clear(); results.push("identical result text from a distinct operation replaces the previous result as a new event, without stacking duplicates");
 
   for (let i = 0; i < 4; i++) await show({ key: `critical-${i}`, level: "error", message: `重要な問題 ${i}` });
   await show({ key: "queued-success", level: "success", message: "待機している完了通知" });
-  check(await host.locator(".toast-card").count() === 3 && await host.getByRole("alert").count() === 3 && (await host.innerText()).includes("ほか 2 件"), "queue does not cap at three or prioritize important problems");
+  await page.waitForFunction(() => document.querySelectorAll('.toast-host .toast-card').length === 3 && [...document.querySelectorAll('.toast-host .info-popover')].some(e => e.textContent.includes('ほか 2 件')));
+  check(await host.locator(".toast-card").count() === 3 && await host.getByRole("alert").count() === 3 && (await host.locator('.info-popover').allTextContents()).some(text => text.includes("ほか 2 件")), "queue does not cap at three or prioritize important problems");
   await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).first().click();
+  await page.waitForFunction(() => document.querySelectorAll('.toast-host .toast-card').length === 3 && [...document.querySelectorAll('.toast-host .toast-card')].some(e => e.textContent.includes('重要な問題 0')));
   check(await host.getByRole("alert").count() === 3 && (await host.innerText()).includes("重要な問題 0"), "queued important problem was lost");
   await clear(); results.push("at most three notifications are displayed; important problems are promoted ahead of queued normal results");
 
@@ -92,7 +95,8 @@ async page => {
     await page.setViewportSize({ width, height }); await show({ key: "geometry", level: "error", message: "保存に失敗しました。" });
     for (const theme of ["light", "dark"]) {
       await page.evaluate(t => { document.documentElement.dataset.theme = t; document.querySelector(".content").scrollTop = 600; }, theme);
-      const geometry = await host.evaluate(e => { const r = e.getBoundingClientRect(), h = document.querySelector(".topbar").getBoundingClientRect(), p = document.querySelector(".toast-fixture-player").getBoundingClientRect(); return { x: r.x, right: r.right, y: r.y, bottom: r.bottom, headerBottom: h.bottom, playerTop: p.top, scroll: document.querySelector(".content").scrollTop, width: e.scrollWidth, clientWidth: e.clientWidth }; });
+      await page.waitForFunction(() => { const card = document.querySelector('.toast-card'), r = card?.getBoundingClientRect(); return r && r.top >= 76 && card.closest('[data-sonner-toast]').dataset.mounted === 'true'; });
+      const geometry = await host.locator('.toast-card').evaluate(e => { const r = e.getBoundingClientRect(), h = document.querySelector(".topbar").getBoundingClientRect(), p = document.querySelector(".toast-fixture-player").getBoundingClientRect(); return { x: r.x, right: r.right, y: r.y, bottom: r.bottom, headerBottom: h.bottom, playerTop: p.top, scroll: document.querySelector(".content").scrollTop, width: e.scrollWidth, clientWidth: e.clientWidth }; });
       check(geometry.x >= 64 && geometry.right <= width && geometry.y >= geometry.headerBottom && geometry.bottom <= geometry.playerTop && geometry.width <= geometry.clientWidth + 1 && geometry.scroll > 0, `notification overlaps fixed UI or overflows: ${JSON.stringify(geometry)}`);
       await page.screenshot({ path: `toast-${theme}-${width}.png` });
     }

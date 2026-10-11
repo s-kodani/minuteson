@@ -6,24 +6,44 @@ import { emit } from "@tauri-apps/api/event";
 import { ModelDownloadPanel } from "../src/model-download";
 import { ModelInspectionPanel } from "../src/model-inspection";
 import { ToastHost } from "../src/toast";
-import { parseDownloadDefinition, downloadDigest, type DownloadReview } from "../src/model-download-state";
+import { parseDownloadDefinition, downloadDigest, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
+import officialChoices from "../model-catalog/macos.json";
+import whisperNetwork from "../model-catalog/whisper-small-network.json";
+// Build-specific bundle hashes cannot be a static catalog. Browser-only fake
+// runtime metadata exercises the same review shape; never actual IO/CPU proof.
+const fakeRuntimeFiles = [
+  { relativePath: "bin/whisper-cli", role: "executable", expectedSize: 100, expectedHash: "a".repeat(64) },
+  { relativePath: "notices/whisper-MIT.txt", role: "notice", expectedSize: 16, expectedHash: "a".repeat(64) },
+  { relativePath: "build-info.json", role: "notice", expectedSize: 32, expectedHash: "a".repeat(64) },
+];
+const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし", description: "同梱処理の画面検証のみ・実ファイルなし", recipe: {
+  schemaVersion: 3, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files] },
+  sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources],
+} };
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
   const recipe = parseDownloadDefinition(definition);
-  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };
+  return { manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), ...(recipe.schemaVersion >= 2 ? { recipeSchemaVersion: recipe.schemaVersion as 2 | 3, ...downloadByteTotals(recipe) } : {}), totalBytes: recipe.manifest.files.reduce((n, file) => n + file.expectedSize, 0), installed: false, ready: false, publisherAuthenticity: "not_verified" };
 }
 async function receipt(operationId: string, review: DownloadReview) {
   const manifestHash = await downloadDigest(review.manifest), files = review.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
   return { operationId, recipeHash: review.recipeHash, directory: "/synthetic/payload", installed: false, ready: false, report: { manifest: review.manifest, manifestHash, reviewHash: await downloadDigest([1, review.manifest, manifestHash, files]), files, totalBytes: review.totalBytes, engineCompatibility: "not_verified", publisherAuthenticity: "not_verified", installed: false, ready: false } };
 }
-f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: review.totalBytes }); };
+f.progress = async (operationId: string, receivedBytes: number, wrong = false) => { const review = f.operations.get(operationId).review; await emit("model-download-progress", { operationId, recipeHash: wrong ? "c".repeat(64) : review.recipeHash, receivedBytes, totalBytes: downloadTransferBytes(review) }); };
 f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review = await reviewed(f.definition); f.operations.set(id, { review, state: "complete", receipt: await receipt(id, review) }); return id; };
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: structuredClone(args) });
+  if (command === "get_official_model_options") {
+    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([hybridChoice, ...officialChoices].map(async choice => {
+      const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
+      return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition) };
+    }));
+    return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review: await reviewed(f.definition) }];
+  }
   if (command === "get_model_placements") return [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
   if (command === "review_model_download") {
@@ -73,7 +93,10 @@ function Fixture() {
   f.setLocked = setLocked; f.setVisible = setVisible; f.setParent = setParent; f.busy = busy;
   const compact = new URLSearchParams(location.search).get("compact") === "1";
   return <main><h1>モデル取得の合成検証</h1><button onClick={() => setVisible(value => !value)}>設定の表示切替</button><p>共有準備: {busy ? "操作中" : "待機"}</p>
-    {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button></>}
+    <output aria-label="合成取得操作数">合成のみ：取得 {f.calls.filter(call => call.command === "start_model_download").length} · コピー {f.calls.filter(call => call.command === "place_downloaded_model").length} · CPU {f.calls.filter(call => call.command === "check_model_compatibility").length} · 適用 {f.calls.filter(call => call.command === "apply_model_profile_application").length}</output>
+    {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button>
+      <button onClick={() => { f.readMissing = true; }}>合成の実体照合失敗</button><button onClick={() => { f.readMissing = false; }}>合成の実体照合復帰</button>
+      <button onClick={() => { for (const item of f.operations.values()) item.state = "incomplete"; }}>合成の記録を未完了にする</button></>}
     {visible && (parent ? <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} /> : <ModelDownloadPanel compact={compact} locked={locked} onBusyChange={setBusy} onChanged={async () => { f.changed++; }} />)}<ToastHost /></main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

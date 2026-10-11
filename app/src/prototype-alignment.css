@@ -8,10 +8,11 @@
 }
 :root[data-theme="dark"] { --floating-shadow:0 16px 45px #0005; }
 @media(prefers-color-scheme:dark) { :root:not([data-theme]) { --floating-shadow:0 16px 45px #0005; } }
-button { min-height:40px; padding:7px 14px; border:1px solid transparent; border-radius:8px; font-weight:650; }
+button { min-height:40px; padding:9px 14px; border:1px solid transparent; border-radius:8px; font-size:13px; line-height:20px; font-weight:500; }
 button:hover:not(:disabled) { filter:brightness(.96); }
 button:disabled { opacity:.5; }
 .secondary,.small-secondary { border-color:var(--border); color:var(--text); font-weight:500; }
+.small-secondary { font-size:13px; line-height:20px; padding:9px 14px; }
 .sidebar { padding:27px 16px 18px; }
 .brand { padding:0 12px 30px; font-size:20px; font-weight:750; letter-spacing:-.6px; }
 .brand-mark { width:32px; height:32px; border-radius:9px; font-size:20px; }
@@ -19,7 +20,7 @@ button:disabled { opacity:.5; }
 .nav-item { display:flex; gap:12px; align-items:center; font-size:15px; font-weight:500; padding:10px 14px; }
 .nav-item.selected { font-weight:650; }
 .nav-glyph { display:inline; width:20px; text-align:center; font-size:19px; }
-.new-recording-nav { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:12px; }
+.new-recording-nav { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:12px; font-size:15px; }
 .sidebar .nav-item:last-child { margin-top:auto; }
 .sidebar-foot { padding:17px 12px; }
 .topbar { min-height:64px; padding:10px 28px; font-size:13px; font-weight:500; }
@@ -62,19 +63,28 @@ button:disabled { opacity:.5; }
 .landing-tools>.workspace-tools-body { max-height:none; }
 .landing-tools>summary { display:list-item; }
 .content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
-.settings-management-toggle { margin:0 0 18px; font-size:13px; }
+.settings-management-toggle { margin:18px 0; font-size:13px; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
 .meeting-detail-status { padding:18px 28px 12px; background:var(--surface); max-height:20dvh; }
 .meeting-detail-status h1 { margin:0; font-size:24px; font-weight:650; line-height:1.4; overflow-wrap:anywhere; }
 .meeting-detail-status .lead { margin:6px 0 0; font-size:13px; color:var(--muted); }
-.speaker-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.speaker-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:16px; }
 .speaker-heading h3 { margin:0; }
 .speaker-heading button { padding:2px 9px; min-height:28px; }
 .speaker-panel-body .speaker-name-editor { padding:0; border:0; border-radius:0; }
 .speaker-panel-body .speaker-filters { display:grid; gap:4px; }
 .speaker-filters .speaker-filter { display:flex; width:100%; justify-content:space-between; }
-.speaker-name-tools { margin:4px 0 12px 30px; font-size:12px; color:var(--muted); }
-.speaker-name-tools summary { cursor:pointer; }
+.speaker-list-row { display:flex; align-items:stretch; gap:4px; border-radius:8px; min-width:0; }
+.speaker-list-row[data-selected=true] { background:var(--selection); }
+.speaker-name-button { flex:1; min-width:0; padding:8px 4px; background:transparent; color:var(--text); text-align:left; font-weight:500; }
+.speaker-name-button .speaker-label { min-width:0; }
+.speaker-name-button .speaker-label>span:not(.speaker-avatar) { overflow-wrap:anywhere; }
+.speaker-count-filter { flex:none; min-height:32px; padding:4px; font-size:13px; font-weight:500; background:transparent; color:var(--muted); }
+.speaker-count-filter[aria-pressed=true] { color:var(--primary-strong); }
+.speaker-name-dialog { width:min(420px,calc(100vw - 32px)); max-width:420px; padding:24px; }
+.speaker-name-dialog label { display:grid; gap:8px; font-size:13px; }
+.speaker-name-dialog input { padding:10px 12px; border:1px solid var(--input-border); border-radius:8px; }
+.speaker-name-dialog .transcript-actions { justify-content:flex-end; }
 .speaker-merge-tools,.speaker-diarization-tools { border-top:1px solid var(--border); padding-top:12px; margin-top:12px; font-size:12px; }
 .transcript-search { padding-bottom:10px; border-bottom:1px solid var(--border); }
 .transcript-search>label { flex:1; }
@@ -82,6 +92,9 @@ button:disabled { opacity:.5; }
 .transcript-body-edit { display:block; width:100%; padding:0; margin:0; border:0; border-radius:4px; background:transparent; color:var(--text); font:inherit; line-height:inherit; text-align:left; white-space:pre-wrap; user-select:text; }
 .transcript-body-edit:disabled { opacity:1; cursor:text; background:transparent; color:var(--text); }
 .transcript-body-edit:hover:not(:disabled) { background:var(--background); }
+.transcript-body-edit[aria-disabled=true] { cursor:text; }
+.transcript-body-edit[aria-disabled=true]:hover { background:transparent; }
+.transcript-body-edit:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
 .utterance-stamp { padding:1px 5px; min-height:26px; border:0; background:transparent; color:var(--primary-strong); font-size:12px; font-variant-numeric:tabular-nums; }
 .utterance-edit-tools { margin-top:8px; font-size:12px; color:var(--muted); }
 .utterance-edit-tools>summary { cursor:pointer; }
@@ -92,6 +105,57 @@ button:disabled { opacity:.5; }
 .settings-disclosure-body[hidden] { display:none; }
 .settings-disclosure-body { padding-top:12px; }
 .settings-disclosure-toggle { font-size:13px; font-weight:500; }
+.options-modal[hidden] { display:none; }
+.options-modal[data-portaled=true]:not([hidden]) { display:contents; }
+.options-modal-trigger[hidden] { display:none; }
+.minutes-settings-actions-host,.minutes-format-actions-host { display:flex; align-items:center; }
+.options-modal.workspace-tools { border:0; padding:0; background:transparent; }
+.options-modal-trigger { min-height:var(--action-height,40px); padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); font-weight:500; }
+.options-attention { color:var(--danger-text); font-size:11px; }
+.options-dialog { width:min(720px,calc(100vw - 32px)); max-width:720px; max-height:calc(100dvh - 48px); padding:24px; overflow:auto; overscroll-behavior:contain; }
+.options-dialog h2 { margin:0 0 20px; font-size:19px; }
+.options-dialog-content { display:grid; gap:16px; min-width:0; }
+.options-dialog .workspace-tools-body { max-height:none; overflow:visible; padding:0; }
+.options-dialog .minutes-toolbar,.options-dialog .analysis-settings { max-height:none; overflow:visible; }
+.options-dialog .analysis-settings { margin:12px 0; }
+.analysis-engine-view:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.analysis-engine-view>h2 { margin:0; font-size:19px; }
+.diarization-count-view:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.diarization-count-view>h2 { margin:0; font-size:19px; }
+.analysis-engine-view fieldset { display:grid; gap:16px; min-width:0; border:0; margin:0; padding:0; }
+.analysis-engine-view label { display:grid; gap:8px; min-width:0; margin:0; font-size:13px; line-height:20px; color:var(--secondary-text); }
+.analysis-engine-view .info-field { display:grid; gap:8px; min-width:0; }
+.analysis-engine-view :is(input:not([type=checkbox]),select,textarea) { width:100%; min-width:0; min-height:40px; padding:9px 12px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); font-family:inherit; font-size:13px; line-height:20px; }
+.analysis-engine-view textarea { min-height:80px; resize:vertical; }
+.analysis-engine-view input[type=number] { max-width:110px; }
+.meeting-vocabulary-view:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.meeting-vocabulary-view>h2 { margin:0; font-size:19px; }
+.meeting-vocabulary-view .vocabulary-list { margin:0; }
+.options-dialog .issue-status { max-height:none; overflow:visible; }
+.options-dialog label { font-size:13px; }
+.options-dialog input:not([type=checkbox]):not([type=radio]),.options-dialog select { max-width:100%; }
+.transcript-workspace-tools .options-dialog { max-width:720px; }
+.options-dialog .transcript-options-body { display:grid; gap:20px; min-width:0; }
+.transcript-options-section { display:grid; gap:12px; min-width:0; }
+.transcript-options-section:not(:first-child) { border-top:1px solid var(--border); padding-top:20px; }
+.transcript-options-section h3 { margin:0; font-size:14px; line-height:1.5; }
+.transcript-options-section p { margin:0; font-size:13px; line-height:1.7; }
+.transcript-options-display,.transcript-options-bulk-controls { display:grid; grid-template-columns:minmax(160px,1fr) auto; align-items:end; gap:12px; min-width:0; }
+.transcript-options-section label { display:grid; gap:8px; min-width:0; color:var(--muted); }
+.transcript-options-section select { width:100%; min-width:0; padding:9px 12px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit; }
+.transcript-options-buttons,.transcript-options-recovery { display:flex; flex-wrap:wrap; gap:10px; align-items:center; min-width:0; }
+.transcript-options-section button { min-height:36px; padding:8px 12px; font-size:13px; line-height:1.5; white-space:normal; }
+.transcript-options-recovery>p,.transcript-options-recovery>[role=alert],.transcript-options-recovery>[role=status] { flex-basis:100%; }
+@media(max-width:600px) {
+  .transcript-options-display,.transcript-options-bulk-controls { grid-template-columns:minmax(0,1fr); }
+}
+.speaker-merge-tools>.options-modal-trigger,.speaker-diarization-tools>.options-modal-trigger { width:100%; text-align:left; }
+.utterance-row { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; }
+.utterance-row>.utterance-meta { grid-column:1; grid-row:1; min-width:0; min-height:32px; margin-bottom:8px; }
+.utterance-row>:not(.utterance-meta):not(.utterance-edit-tools) { grid-column:1 / -1; min-width:0; }
+.utterance-edit-tools.options-modal { position:static; grid-column:2; grid-row:1; align-self:start; margin:0; }
+.utterance-edit-tools>.options-modal-trigger { min-width:32px; min-height:32px; font-size:20px; padding:0 6px; border:0; background:transparent; }
+.utterance-meta { padding-right:0; }
 .model-setup-summary { display:grid; gap:6px; margin:18px 0; }
 .model-setup-summary>span { color:var(--muted); font-size:13px; }
 .model-inspection .model-download { border:0; padding:0; margin:0; }
@@ -130,6 +194,14 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .minutes-document-status .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
 @media(max-width:1119px) {
   .minutes-split .workspace-drawer-trigger { min-height:28px; padding:4px 8px; }
+  .transcript-split .workspace-drawer-trigger { min-height:28px; padding:4px 8px; }
+  .meeting-detail-content .transcript-split { gap:6px; }
+}
+@media(max-height:760px) {
+  .meeting-detail-status { padding-block:12px 8px; gap:0; }
+  .meeting-detail-status .lead { margin-top:2px; }
+  .transcript-main>.transcript-actions:first-child button { min-height:32px; }
+  .transcript-search { padding-bottom:4px; }
 }
 @media(max-width:760px) {
   .meeting-detail-status { padding:16px; }
@@ -137,8 +209,12 @@ button:disabled { opacity:.5; }
   .minutes-editor .minutes-document>div:not([hidden]) { padding:22px 18px; }
 }
 .meeting-detail-content>.meetings-card:not([hidden]),.meeting-detail-content>.meeting-analysis-tools:not([hidden]) { flex:none; max-height:20dvh; overflow:auto; }
+.meeting-detail-navigation { flex:none; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; padding:0 28px; border-bottom:1px solid var(--border); background:var(--surface); }
+.meeting-detail-navigation>.meeting-detail-tabs { flex:1 1 162px; min-width:0; border:0; padding:0; }
+.meeting-detail-actions { display:flex; align-items:center; margin-left:auto; padding-block:8px; min-width:0; }
+.meeting-detail-actions>.options-modal-trigger { --action-height:32px; --action-font-size:12px; --action-line-height:18px; }
 .meeting-detail-tabs { gap:26px; padding-inline:28px; }
-.meeting-detail-tabs [role=tab] { padding:7px 3px; border-bottom-width:2px; font-weight:500; }
+.meeting-detail-tabs [role=tab] { padding:7px 3px; border-bottom-width:2px; font-size:15px; font-weight:500; }
 .meeting-detail-tabs [aria-selected=true] { font-weight:650; }
 .meeting-detail-content .transcript-card,.meeting-detail-content .minutes-card { border:0; background:transparent; padding:8px; border-radius:0; }
 .transcript-split { gap:24px; }
@@ -146,6 +222,11 @@ button:disabled { opacity:.5; }
 .speaker-filter[aria-pressed=true] { background:var(--selection); box-shadow:none; color:var(--primary-strong); }
 .utterance-row { padding:18px 8px; border:0; border-bottom:1px solid var(--border); border-radius:0; }
 .utterance-list { gap:0; }
+.transcript-feedback { flex:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 32px; }
+.transcript-feedback[hidden] { display:none; }
+.transcript-feedback>.action-error { flex:1; min-width:0; margin:0!important; font-size:12px; overflow-wrap:anywhere; }
+.meeting-detail-content .transcript-feedback>.issue-status { margin:0; max-height:none; flex:0 1 auto; }
+.transcript-feedback .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
 .utterance-text { margin:8px 0; line-height:1.9; }
 .minutes-wysiwyg { padding:35px 42px; border-radius:12px; border-color:var(--border); }
 .info-popover,dialog { border-radius:var(--floating-radius); background-clip:padding-box; isolation:isolate; box-shadow:var(--floating-shadow); }
@@ -153,30 +234,81 @@ button:disabled { opacity:.5; }
 /* Detached drawers must round all four corners, including the screen-facing edge. */
 .workspace-drawer,.workspace-drawer-right { border-radius:var(--floating-radius); }
 .info-popover { font-size:13px; }
-/* Leave room around the host: its scrolling rectangle must not crop card shadows. */
-.toast-host { right:16px; padding:8px; width:min(396px,calc(100vw - 80px)); }
+/* Sonner's fixed stack never adds a row to the header or a toast scrollport. */
+.toast-host { display:contents; position:static; width:auto; padding:0; }
+.toast-host>section { display:contents; }
+.toast-host .mon-notification-stack { z-index:30; pointer-events:auto; width:var(--width); left:auto; right:16px; }
+.mon-notification-stack [data-sonner-toast] { width:100%; }
+.mon-notification-stack [data-sonner-toast][data-expanded=false][data-front=false] { pointer-events:none; }
+.mon-notification-stack [data-sonner-toast][data-expanded=false][data-front=false] .toast-card>* { visibility:hidden; }
+.mon-notification-stack [data-sonner-toast][data-removed=true] { pointer-events:none; }
+.mon-notification-stack [data-sonner-toast][data-visible=false] .toast-card { visibility:hidden; }
+.mon-notification-stack [data-content],.mon-notification-stack [data-title] { width:100%; }
 .toast-card { position:relative; border:1px solid var(--border); border-radius:var(--floating-radius); overflow:hidden; background-clip:padding-box; box-shadow:0 4px 12px #0f172a20; padding:12px 16px; }
 .toast-success,.toast-warning,.toast-error { border-left-color:var(--border); }
 .toast-close { background:transparent; border:0; border-radius:50%; }
 .toast-queued { border:1px solid var(--border); border-radius:12px; padding:12px 16px; }
-/* Detail notifications occupy header space, never the editing controls below it. */
-.topbar:has(>.toast-host[data-docked=true]:not(:empty)) { display:grid; grid-template-columns:minmax(100px,1fr) minmax(240px,480px); gap:4px 16px; }
-.topbar:has(>.toast-host[data-docked=true]:not(:empty))>span { grid-column:1; grid-row:1; }
-.topbar:has(>.toast-host[data-docked=true]:not(:empty))>.header-recording { grid-column:1; grid-row:2; justify-content:flex-start; }
-.main-column .topbar>.toast-host[data-docked=true] { position:static; grid-column:2; grid-row:1 / span 2; width:100%; min-width:0; max-height:80px; padding:4px; pointer-events:auto; }
-.topbar>.toast-host[data-docked=true]:empty { display:none; }
-.topbar>.toast-host[data-docked=true] .toast-card { align-items:center; gap:6px; padding:6px 10px; box-shadow:0 2px 6px #0f172a20; }
-.topbar>.toast-host[data-docked=true] .toast-body { display:flex; align-items:center; gap:8px; }
-.topbar>.toast-host[data-docked=true] .toast-body p { flex:1; min-width:0; font-size:12px; line-height:1.4; }
-.topbar>.toast-host[data-docked=true] .toast-body button { flex:none; max-width:50%; margin:0; min-height:28px; padding:4px 8px; font-size:12px; white-space:normal; }
-.topbar>.toast-host[data-docked=true] .toast-close { min-width:28px; min-height:28px; }
-@media(max-width:760px) {
-  .topbar:has(>.toast-host[data-docked=true]:not(:empty)) { grid-template-columns:minmax(0,1fr); }
-  .main-column .topbar>.toast-host[data-docked=true] { grid-column:1; grid-row:3; max-height:80px; }
+.toast-host { max-height:none; overflow:visible; }
+.main-column:has(.meeting-playback-dock:not([hidden])) .toast-host { max-height:none; }
+.toast-body>p { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.toast-card>.info-shell { flex:none; }
+.toast-card .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
+.toast-host .toast-queued { margin:0; padding:0 12px; border:0; box-shadow:none; background:transparent; font-size:11px; text-align:right; }
+.meeting-playback-dock { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:8px 12px; min-height:56px; max-height:none; overflow:visible; padding:12px 28px; }
+.meeting-playback-content { flex:1; min-width:0; }
+.meeting-playback-dock .playback-owner { font-size:11px; }
+.meeting-playback-dock:has(.audio-player) .playback-owner { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.meeting-playback-dock .audio-player { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px 12px; margin:0; background:transparent; }
+.meeting-playback-dock .playback-empty,:root .meeting-playback-dock .audio-controls>button.playback-close { display:none; }
+.meeting-playback-dock .playback-alignment-note { grid-column:1 / -1; }
+.meeting-playback-dock .audio-controls { flex:1 1 320px; flex-wrap:nowrap; gap:8px; }
+.meeting-playback-dock .audio-controls>input[type=range] { flex:1; min-width:60px; width:100%; margin:0; }
+.meeting-playback-dock .audio-controls>button { min-height:32px; padding:4px 8px; white-space:nowrap; }
+.meeting-playback-dock .audio-controls>span { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.meeting-playback-dock .audio-controls>label { font-size:0; flex:none; flex-wrap:nowrap; }
+.meeting-playback-dock .audio-controls select { font-size:12px; }
+.meeting-playback-dock .audio-player>.heading-with-info { font-size:11px; }
+.playback-alignment-note { font-size:11px; color:var(--muted); }
+.meeting-playback-dock .meeting-audio-actions { flex:none; align-items:center; align-self:start; margin:0; gap:8px; }
+.meeting-playback-dock .meeting-audio-actions>button { min-height:32px; padding:4px 8px; }
+.meeting-audio-settings { width:auto; }
+.meeting-audio-settings .options-dialog { max-width:480px; }
+.meeting-audio-settings-fields { display:grid; gap:16px; font-size:13px; }
+.meeting-audio-settings-fields>label { display:grid; gap:6px; }
+.meeting-audio-settings-fields select { font:inherit; padding:8px; border:1px solid var(--border); border-radius:8px; }
+.meeting-audio-settings-fields p { color:var(--muted); margin:0; }
+/* The same two-column reading surface as the mock, even at 960px. */
+.content.meeting-detail-content { position:relative; padding:0; gap:0; overflow:visible; }
+.meeting-detail-content .transcript-card { padding:0; gap:0; }
+.meeting-detail-content .transcript-split { gap:0; }
+.speaker-panel-body { padding:24px 20px; border-right:1px solid var(--border); background:var(--surface); }
+.transcript-main { position:relative; padding:24px 32px; gap:12px; }
+.transcript-main>.transcript-actions:first-child { justify-content:flex-end; gap:8px 12px; }
+.transcript-heading-actions { display:flex; align-items:center; min-width:0; max-width:100%; }
+.transcript-main>.transcript-actions:first-child>.hint { color:var(--muted); }
+.transcript-main .transcript-search { padding:0 0 12px; border:0; }
+.transcript-workspace-tools { position:static; }
+.meeting-workspace-tools { position:static; }
+.meeting-workspace-tools>summary,.transcript-workspace-tools>summary { list-style:none; min-height:30px; padding:4px 10px!important; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+.meeting-workspace-tools>summary::-webkit-details-marker,.transcript-workspace-tools>summary::-webkit-details-marker { display:none; }
+.meeting-workspace-tools[open],.transcript-workspace-tools[open] { width:min(480px,calc(100vw - 112px)); box-shadow:var(--floating-shadow); background:var(--surface); border:1px solid var(--border); border-radius:12px; }
+.meeting-workspace-tools>.workspace-tools-body,.transcript-workspace-tools>.workspace-tools-body { max-height:60dvh; padding:12px; }
+.speaker-avatar { display:none; }
+.speaker-panel-body .speaker-label,.utterance-meta .speaker-label { background:transparent; color:var(--text); padding:0; gap:9px; font-size:13px; min-width:0; flex-wrap:nowrap; }
+.speaker-panel-body .speaker-label>span:not(.speaker-avatar),.utterance-meta .speaker-label>span:not(.speaker-avatar) { min-width:0; overflow-wrap:anywhere; }
+:root[data-theme=dark] .speaker-panel-body .speaker-label,:root[data-theme=dark] .utterance-meta .speaker-label { background:transparent; color:var(--text); }
+@media(prefers-color-scheme:dark) { :root:not([data-theme]) .speaker-panel-body .speaker-label,:root:not([data-theme]) .utterance-meta .speaker-label { background:transparent; color:var(--text); } }
+.speaker-panel-body .speaker-avatar,.utterance-meta .speaker-avatar { display:grid; place-items:center; width:29px; height:29px; border-radius:9px; background:var(--speaker-light-bg); color:var(--speaker-light-fg); font-size:12px; font-weight:500; flex:none; }
+:root[data-theme=dark] .speaker-avatar { background:var(--speaker-dark-bg); color:var(--speaker-dark-fg); }
+@media(min-width:761px) {
+  .meeting-detail-content .transcript-split { grid-template-columns:216px minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
 }
-/* Keep a compact dock in short frames, then grow smoothly: crossing a height
-   breakpoint must not suddenly take the editor's remaining lines away. */
-.meeting-playback-dock { max-height:max(80px,min(40dvh,calc(100dvh - 680px))); align-items:start; scroll-padding-block:8px; }
+@media(max-width:760px) {
+  .transcript-main { padding:16px; }
+  .meeting-playback-dock { flex-wrap:wrap; }
+  .meeting-playback-dock .audio-controls { flex-wrap:wrap; }
+  .meeting-playback-dock .audio-player { grid-template-columns:minmax(0,1fr); }
+}
 .mini-shell { padding:14px 16px; border-radius:12px; border-color:var(--border); }
 .mini-top strong { font-size:13px; font-weight:650; }
 .timer { font-size:16px; font-weight:650; }
@@ -200,3 +332,361 @@ button:disabled { opacity:.5; }
   .meeting-table th,.meeting-table td { padding:14px 12px; }
   .meeting-date { white-space:normal; }
 }
+
+/* Text actions share one metric per row, including portaled settings triggers.
+   A minimum, not a fixed height, lets long labels wrap without being clipped. */
+:is(.analysis-actions,.transcript-actions,.card-actions,.recovery-actions,
+    .transcript-options-buttons,.transcript-options-recovery,.minutes-toolbar,
+    .minutes-primary-toolbar,.meeting-audio-actions,.audio-controls,.mini-bottom,
+    .transcript-pages,.utterance-meta,.preview-utterance-meta,.version-row,
+    .common-modal,.theme-settings,.settings-disclosure,
+    .meeting-detail-content .minutes-primary-actions) button:not(:is(.info-trigger,
+    .info-close,.toast-close,.utterance-stamp,.speaker-name-button,.speaker-count-filter,
+  .transcript-body-edit,.utterance-play-icon,.evidence-chip,[data-evidence-id])) {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:var(--action-height,40px);
+  padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px;
+  font-family:inherit; font-size:var(--action-font-size,13px);
+  line-height:var(--action-line-height,20px); font-weight:500;
+  min-width:0; max-width:100%; overflow-wrap:anywhere;
+  vertical-align:middle; white-space:normal;
+}
+.meeting-detail-content .minutes-primary-actions,
+.meeting-detail-content .transcript-actions,.transcript-workspace-tools,.minutes-primary-toolbar,
+.meeting-playback-dock,.mini-bottom {
+  --action-height:32px; --action-font-size:12px; --action-line-height:18px;
+}
+/* A modal starts a new action row rather than inheriting its compact opener. */
+.common-modal,.common-modal :is(.analysis-actions,.transcript-actions,.minutes-toolbar,
+    .minutes-primary-toolbar,.meeting-audio-actions,.audio-controls) {
+  --action-height:40px; --action-font-size:13px; --action-line-height:20px;
+}
+.analysis-actions,.card-actions,.recovery-actions,
+.transcript-options-buttons,.transcript-options-recovery,.minutes-toolbar,
+.minutes-primary-toolbar { align-items:stretch; }
+.minutes-format-tools .workspace-tools-body { display:grid; gap:16px; min-width:0; }
+.minutes-format-tools .workspace-tools-body>p { margin:0; }
+.minutes-format-tools .minutes-toolbar { margin:0; gap:10px; }
+.minutes-workspace-tools .workspace-tools-body { display:grid; gap:20px; min-width:0; }
+.minutes-settings-controls { display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; min-width:0; }
+.minutes-settings-controls>.minutes-editor-options-host { display:contents; }
+.minutes-workspace-tools .workspace-tools-body>:is(p,.analysis-jobs) { margin:0; }
+.minutes-workspace-tools .analysis-settings { display:grid; gap:16px; min-width:0; margin:0; }
+.minutes-workspace-tools .analysis-settings>:is(h3,p,.analysis-actions) { margin:0; }
+.minutes-workspace-tools .analysis-settings>fieldset { display:grid; gap:16px; min-width:0; margin:0; }
+.minutes-workspace-tools .analysis-settings label { margin:0; gap:8px; }
+.minutes-workspace-tools .info-field { display:grid; gap:8px; min-width:0; }
+.minutes-workspace-tools :is(.analysis-versions,.minutes-export-history) { display:grid; gap:12px; min-width:0; }
+.minutes-workspace-tools :is(.analysis-versions,.minutes-export-history)>:is(h3,p) { margin:0; }
+.info-trigger,.info-close { min-height:32px; }
+
+/* Empty/loading states live outside the padded transcript split. */
+.transcript-state { margin:0; padding:24px 0; color:var(--muted); overflow-wrap:anywhere; }
+.meeting-detail-content .transcript-state { flex:none; padding:24px 32px; }
+.preview-utterance-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; min-width:0; }
+.preview-utterance-meta>small { min-width:0; margin:0; overflow-wrap:anywhere; }
+.preview-utterance-meta .speaker-review-badges { margin:0; align-items:center; }
+.utterance-play-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:32px; height:32px; min-height:32px; padding:0; line-height:1; }
+.utterance-play-icon svg { display:block; flex:none; }
+.common-modal.analysis-dialog { width:min(980px,calc(100vw - 48px)); max-width:980px; }
+/* Familiar secondary actions keep labels in native hover help and AX names. */
+:root button.icon-button { display:inline-flex; align-items:center; justify-content:center; flex:none; width:var(--action-height,40px); height:var(--action-height,40px); min-width:var(--action-height,40px); min-height:var(--action-height,40px); padding:0; line-height:1; position:relative; }
+.action-icon { display:block; flex:none; pointer-events:none; }
+.settings-modal-slot,.settings-modal-view:not([hidden]) { display:contents; }
+.settings-modal-view[hidden] { display:none; }
+.icon-button .options-attention { position:absolute; top:0; right:3px; font-size:13px; line-height:16px; color:var(--warning-text); }
+.common-modal.speaker-add-dialog { width:min(520px,calc(100vw - 32px)); max-width:520px; }
+.speaker-add-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.speaker-add-dialog .common-modal-body>:is(h3,p,.transcript-actions) { margin:0; }
+.speaker-add-dialog h3 { font-size:19px; }
+.speaker-add-dialog label { display:grid; gap:8px; min-width:0; font-size:13px; }
+.speaker-add-dialog .transcript-actions { justify-content:flex-end; }
+.common-modal.split-dialog { width:min(760px,calc(100vw - 32px)); max-width:760px; }
+.split-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.split-dialog .common-modal-body>:is(h3,p,.transcript-actions) { margin:0; }
+.split-dialog h3 { font-size:19px; }
+.split-dialog .common-modal-body>button { justify-self:start; }
+.split-field-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; min-width:0; }
+.split-field-row label { display:grid; gap:8px; margin:0; min-width:0; font-size:13px; }
+.split-field-row :is(input,select) { width:100%; min-width:0; min-height:40px; box-sizing:border-box; font-size:13px; line-height:20px; }
+.split-preview section { display:grid; align-content:start; gap:8px; min-width:0; }
+.split-preview :is(h4,p) { margin:0; }
+.split-dialog .transcript-actions { justify-content:flex-end; gap:8px; }
+@media(max-width:600px) { .split-field-row { grid-template-columns:minmax(0,1fr); } }
+.transcript-recovery-view:not([hidden]),.transcript-recovery-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
+:is(.transcript-recovery-view,.transcript-recovery-dialog) :is(h3,p) { margin:0; overflow-wrap:anywhere; }
+:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory { display:grid; gap:16px; }
+:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory p { display:block; padding:0; border:0; }
+:is(.transcript-recovery-view,.transcript-recovery-dialog) .recovery-inventory-item { display:grid; justify-items:start; gap:12px; padding:16px 0; border-top:1px solid var(--border); }
+:is(.transcript-recovery-view,.transcript-recovery-dialog) :is(.recovery-pagination,.recovery-actions) { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0; }
+.transcript-recovery-view label { display:grid; gap:8px; margin:16px 0; font-size:13px; }
+.transcript-recovery-view textarea { width:100%; min-width:0; min-height:80px; resize:vertical; padding:10px; font:inherit; font-size:15px; line-height:1.7; border:1px solid var(--input-border); border-radius:8px; background:var(--raised); color:var(--text); }
+.transcript-recovery-view textarea:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.transcript-recovery-view button { max-width:100%; white-space:normal; }
+:is(.transcript-recovery-view,.transcript-recovery-dialog>.common-modal-body)>button { justify-self:start; }
+.common-modal.analysis-dialog .preview-columns { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.preview-columns>section { min-width:0; }
+.card-actions { flex-wrap:wrap; }
+.analysis-actions>span,.transcript-actions>span,.minutes-toolbar>span,.minutes-primary-toolbar>span { align-self:center; }
+.vocabulary-list .analysis-actions label { gap:8px; }
+.action-error:has(>button) { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; }
+.action-error>button { flex:none; max-width:100%; }
+.meeting-search,.meeting-form-row input { min-height:40px; padding:9px 12px; font-size:13px; line-height:20px; }
+/* Beat the base :root input font shorthand, not just its padding. */
+:root .meeting-search { font-family:inherit; font-size:13px; line-height:20px; }
+.meetings-card>.card-head>button { min-height:40px; padding:9px 12px; font-size:13px; line-height:20px; }
+.meeting-detail-content .transcript-search input[type=search] { min-height:40px; padding:9px 12px; font-size:13px; line-height:20px; }
+.meeting-form-row { align-items:center; flex-wrap:wrap; }
+.theme-choice { flex-wrap:wrap; }
+.theme-choice select,.common-modal select,.capture-input-selection select { min-height:40px; max-width:100%; min-width:0; padding:9px 12px; font:inherit; font-size:13px; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
+.audio-controls label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
+.audio-controls select { box-sizing:border-box; height:var(--action-height,40px); min-height:var(--action-height,40px); padding:5px 8px; font:inherit; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
+/* WebKit's native select ignores padding/min-height. Retain the native select
+   semantics while drawing the field and its theme-aware chevron ourselves. */
+.theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select {
+  -webkit-appearance:none; appearance:none; padding-right:32px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:right 16px center,right 11px center;
+  background-size:5px 5px; background-repeat:no-repeat;
+}
+@media(forced-colors:active) {
+  .theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select { -webkit-appearance:auto; appearance:auto; background-image:none; }
+}
+.common-modal .playback-follow-choice input[type=checkbox],.vocabulary-list input[type=checkbox] { margin:0; flex:none; }
+.meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
+.meeting-detail-content .minutes-card>.card-head { gap:12px; }
+.minutes-save-status { font-size:11px; white-space:nowrap; color:var(--muted); }
+.minutes-primary-actions>.minutes-editor-actions-host { min-width:0; }
+.minutes-document-status>.heading-with-info { gap:4px; }
+.transcript-main>.transcript-actions:first-child { min-height:32px; }
+.meeting-audio-settings-fields>.playback-follow-choice { display:flex; align-items:center; gap:8px; }
+.import-term label:has(>input[type=checkbox]) { flex-direction:row; align-items:center; gap:8px; }
+.model-application-dialog label:has(>input[type=checkbox]),.common-modal .import-checkbox { display:flex; align-items:flex-start; gap:8px; }
+.model-application-dialog label>input[type=checkbox],.common-modal .import-checkbox>input[type=checkbox] { flex:none; margin:5px 0 0; }
+/* Shared spacing for secondary forms and metadata, not another scroll area. */
+.card-head { gap:12px; flex-wrap:wrap; }
+.card-head>.heading-with-info { min-width:0; }
+.heading-with-info>h2,.heading-with-info>h3 { overflow-wrap:anywhere; }
+/* A title's section margin must not offset its adjacent information control. */
+.options-dialog .heading-with-info>:is(h2,h3),
+.heading-with-info>label { margin:0; min-width:0; }
+.heading-with-info { gap:8px; }
+.analysis-card>.heading-with-info h2 { font-size:17px; }
+.info-popover-head { align-items:center; }
+.info-popover .info-popover-head h3 { margin:0; }
+.version-row { flex-wrap:wrap; gap:12px; }
+.version-row>div { min-width:0; overflow-wrap:anywhere; }
+.version-row>.analysis-actions { margin:0; }
+.vocabulary-list article { display:grid; gap:12px; }
+.vocabulary-list label { min-width:0; gap:8px; font-size:13px; line-height:20px; }
+.vocabulary-list :is(input:not([type=checkbox]),textarea) { min-width:0; max-width:100%; padding:9px 12px; font-size:13px; line-height:20px; }
+.vocabulary-list input:not([type=checkbox]) { min-height:40px; }
+.vocabulary-list article>.analysis-actions { margin:0; align-items:center; }
+.options-dialog-content>:is(p,.analysis-actions,.prompt-label,.analysis-settings),
+.options-dialog-content>.text-size-choice,.options-dialog-content>.playback-follow-choice { margin-block:0; }
+.model-download-settings label:has(>input[type=file]) { display:grid; gap:8px; margin-block:0; }
+.model-download-settings input[type=file] { min-width:0; max-width:100%; font-size:13px; }
+.model-download-settings input[type=file]::file-selector-button { margin-right:12px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit; }
+.model-download [aria-label="未確定のモデル取得操作"] { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.model-download [aria-label="未確定のモデル取得操作"]>p { flex-basis:100%; margin:0; }
+.import-dialog nav[aria-label="取り込み用語のページ"] { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-block:12px; }
+.transcript-pages { flex-wrap:wrap; gap:10px 12px; }
+.transcript-pages :is(form,label) { min-width:0; flex-wrap:wrap; gap:8px; }
+.transcript-pages input[type=number] { min-height:var(--action-height,40px); padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 10px; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border-radius:8px; }
+.evidence-verification { flex-wrap:wrap; gap:8px 12px; }
+.common-modal label:has(>input[type=checkbox]):not(.import-checkbox) { display:flex; align-items:center; gap:8px; }
+.common-modal label>input:is([type=checkbox],[type=radio]) { flex:none; margin:0; }
+.utterance-meta .assigned-speakers { margin:0; align-items:center; }
+.meeting-detail-content .utterance-list,.meeting-detail-content .minutes-body-scroll { padding-right:8px; scrollbar-gutter:stable; }
+.meeting-detail-content .transcript-search { align-items:center; gap:8px 12px; max-height:none; overflow:visible; }
+.playback-follow-status { max-height:none; overflow:visible; padding-block:8px; }
+.playback-follow-status>span { min-width:0; overflow-wrap:anywhere; }
+/* Import is a settings form too: one scroll boundary, clearly spaced groups. */
+.common-modal.import-dialog { width:min(720px,calc(100vw - 32px)); max-width:720px; }
+.import-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.import-dialog>.common-modal-body>:is(h2,p,dl,fieldset,.analysis-actions) { margin-block:0; }
+.import-dialog>.common-modal-body>h2 { font-size:19px; }
+.import-dialog p,.import-dialog dl { font-size:13px; line-height:1.7; }
+.common-modal.import-dialog .import-info { grid-template-columns:116px minmax(0,1fr); align-items:baseline; gap:6px 16px; }
+.common-modal.import-dialog .import-info :is(dt,dd) { min-width:0; margin:0; }
+.import-dialog .heading-with-info>h3 { margin:0; font-size:14px; }
+.import-dialog fieldset { display:grid; gap:16px; margin:0; }
+.import-dialog fieldset>label { margin:0; gap:8px; font-size:13px; }
+.import-dialog fieldset>label>:is(input,select) { min-height:40px; padding-block:9px; font-size:13px; line-height:20px; }
+.import-dialog fieldset>p { margin:0; }
+.import-dialog .import-field-label { display:flex; align-items:center; min-height:32px; }
+.import-dialog .import-profile-field { display:grid; gap:8px; min-width:0; }
+.import-dialog .import-profile-field label { margin:0; font-size:13px; }
+.import-dialog .import-profile-field select { width:100%; min-width:0; }
+.import-dialog .import-vocabulary-entry { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
+.import-dialog.import-vocabulary-view>.common-modal-replacement:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.import-dialog.import-vocabulary-view .common-modal-replacement>h2 { margin:0; font-size:19px; }
+.import-dialog fieldset.import-vocabulary-fields { grid-template-columns:minmax(0,1fr); }
+.import-vocabulary-fields .import-term { display:grid; gap:12px; min-width:0; }
+.import-vocabulary-fields .import-term label { min-width:0; margin:0; gap:8px; font-size:13px; line-height:20px; }
+.import-vocabulary-fields .import-term :is(input:not([type=checkbox]),textarea) { min-width:0; width:100%; padding:9px 12px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); font-size:13px; line-height:20px; }
+.import-vocabulary-fields .import-term input:not([type=checkbox]) { min-height:40px; }
+.import-vocabulary-fields .import-term textarea { resize:vertical; }
+.import-dialog .analysis-actions { margin:0; padding:16px 0 0; }
+@media(min-width:600px) {
+  .import-dialog fieldset { grid-template-columns:minmax(0,2fr) minmax(0,1fr); align-items:start; }
+  .import-dialog fieldset>:is(p,.import-vocabulary-entry) { grid-column:1 / -1; }
+}
+@media(max-width:480px) {
+  .common-modal.import-dialog .import-info { grid-template-columns:minmax(0,1fr); row-gap:4px; }
+  .common-modal.import-dialog .import-info dd:not(:last-child) { margin-bottom:8px; }
+}
+/* Settings fields use the same 40px metrics as their neighboring actions.
+   Do not resize checkboxes, sliders, file pickers, or multiline editors. */
+.common-modal input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=hidden]):not([type=button]):not([type=submit]) {
+  min-width:0; max-width:100%; min-height:40px;
+  padding:9px 12px; font-size:13px; line-height:20px;
+}
+.options-dialog-content>fieldset {
+  display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0;
+}
+.options-dialog-content>fieldset>label {
+  min-width:0; margin:0; gap:8px;
+}
+.options-dialog-content>.info-field { display:grid; gap:8px; margin:0; }
+.options-dialog-content>.info-field>.heading-with-info>label { margin:0; }
+.engine-numbers { align-items:end; gap:12px; }
+.engine-numbers>label { min-width:0; margin:0; }
+.common-modal .prompt-label textarea { font-size:13px; line-height:20px; }
+/* Nested settings need their own rhythm; the outer grid cannot space a
+   heading, field, or action hidden one level below it. */
+.options-dialog-content>form {
+  display:grid; gap:16px; min-width:0;
+}
+.options-dialog-content>form>:is(.prompt-label,.analysis-actions,p) { margin-block:0; }
+.model-inspection-settings .options-dialog-content>section {
+  display:grid; gap:12px; min-width:0;
+}
+.model-inspection-settings .options-dialog-content>section>button { justify-self:start; max-width:100%; }
+.model-inspection-settings .options-dialog-content>section>:is(p,ul) { margin-block:0; }
+.model-inspection-settings .options-dialog-content>section>article {
+  display:grid; gap:8px; min-width:0; padding:16px 0; border-top:1px solid var(--border);
+}
+.model-inspection-settings .options-dialog-content>section>article>:is(h4,p,ul) { margin-block:0; }
+.model-inspection-settings .options-dialog-content>section>ul>li+li { margin-top:20px; }
+.model-inspection-settings .options-dialog-content>section>ul>li { overflow-wrap:anywhere; }
+.model-inspection-report>h3 { margin:0; font-size:14px; }
+.model-inspection-settings .options-dialog { max-width:720px; }
+/* These settings are portaled outside their source card. Keep field borders,
+   code wrapping and record spacing scoped to the actual modal host. */
+.model-inspection-settings .prompt-label input { width:100%; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); }
+.model-inspection-settings pre { margin:0; padding:12px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+.model-inspection-settings code { overflow-wrap:anywhere; }
+.model-preparation-choices { display:grid; gap:12px; }
+.model-preparation-choices>article { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px 20px; padding:16px; border:1px solid var(--border); border-radius:12px; }
+.model-preparation-choices h4 { margin:0 0 6px; }
+.model-preparation-choices p { margin:0; font-size:13px; color:var(--muted); line-height:1.6; }
+.model-preparation-choices>article>button { flex:0 0 auto; }
+.model-download-settings .prompt-label textarea { width:100%; padding:10px 12px; border:1px solid var(--input-border); border-radius:8px; font:12px/1.5 monospace; resize:vertical; }
+.model-download-settings details { min-width:0; overflow-wrap:anywhere; }
+.model-preparation-feedback,.model-preparation-next { display:grid; gap:12px; min-width:0; }
+.model-preparation-feedback>:is(p,.issue-status,.model-result-status),.model-preparation-next>p { margin:0; }
+.model-preparation-feedback .issue-status>span { flex-basis:100%; min-width:0; overflow-wrap:anywhere; }
+.model-preparation-next>button { justify-self:start; max-width:100%; }
+/* Keep reference headings centered with their adjacent close action, and
+   leave a real gap between expandable records and playback controls. */
+.minutes-reference-body .fixed-evidence-group>.card-head { align-items:center; gap:12px; }
+.fixed-transcript-workspace>.card-head>h3 { min-width:0; margin:0; }
+.fixed-evidence>.evidence-record-details { margin-block:12px; }
+.evidence-record-details>small { display:block; margin-top:8px; overflow-wrap:anywhere; }
+.fixed-evidence>.audio-controls { align-items:stretch; gap:10px 12px; }
+.fixed-evidence>.audio-controls>button { min-width:0; max-width:100%; }
+.fixed-transcript article>.document-text { margin-block:8px; }
+.fixed-transcript article>small.document-text { display:block; }
+.analysis-jobs li>div:first-child,.speaker-review li>span { min-width:0; overflow-wrap:anywhere; }
+/* Nested count settings cannot rely on the outer dialog's grid to space
+   their own children. Keep conditional count inputs in the same track. */
+.options-dialog .diarization-panel { display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0; }
+.options-dialog .diarization-panel>.heading-with-info>h3 { margin:0; }
+.options-dialog .diarization-panel>.analysis-settings { margin:0; }
+.options-dialog .diarization-panel>:is(p,.analysis-jobs) { margin:0; }
+.options-dialog .diarization-panel>.analysis-jobs:empty { display:none; }
+.options-dialog .diarization-panel>button { justify-self:start; max-width:100%; }
+.options-dialog .diarization-tracks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:16px; min-width:0; margin:0; }
+.options-dialog .diarization-tracks:empty { display:none; }
+.options-dialog .diarization-tracks>div { display:grid; gap:12px; min-width:0; }
+.options-dialog .diarization-tracks label { display:grid; min-width:0; gap:8px; margin:0; }
+.options-dialog .diarization-tracks :is(input,select) { width:100%; max-width:none; }
+/* Recording preparation is outside a modal, but uses the same field sizing. */
+.recording-workspace input:not([type=checkbox]):not([type=range]),
+.capture-input-selection select {
+  min-height:40px; padding:9px 12px; font-size:13px; line-height:20px;
+}
+.capture-input-selection select { padding-right:32px; }
+.recording-workspace-heading>button { flex:none; }
+.capture-scope-details .options-dialog-content>label { display:grid; gap:8px; margin:0; min-width:0; }
+/* Maintenance cards can have a button immediately after their heading.
+   Space actual children instead of depending on optional paragraph margins. */
+.settings-management-toggle .options-dialog-content>.analysis-card {
+  display:grid; gap:16px; min-width:0; margin:0;
+}
+.settings-management-toggle .options-dialog-content>.analysis-card>:is(h2,p,ul,.analysis-actions) { margin-block:0; }
+.settings-management-toggle .options-dialog-content>.analysis-card>h2 { font-size:17px; }
+.settings-management-toggle .options-dialog-content>.analysis-card>button { justify-self:start; max-width:100%; }
+.settings-management-toggle .options-dialog-content>.analysis-card>ul:empty { display:none; }
+/* Download records scroll with their owning dialog, never inside a second list. */
+.model-download-settings .options-dialog-content>:is(h3,h4,details,.analysis-actions,.model-download-catalog) { margin-block:0; }
+.model-download-settings .options-dialog-content>button { justify-self:start; max-width:100%; }
+.model-download-settings .model-download-catalog { display:grid; gap:16px; min-width:0; max-height:none; overflow:visible; padding:0; list-style:none; }
+.model-download-catalog>li { min-width:0; padding-top:16px; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.model-download-catalog>li>p { margin-block:8px 12px; }
+.model-download .model-application-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
+.model-download .model-application-dialog>.common-modal-body>:is(h3,p,ul,.issue-status) { margin-block:0; }
+.model-download .model-application-dialog>.common-modal-body>button { justify-self:start; max-width:100%; }
+.model-download .model-application-dialog>.common-modal-body>ul>li+li { margin-top:12px; }
+/* Secondary reading controls follow the same spacing as the main forms. */
+.meeting-audio-settings-fields>label { min-width:0; margin:0; gap:8px; }
+.meeting-list-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; min-width:0; }
+.meeting-list-notice>button { flex:none; max-width:100%; }
+.common-modal .card-head>:is(h2,h3,h4) { min-width:0; margin:0; }
+.minutes-page-navigation { display:grid; gap:12px; min-width:0; margin-top:16px; }
+.minutes-page-navigation>.transcript-pages,.minutes-page-navigation>.action-error { margin:0; }
+.minutes-page-navigation .transcript-pages input[type=number],
+.fixed-transcript-workspace .transcript-pages input[type=number] {
+  padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px;
+}
+@media(max-width:600px) {
+  .options-dialog .diarization-tracks { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:760px) {
+  .meeting-detail-content .transcript-split>.workspace-panel-shell { padding:12px 16px 0; }
+  .meeting-detail-navigation { padding-inline:16px; }
+  /* The fixed audio actions must not squeeze the description to one glyph
+     per line and consume the transcript's remaining height. */
+  .meeting-playback-dock { gap:8px; }
+  .meeting-playback-dock>.meeting-playback-content { flex-basis:100%; }
+  .meeting-playback-dock .audio-controls { flex-wrap:wrap; }
+  .meeting-playback-dock .meeting-audio-actions { flex-wrap:wrap; max-width:100%; }
+  .meeting-detail-content .transcript-state { padding:20px 16px; }
+  .transcript-feedback { padding-inline:16px; }
+  .common-modal.analysis-dialog { width:calc(100vw - 32px); }
+  .common-modal.analysis-dialog .preview-columns { grid-template-columns:minmax(0,1fr); }
+  .meeting-detail-content .minutes-card { padding:16px; }
+  .main-column:has(.meeting-detail-status)>.topbar { padding:10px 16px; gap:6px; min-height:56px; }
+  .main-column:has(.meeting-detail-status)>.topbar>.header-recording { width:auto; min-width:0; justify-content:flex-end; }
+  .meeting-detail-status { padding:12px 16px 8px; }
+  .meeting-detail-content .minutes-card { padding:12px 16px; gap:8px; }
+  .meeting-detail-content .minutes-card>.card-head { gap:8px; align-items:center; }
+  .meeting-detail-content .minutes-primary-actions { gap:6px; min-width:0; max-width:100%; }
+  .minutes-editor-actions-host,.minutes-edit-actions { gap:6px; }
+  .meeting-detail-content .minutes-document-status { gap:6px; font-size:11px; }
+  .meeting-detail-content .minutes-document-status .data-updated { padding:2px 4px; font-size:11px; }
+  .meeting-detail-content .minutes-document-status .info-trigger { width:20px; min-height:20px; height:20px; }
+  .meeting-playback-dock { padding-block:8px; }
+}
+/* Guided imports share the compact modal control rhythm; long names wrap. */
+.model-import-guide { display: grid; gap: 16px; }
+.model-import-guide > p { margin: 0; }
+.model-import-guide > .heading-with-info > p { margin: 0; }
+.model-import-file-list { display: grid; gap: 12px; }
+.model-import-file { display: flex; align-items: center; gap: 16px; }
+.model-import-file > span { flex: 1; min-width: 0; }
+.model-import-file small { display: block; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+.model-import-file > button { flex: 0 0 auto; }
+.model-import-guide > button { justify-self: start; }
+.model-import-legacy { margin-top: 20px; }

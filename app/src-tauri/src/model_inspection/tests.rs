@@ -1,6 +1,60 @@
 use super::*;
 use std::cell::Cell;
 
+#[test]
+fn guided_model_preflight_needs_no_manifest_and_preserves_existing_manifest() {
+    for engine in [Engine::Whisper, Engine::Sherpa, Engine::Llama] {
+        let (dir, mut manifest) = fixture(engine);
+        manifest.target = Target::current().unwrap();
+        std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
+        let report = inspect_declared(dir.path(), &manifest, &|| false).unwrap();
+        assert_eq!(report.manifest, manifest);
+        assert_eq!(
+            report.manifest_hash,
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&manifest).unwrap())
+            )
+        );
+        assert!(!dir.path().join(MANIFEST).exists());
+        assert!(!report.ready && !report.installed);
+        assert_eq!(report.publisher_authenticity, "not_verified");
+        let original = b"unrelated existing manifest; must not be changed or adopted";
+        std::fs::write(dir.path().join(MANIFEST), original).unwrap();
+        assert_eq!(
+            inspect_declared(dir.path(), &manifest, &|| false)
+                .unwrap()
+                .review_hash,
+            report.review_hash
+        );
+        assert_eq!(std::fs::read(dir.path().join(MANIFEST)).unwrap(), original);
+    }
+}
+
+#[test]
+fn guided_model_preflight_rejects_invalid_declaration_and_cancellation_without_writes() {
+    let (dir, mut manifest) = fixture(Engine::Whisper);
+    manifest.target = Target::current().unwrap();
+    std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
+    assert!(inspect_declared(dir.path(), &manifest, &|| true).is_err());
+    manifest.files[1].relative_path = "../outside.bin".into();
+    assert!(inspect_declared(dir.path(), &manifest, &|| false).is_err());
+    assert!(!dir.path().join(MANIFEST).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn guided_model_preflight_rejects_symlink_files_without_following_them() {
+    let (dir, mut manifest) = fixture(Engine::Llama);
+    manifest.target = Target::current().unwrap();
+    std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
+    let model = dir.path().join(&manifest.files[1].relative_path);
+    std::fs::rename(&model, dir.path().join("real-model")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("real-model"), &model).unwrap();
+    assert!(inspect_declared(dir.path(), &manifest, &|| false).is_err());
+    assert!(!dir.path().join(MANIFEST).exists());
+}
+
 fn fixture(engine: Engine) -> (tempfile::TempDir, PackageManifest) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("weights")).unwrap();

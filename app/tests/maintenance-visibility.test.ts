@@ -13,7 +13,7 @@ test("compact maintenance hides only a verified empty, supported and connected s
 test("compact presentation does not unmount controllers, notifications or confirmation modals", () => {
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
   assert.equal((main.match(/compact=\{!settingsManagementOpen\}/g) ?? []).length, 5);
-  assert.match(main, /aria-expanded=\{settingsManagementOpen\}/);
+  assert.match(main, /<OptionsModal[^\n]*open=\{settingsManagementOpen\} onOpenChange=\{setSettingsManagementOpen\}/);
   for (const file of ["meeting-deletion", "model-body-deletion", "audio-deletion", "recovery-panel", "partial-recording-panel"]) {
     const source = readFileSync(new URL(`../src/${file}.tsx`, import.meta.url), "utf8");
     assert.match(source, /compact = false/);

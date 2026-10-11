@@ -112,7 +112,7 @@ def supplemental_files(repository, package, index, locked):
         data = path.read_bytes()
         data.decode("utf8")
         if (not data.strip() or sha(data) != record["sha256"] or len(data) != record["bytes"]
-                or record["kind"] not in ("license_text", "upstream_license_reference")
+                or record["kind"] not in ("license_text", "upstream_license_reference", "license_template")
                 or not record["sourceUrl"].startswith("https://")):
             raise ValueError("supplemental notice content/provenance changed")
         result.append((record, data))
@@ -191,6 +191,8 @@ def collect(repository, metadata, lock):
             total += len(data)
             if total > MAX_TOTAL_BYTES:
                 raise ValueError("dependency notices exceed the total size limit")
+            if record["kind"] == "license_template":
+                chunks.append(b"Standard license template only; NOT a package-specific copyright notice.\n")
             chunks.extend([f"--- Supplemental {record['kind']}: {record['path']} ---\nSource: {record['sourceUrl']}\n".encode(),
                            data, b"\n\n"])
         if source and license_id and "MPL-2.0" in license_id:

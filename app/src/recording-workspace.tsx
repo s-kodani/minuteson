@@ -1,4 +1,5 @@
-import type {ReactNode} from "react";
+import { IconButton } from "./action-icon";
+import {useLayoutEffect,useRef,type ReactNode} from "react";
 import {formatElapsed,type BridgeState} from "./session";
 import type {RecordingPreparation} from "./recording-preparation-state";
 import {InfoPopover} from "./info-popover";
@@ -6,12 +7,29 @@ import "./recording-workspace.css";
 import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 import {RecordingWriteStatus} from "./recording-write-status";
 import {RecordingInputStatus} from "./recording-input-status";
+import {overlayOpen} from "./keyboard";
 
 export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:()=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
   inputs:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
+  const titleField=useRef<HTMLInputElement>(null);
+  const titleFocusOwner=useRef<string|null>(null);
+  useLayoutEffect(()=>{
+    const id=preparation?.id;
+    if(!id){titleFocusOwner.current=null;return;}
+    // Navigation temporarily disables this field. Focus after that commit,
+    // once per preparation, rather than racing it from an animation frame.
+    if(locked||preparation.submitted||titleFocusOwner.current===id)return;
+    titleFocusOwner.current=id;
+    const field=titleField.current,active=document.activeElement;
+    // A user who already entered the workspace or opened an explanation
+    // while navigation finished keeps their chosen focus.
+    if(!field||field.disabled||overlayOpen()||
+      active instanceof HTMLElement&&active!==field&&active.closest(".recording-workspace"))return;
+    field.focus();
+  },[preparation?.id,preparation?.submitted,locked]);
   const snapshot=state.kind==="ready"?state.snapshot:null;
   const owns=!!owner&&snapshot?.meetingId===owner&&!!snapshot.sessionId;
   const phase=owns?snapshot.phase:"idle";
@@ -19,9 +37,9 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
   const active=owns&&!["idle","error"].includes(phase);
   const levels=useRecordingLevels(owns&&["preparing","recording"].includes(phase)?snapshot.sessionId:null);
   return <section className="recording-workspace" aria-label="録音状態" tabIndex={-1}>
-    <div className="recording-workspace-heading"><button type="button" className="small-secondary" disabled={locked} onClick={onBack}>会議一覧へ戻る</button><span className="state-pill" role="status">{phaseText}</span></div>
+    <div className="recording-workspace-heading"><IconButton label="会議一覧へ戻る" icon="previous" type="button" className="small-secondary" disabled={locked} onClick={onBack} /><span className="state-pill" role="status">{phaseText}</span></div>
     <h1>{active?"録音":"新しい録音"}</h1>
-    {preparation?<label htmlFor="recording-title">会議名<input id="recording-title" value={preparation.title} disabled={locked||preparation.submitted} onChange={e=>onTitle(e.target.value)} maxLength={400}/></label>:<h2 className="recording-workspace-title" title={title}>{title}</h2>}
+    {preparation?<label htmlFor="recording-title">会議名<input ref={titleField} id="recording-title" value={preparation.title} disabled={locked||preparation.submitted} onChange={e=>onTitle(e.target.value)} maxLength={400}/></label>:<h2 className="recording-workspace-title" title={title}>{title}</h2>}
     {preparation&&!preparation.submitted&&<p>日時から仮の会議名を入れています。変更せずに開始できます。開始の確認前には会議や音声を保存しません。</p>}
     {active?<>
       <div className="clock" aria-label="録音経過時間">{formatElapsed(snapshot.elapsedMs)}</div>
