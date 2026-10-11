@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { compactInline } from "./minutes-edit";
+import { inputMethodOwnsEvent } from "./input-method";
 import type { Inline } from "./minutes-state";
 
 function units(node: Node): number {
@@ -90,8 +91,9 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
     // Use the native InputEvent so inputType is available on both WebKit/Chrome.
     const before = (event: InputEvent) => {
       if (disabled) { event.preventDefault(); return; }
-      if (evidenceOnly && event.inputType.startsWith("insert")) event.preventDefault();
-      else if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) { event.preventDefault(); insertText("\n"); }
+      if (evidenceOnly && event.inputType.startsWith("insert")) { event.preventDefault(); return; }
+      if (inputMethodOwnsEvent(event, composing.current)) return;
+      if (["insertParagraph", "insertLineBreak"].includes(event.inputType)) { event.preventDefault(); insertText("\n"); }
     };
     field.addEventListener("beforeinput", before);
     return () => field.removeEventListener("beforeinput", before);
@@ -140,11 +142,11 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
   };
   return <div ref={root} className="minutes-rich-field" data-block={blockIndex} data-inline-address={addressKey} data-placeholder={evidenceOnly ? "根拠なし（手動追加）" : "入力してください"} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-label={label} aria-multiline="true" aria-readonly={disabled} tabIndex={0}
     onFocus={capture} onKeyUp={capture} onMouseUp={capture} onSelect={capture}
-    onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled) onEvidence?.(chip.dataset.evidenceId!, chip); }}
-    onKeyDown={event => { const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!, chip); } }}
+    onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled && !composing.current) onEvidence?.(chip.dataset.evidenceId!, chip); }}
+    onKeyDown={event => { if (inputMethodOwnsEvent(event.nativeEvent, composing.current) || event.repeat) return; const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!, chip); } }}
     onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={changed}
     onPaste={(event) => {
-      event.preventDefault(); if (disabled || evidenceOnly) return;
+      event.preventDefault(); if (disabled || evidenceOnly || composing.current) return;
       const value = event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
       insertText(value);
     }} onDrop={(e) => e.preventDefault()} />;

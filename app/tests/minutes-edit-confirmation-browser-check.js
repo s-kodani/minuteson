@@ -18,7 +18,7 @@ async (page, capturePath, detailUI) => {
     await settings().getByRole("button", { name: "確認を閉じる", exact: true }).click();
   };
   const openFormat = () => primary().getByRole("button", { name: "議事録の書式・構造操作", exact: true }).click();
-  const closeFormat = () => format().getByRole("button", { name: "確認を閉じる", exact: true }).click();
+  const closeFormat = async () => { if (await format().isVisible()) await format().getByRole("button", { name: "確認を閉じる", exact: true }).click(); };
   const boot = async () => { await page.reload(); await page.locator(".meeting-name").first().click(); await page.getByRole("tab", { name: "議事録", exact: true }).click(); await primary().getByRole("button", { name: "議事録を編集", exact: true }).click(); await editor().getByRole("textbox", { name: "議事録ブロック2", exact: true }).waitFor(); };
   await boot(); const text = editor().getByRole("textbox", { name: "議事録ブロック2", exact: true });
   const original = await text.textContent(); await page.evaluate(() => window.__mon.failMinutesSave = true); await text.fill("未保存の点検日メモ");
