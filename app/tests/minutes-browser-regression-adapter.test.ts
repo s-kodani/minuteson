@@ -144,6 +144,17 @@ test("minutes edit confirmation regression follows modal settings and captures s
   assert.match(code,/await count\("save_minutes_draft"\) === 1, "discard saved unwanted rich input or replayed failed save"/);
 });
 
+test("minutes workspace regression covers failed exit, explicit retries and surviving focus without extra saves",()=>{
+  const code=readFileSync(new URL("./detail-minutes-browser-check.js",import.meta.url),"utf8");
+  assert.doesNotThrow(()=>new Function(`return (${code})`));
+  assert.match(code,/failed exit silently replayed a save or exited editing/);
+  assert.match(code,/failed explicit retry lost focus\/input or sent multiple saves/);
+  assert.match(code,/document.activeElement\?\.textContent === "議事録保存を再試行"/);
+  assert.match(code,/document.activeElement\?\.getAttribute\("aria-label"\) === "編集を終了"/);
+  assert.match(code,/document.activeElement\?\.getAttribute\("aria-label"\) === "議事録を編集"/);
+  assert.match(code,/clean exit unnecessarily saved again/);
+});
+
 test("synthetic controls can be dismissed without clearing the failure or changing product controls", () => {
   const fixture=readFileSync(new URL("./detail-mock-browser-fixture.js",import.meta.url),"utf8");
   assert.match(fixture,/close.textContent = "合成操作を閉じる"/);

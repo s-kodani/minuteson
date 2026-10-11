@@ -5,6 +5,8 @@
 
 ## 2026-10-11 UI調整の区切りとコミット再開
 
+議事録の合成保存失敗で終了／切替を拒否し、追記・固定根拠と要対応を保持、無断再送なしを確認。明示retry成功で消えるbuttonのfocus欠落を補修し、再失敗時はretry、成功時は編集操作へ戻し、3秒保存待ち中に選んだ別focusを維持した。843成功（3.158387375秒）、型検査／Vite2.22秒、QA Cargo1分17秒。最終Macの通常編集／終了／Tabは成功、停止DB＋WAL全dump SHA不変。実Macの保存失敗の証拠には拡大しない。[限定証拠・検査種別・時間](verification/minutes-save-recovery-focus-2026-10-11.md)。全23タスク・実録音／配布／試用等の残件、正式評価／Windows保留を維持し、CI・録音・追加取得・通常Rust再実行なし。
+
 Macで議事録の太字／斜体・見出し2／リスト・2列表と実Markdown、候補採用／直前版復元の取消・明示確定、冷起動後の書式／固定8根拠を確認。編集終了時のworkspace focus残りを補修し、最終Macの本文／表からの2反復で編集入口復帰、合成3秒保存中の別focus保持を確認した。838成功（1.873402084秒）、型検査／Vite1.56秒、QA Cargo1分11秒。復元後／冷起動／focus確認終了のDB＋WAL全dump SHA一致、旧QAのdraft／exportとbootstrap保持。[限定証拠・意図したテスト会議変更・時間](verification/minutes-rich-restore-native-2026-10-11.md)。全書式／競合／保存失敗／実IME／VoiceOver、実録音・配布／試用など全23タスクの残件は維持。CI・録音・追加取得・通常Rust再実行なし。
 
 取り込み読込後の初期focusを補修。非表示の兄弟viewの有効な取消を初期候補から除外し、readiness後の安全な×focusをMac通常選択2回・合成2回で確認。初期Enter／破棄確認取消・Tab／逆Tab・明示取消後入口復帰、停止DB＋WALの全dump SHA不変・5会議保持を確認。836成功（1.806819083秒）、型検査／Vite1.50秒、QA Cargo1分13秒。[限定証拠・時間](verification/ui-import-initial-focus-2026-10-11.md)。以下の取り込み初期focus残件は修正前の履歴。全UI／IME／VoiceOver・23タスクの完了ではなく、CI／録音／追加取得・通常Rust再実行なし。

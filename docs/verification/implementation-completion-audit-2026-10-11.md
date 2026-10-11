@@ -4,6 +4,8 @@
 
 ## 今回確認した現在の検査結果
 
+合成の議事録保存失敗で入力／要対応保持・終了／切替拒否・無断再送なし、明示retry再失敗／成功を確認。成功時のfocus欠落を補修し、retry／編集操作への安全な復帰と保存待ち中の別focus保持を検査した。実キューの部分ack後失敗保護も含め843成功・型検査／QA成功。Mac通常編集／終了／Tabと停止DB＋WAL全dump不変は確認したが、実Macの容量不足・保存競合の検証ではない。[限定証拠](minutes-save-recovery-focus-2026-10-11.md)。全書式・全異常経路・IME／VoiceOver・全23タスクの残件を維持する。
+
 議事録のMac書式編集（太字・斜体／見出し2／リスト／2列表）→実Markdown→候補#2採用→編集済み#1復元と、各確認のEscape取消・入口focus、冷起動後の書式／8根拠を確認。編集終了focus残りを補修しMac2反復／合成遅延保存中の別focus保持を検査。838成功・型検査／QA成功、復元後から冷起動・最終focus確認までの全DB＋WAL dump一致。[限定証拠・意図した対象会議変更](minutes-rich-restore-native-2026-10-11.md)。全書式／全競合・保存失敗／長文／実IME／VoiceOverは残し、全23タスクを完了にしない。
 
 取り込み読込後の初期focusがcontainerに残る条件を再現し、非表示兄弟viewの取消を候補から除外した。最終Mac通常選択2回で×focus・初期Enter／Escape確認取消・Tab／逆Tab・明示取消後入口復帰を取得。836成功・型検査／QA成功、停止DB＋WAL全dump SHA不変。[限定証拠](ui-import-initial-focus-2026-10-11.md)。以下の初期focus残件は修正前の履歴であり、他modal順序・全主要操作／IME／VoiceOver・全23タスクの完了にしない。
