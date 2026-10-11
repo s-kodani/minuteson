@@ -31,6 +31,16 @@ test("QA script builds with the QA flavor without launching or invoking CI", () 
   assert.equal(pkg.scripts.tauri, "tauri");
 });
 
+test("all macOS flavors declare recording privacy purposes on the responsible parent app", () => {
+  assert.equal(macos.bundle.macOS.infoPlist, "release-entitlements/Info.plist");
+  const purposes = readFileSync(new URL(`../src-tauri/${macos.bundle.macOS.infoPlist}`, import.meta.url), "utf8");
+  for (const key of ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"]) {
+    assert.match(purposes, new RegExp(`<key>${key}</key>\\s*<string>[^<]+</string>`, "u"));
+  }
+  // This is a usage declaration, not an entitlement or an OS permission grant.
+  assert.doesNotMatch(purposes, /com\.apple\.security/);
+});
+
 test("native macOS packaging includes the generated headless embedding helper at the runtime resource path", () => {
   assert.equal(macos.bundle.resources["../../probes/speaker-embedding/.build/mon-speaker-embedding"], "mon-speaker-embedding");
   const build = readFileSync(new URL("../build-macos.sh", import.meta.url), "utf8");

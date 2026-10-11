@@ -320,6 +320,57 @@ pub(super) struct Manifest {
     system: Track,
 }
 impl Manifest {
+    // This path presents a failed initialization, never accepts recorded audio.
+    // The requested owner/scope stay mandatory; an identity not yet obtained by
+    // the helper must not conceal its primary initialization error.
+    pub(super) fn failure(&self, request: &super::Request) -> Result<Option<String>, String> {
+        if self.state != "failed" {
+            return Ok(None);
+        }
+        if self.schema_version != 2
+            || self.capture_test.owner_id != request.run_id
+            || self.capture_test.duration_seconds != 5
+            || self.capture_mode != request.capture_scope.mode
+            || self.backend != "screencapturekit"
+            || self.target_pids
+                != request
+                    .capture_scope
+                    .application
+                    .as_ref()
+                    .map(|a| vec![a.pid])
+                    .unwrap_or_default()
+            || self
+                .target_application_identity
+                .as_ref()
+                .is_some_and(|identity| {
+                    Some(identity) != request.capture_scope.application.as_ref()
+                })
+        {
+            return Err("テストの所有または取得範囲が開始条件と一致しません".into());
+        }
+        if self
+            .microphone_uid
+            .as_ref()
+            .is_some_and(|uid| uid != &request.microphone_uid)
+        {
+            return Err("テストのマイクが開始条件と一致しません".into());
+        }
+        let reason = self
+            .errors
+            .iter()
+            .filter(|error| !error.trim().is_empty())
+            .take(3)
+            .map(|error| error.chars().take(1200).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        Ok(Some(if reason.is_empty() {
+            "録音ヘルパーの初期化または保存に失敗しました。権限・機器・保存先を確認してください"
+                .into()
+        } else {
+            reason
+        }))
+    }
+
     pub(super) fn require_owner(&self, request: &super::Request) -> Result<(), String> {
         if self.schema_version != 2
             || self.capture_test.owner_id != request.run_id

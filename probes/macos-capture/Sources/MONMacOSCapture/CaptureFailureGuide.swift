@@ -1,8 +1,30 @@
+import AVFoundation
 import Foundation
 
 /// Presentation only: keep status codes and evidence unchanged. Do not infer
 /// recovered audio, acquisition closure, a loss bound or permission to delete.
 enum CaptureFailureGuide {
+  static func microphonePermission(_ status: AVAuthorizationStatus) -> String {
+    let reason: String
+    switch status {
+    case .notDetermined:
+      reason = "マイクの権限確認が完了しませんでした（未決定）。許可画面が出ない場合も、拒否されたとは限りません。"
+    case .denied:
+      reason = "マイクの利用が許可されていません。"
+    case .restricted:
+      reason = "マイクの利用がシステムの制限で禁止されています。端末の管理者に確認してください。"
+    case .authorized:
+      return "マイク権限は許可済みです。"
+    @unknown default:
+      reason = "マイク権限の状態を確認できませんでした。"
+    }
+    return reason + " システム設定 → プライバシーとセキュリティ → マイクで、MON QA または MON Capture Probe（録音ヘルパー）の許可を確認してください。設定変更後はアプリを再起動してマイク一覧を再確認してください。"
+  }
+
+  static func microphoneInitialization(_ error: Error) -> String {
+    "マイクの音声エンジンを初期化できませんでした。選択機器の接続・使用状況を確認してください: \(error)"
+  }
+
   static func message(_ code: String) -> String {
     let reason: String
     switch code {

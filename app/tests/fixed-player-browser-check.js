@@ -30,8 +30,8 @@ async (page, capturePath, detailUI) => {
   await play();
   check(await row.getAttribute("aria-current") === "true" && await row.getByText("再生中",{ exact:true }).isVisible(),"playing row lacks textual/current indicator");
   await pause(); check(await row.getAttribute("aria-current") === null && await row.getByText("再生中",{ exact:true }).count() === 0,"paused row still claims playing");
-  check(await player.evaluate(e => !e.closest(".content") && !e.closest(".transcript-card")) && (await dock.innerText()).includes("同期精度は未検証"),"player still belongs to scrollport or hid alignment warning");
-  results.push("selected utterance controls and alignment warning render outside the scrolling body");
+  check(await player.evaluate(e => !e.closest(".content") && !e.closest(".transcript-card")) && !(await dock.innerText()).includes("同期未検証") && await page.locator(".toast-body").filter({hasText:"同期未検証"}).count()===1,"player belongs to scrollport or alignment is not a toast");
+  results.push("selected utterance controls remain in the dock; unverified alignment is a toast, not an extra dock row");
   await player.evaluate(e => { window.monBrowserFixture.playerNode = e; });
   const prepareBefore = (await counts()).prepare;
   for(const width of [1280,1200,960]) {

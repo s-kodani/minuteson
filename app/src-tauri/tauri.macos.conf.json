@@ -15,7 +15,8 @@
     },
     "macOS": {
       "minimumSystemVersion": "15.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "infoPlist": "release-entitlements/Info.plist"
     }
   }
 }

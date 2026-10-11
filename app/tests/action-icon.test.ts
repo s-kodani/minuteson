@@ -15,8 +15,8 @@ test("icon buttons retain human labels in hover help and accessibility without d
 
 test("audio icons keep playback, preparation and lock guards and descriptive state labels", () => {
   const player = source("transcript-audio.tsx"), meeting = source("meeting-audio.tsx");
-  assert.match(player, /label=\{snapshot.playing \? "一時停止" : "再生"\} icon=\{snapshot.playing \? "pause" : "play"\} onClick=\{playFromBar\} disabled=\{preparing \|\| locked\}/);
-  assert.match(player, /label="先頭へ" icon="restart" onClick=\{\(\) => \{ player.pause\(\); player.seek\(0\); \}\} disabled=\{!info \|\| locked\}/);
+  assert.match(player, /label=\{preparing \? "再生準備を取り消す" : snapshot.playing \? "一時停止" : "再生"\} icon=\{preparing \? "close" : snapshot.playing \? "pause" : "play"\} onClick=\{preparing \? clear : playFromBar\} disabled=\{locked\}/);
+  assert.match(player, /label="先頭へ" icon="restart" onClick=\{\(\) => \{ player.pause\(\); player.seek\(0\); \}\} disabled=\{!info \|\| preparing \|\| locked\}/);
   assert.match(player, /label="再生を閉じる" icon="close" onClick=\{clear\} disabled=\{locked\}/);
   assert.match(meeting, /<OptionsModal label="再生設定" icon="more"/);
   assert.match(source("options-modal.tsx"), /aria-haspopup="dialog" aria-controls=\{scope\?\.id\?\?id\} aria-expanded=\{open && !hidden\}/);

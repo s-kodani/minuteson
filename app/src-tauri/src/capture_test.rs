@@ -537,8 +537,11 @@ impl CaptureTests {
                                 Ok(()) => run.directory = None,
                                 Err(error) => {
                                     run.snapshot.cleanup_pending = true;
-                                    run.snapshot.error_message =
-                                        Some(format!("一時音声の回収が未完了です: {error}"));
+                                    let primary =
+                                        run.snapshot.error_message.take().unwrap_or_default();
+                                    run.snapshot.error_message = Some(format!(
+                                        "{primary} / 一時音声の回収が未完了です: {error}"
+                                    ));
                                 }
                             }
                         }
@@ -686,6 +689,13 @@ fn watch(
     let mut reported = false;
     loop {
         if let Some(status) = child.exited()? {
+            if !cancel.load(Ordering::Acquire) {
+                if let Some(manifest) = directory.manifest()? {
+                    if let Some(reason) = manifest.failure(request)? {
+                        return Err(reason);
+                    }
+                }
+            }
             if status.success() && !cancel.load(Ordering::Acquire) {
                 return Ok(());
             }
@@ -704,6 +714,9 @@ fn watch(
             );
         }
         if let Some(manifest) = directory.manifest()? {
+            if let Some(reason) = manifest.failure(request)? {
+                return Err(reason);
+            }
             manifest.require_owner(request)?;
             if manifest.state == "recording" && !reported && !cancel.load(Ordering::Acquire) {
                 recording()?;

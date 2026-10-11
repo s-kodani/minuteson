@@ -1848,27 +1848,35 @@ fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
     store.snapshot()
 }
 #[tauri::command]
-fn get_capture_test_snapshot(
+async fn get_capture_test_snapshot(
     window: WebviewWindow,
     run_id: Option<String>,
 ) -> Result<Option<capture_test::Snapshot>, String> {
     if window.label() != "main" {
         return Err("録音前テストはメイン画面から確認してください".into());
     }
-    window
-        .state::<capture_test::CaptureTests>()
-        .snapshot(run_id.as_deref())
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<capture_test::CaptureTests>()
+            .snapshot(run_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn get_capture_test_recovery(
+async fn get_capture_test_recovery(
     window: WebviewWindow,
 ) -> Result<capture_test::recovery::Snapshot, String> {
     if window.label() != "main" {
         return Err("テスト音声の回復はメイン画面から確認してください".into());
     }
-    window
-        .state::<capture_test::CaptureTests>()
-        .recovery_snapshot()
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<capture_test::CaptureTests>()
+            .recovery_snapshot()
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn retry_capture_test_recovery(
@@ -1899,14 +1907,17 @@ async fn start_capture_test(
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn cancel_capture_test(
+async fn cancel_capture_test(
     window: WebviewWindow,
     run_id: String,
 ) -> Result<capture_test::Snapshot, String> {
     if window.label() != "main" {
         return Err("録音前テストはメイン画面から停止してください".into());
     }
-    capture_test::CaptureTests::cancel(window.app_handle(), &run_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || capture_test::CaptureTests::cancel(&app, &run_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn discard_capture_test(window: WebviewWindow, run_id: String) -> Result<(), String> {
@@ -1919,14 +1930,17 @@ async fn discard_capture_test(window: WebviewWindow, run_id: String) -> Result<(
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn get_capture_test_levels(
+async fn get_capture_test_levels(
     window: WebviewWindow,
     run_id: String,
 ) -> Result<input_levels::InputLevels, String> {
     if window.label() != "main" {
         return Err("録音前テストはメイン画面から確認してください".into());
     }
-    capture_test::CaptureTests::levels(window.app_handle(), &run_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || capture_test::CaptureTests::levels(&app, &run_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn prepare_capture_test_playback(
@@ -1946,34 +1960,45 @@ async fn prepare_capture_test_playback(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn get_recording_levels(
+async fn get_recording_levels(
     window: WebviewWindow,
     session_id: String,
 ) -> Result<input_levels::InputLevels, String> {
     if window.label() != "main" && window.label() != "recorder" {
         return Err("入力レベルは録音画面から確認してください".into());
     }
-    RecorderController::levels(window.app_handle(), &session_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || RecorderController::levels(&app, &session_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn get_recording_writes(
+async fn get_recording_writes(
     window: WebviewWindow,
     session_id: String,
 ) -> Result<recording_writes::Snapshot, String> {
     if window.label() != "main" && window.label() != "recorder" {
         return Err("書込み状態は録音画面から確認してください".into());
     }
-    RecorderController::writes(window.app_handle(), &session_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || RecorderController::writes(&app, &session_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn get_recording_input_status(
+async fn get_recording_input_status(
     window: WebviewWindow,
     session_id: String,
 ) -> Result<input_status::Snapshot, String> {
     if window.label() != "main" && window.label() != "recorder" {
         return Err("入力状態は録音画面から確認してください".into());
     }
-    RecorderController::input_status(window.app_handle(), &session_id)
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::input_status(&app, &session_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn get_recording_input_history_status(
@@ -2063,7 +2088,7 @@ async fn acknowledge_archived_recording_input_notice(
 }
 
 #[tauri::command]
-fn receive_recording_input_notice(
+async fn receive_recording_input_notice(
     window: WebviewWindow,
     session_id: String,
     notice_id: String,
@@ -2074,54 +2099,72 @@ fn receive_recording_input_notice(
     if window.label() != "main" && window.label() != "recorder" {
         return Err("入力通知は録音画面から受付してください".into());
     }
-    RecorderController::input_notice_action(
-        window.app_handle(),
-        &session_id,
-        &notice_id,
-        &recipient_id,
-        window.label(),
-        generation,
-        input_status::queue::Action::Receive,
-        receive_id.as_deref(),
-    )
+    let app = window.app_handle().clone();
+    let target = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::input_notice_action(
+            &app,
+            &session_id,
+            &notice_id,
+            &recipient_id,
+            &target,
+            generation,
+            input_status::queue::Action::Receive,
+            receive_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn render_recording_input_notice(
+async fn render_recording_input_notice(
     window: WebviewWindow,
     session_id: String,
     notice_id: String,
     recipient_id: String,
     generation: u64,
 ) -> Result<input_status::Receipt, String> {
-    RecorderController::input_notice_action(
-        window.app_handle(),
-        &session_id,
-        &notice_id,
-        &recipient_id,
-        window.label(),
-        Some(generation),
-        input_status::queue::Action::Render,
-        None,
-    )
+    let app = window.app_handle().clone();
+    let target = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::input_notice_action(
+            &app,
+            &session_id,
+            &notice_id,
+            &recipient_id,
+            &target,
+            Some(generation),
+            input_status::queue::Action::Render,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn close_recording_input_notice(
+async fn close_recording_input_notice(
     window: WebviewWindow,
     session_id: String,
     notice_id: String,
     recipient_id: String,
     generation: u64,
 ) -> Result<input_status::Receipt, String> {
-    RecorderController::input_notice_action(
-        window.app_handle(),
-        &session_id,
-        &notice_id,
-        &recipient_id,
-        window.label(),
-        Some(generation),
-        input_status::queue::Action::Close,
-        None,
-    )
+    let app = window.app_handle().clone();
+    let target = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::input_notice_action(
+            &app,
+            &session_id,
+            &notice_id,
+            &recipient_id,
+            &target,
+            Some(generation),
+            input_status::queue::Action::Close,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2219,14 +2262,29 @@ async fn get_capture_applications(
 }
 
 #[tauri::command]
-fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, String> {
+async fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, String> {
     if !matches!(window.label(), "main" | "recorder") {
         return Err("Only the recording windows can stop recording".into());
     }
     if window.state::<StopDecisionStore>().snapshot().visible() {
         return Err("開いている録音確認で決定してください。停止は重複送信していません".into());
     }
-    RecorderController::stop(window.app_handle())
+    // Bind the request before dispatch: a delayed stop must not target a later
+    // session that replaced the one visible when the user pressed the button.
+    let session = window
+        .state::<SessionStore>()
+        .snapshot()
+        .session_id
+        .ok_or("停止できる録音がありません")?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if app.state::<StopDecisionStore>().snapshot().visible() {
+            return Err("開いている録音確認で決定してください。停止は重複送信していません".into());
+        }
+        RecorderController::stop_session(&app, &session)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -392,6 +392,89 @@ fn saved_fixture() -> (files::TestDirectory, Request, serde_json::Value) {
     (directory, request, manifest)
 }
 
+#[test]
+fn failed_initialization_reports_primary_error_without_accepting_unconfirmed_audio() {
+    let (directory, request, mut manifest) = saved_fixture();
+    manifest["state"] = serde_json::json!("failed");
+    manifest["microphoneDeviceUID"] = serde_json::Value::Null;
+    manifest["microphone"]["frames"] = serde_json::json!(0);
+    manifest["system"]["frames"] = serde_json::json!(0);
+    manifest["errors"] = serde_json::json!([
+        "マイクの権限確認が完了しませんでした（未決定）",
+        "no system samples"
+    ]);
+    write_manifest(&directory, &manifest);
+    let failed = directory.manifest().unwrap().unwrap();
+    assert!(failed
+        .failure(&request)
+        .unwrap()
+        .unwrap()
+        .starts_with("マイクの権限確認"));
+    // The acceptance path still rejects a missing UID and failed state.
+    assert!(failed.require_owner(&request).is_err());
+    assert!(files::verify(&directory, &request, &|| false).is_err());
+    for (key, value) in [
+        ("microphoneDeviceUID", serde_json::json!("another-mic")),
+        ("targetPIDs", serde_json::json!([123])),
+        ("captureMode", serde_json::json!("application")),
+    ] {
+        let mut changed = manifest.clone();
+        changed[key] = value;
+        write_manifest(&directory, &changed);
+        assert!(directory
+            .manifest()
+            .unwrap()
+            .unwrap()
+            .failure(&request)
+            .is_err());
+    }
+    manifest["captureTest"]["ownerId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    write_manifest(&directory, &manifest);
+    assert!(directory
+        .manifest()
+        .unwrap()
+        .unwrap()
+        .failure(&request)
+        .is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn initialization_failure_is_preserved_before_and_after_helper_exit() {
+    for already_exited in [false, true] {
+        let (directory, request, mut manifest) = saved_fixture();
+        manifest["state"] = serde_json::json!("failed");
+        manifest["microphoneDeviceUID"] = serde_json::Value::Null;
+        manifest["errors"] = serde_json::json!(["audio engine initialization failed -123"]);
+        write_manifest(&directory, &manifest);
+        let mut command = if already_exited {
+            Command::new("/usr/bin/false")
+        } else {
+            let mut c = Command::new("/bin/sleep");
+            c.arg("30");
+            c
+        };
+        let child = Probe(Mutex::new(command.spawn().unwrap()));
+        if already_exited {
+            child.0.lock().unwrap().wait().unwrap();
+        }
+        let result = watch(
+            &directory,
+            &child,
+            &request,
+            &AtomicBool::new(false),
+            Duration::from_secs(1),
+            || panic!("failed initialization is not recording"),
+        );
+        child.terminate().unwrap();
+        assert_eq!(
+            result.unwrap_err(),
+            "audio engine initialization failed -123"
+        );
+        assert!(child.exited().unwrap().is_some());
+    }
+}
+
 fn read_all(mut audio: crate::playback::PreparedAudio, frames: u64, value: f32) {
     assert_eq!(audio.total_frames(), frames);
     assert_eq!((audio.sample_rate, audio.channels), (8000, 2));

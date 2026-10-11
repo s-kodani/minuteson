@@ -41,6 +41,43 @@ fn require_level_session(
     Ok(())
 }
 
+// Commit the canonical phase while owning the capture, then release it before
+// dispatching anything that may enter a WebView or the native event loop.
+fn publish_after_unlock<G, T>(
+    guard: G,
+    commit: impl FnOnce() -> T,
+    dispatch: impl FnOnce(&T),
+) -> T {
+    let snapshot = commit();
+    drop(guard);
+    dispatch(&snapshot);
+    snapshot
+}
+
+fn should_show_panel(snapshot: &RecordingSnapshot, owner: &str) -> bool {
+    snapshot.session_id.as_deref() == Some(owner)
+        && matches!(
+            snapshot.phase,
+            RecordingPhase::Preparing | RecordingPhase::Recording
+        )
+}
+
+fn mark_started(store: &SessionStore, owner: &str) -> bool {
+    store
+        .update_if(|snapshot| {
+            if snapshot.session_id.as_deref() != Some(owner)
+                || snapshot.phase != RecordingPhase::Preparing
+            {
+                return false;
+            }
+            snapshot.phase = RecordingPhase::Recording;
+            snapshot.microphone_connected = false;
+            snapshot.system_audio_connected = false;
+            true
+        })
+        .is_some()
+}
+
 fn recording_command(
     binary: &Path,
     output: &Path,
@@ -464,26 +501,37 @@ impl RecorderController {
             writes,
             input_status: Arc::new(Mutex::new(input_status)),
         });
-        let snapshot = publish(app, |state| {
-            state.phase = RecordingPhase::Preparing;
-            state.elapsed_ms = 0;
-            state.microphone_connected = false;
-            state.system_audio_connected = false;
-            state.meeting_id = Some(meeting_id.to_owned());
-            state.session_id = Some(session.id.clone());
-            state.error_message = None;
-        });
-        if let Some(panel) = app.get_webview_window("recorder") {
-            let _ = panel.show();
-        }
+        let snapshot = publish_after_unlock(
+            active,
+            || {
+                app.state::<SessionStore>().update(|state| {
+                    state.phase = RecordingPhase::Preparing;
+                    state.elapsed_ms = 0;
+                    state.microphone_connected = false;
+                    state.system_audio_connected = false;
+                    state.meeting_id = Some(meeting_id.to_owned());
+                    state.session_id = Some(session.id.clone());
+                    state.error_message = None;
+                })
+            },
+            |_| notify_session(app),
+        );
         let worker_app = app.clone();
-        let worker_session = session.id;
+        let worker_session = session.id.clone();
+        // Supervision starts before scheduling the panel. A delayed/failed UI
+        // must never leave an exited helper and an unobserved preparing session.
         std::thread::spawn(move || watch_probe(worker_app, child, worker_session, output));
+        let panel_app = app.clone();
+        let expected_session = session.id;
+        let _ = app.run_on_main_thread(move || {
+            let current = panel_app.state::<SessionStore>().snapshot();
+            if should_show_panel(&current, &expected_session) {
+                if let Some(panel) = panel_app.get_webview_window("recorder") {
+                    let _ = panel.show();
+                }
+            }
+        });
         Ok(snapshot)
-    }
-
-    pub fn stop(app: &AppHandle) -> Result<RecordingSnapshot, String> {
-        Self::stop_target(app, None)
     }
 
     pub fn stop_session(app: &AppHandle, session: &str) -> Result<RecordingSnapshot, String> {
@@ -523,7 +571,14 @@ impl RecorderController {
                 .kill();
             return Err(format!("録音停止要求を書き込めません: {error}"));
         }
-        let snapshot = publish(app, |state| state.phase = RecordingPhase::Stopping);
+        let snapshot = publish_after_unlock(
+            active,
+            || {
+                app.state::<SessionStore>()
+                    .update(|state| state.phase = RecordingPhase::Stopping)
+            },
+            |_| notify_session(app),
+        );
         Ok(snapshot)
     }
 }
@@ -532,6 +587,107 @@ impl RecorderController {
 mod tests {
     use super::*;
     const SESSION: &str = "735027d4-a03e-43d3-830a-21e767dfaf88";
+    #[test]
+    fn blocked_start_notification_does_not_block_concurrent_poll_or_stop() {
+        let capture = Arc::new(Mutex::new(()));
+        let store = Arc::new(SessionStore::default());
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let worker_capture = capture.clone();
+        let worker_store = store.clone();
+        let worker = std::thread::spawn(move || {
+            publish_after_unlock(
+                worker_capture.lock().unwrap(),
+                || {
+                    worker_store.update(|s| {
+                        s.session_id = Some(SESSION.into());
+                        s.phase = RecordingPhase::Preparing;
+                    })
+                },
+                |_| {
+                    ready_tx.send(()).unwrap();
+                    resume_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                    assert_eq!(worker_store.snapshot().phase, RecordingPhase::Stopping);
+                    assert!(!mark_started(&worker_store, SESSION));
+                },
+            );
+        });
+        ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let guard = capture
+            .try_lock()
+            .expect("UI dispatch retained capture lock");
+        require_level_session(SESSION, &store.snapshot(), SESSION).unwrap();
+        publish_after_unlock(
+            guard,
+            || store.update(|s| s.phase = RecordingPhase::Stopping),
+            |_| {},
+        );
+        resume_tx.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(store.snapshot().phase, RecordingPhase::Stopping);
+    }
+    #[test]
+    fn start_notification_allows_immediate_capture_poll_and_stop() {
+        let capture = Mutex::new(());
+        let store = SessionStore::default();
+        let guard = capture.lock().unwrap();
+        let started = publish_after_unlock(
+            guard,
+            || {
+                assert!(capture.try_lock().is_err());
+                store.update(|s| {
+                    s.session_id = Some(SESSION.into());
+                    s.phase = RecordingPhase::Preparing;
+                })
+            },
+            |snapshot| {
+                // This callback stands at the native-dispatch boundary. Both poll
+                // and stop must acquire the capture lock without waiting on UI.
+                let _poll = capture
+                    .try_lock()
+                    .expect("capture held during notification");
+                require_level_session(SESSION, &store.snapshot(), SESSION).unwrap();
+                assert!(should_show_panel(snapshot, SESSION));
+                store.update(|s| s.phase = RecordingPhase::Stopping);
+            },
+        );
+        assert_eq!(started.phase, RecordingPhase::Preparing);
+        assert_eq!(store.snapshot().phase, RecordingPhase::Stopping);
+        assert!(!mark_started(&store, SESSION));
+        assert!(!should_show_panel(&store.snapshot(), SESSION));
+    }
+
+    #[test]
+    fn delayed_start_observation_cannot_overwrite_stop_or_another_owner() {
+        let store = SessionStore::default();
+        store.update(|s| {
+            s.session_id = Some(SESSION.into());
+            s.phase = RecordingPhase::Preparing;
+        });
+        assert!(mark_started(&store, SESSION));
+        assert!(!mark_started(&store, SESSION));
+        store.update(|s| s.phase = RecordingPhase::Stopping);
+        let stopped = store.snapshot();
+        assert!(!mark_started(&store, SESSION));
+        assert_eq!(store.snapshot(), stopped);
+        store.update(|s| {
+            s.session_id = Some("new-owner".into());
+            s.phase = RecordingPhase::Preparing;
+        });
+        assert!(!mark_started(&store, SESSION));
+        assert!(!should_show_panel(&store.snapshot(), SESSION));
+        for phase in [
+            RecordingPhase::Idle,
+            RecordingPhase::Error,
+            RecordingPhase::Saving,
+        ] {
+            store.update(|s| {
+                s.session_id = Some(SESSION.into());
+                s.phase = phase;
+            });
+            assert!(!should_show_panel(&store.snapshot(), SESSION));
+        }
+    }
     #[test]
     #[cfg(unix)]
     fn segmented_manifest_monitor_preserves_large_state_and_bounded_error() {
@@ -792,9 +948,20 @@ pub(crate) fn probe_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn publish(app: &AppHandle, change: impl FnOnce(&mut RecordingSnapshot)) -> RecordingSnapshot {
     let snapshot = app.state::<SessionStore>().update(change);
-    crate::recording_confirmation_window::session_changed(app, &snapshot);
-    let _ = app.emit("session-changed", snapshot.clone());
+    notify_session(app);
     snapshot
+}
+
+fn notify_session(app: &AppHandle) {
+    let handle = app.clone();
+    // Never synchronously wait for UI work while holding the lifecycle lock.
+    // Read the latest revision when delivered, so delayed work cannot restore
+    // a preparing/recording state over an already stopped or newer session.
+    let _ = app.run_on_main_thread(move || {
+        let snapshot = handle.state::<SessionStore>().snapshot();
+        crate::recording_confirmation_window::session_changed(&handle, &snapshot);
+        let _ = handle.emit("session-changed", snapshot);
+    });
 }
 
 fn manifest_state(output: &Path) -> Option<String> {
@@ -862,11 +1029,9 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
                     .is_ok()
                 {
                     announced = true;
-                    publish(&app, |snapshot| {
-                        snapshot.phase = RecordingPhase::Recording;
-                        snapshot.microphone_connected = false;
-                        snapshot.system_audio_connected = false;
-                    });
+                    if mark_started(&app.state::<SessionStore>(), &session_id) {
+                        notify_session(&app);
+                    }
                 }
             } else if state.phase == RecordingPhase::Stopping {
                 announced = true;
@@ -877,13 +1042,12 @@ fn watch_probe(app: AppHandle, child: Arc<Mutex<Child>>, session_id: String, out
         let system_connected = status
             .as_ref()
             .is_some_and(|status| status.system_connected());
-        if let Some(snapshot) = app.state::<SessionStore>().update_input_connections(
-            &session_id,
-            connected,
-            system_connected,
-        ) {
-            crate::recording_confirmation_window::session_changed(&app, &snapshot);
-            let _ = app.emit("session-changed", snapshot);
+        if app
+            .state::<SessionStore>()
+            .update_input_connections(&session_id, connected, system_connected)
+            .is_some()
+        {
+            notify_session(&app);
         }
         let seconds = started.elapsed().as_secs();
         if seconds > last_second {

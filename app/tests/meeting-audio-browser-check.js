@@ -29,7 +29,7 @@ async (page, capturePath, detailUI) => {
   check(await count("prepare_meeting_playback")===0,"idle mode selection performed native preparation");
   results.push("idle full-meeting action and explicit source modes never prepare or play on mount or selection alone");
   await play();await pause();
-  check((await player.innerText()).includes("60:00")&&(await dock.innerText()).includes("会議全体の音声")&&(await player.innerText()).includes("同期精度は未検証"),"whole timeline or unverified warning missing");
+  check((await player.innerText()).includes("60:00")&&(await dock.innerText()).includes("会議全体の音声")&&!(await player.innerText()).includes("同期未検証")&&await page.locator(".toast-body").filter({hasText:"同期未検証"}).count()===1,"whole timeline or unverified toast missing");
   check(await dock.getByRole("slider",{name:"発言内の再生位置",exact:true}).count()===0,"full meeting is mislabeled as an utterance range");
   results.push("whole meeting uses a distinct 60-minute range and unverified synchronization instead of an utterance duration");
   await slider.fill("960000");await speed.selectOption("1.5");await mode.selectOption("system");

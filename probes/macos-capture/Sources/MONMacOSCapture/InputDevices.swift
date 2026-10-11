@@ -73,7 +73,7 @@ enum InputDevices {
       let matches = devices.filter { $0.uid == uid }
       guard matches.count == 1 else {
         throw ProbeError.capture(
-          "selected microphone is unavailable; choose it again, no fallback was used")
+          "選択したマイクが見つかりません。機器の接続を確認して選び直してください。別のマイクへの自動切替はしていません。")
       }
       return matches[0]
     }

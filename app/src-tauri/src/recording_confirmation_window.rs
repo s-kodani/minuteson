@@ -166,7 +166,7 @@ pub fn request_recording_confirmation(
     Ok(current)
 }
 #[tauri::command]
-pub fn decide_recording_confirmation(
+pub async fn decide_recording_confirmation(
     window: WebviewWindow,
     id: String,
     stop: bool,
@@ -175,7 +175,19 @@ pub fn decide_recording_confirmation(
     if window.label() != LABEL {
         return Err("録音確認ウィンドウから決定してください".into());
     }
-    let app = window.app_handle();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        decide_recording_confirmation_blocking(&app, &id, stop, expected_preparing)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn decide_recording_confirmation_blocking(
+    app: &AppHandle,
+    id: &str,
+    stop: bool,
+    expected_preparing: bool,
+) -> Result<StopDecision, String> {
     let store = app.state::<StopDecisionStore>();
     if !stop {
         let value = store.dismiss(&id)?;

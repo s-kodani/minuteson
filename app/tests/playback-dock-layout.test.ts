@@ -32,7 +32,19 @@ test("dock settings align with the first controls row rather than the whole mult
   assert.match(css,/\.meeting-playback-dock \.meeting-audio-actions \{[^}]*align-self:start;/);
   assert.match(css,/\.meeting-audio-settings \{ width:auto; \}/);
   assert.match(css,/:root \.meeting-playback-dock \.audio-controls>button\.playback-close \{ display:none; \}/);
-  assert.match(css,/\.meeting-playback-dock \.playback-alignment-note \{ grid-column:1 \/ -1; \}/);
+  assert.doesNotMatch(css,/playback-alignment-note/);
+});
+
+test("playback status never adds a visible dock row, and preparation retains a same-size cancel control", () => {
+  const player=source("transcript-audio.tsx");
+  assert.match(player,/<ToastNotice scope=\{meetingId\} type="playback-alignment" level="info" message=\{!preparing && info\?\.alignment === "unverified"/);
+  assert.match(player,/<ToastNotice scope=\{meetingId\} type="playback-error"/);
+  assert.doesNotMatch(player,/playback-alignment-note|\(info \|\| options.idleMeetingMode\) && !preparing/);
+  assert.match(player,/preparing && <span className="sr-only" role="status"/);
+  assert.match(player,/snapshot.buffering && <span className="sr-only" role="status"/);
+  assert.match(player,/label=\{preparing \? "再生準備を取り消す"/);
+  assert.match(player,/onClick=\{preparing \? clear : playFromBar\} disabled=\{locked\}/);
+  assert.match(player,/<OptionsModal label="音声欠損を確認" icon="more" attention><PlaybackMissing/);
 });
 
 test("return to full meeting is explicit, paused and stays in the playback settings modal", () => {

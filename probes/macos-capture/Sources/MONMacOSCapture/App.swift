@@ -1010,12 +1010,16 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     guard permission == .authorized else {
       throw ProbeError.permission(
-        "microphone permission is \(String(describing: permission)); grant it in System Settings and retry"
+        CaptureFailureGuide.microphonePermission(permission)
       )
     }
     recovery = try MicrophoneRecovery(uid: selected.uid, observe: inputEventObserver)
     deviceUID = selected.uid
-    try configure(selected)
+    do {
+      try configure(selected)
+    } catch {
+      throw ProbeError.capture(CaptureFailureGuide.microphoneInitialization(error))
+    }
   }
 
   private func configure(_ selected: CaptureInputDevice) throws {
@@ -1591,13 +1595,15 @@ public enum CaptureCommand {
         }
         manifest.state = "saved"
       } catch {
+        // Keep the initiating failure first. Cleanup can also fail when an
+        // input never started, but must not replace the permission/device error.
+        manifest.errors.append(String(describing: error))
         testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
         mic.stop()
         do {
           if options.backend == "coreaudio" { try tap.stop() } else { try await system.stop() }
         } catch { manifest.errors.append(String(describing: error)) }
         manifest.state = "failed"
-        manifest.errors.append(String(describing: error))
       }
       do {
         try power.release()
