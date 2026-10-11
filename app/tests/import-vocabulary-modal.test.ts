@@ -5,7 +5,7 @@ const source=(name:string)=>readFileSync(new URL(`../src/${name}`,import.meta.ur
 
 test("import vocabulary shares its native boundary and preserves fields while inactive",()=>{
   const panel=source("audio-import.tsx"), modal=source("common-modal.tsx");
-  assert.equal((panel.match(/<CommonModal\b/g)??[]).length,1);
+  assert.equal((panel.match(/<ScopedModal\b/g)??[]).length,1);
   assert.doesNotMatch(panel,/<OptionsModal|vocabularyOpen && vocabularyContent/);
   assert.match(panel,/persistentReplacement=\{vocabularyContent\} replacement=\{vocabularyOpen \?/);
   assert.match(modal,/\(replacement \|\| persistentReplacement != null\) && <div className="common-modal-replacement" hidden=\{!replacement \|\| !!owned\}>\{persistentReplacement \?\? replacement\?\.content\}/);
@@ -15,7 +15,7 @@ test("import vocabulary shares its native boundary and preserves fields while in
 test("vocabulary switch restores its own entry and retains original save and confirmation guards",()=>{
   const panel=source("audio-import.tsx");
   assert.match(panel,/id="audio-import-dialog"/);
-  assert.match(panel,/aria-controls="audio-import-dialog" aria-expanded=\{vocabularyOpen\}/);
+  assert.match(panel,/aria-controls=\{scope\?\.id\?\?"audio-import-dialog"\} aria-expanded=\{vocabularyOpen\}/);
   assert.match(panel,/event.currentTarget.focus\(\{preventScroll:true\}\);setVocabularyOpen\(true\)/);
   assert.match(panel,/onDismiss:\(\)=>setVocabularyOpen\(false\),restoreTarget:\(\)=>vocabularyTrigger.current/);
   assert.match(panel,/className="import-vocabulary-fields" disabled=\{disabled\|\|!!snapshot\?\.saved\}/);

@@ -5,6 +5,11 @@ export type SettingsView = {
   open: boolean;
   title: string;
   className: string;
+  dialogClassName?: string;
+  labelledBy?: string;
+  blocked?: boolean;
+  restoreReady?: boolean;
+  dismissLabel?: "キャンセル" | "閉じる";
   replacement?: ModalReplacement | null;
   dismiss: () => void;
   entry: () => HTMLElement | null;
@@ -19,6 +24,7 @@ export class SettingsModalState {
   private listeners = new Set<() => void>();
   private snapshot: Snapshot = { active: null, returning: null };
   getSnapshot = () => this.snapshot;
+  getView = (id: string) => this.views.get(id) ?? null;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   update(view: SettingsView) {
     const old = this.views.get(view.id);

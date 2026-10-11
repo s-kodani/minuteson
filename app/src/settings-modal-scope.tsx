@@ -1,10 +1,10 @@
-import { createContext, useContext, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";
 import { SettingsModalState, type SettingsView } from "./settings-modal-state";
 import { topOpenModal } from "./modal-state";
 
-type Scope = { state: SettingsModalState; id: string; body: HTMLDivElement | null; replacement: HTMLDivElement | null };
+type Scope = { state: SettingsModalState; id: string; body: HTMLDivElement | null; replacement: HTMLDivElement | null; dialog: RefObject<HTMLDialogElement | null> };
 const Context = createContext<Scope | null>(null);
 export const useSettingsModalScope = () => useContext(Context);
 
@@ -21,7 +21,8 @@ export function SettingsModalScope({ children }: { children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const retained = useRef<SettingsView | null>(null);
   if (snapshot.active) retained.current = snapshot.active;
-  const owner = snapshot.active ?? retained.current;
+  const owner = snapshot.active ?? (retained.current ? state.getView(retained.current.id) ?? retained.current : null);
+  const context = useMemo(() => ({ state, id, body, replacement, dialog }), [state, id, body, replacement]);
   useLayoutEffect(() => {
     const current = snapshot.active;
     const enteringReplacement = !!current?.replacement && previous.current?.replacement?.key !== current.replacement.key;
@@ -58,9 +59,9 @@ export function SettingsModalScope({ children }: { children: ReactNode }) {
     }
     previous.current = current;
   }, [snapshot]);
-  return <Context.Provider value={{ state, id, body, replacement }}>{children}{createPortal(
+  return <Context.Provider value={context}>{children}{createPortal(
     <div className={`options-modal ${owner?.className ?? ""}`} data-options-modal-host style={{ display: "contents" }}>
-      <CommonModal ref={dialog} id={id} open={!!snapshot.active} nested externalContent data-settings-modal aria-label={owner?.title} className="options-dialog" dismissLabel="閉じる"
+      <CommonModal ref={dialog} id={id} open={!!snapshot.active} nested externalContent data-settings-modal aria-label={owner?.title} aria-labelledby={owner?.labelledBy} className={owner?.dialogClassName ?? "options-dialog"} dismissLabel={owner?.dismissLabel ?? "閉じる"} blocked={owner?.blocked} restoreReady={owner?.restoreReady}
         onDismiss={() => owner?.dismiss()} restoreTarget={owner?.entry} replacement={owner?.replacement}
         persistentReplacement={<div ref={setReplacement} className="settings-modal-slot" />}>
         <div ref={setBody} className="settings-modal-slot" />

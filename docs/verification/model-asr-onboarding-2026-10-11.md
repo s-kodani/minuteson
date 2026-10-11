@@ -175,6 +175,8 @@ PID30978の通常終了・消失を確認後、DB＋WALだけを `/private/tmp/m
 
 ## 保存待ちと操作中の表示を分離
 
+この節で残している取り込み直後の会議操作AX欠落には、後続の[取り込みも共通native境界に接続する修正と通常2件の実機確認](ui-import-shared-modal-2026-10-11.md)を追加した。以下はその修正前の時点の記録で、全UI／VoiceOverの完了へ拡大しない。
+
 末尾時刻修正は `757d327cced167ace941d065504e12674f926c61` でmainへPush済み。今回UIだけを変更し、保存barrierが待機する間は「編集の保存を確認中」、後続処理の間は「操作を実行中」と表示する。`runAfterSaving`のfinallyでidleへ戻し、保存失敗時には操作を開始しない。既存の重複操作ref／busy／失敗時の編集保持guardを維持。待機2段階・保存失敗・操作失敗・同期遷移・画面接続の5回帰を追加した。
 
 QA `/private/tmp/mon-saved-action-qa.RMzb5H/MON Onboarding QA.app`（main SHA `6985a6bc8dfd19df5aa89d1932a312fc74c9c80fddca94ae6f50479d77a39e5d`）を通常起動し、既存テスト会議の議事録再生成をGUIで開始。生成中に設定をEscapeで閉じ、「操作を実行中」と本文の「保存済み」、無効の編集／出力／タブ操作をnative AXで確認した。画像 `/private/tmp/mon-saved-action-running-20261011.png` SHA `917643d1164fda383bf1fe1fe48b13d40f525fe7653e0618a92638eb87b62013`。完了後は処理中表示が消え操作が有効に戻り、現在版#1／編集ありを保持。job `90cfb680-0e24-4ddf-9ab6-6bb232255f3f` はsucceeded 1/1、50,146ms、新候補#2 `689e7112-5087-4e78-ac6c-48260fc26cd6` のみを追加し、採用しない。正式品質の合格ではない。
