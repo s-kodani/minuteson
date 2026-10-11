@@ -90,6 +90,13 @@ struct MicrophoneRecovery {
 
   func owns(_ token: Binding) -> Bool { !stopped && binding == token }
 
+  func currentBinding() throws -> Binding {
+    guard let binding, accepts(binding) else {
+      throw ProbeError.capture("microphone binding is not connected")
+    }
+    return binding
+  }
+
   // A control-loop retry retires the engine but is not a new diagnosis.
   mutating func interruptForRetry() {
     if reason == "format_changed" {
