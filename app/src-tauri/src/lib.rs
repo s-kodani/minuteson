@@ -18,6 +18,8 @@ mod import_controller;
 mod input_levels;
 mod input_status;
 mod local_engine;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod minutes_document;
 mod model_application;
 #[cfg(target_os = "macos")]
@@ -2521,6 +2523,8 @@ pub fn run() {
         .manage(model_inspection::Inspector::default())
         .manage(exports::ExportController::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos_menu::install(app)?;
             #[cfg(target_os = "macos")]
             rounded_windows::configure(app.handle())?;
             let root = match app.path().app_data_dir() {
