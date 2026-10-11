@@ -243,20 +243,72 @@ def verify_notices(app):
             "noticesSha256": inventory["noticesSha256"], "inventorySha256": digest(inventory_path)}
 
 
-def verify_asr_runtime(app):
-    """Sealed build-time resource proof, NOT signed runtime/onboarding proof.
-
-    The payload CLI is still ad-hoc and inside a data TAR. Outer app signing or
-    notarization must not be reported as Developer ID signing of that CLI.
-    """
+def asr_module():
     spec = importlib.util.spec_from_file_location("mon_release_asr_runtime", REPOSITORY / "tools/mon_whisper_runtime.py")
     runtime = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runtime)
+    # One supervised command boundary, including Mach-O and signature checks.
+    runtime.command = command
+    return runtime
+
+
+def sign_asr_runtime(app, identity, team, policy):
+    """Reseal the CLI in our copied, not-yet-signed app; never change the cache."""
+    credentials(identity, team, None)
+    runtime = asr_module()
+    directory = private_path(app / "Contents/Resources/asr-runtime", directory=True)
+    with tempfile.TemporaryDirectory(prefix="mon-asr-sign-", dir=app.parent) as temporary:
+        work = Path(temporary)
+        extracted = work / "extracted"
+        extracted.mkdir(mode=0o700)
+        before = runtime.unpack_package(directory, extracted)
+        if before["runtimeSigning"] != "ad_hoc_only":
+            raise ValueError("release preparation must start from the original ad-hoc runtime")
+        binary = extracted / "bin/whisper-cli"
+        runtime.verify_binary(binary)
+        # Static CPU/Accelerate: no JIT, library-validation or debug exceptions.
+        sign(binary, identity, team, policy / "main.plist")
+        runtime.verify_binary(binary)
+        package = work / "package"
+        package.mkdir(mode=0o700)
+        after = runtime.package(binary, extracted / "notices/whisper-MIT.txt", package, signing_team=team)
+        if after["files"][1:] != before["files"][1:]:
+            raise ValueError("runtime signing changed the notice or pinned build provenance")
+        # Only the two known resources in our private copy are replaced, before
+        # signing its outer bundle. A failure cannot publish a success result.
+        for name in ("whisper-runtime.tar", "runtime-index.json"):
+            private_path(directory / name)
+            os.replace(private_path(package / name), directory / name)
+    return verify_asr_runtime(app, team)
+
+
+def verify_asr_runtime(app, team=None):
+    """Hash proof; with an explicit Team ID, also check the actual inner CLI.
+
+    Neither an outer app ticket nor JSON metadata proves standalone
+    notarization, Gatekeeper acceptance, native onboarding or license approval.
+    """
+    runtime = asr_module()
     index = runtime.verify_package(private_path(app / "Contents/Resources/asr-runtime", directory=True))
+    signing = "not_verified"
+    if team is not None:
+        if (not TEAM.fullmatch(team) or index["runtimeSigning"] != "developer_id_signed"
+                or index.get("signingTeamId") != team):
+            raise ValueError("release runtime signing metadata does not match the expected Team ID")
+        with tempfile.TemporaryDirectory(prefix="mon-asr-verify-", dir=app.parent) as temporary:
+            extracted = Path(temporary)
+            checked = runtime.unpack_package(app / "Contents/Resources/asr-runtime", extracted)
+            if checked != index:
+                raise ValueError("runtime package changed during signature verification")
+            binary = extracted / "bin/whisper-cli"
+            runtime.verify_binary(binary)
+            verify_signature(binary, team, runtime=True,
+                             entitlements=REPOSITORY / "app/src-tauri/release-entitlements/main.plist")
+        signing = "verified"
     return {"state": "packaged_onboarding_unverified", "engineVersion": index["engineVersion"],
             "sourceCommit": index["sourceCommit"], "archiveSha256": index["archive"]["sha256"],
             "archiveBytes": index["archive"]["bytes"], "runtimeSigning": index["runtimeSigning"],
-            "developerIdSigning": "not_verified", "standaloneNotarization": "not_verified",
+            "developerIdSigning": signing, "standaloneNotarization": "not_verified",
             "nativeOnboarding": "not_verified", "licenseReview": "not_verified"}
 
 
@@ -298,6 +350,7 @@ def build(output, identity, team, profile, environment):
         verify_notices(app)
         verify_asr_runtime(app)
         started = time.monotonic()
+        sign_asr_runtime(app, identity, team, policy)
         sign(capture, identity, team, policy / "capture.plist")
         sign(embedding, identity, team, policy / "embedding.plist")
         sign(app, identity, team, policy / "main.plist")
@@ -330,7 +383,7 @@ def build(output, identity, team, profile, environment):
             verify_signature(path, team, runtime=True, entitlements=policy / policy_file)
         verify_signature(dmg, team, runtime=False)
         dependency_notices = verify_notices(app)
-        asr_runtime = verify_asr_runtime(app)
+        asr_runtime = verify_asr_runtime(app, team)
         # Only this newly-created cache is reclaimed, after all owned commands
         # have returned and final artifacts are verified. Failures preserve it.
         now = cache.lstat()

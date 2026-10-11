@@ -271,7 +271,18 @@ def build_info():
             "distributionReady": False}
 
 
-def package(binary, license_file, destination):
+def signing_metadata(team=None):
+    """Packaging metadata only; callers must verify the actual OS signature."""
+    if team is None:
+        return {"runtimeSigning": "ad_hoc_only"}
+    import re
+    if not isinstance(team, str) or not re.fullmatch(r"[A-Z0-9]{10}", team):
+        raise ValueError("runtime signing Team ID is invalid")
+    return {"runtimeSigning": "developer_id_signed", "signingTeamId": team}
+
+
+def package(binary, license_file, destination, *, signing_team=None):
+    signing = signing_metadata(signing_team)
     private(destination, directory=True)
     if any(destination.iterdir()):
         raise ValueError("runtime package destination must be empty")
@@ -295,48 +306,91 @@ def package(binary, license_file, destination):
             entries.append({"relativePath": name, "bytes": len(content),
                             "sha256": hashlib.sha256(content).hexdigest()})
     index = {**build_info(), "archive": {"file": archive.name, "bytes": archive.stat().st_size,
-             "sha256": digest(archive)}, "files": entries, "runtimeSigning": "ad_hoc_only"}
+             "sha256": digest(archive)}, "files": entries, **signing}
     with (destination / "runtime-index.json").open("x", encoding="utf8") as output:
         json.dump(index, output, ensure_ascii=False, separators=(",", ":"))
     verify_package(destination)
     return index
 
 
-def verify_package(directory):
+def package_contents(directory):
+    """Verify the exact bytes we return, never extract paths from the TAR.
+
+    Signing metadata is not certificate verification. The release builder
+    independently checks the extracted Mach-O with the supplied Apple Team ID.
+    """
     private(directory, directory=True)
     if {path.name for path in directory.iterdir()} != {"runtime-index.json", "whisper-runtime.tar"}:
         raise ValueError("runtime package has missing or unknown files")
     index_path = private(directory / "runtime-index.json")
     if not 0 < index_path.stat().st_size <= 65536:
         raise ValueError("runtime index exceeds the metadata limit")
-    index = json.loads(index_path.read_text(encoding="utf8"))
+    with index_path.open("rb") as stream:
+        index_bytes = stream.read(65537)
+    if not 0 < len(index_bytes) <= 65536:
+        raise ValueError("runtime index exceeds the metadata read limit")
+    index = json.loads(index_bytes)
     expected = build_info()
-    if (not isinstance(index, dict) or set(index) != set(expected) | {"archive", "files", "runtimeSigning"}
+    if not isinstance(index, dict):
+        raise ValueError("runtime index is not an object")
+    team = index.get("signingTeamId")
+    signing = signing_metadata(team)
+    if (set(index) != set(expected) | {"archive", "files"} | set(signing)
             or any(json.dumps(index.get(key), sort_keys=True) != json.dumps(value, sort_keys=True) for key, value in expected.items())
-            or index.get("runtimeSigning") != "ad_hoc_only"):
+            or any(index.get(key) != value for key, value in signing.items())):
         raise ValueError("runtime index differs from the fixed CPU build definition")
     archive = private(directory / "whisper-runtime.tar")
+    # Bind hashes and member checks to one bounded snapshot. Verification of a
+    # path followed by a fresh unverified extract would allow replacement bytes.
+    with archive.open("rb") as stream:
+        archive_bytes = stream.read(MAX_PACKAGE + 1)
     if (not 0 < archive.stat().st_size <= MAX_PACKAGE
-            or index["archive"] != {"file": archive.name, "bytes": archive.stat().st_size, "sha256": digest(archive)}):
+            or index["archive"] != {"file": archive.name, "bytes": len(archive_bytes),
+                                    "sha256": hashlib.sha256(archive_bytes).hexdigest()}
+            or len(archive_bytes) > MAX_PACKAGE):
         raise ValueError("runtime archive size/SHA does not match its index")
     if not isinstance(index["files"], list) or len(index["files"]) != len(MEMBERS):
         raise ValueError("runtime package member list differs")
-    with tarfile.open(archive, "r:") as source:
+    contents = {}
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as source:
         count = 0
         for position, member in enumerate(source):
             if position >= len(MEMBERS) or member.name != MEMBERS[position] or not member.isfile():
                 raise ValueError("runtime archive has unsafe or unknown entries")
-            content = source.extractfile(member).read(MAX_PACKAGE + 1)
-            if not 0 < len(content) == member.size <= MAX_PACKAGE:
+            limit = MAX_PACKAGE if position == 0 else 65536
+            if not 0 < member.size <= limit:
+                raise ValueError("runtime archive member exceeds its limit")
+            content = source.extractfile(member).read(limit + 1)
+            if not 0 < len(content) == member.size <= limit:
                 raise ValueError("runtime archive member size differs")
             if index["files"][position] != {"relativePath": member.name, "bytes": len(content),
                                           "sha256": hashlib.sha256(content).hexdigest()}:
                 raise ValueError("runtime archive member SHA differs")
             if member.name == "build-info.json" and json.dumps(json.loads(content), sort_keys=True) != json.dumps(expected, sort_keys=True):
                 raise ValueError("runtime build provenance differs")
+            contents[member.name] = content
             count += 1
         if count != len(MEMBERS):
             raise ValueError("runtime archive member is missing")
+    return index, contents
+
+
+def verify_package(directory):
+    return package_contents(directory)[0]
+
+
+def unpack_package(directory, destination):
+    """Create only three fixed files in a new private, empty scratch directory."""
+    private(destination, directory=True)
+    if any(destination.iterdir()):
+        raise ValueError("runtime extraction destination must be empty")
+    index, contents = package_contents(directory)
+    for name in MEMBERS:
+        path = destination / name
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        with path.open("xb") as stream:
+            stream.write(contents[name])
+        path.chmod(0o755 if name == MEMBERS[0] else 0o600)
     return index
 
 
@@ -369,6 +423,8 @@ def prepare(cache, supplied, cmake, jobs):
         destination = cache / "package"
         if destination.exists() or destination.is_symlink():
             index = verify_package(destination)
+            if index["runtimeSigning"] != "ad_hoc_only":
+                raise ValueError("build cache must contain the original ad-hoc runtime package")
             return {"state": "checked_cached_package", "package": str(destination),
                     "archiveBytes": index["archive"]["bytes"], "networkBytes": 0}
         if shutil.disk_usage(cache).free < 384 * 1024 ** 2:

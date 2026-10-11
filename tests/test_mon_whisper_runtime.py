@@ -77,6 +77,74 @@ class RuntimeTests(unittest.TestCase):
             runtime.package(self.binary, self.license, self.package)
         self.assertEqual(unknown.read_bytes(), b"keep")
 
+    def test_signed_metadata_requires_team_but_never_claims_certificate_or_readiness(self):
+        index = runtime.package(self.binary, self.license, self.package, signing_team="ABCDE12345")
+        self.assertEqual(index["runtimeSigning"], "developer_id_signed")
+        self.assertEqual(index["signingTeamId"], "ABCDE12345")
+        self.assertEqual(runtime.verify_package(self.package), index)
+        self.assertEqual(index["publisherAuthenticity"], "not_verified")
+        self.assertFalse(index["distributionReady"])
+        path = self.package / "runtime-index.json"
+        for changes in [{"signingTeamId": None}, {"signingTeamId": 1234567890},
+                        {"signingTeamId": "abcde12345"}, {"signingTeamId": "ABCDE1234"},
+                        {"runtimeSigning": "ad_hoc_only"}, {"publisherAuthenticity": "verified"}]:
+            path.write_text(json.dumps({**index, **changes}))
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                runtime.verify_package(self.package)
+        path.write_text(json.dumps(index))
+        with patch.object(runtime.sys, "platform", "darwin"), patch.object(runtime.platform, "machine", return_value="arm64"), patch.object(runtime, "command") as command, self.assertRaises(ValueError):
+            runtime.prepare(self.root, None, None, 4)
+        command.assert_not_called()
+
+    def test_unpack_creates_only_fixed_checked_bytes_with_no_execution_or_overwrite(self):
+        index = runtime.package(self.binary, self.license, self.package)
+        destination = self.root / "unpacked"
+        destination.mkdir()
+        with patch.object(runtime, "command") as command:
+            self.assertEqual(runtime.unpack_package(self.package, destination), index)
+        command.assert_not_called()
+        self.assertEqual((destination / "bin/whisper-cli").read_bytes(), self.binary.read_bytes())
+        self.assertEqual((destination / "notices/whisper-MIT.txt").read_bytes(), self.license.read_bytes())
+        self.assertEqual(json.loads((destination / "build-info.json").read_bytes()), runtime.build_info())
+        self.assertEqual((destination / "bin/whisper-cli").stat().st_mode & 0o777, 0o755)
+        with self.assertRaises(ValueError):
+            runtime.unpack_package(self.package, destination)
+
+    def test_unpack_checks_tampering_before_creating_any_file(self):
+        runtime.package(self.binary, self.license, self.package)
+        destination = self.root / "unpacked"
+        destination.mkdir()
+        archive = self.package / "whisper-runtime.tar"
+        archive.write_bytes(archive.read_bytes() + b"changed")
+        with self.assertRaises(ValueError):
+            runtime.unpack_package(self.package, destination)
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_unpack_rejects_unsafe_member_or_oversized_notice_even_with_updated_archive_hash(self):
+        index = runtime.package(self.binary, self.license, self.package)
+        archive = self.package / "whisper-runtime.tar"
+        for bad_name, kind, content in [("../outside", tarfile.REGTYPE, b"bad"),
+                                       ("bin/whisper-cli", tarfile.SYMTYPE, b""),
+                                       ("notices/whisper-MIT.txt", tarfile.REGTYPE, b"x" * 65537)]:
+            with tarfile.open(archive, "w") as output:
+                for name in runtime.MEMBERS:
+                    payload = self.binary.read_bytes() if name == runtime.MEMBERS[0] else self.license.read_bytes() if name == runtime.MEMBERS[1] else json.dumps(runtime.build_info()).encode()
+                    replace = name == (runtime.MEMBERS[1] if bad_name == runtime.MEMBERS[1] else runtime.MEMBERS[0])
+                    member = tarfile.TarInfo(bad_name if replace else name)
+                    member.type = kind if replace else tarfile.REGTYPE
+                    member.linkname = "../../outside" if member.issym() else ""
+                    payload = content if replace else payload
+                    member.size = len(payload)
+                    output.addfile(member, io.BytesIO(payload))
+            changed = {**index, "archive": {"file": archive.name, "bytes": archive.stat().st_size, "sha256": runtime.digest(archive)}}
+            (self.package / "runtime-index.json").write_text(json.dumps(changed))
+            with tempfile.TemporaryDirectory(dir=self.root) as temporary, self.subTest(name=bad_name):
+                destination = Path(temporary)
+                with self.assertRaises(ValueError):
+                    runtime.unpack_package(self.package, destination)
+                self.assertEqual(list(destination.iterdir()), [])
+            self.assertFalse((self.root / "outside").exists())
+
     def test_changed_archive_is_rejected_without_deletion_or_rebuild(self):
         runtime.package(self.binary, self.license, self.package)
         archive = self.package / "whisper-runtime.tar"

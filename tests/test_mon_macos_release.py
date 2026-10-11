@@ -76,6 +76,21 @@ class ReleaseTests(unittest.TestCase):
         self.calls.append(argv)
         if "-archs" in argv:
             return b"arm64\n", b""
+        if Path(argv[0]).name == "otool":
+            if "-L" in argv:
+                return b"cli:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1)\n", b""
+            return b"cmd LC_BUILD_VERSION\n minos 15.0\n", b""
+        if "--sign" in argv and Path(argv[-1]).name == "whisper-cli":
+            # Synthetic signature stand-in changes bytes. No real signing key,
+            # executable, ticket or distribution proof is used in this test.
+            binary = Path(argv[-1])
+            binary.write_bytes(binary.read_bytes() + b" synthetic Developer ID signature")
+        if "--sign" in argv and Path(argv[-1]).name == "mon.app":
+            # Repacking must finish before the enclosing resource seal is made.
+            directory = Path(argv[-1]) / "Contents/Resources/asr-runtime"
+            index = release.asr_module().verify_package(directory)
+            self.assertEqual(index["runtimeSigning"], "developer_id_signed")
+            self.assertEqual(index["signingTeamId"], TEAM)
         if "--entitlements" in argv and "--display" in argv:
             target = argv[-1]
             policy = "embedding.plist" if target.endswith("mon-speaker-embedding") else "capture.plist" if target.endswith("MONCaptureProbe.app") else "main.plist"
@@ -252,7 +267,7 @@ class ReleaseTests(unittest.TestCase):
     def test_sign_only_pipeline_is_inside_out_creates_new_dmg_and_never_uploads_staples_or_launches(self):
         output, result = self.pipeline()
         signs = [argv for argv in self.calls if "--sign" in argv]
-        self.assertEqual([Path(argv[-1]).name for argv in signs], ["MONCaptureProbe.app", "mon-speaker-embedding", "mon.app", "mon_0.1.0_aarch64.dmg"])
+        self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", "MONCaptureProbe.app", "mon-speaker-embedding", "mon.app", "mon_0.1.0_aarch64.dmg"])
         self.assertFalse(any("notarytool" in argv or "stapler" in argv or Path(argv[0]).name == "open" for argv in self.calls))
         self.assertEqual(result["notarization"], "not_requested")
         self.assertFalse(result["distributionReady"])
@@ -261,7 +276,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result["dependencyNotices"]["state"], "collected_not_reviewed")
         self.assertEqual(result["dependencyNotices"]["missingNoticeTexts"], ["synthetic"])
         self.assertEqual(result["asrRuntime"]["state"], "packaged_onboarding_unverified")
-        self.assertEqual(result["asrRuntime"]["runtimeSigning"], "ad_hoc_only")
+        self.assertEqual(result["asrRuntime"]["runtimeSigning"], "developer_id_signed")
+        self.assertEqual(result["asrRuntime"]["developerIdSigning"], "verified")
         self.assertEqual(result["asrRuntime"]["standaloneNotarization"], "not_verified")
         self.assertEqual(result["dmgSha256"], release.digest(output / result["dmg"]))
         self.assertEqual(json.loads((output / "build-result.json").read_text()), result)
@@ -269,6 +285,15 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("secret", (output / "build-result.json").read_text())
         self.assertFalse(Path(result["buildCache"]).exists())
         self.assertFalse(result["buildCacheRetained"])
+        self.assertEqual([p.name for p in output.iterdir() if p.name.startswith("mon-asr-")], [])
+        runtime = release.asr_module()
+        original, old_files = runtime.package_contents(self.app / "Contents/Resources/asr-runtime")
+        sealed, files = runtime.package_contents(output / "mon.app/Contents/Resources/asr-runtime")
+        self.assertEqual(original["runtimeSigning"], "ad_hoc_only")
+        self.assertEqual(sealed["signingTeamId"], TEAM)
+        self.assertNotEqual(files["bin/whisper-cli"], old_files["bin/whisper-cli"])
+        self.assertEqual(sealed["files"][1:], original["files"][1:])
+        self.assertNotEqual(sealed["archive"]["sha256"], original["archive"]["sha256"])
 
     def test_explicit_notary_pipeline_staples_app_before_dmg_and_never_rebuilds_accepted_dmg(self):
         _, result = self.pipeline("existing-explicit-profile")
@@ -367,6 +392,60 @@ class ReleaseTests(unittest.TestCase):
             self.pipeline()
         self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
         self.assertFalse((self.root / "distribution/build-result.json").exists())
+
+    def test_asr_signing_failure_never_signs_outer_app_or_uploads_or_changes_source_package(self):
+        source = self.app / "Contents/Resources/asr-runtime/whisper-runtime.tar"
+        before = source.read_bytes()
+        original = self.signed
+        def refuse(argv, **kwargs):
+            if "--sign" in argv and Path(argv[-1]).name == "whisper-cli":
+                raise ValueError("synthetic missing signing key")
+            return original(argv, **kwargs)
+        with patch.object(self, "signed", side_effect=refuse), redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
+            self.pipeline("existing-explicit-profile")
+        self.assertEqual(source.read_bytes(), before)
+        self.assertFalse(any("notarytool" in argv or ("--sign" in argv and argv[-1].endswith("mon.app")) for argv in self.calls))
+        self.assertFalse((self.root / "distribution/build-result.json").exists())
+
+    def test_asr_metadata_alone_cannot_substitute_for_native_certificate_verification(self):
+        runtime = release.asr_module()
+        directory = self.app / "Contents/Resources/asr-runtime"
+        index_path = directory / "runtime-index.json"
+        index = json.loads(index_path.read_text())
+        index.update(runtimeSigning="developer_id_signed", signingTeamId=TEAM)
+        index_path.write_text(json.dumps(index))
+        # Without an expected Team and actual OS checks, the label proves nothing.
+        self.assertEqual(release.verify_asr_runtime(self.app)["developerIdSigning"], "not_verified")
+        def reject_certificate(argv, **kwargs):
+            if "--verify" in argv and "-R" in argv:
+                raise ValueError("native certificate requirement refusal")
+            return self.signed(argv, **kwargs)
+        with patch.object(release, "command", side_effect=reject_certificate), self.assertRaises(ValueError):
+            release.verify_asr_runtime(self.app, TEAM)
+        self.assertTrue(any("--verify" in argv and "--strict" in argv for argv in self.calls))
+        with patch.object(release, "command") as command, self.assertRaises(ValueError):
+            release.verify_asr_runtime(self.app, "KLMNOPQRST")
+        command.assert_not_called()
+
+    def test_asr_signature_refuses_jit_or_library_validation_exceptions(self):
+        def injected_policy(argv, **kwargs):
+            if "--display" in argv and "--entitlements" in argv and Path(argv[-1]).name == "whisper-cli":
+                return plistlib.dumps({"com.apple.security.cs.disable-library-validation": True}), b""
+            return self.signed(argv, **kwargs)
+        with patch.object(release, "command", side_effect=injected_policy), self.assertRaises(ValueError):
+            release.sign_asr_runtime(self.app, IDENTITY, TEAM, self.policy)
+        self.assertEqual(release.verify_asr_runtime(self.app)["runtimeSigning"], "ad_hoc_only")
+
+    def test_asr_final_checks_reject_ad_hoc_fallback_or_changed_archive(self):
+        with self.assertRaises(ValueError):
+            release.verify_asr_runtime(self.app, TEAM)
+        with patch.object(release, "command", side_effect=self.signed):
+            release.sign_asr_runtime(self.app, IDENTITY, TEAM, self.policy)
+        archive = self.app / "Contents/Resources/asr-runtime/whisper-runtime.tar"
+        archive.write_bytes(archive.read_bytes() + b"tampered after signing")
+        with patch.object(release, "command") as command, self.assertRaises(ValueError):
+            release.verify_asr_runtime(self.app, TEAM)
+        command.assert_not_called()
 
 
 if __name__ == "__main__":

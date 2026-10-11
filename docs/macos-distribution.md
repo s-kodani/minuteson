@@ -25,13 +25,18 @@ Tauriの準備用プロファイルはアドホックのappだけを生成し、
 
 | 対象 | Hardened Runtimeのentitlements |
 |---|---|
+| 同梱文字起こしCLI | 追加例外なし |
 | 録音ヘルパー | `com.apple.security.device.audio-input`だけ |
 | 特徴量ヘルパー | `com.apple.security.cs.disable-library-validation`だけ |
 | 親アプリ | 追加例外なし |
 
 特徴量ヘルパーは利用者が別途準備した推論ライブラリを読み込むため、同一Team署名だけに限る検査をこのヘルパーだけで解除する。親アプリ・録音側へ広げない。これは隔離実行ではなく、既存のパス・容量・SHA・役割の照合と、CPU実行の別同意を維持する。[Appleのライブラリ検証の説明](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.disable-library-validation)を参照。録音用entitlementは[Audio Input](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.device.audio-input)に対応する。
 
-ヘルパーを先に署名し、親を最後に封印する。署名には`--deep`を使わず、検証にはdeep／strict・Apple anchor・Developer IDの証明書OID・期待Teamを要求する。表示されたTeam文字列だけでは合格にしない。secure timestamp・runtimeビット・実際に封入されたentitlementsも照合する。debug権限や未選択の例外を追加したpolicyは構築前に拒否する。
+コピーしたapp内の文字起こしTARを容量／SHAと固定3ファイルで照合し、専用の一時領域へ展開する。CLIのarm64・macOS 15・システム依存のみ・署名整合を検査し、Developer ID・timestamp・Hardened Runtimeと追加例外なしで署名する。その実体を圧縮し直し、署名後の容量／SHAと期待Teamをindexへ記録する。noticeと固定build情報は変更を拒否する。元の開発用キャッシュはアドホックのまま保持する。署名／検査失敗は親の署名・公証へ進めず、成功記録を作らない。
+
+CLIの再封入後、ヘルパーを先に署名し、親を最後に封印する。この順序は[Appleの内包コード署名の説明](https://developer.apple.com/library/archive/technotes/tn2206/_index.html#//apple_ref/doc/uid/DTS40007919-CH1-TNTAG201)に従う。署名には`--deep`を使わず、検証にはdeep／strict・Apple anchor・Developer IDの証明書OID・期待Teamを要求する。表示されたTeam文字列だけでは合格にしない。secure timestamp・runtimeビット・実際に封入されたentitlementsも照合する。debug権限や未選択の例外を追加したpolicyは構築前に拒否する。
+
+最終検査でも実TARを再展開し、CLI自体の署名とTeam／権限を検査する。JSONの`runtimeSigning: developer_id_signed`と`signingTeamId`は配置情報であって証明書の検証結果ではない。ネイティブ導入は旧アドホック形式とこの新形式の両方を読めるが、固定出典・容量・SHA・取得内容の再照合・コピー・CPU確認・明示適用を省略しない。公開元の真正性・ライセンス承認や準備完了状態も昇格しない。
 
 ## 公証は別の明示モード
 
@@ -53,6 +58,8 @@ Macの準備ビルドはオフラインで依存通知文を収集し、`Content
 パッケージに本文がない場合の補完資料はcrateの正確な版・申告・配布checksum・公開VCS commit／pathに固定し、出典／容量／SHAを保持する。`upstream_license_reference`は説明・参照だけで、不足本文を解消しない。配布時の照合は補完index SHAにも及ぶ。MPL対象の正確な版の公開ソースarchive URLとSHAは通知文にも含める。通常ビルドでは通信せず、ソースの実取得確認や最終的な配布条件確認は別。現在の不足12件、SDK由来等の残条件、実11件のarchive照合については[版固定補完の記録](verification/macos-notice-supplements-2026-10-10.md)を参照。
 
 正常なビルド結果は`build-result.json`に新規保存する。版・Team・DMG名・容量・SHA、公証要求ID／ticketの状態、工程時間と回収済みキャッシュの場所を含む。手動ビルドの結果であり、取得モデルの互換性や会議品質の証拠ではない。
+
+`asrRuntime.developerIdSigning: verified`は、明示Teamに対する内包CLIの実署名検査が成功した場合だけ記録する。appのticketをCLI単体の公証・Gatekeeper・導入確認の代用にせず、`standaloneNotarization`・`nativeOnboarding`・`licenseReview`は`not_verified`を保持する。現在は証明書／公証profile未準備のため、この経路の検証は合成コマンドと導入側の回帰までであり、正式署名済み成果物はない。
 
 署名だけなら`notarization: not_requested`。ticketの検査まで成功しても、`runtimeQA`・`gatekeeper`・`licenseReview`・`manualUpdate`は`not_verified`、`distributionReady`はfalseのまま。配布条件の確認、ダウンロード由来のGatekeeper、分離した実機でのGUI・録音・外部推論ライブラリ、通常版の置換と設定・会議・モデルの保持を別に検証する。Gatekeeper・隔離属性・TCCを無効化して合格にしない。
 

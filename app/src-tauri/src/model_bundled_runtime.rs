@@ -35,6 +35,18 @@ struct Index {
     archive: Archive,
     files: Vec<Member>,
     runtime_signing: String,
+    #[serde(
+        default,
+        deserialize_with = "signing_team",
+        skip_serializing_if = "Option::is_none"
+    )]
+    signing_team_id: Option<String>,
+}
+fn signing_team<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    // An absent legacy field is allowed; a present null/non-string is not.
+    String::deserialize(deserializer).map(Some)
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -85,15 +97,29 @@ impl Bundle {
         let index: Index =
             serde_json::from_slice(&bytes).map_err(|_| "同梱情報の形式が不正です")?;
         let mut info = serde_json::to_value(&index).map_err(|e| e.to_string())?;
-        for key in ["archive", "files", "runtimeSigning"] {
+        for key in ["archive", "files", "runtimeSigning", "signingTeamId"] {
             info.as_object_mut().unwrap().remove(key);
         }
         let expected: serde_json::Value = serde_json::from_str(include_str!(
             "../../model-catalog/whisper-runtime-build.json"
         ))
         .map_err(|_| "固定された同梱定義が不正です")?;
+        // This is packaging metadata, not OS certificate verification. A
+        // release builder verifies the inner CLI before signing the app. Keep
+        // publisher authenticity/readiness unverified and bind every byte as
+        // before; no signing label bypasses hashes, provenance or inspection.
+        let signing_valid = match (index.runtime_signing.as_str(), &index.signing_team_id) {
+            ("ad_hoc_only", None) => true,
+            ("developer_id_signed", Some(team)) => {
+                team.len() == 10
+                    && team
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            }
+            _ => false,
+        };
         if info != expected
-            || index.runtime_signing != "ad_hoc_only"
+            || !signing_valid
             || index.archive.file != "whisper-runtime.tar"
             || index.archive.bytes == 0
             || index.archive.bytes > MAX_PACKAGE

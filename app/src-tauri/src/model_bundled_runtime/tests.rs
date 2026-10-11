@@ -138,6 +138,102 @@ fn acquisition_preflight_rejects_changed_archive_recipe_and_cancel_before_stagin
     }
 }
 #[test]
+fn developer_id_packaging_metadata_keeps_unverified_trust_and_binds_changed_payload() {
+    let (temp, root, _, mut value) = fixture();
+    let original = Bundle::open(&root).unwrap().recipe().unwrap();
+    let bytes = b"synthetic re-signed archive; never executed";
+    value["runtimeSigning"] = json!("developer_id_signed");
+    value["signingTeamId"] = json!("ABCDE12345");
+    value["archive"]["bytes"] = json!(bytes.len());
+    value["archive"]["sha256"] = json!(hash(bytes));
+    value["files"][0]["bytes"] = json!(32);
+    value["files"][0]["sha256"] = json!(hash(b"synthetic re-signed CLI"));
+    std::fs::write(root.join("whisper-runtime.tar"), bytes).unwrap();
+    std::fs::write(
+        root.join("runtime-index.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let mut bundle = Bundle::open(&root).unwrap();
+    let recipe = bundle.recipe().unwrap();
+    assert_ne!(recipe.hash().unwrap(), original.hash().unwrap());
+    assert!(bundle.bind(&original).is_err());
+    assert_eq!(recipe.manifest.files[1..], original.manifest.files[1..]);
+    let review = recipe.review().unwrap();
+    assert_eq!(review.publisher_authenticity, "not_verified");
+    assert!(!review.ready && !review.installed);
+    bundle.prepare(&root, &recipe, &|| false).unwrap();
+    let mut output = std::fs::File::create(temp.path().join("checked-copy")).unwrap();
+    bundle
+        .fetch(
+            BUNDLED_WHISPER,
+            bytes.len() as u64,
+            &hash(bytes),
+            &mut output,
+            &|| false,
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read(temp.path().join("checked-copy")).unwrap(),
+        bytes
+    );
+    std::fs::write(root.join("whisper-runtime.tar"), b"tampered").unwrap();
+    assert!(bundle
+        .fetch(
+            BUNDLED_WHISPER,
+            bytes.len() as u64,
+            &hash(bytes),
+            &mut output,
+            &|| false
+        )
+        .is_err());
+}
+#[test]
+fn signing_team_state_shape_never_accepts_null_wrong_team_or_self_approved_provenance() {
+    for (state, team) in [
+        ("ad_hoc_only", Some(json!("ABCDE12345"))),
+        ("ad_hoc_only", Some(Value::Null)),
+        ("developer_id_signed", None),
+        ("developer_id_signed", Some(Value::Null)),
+        ("developer_id_signed", Some(json!(1234567890))),
+        ("developer_id_signed", Some(json!("abcde12345"))),
+        ("developer_id_signed", Some(json!("ABCDE1234"))),
+        ("developer_id_verified", Some(json!("ABCDE12345"))),
+    ] {
+        let (_temp, root, _, mut value) = fixture();
+        value["runtimeSigning"] = json!(state);
+        if let Some(team) = team {
+            value["signingTeamId"] = team;
+        }
+        std::fs::write(
+            root.join("runtime-index.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Bundle::open(&root).is_err(),
+            "{state}: {}",
+            value.get("signingTeamId").unwrap_or(&Value::Null)
+        );
+    }
+    for (key, changed) in [
+        ("publisherAuthenticity", json!("verified")),
+        ("distributionReady", json!(true)),
+        ("licenseReview", json!("approved")),
+    ] {
+        let (_temp, root, _, mut value) = fixture();
+        value["runtimeSigning"] = json!("developer_id_signed");
+        value["signingTeamId"] = json!("ABCDE12345");
+        value[key] = changed;
+        std::fs::write(
+            root.join("runtime-index.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(Bundle::open(&root).is_err(), "{key}");
+    }
+}
+#[test]
 fn native_bundle_copy_checks_identity_size_sha_and_never_runs_or_reports_network() {
     let (temp, root, bytes, _) = fixture();
     let mut bundle = Bundle::open(&root).unwrap();
