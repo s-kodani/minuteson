@@ -5,6 +5,8 @@
 
 ## 2026-10-11 UI調整の区切りとコミット再開
 
+編集済み自作会議で、実Whisperの点検日ヒント再解析とSherpaの1人指定再解析→未採用候補／採用確認取消を確認。開始前45表の既存全列・全head／draft／固定根拠等を保持し、冷起動後も候補と本文・名前を保持。人数指定の全閉鎖復帰先と子engine→親入口focusを再現・補修、最終Macで親子／別入口の復帰を確認。853成功・QA2回成功・冷起動後全DB＋WAL dump不変。[実job・限定保護・失敗比較・時間](verification/reanalysis-edit-protection-native-2026-10-11.md)。明示手動割当集合は空で、その全継承や複数話者／正式品質の証拠にしない。全23タスクの残件・CI／録音／通常Rust停止を維持する。
+
 議事録の拡幅・入口の右端揃いを保ったまま、目次入口の外側focus枠が上下で切れる余白を補修。合成6幅×両テーマで上下6px・右端差0・横溢れなし、最終Macで開閉・入口focusと枠全周を確認。849成功・型検査／QA成功、停止DB＋WAL全dump SHA不変。[追確認と工程時間](verification/workspace-panel-focus-native-2026-10-11.md#追確認入口の外側フォーカス枠の余白)。全画面／IME・VoiceOver／23タスクの完了には拡大せず、CI・録音・通常Rust再実行なし。
 
 Macで目次入口／根拠時刻のクリック後にworkspace／本文へ焦点が残ることを再現し、実入口とrich chipを明示記録して補修。最終Macで目次の×／Tab／逆Tab／Enter往復、閲覧・編集の固定根拠を閉じて同じ時刻へ戻ることを確認。合成の狭幅Escape復帰・保存要求0、848成功・型検査／QA成功、停止DB＋WAL全dump SHA不変。[限定証拠・失敗比較・時間](verification/workspace-panel-focus-native-2026-10-11.md)。全UI／実IME・VoiceOver等と全23タスクの残件は維持し、CI・録音・通常Rust再実行なし。

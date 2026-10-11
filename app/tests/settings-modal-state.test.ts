@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SettingsModalState, type SettingsView } from "../src/settings-modal-state.ts";
+import { SettingsModalState, settingsExitTarget, type SettingsView } from "../src/settings-modal-state.ts";
 const view = (id: string, open = false): SettingsView => ({ id, open, title: id, className: id, dismiss: () => {}, entry: () => null });
 
 test("closed settings registration never opens a native owner or executes work", () => {
@@ -53,7 +53,7 @@ test("scoped settings keep base/replacement inputs mounted without moving hosts 
   const scope = source("settings-modal-scope.tsx"), options = source("options-modal.tsx");
   assert.equal((scope.match(/<CommonModal/g) ?? []).length, 1);
   assert.match(scope, /persistentReplacement=\{<div ref=\{setReplacement\}/);
-  assert.match(scope, /restoreTarget=\{owner\?\.entry\} replacement=\{owner\?\.replacement\}/);
+  assert.match(scope, /restoreTarget=\{\(\) => exitEntry.current \?\? owner\?\.entry\(\) \?\? null\} replacement=\{owner\?\.replacement\}/);
   assert.match(scope, /previous.current\?\.replacement\?\.key !== current.replacement.key/);
   assert.match(scope, /previous.current.id !== current.id \|\| enteringReplacement/);
   assert.match(scope, /enteringReplacement \|\| replacementReady/);
@@ -68,6 +68,30 @@ test("scoped settings keep base/replacement inputs mounted without moving hosts 
   assert.doesNotMatch(options,/settings-modal-view \$\{className\}/);
   assert.match(source("main.tsx"), /<SettingsModalScope><MainWindow \/><\/SettingsModalScope>/);
   assert.doesNotMatch(scope, /invoke\(|\.flush\(|\.append(?:Child)?\(|setTimeout/);
+});
+test("shared settings retain the actual external replacement opener on full close", () => {
+  const scope = readFileSync(new URL("../src/settings-modal-scope.tsx", import.meta.url), "utf8");
+  assert.match(scope, /exitEntry.current = settingsExitTarget\(snapshot.active, exitEntry.current, target => !!dialog.current\?\.contains\(target\)\)/);
+  assert.match(scope, /restoreTarget=\{\(\) => exitEntry.current \?\? owner\?\.entry\(\) \?\? null\}/);
+  assert.match(scope, /previous.current\?\.replacement\?\.parentKey === current.replacement\?\.key/);
+  assert.match(scope, /snapshot.returning\?\.\(\) \?\? replacementReturn\?\.\(\)/);
+});
+test("a workspace replacement entry wins over the stale parent settings entry", () => {
+  const parent = {} as HTMLElement, actual = {} as HTMLElement;
+  const current = { ...view("meeting", true), entry: () => parent, replacement: { key: "counts", labelledBy: "counts-title", content: null, onDismiss: () => {}, restoreTarget: () => actual } };
+  assert.equal(settingsExitTarget(current, parent, () => false), actual);
+});
+test("internal child entries and closed registration cannot erase the outer workspace entry", () => {
+  const outer = {} as HTMLElement, inner = {} as HTMLElement;
+  const current = { ...view("meeting", true), entry: () => outer, replacement: { key: "engine", content: null, onDismiss: () => {}, restoreTarget: () => inner } };
+  const retained = settingsExitTarget(current, outer, target => target === inner);
+  assert.equal(retained, outer);
+  assert.equal(settingsExitTarget(null, retained, () => false), outer);
+});
+test("a newly opened sibling replaces the exit entry and missing replacement targets fall back to its entry", () => {
+  const old = {} as HTMLElement, sibling = {} as HTMLElement;
+  const current = { ...view("audio", true), entry: () => sibling, replacement: { key: "review", content: null, onDismiss: () => {}, restoreTarget: () => null } };
+  assert.equal(settingsExitTarget(current, old, () => false), sibling);
 });
 test("visible-control shared settings driver covers retained fields and confirmation cancellation", () => {
   const driver = readFileSync(new URL("./settings-modal-browser-check.js", import.meta.url),"utf8");

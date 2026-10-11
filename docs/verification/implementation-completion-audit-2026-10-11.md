@@ -4,6 +4,8 @@
 
 ## 今回確認した現在の検査結果
 
+編集済み自作会議の実Whisperヒント再解析／Sherpa1人指定→未採用候補と採用取消、開始前45表の既存全列・全head／draft／固定根拠保持、冷起動後候補／本文／名前を確認。人数指定の全閉鎖／子engineの親復帰focusを再現・補修し最終Macで正しい入口復帰、853成功・QA成功・冷起動後全dump不変を確認。[限定証拠](reanalysis-edit-protection-native-2026-10-11.md)。明示手動割当集合は空のため、その全継承・正式複数話者品質・全UI／全23タスクの証拠にしない。
+
 拡幅した議事録と目次入口の右端揃いを維持し、入口のfocus枠が上下で切れる余白を補修。合成6幅×両テーマの上下6px・右端差0・横溢れなし、最終Macの開閉／入口focusと枠全周、849成功・QA成功・停止DB＋WAL dump不変を確認。[追確認](workspace-panel-focus-native-2026-10-11.md#追確認入口の外側フォーカス枠の余白)。全focus枠／全UI／IME・VoiceOverや23タスク完了には拡大しない。
 
 目次入口と閲覧／rich根拠のnative clickが実openerを記録できずregionへ戻る問題を再現・補修。最終Macで目次の×・Tab／逆Tab／Enter往復と、閲覧／rich根拠を閉じた時刻focus、全DB＋WAL dump不変を確認。合成狭幅Escape・保存要求0、848成功・QA成功。[限定証拠](workspace-panel-focus-native-2026-10-11.md)。M3-08／M3-04の全画面・異常順序・IME／VoiceOver、実録音・配布／試用等の23タスク残件を維持する。
@@ -111,7 +113,7 @@ generation/result.rs・plan.rs・restore.rs、storage.rs、Rust runnerの現SHA�
 | M2-06 | 実通常v4生成、リッチ編集保存、実Markdownと出力由来照合、[Macの太字／斜体・見出し2／リスト・2列表と実出力・冷起動保持](minutes-rich-restore-native-2026-10-11.md) | 「実録音から出力」全経路、全書式・編集保護・全異常順序のMac統合 |
 | M3-01 | 合成時刻／再接続／部分救出・専用SIGKILL検査成功 | 実機器切断／容量不足／強制終了末尾損失／明示スリープ、実4時間 |
 | M3-02 | [録音中だけのスリープ制御](m3-02-recording-idle-sleep-2026-10-04.md)、確認／OS close実装 | 実録音中のmain close継続・明示終了取消／確定、assertion取得／解除 |
-| M3-03 | 人数指定／重複・固定用語・手動編集保護の実装、現Rust／フロント検査 | Mac全再解析・採用／取消・用語保持経路。正式認識効果は保留 |
+| M3-03 | 人数指定／重複・固定用語・手動編集保護の実装、現Rust／フロント検査、[編集済み会議の実ヒント再解析／1人指定→候補保存・採用取消・45表既存行／head／draft／根拠保持・冷起動](reanalysis-edit-protection-native-2026-10-11.md) | 全人数／明示手動割当／採用と取消・共通／会議別用語変更のMac経路。今回の明示割当集合は空。正式認識効果は保留 |
 | M3-04 | 固定根拠・下書き保護、実復元先の固定引用／文脈・19秒再生、[編集済み#1を含む候補採用／直前復元の取消・明示確定と冷起動・固定8根拠保持](minutes-rich-restore-native-2026-10-11.md) | 全採用／直前復元／競合・保存失敗のMac反復、全長文参照経路 |
 | M3-05 | WAV／M4A実UI取り込み、[MP3／FLAC通常Mac選択・保存・冷起動後再生](audio-import-mp3-flac-native-2026-10-11.md)、合成5形式helper連携、管理原本の内容一致 | ドラッグとファイル選択の現Mac同一経路、各形式から実AI解析／根拠／出力の全経路、4時間素材。10話者評価は保留 |
 | M3-06 | [実AI4会議→別ID4会議追加](real-ai-backup-restore-native-2026-10-11.md)、全JSON／根拠／音声SHA照合・冷起動、[4種の破損拒否・OS選択／確認取消・11会議保護](backup-corruption-rejection-native-2026-10-11.md) | 全攻撃的破損／旧形式／容量不足／中断回復のMac UI。限定4種から全異常時合格を推測しない |

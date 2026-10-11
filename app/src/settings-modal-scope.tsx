@@ -1,7 +1,7 @@
 import { createContext, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";
-import { SettingsModalState, type SettingsView } from "./settings-modal-state";
+import { SettingsModalState, settingsExitTarget, type SettingsView } from "./settings-modal-state";
 import { topOpenModal } from "./modal-state";
 
 type Scope = { state: SettingsModalState; id: string; body: HTMLDivElement | null; replacement: HTMLDivElement | null; dialog: RefObject<HTMLDialogElement | null> };
@@ -19,6 +19,8 @@ export function SettingsModalScope({ children }: { children: ReactNode }) {
   const snapshot = useSyncExternalStore(state.subscribe, state.getSnapshot);
   const previous = useRef<SettingsView | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  const exitEntry = useRef<HTMLElement | null>(null);
+  exitEntry.current = settingsExitTarget(snapshot.active, exitEntry.current, target => !!dialog.current?.contains(target));
   const retained = useRef<SettingsView | null>(null);
   if (snapshot.active) retained.current = snapshot.active;
   const owner = snapshot.active ?? (retained.current ? state.getView(retained.current.id) ?? retained.current : null);
@@ -33,7 +35,9 @@ export function SettingsModalScope({ children }: { children: ReactNode }) {
       && previous.current.replacement?.key === current.replacement.key
       && !!previous.current.replacement.blocked && !current.replacement.blocked;
     if (current && previous.current && (previous.current.id !== current.id || enteringReplacement || replacementReady) && dialog.current?.open) {
-      const target = snapshot.returning?.();
+      const replacementReturn = previous.current?.replacement?.parentKey === current.replacement?.key
+        ? previous.current?.replacement?.restoreTarget : undefined;
+      const target = snapshot.returning?.() ?? replacementReturn?.();
       const usable = target?.isConnected && dialog.current.contains(target) && !!target.getClientRects().length && !target.matches(":disabled") && !target.closest("[hidden], [inert]");
       dialog.current.scrollTop = 0;
       const heading = dialog.current.querySelector<HTMLElement>(".common-modal-replacement h2, .common-modal-replacement h3");
@@ -62,7 +66,7 @@ export function SettingsModalScope({ children }: { children: ReactNode }) {
   return <Context.Provider value={context}>{children}{createPortal(
     <div className={`options-modal ${owner?.className ?? ""}`} data-options-modal-host style={{ display: "contents" }}>
       <CommonModal ref={dialog} id={id} open={!!snapshot.active} nested externalContent data-settings-modal aria-label={owner?.title} aria-labelledby={owner?.labelledBy} className={owner?.dialogClassName ?? "options-dialog"} dismissLabel={owner?.dismissLabel ?? "閉じる"} blocked={owner?.blocked} restoreReady={owner?.restoreReady}
-        onDismiss={() => owner?.dismiss()} restoreTarget={owner?.entry} replacement={owner?.replacement}
+        onDismiss={() => owner?.dismiss()} restoreTarget={() => exitEntry.current ?? owner?.entry() ?? null} replacement={owner?.replacement}
         persistentReplacement={<div ref={setReplacement} className="settings-modal-slot" />}>
         <div ref={setBody} className="settings-modal-slot" />
       </CommonModal>

@@ -16,6 +16,15 @@ export type SettingsView = {
 };
 type Snapshot = { active: SettingsView | null; returning: (() => HTMLElement | null) | null };
 
+// A replacement can open the shared owner directly from the workspace. Keep
+// that external entry across inner views and the final closed registration.
+// CommonModal still validates visibility, connectivity and modality at return.
+export function settingsExitTarget(current: SettingsView | null, retained: HTMLElement | null, inside: (target: HTMLElement) => boolean): HTMLElement | null {
+  if (!current) return retained;
+  const target = current.replacement?.restoreTarget?.() ?? current.entry();
+  return target && !inside(target) ? target : retained;
+}
+
 // Presentation only: no controller, input, save command or confirmation moves.
 // All registered views keep their own mounted fields inside one native boundary.
 export class SettingsModalState {
