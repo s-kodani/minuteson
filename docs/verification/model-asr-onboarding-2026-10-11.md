@@ -172,3 +172,21 @@ PID30978の通常終了・消失を確認後、DB＋WALだけを `/private/tmp/m
 | mon-onboarding-e2e-rust-retest-20261011.log | 75c1548fbe03802ea42ee9b57f64f167d5011f6ce7f8c572cd2225c18ecec7b2 |
 | mon-onboarding-e2e-boundaries-final-20261011.log | 10889cc50edb8740e818e8fa5137617a186de5a489a2684f9f3dfd1154d7a245 |
 | mon-onboarding-e2e-frontend-20261011.log | 451747c7734e0f8d0e0905057fd21187faef5d86c1abb7e39b16b22477d37b97 |
+
+## 保存待ちと操作中の表示を分離
+
+末尾時刻修正は `757d327cced167ace941d065504e12674f926c61` でmainへPush済み。今回UIだけを変更し、保存barrierが待機する間は「編集の保存を確認中」、後続処理の間は「操作を実行中」と表示する。`runAfterSaving`のfinallyでidleへ戻し、保存失敗時には操作を開始しない。既存の重複操作ref／busy／失敗時の編集保持guardを維持。待機2段階・保存失敗・操作失敗・同期遷移・画面接続の5回帰を追加した。
+
+QA `/private/tmp/mon-saved-action-qa.RMzb5H/MON Onboarding QA.app`（main SHA `6985a6bc8dfd19df5aa89d1932a312fc74c9c80fddca94ae6f50479d77a39e5d`）を通常起動し、既存テスト会議の議事録再生成をGUIで開始。生成中に設定をEscapeで閉じ、「操作を実行中」と本文の「保存済み」、無効の編集／出力／タブ操作をnative AXで確認した。画像 `/private/tmp/mon-saved-action-running-20261011.png` SHA `917643d1164fda383bf1fe1fe48b13d40f525fe7653e0618a92638eb87b62013`。完了後は処理中表示が消え操作が有効に戻り、現在版#1／編集ありを保持。job `90cfb680-0e24-4ddf-9ab6-6bb232255f3f` はsucceeded 1/1、50,146ms、新候補#2 `689e7112-5087-4e78-ac6c-48260fc26cd6` のみを追加し、採用しない。正式品質の合格ではない。
+
+続いて同じ単一TTS素材を通常ファイル選択で新規テスト会議 `5408c711-6cd0-42c2-b3ea-acca0c49bdda` へ取り込んだ。直後の会議操作モーダルは描画／×focusがある一方native AX本文が消え、Escape後の再表示でも欠落、再びEscapeで元画面へ復帰した。画像 `/private/tmp/mon-first-import-modal-ax-20261011.png` SHA `c461333d7a03ec14afe383a67b5a55231d14c1b1461157a584db8cf6fbf0ba53`。原因解決やVoiceOver合格にせず、再現順序を残課題として固定する。この会議の通常ASR `8cdcda26-39db-4f84-934c-ae6567a86627`（13,403ms）とSherpa `2e45fded-4b05-4d19-ae6c-f11c1c2140b4`（6,668ms）は各succeeded 1/1、候補は未採用。単一TTSを複数話者評価へ換算しない。
+
+通常終了PID42845消失後、DB＋WALを私的clone `/private/tmp/mon-saved-action-db.slc2Tq` へコピーしread-onlyで照合。integrity_checkはok／foreign_key_checkは0行。先の冷起動cloneと、既存テスト会議のid/title/現・前head、全下書き／出力履歴、採用議事録#1の全列を同じ順序で照合しSHA `62c05dcf98eff04431d5724d2a6c5303f0bf18bd351499b57bc26af3b8fb14dd` が一致。設定／構成／CPU記録SHA `930443a4df65c963311152d73dc4d33cdd78a9945c47d21263d446e1eb3854c4`、実Markdown SHA、既存11会議の4組／bootstrapも不変。追加候補／job／新会議があるためDB全内容不変とは言わない。SQL書込み・本番操作・マイク／PC録音・追加取得・CIなし。
+
+調査から最初の実装までの記録区間UTC06:09:06〜06:10:12は1分06秒（その後の実機確認／文書時間は別、総実装工数ではない）。画面826成功／0失敗／0skip、1.948249583秒、型検査／Vite1.51秒、QA Vite1.51秒／Cargo1分11秒、deep strictアドホック確認・diff check成功。Rust製品ソースは前commitから変更せず、UI修正のみを理由に長いRust構築／検査を再実行しない。既存Sonner／chunk／公証未設定warningは残る。暫定残工数12〜29時間以上と許可／素材／配布準備待ち、正式評価／Windows保留を維持し、全23タスクや全UIを完了扱いにしない。
+
+| ログ（`/private/tmp/`） | SHA-256 |
+|---|---|
+| mon-saved-action-tests-20261011.log | 160249dca9458d08b33c688839a1e8054706f845fa2aac5112a5fef611a87203 |
+| mon-saved-action-build-20261011.log | 91a1250d1a501ae2f430bbc7f92a7e552b46ea20101bb78ccdb1556a7545e5b1 |
+| mon-saved-action-qa-build-20261011.log | 56a4640a9667a3a43b34a29cac4f29b1c791c1cb28f3a8089e053051c9ca0b31 |

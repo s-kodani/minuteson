@@ -20,6 +20,7 @@ import { AnalysisPanel } from "./analysis";
 import { MinutesPanel } from "./minutes";
 import { VocabularyEditor } from "./vocabulary";
 import { flushPendingEdits } from "./draft-save";
+import { runAfterSaving, type SavedActionPhase } from "./saved-action";
 import { AudioImportPanel } from "./audio-import";
 import { ModelInspectionPanel } from "./model-inspection";
 import { useDataOperation } from "./data-operation";
@@ -198,7 +199,8 @@ function MainWindow() {
   const [closingBusy, setClosingBusy] = useState(false);
   const closing = useRef(false), starting = useRef(false);
   const [recoveredCount, setRecoveredCount] = useState(0);
-  const [navigationBusy, setNavigationBusy] = useState(false);
+  const [navigationPhase, setNavigationPhase] = useState<SavedActionPhase>("idle");
+  const navigationBusy = navigationPhase !== "idle";
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
@@ -209,16 +211,13 @@ function MainWindow() {
   const withSavedEdits = async (action: () => void | Promise<void>) => {
     if (navigating.current) return;
     navigating.current = true;
-    setNavigationBusy(true);
     setMeetingError("");
     try {
-      await flushPendingEdits();
-      await action();
+      await runAfterSaving(flushPendingEdits, action, setNavigationPhase);
     } catch (cause) {
       setMeetingError(`操作を完了できませんでした。編集内容はこの画面に保持しています: ${String(cause)}`);
     } finally {
       navigating.current = false;
-      setNavigationBusy(false);
     }
   };
   const deletion = useMeetingDeletion({ operation: dataOperation, locked: captureTest.blocked || navigationBusy || dataPending || recoveryPending || modelDeletionPending || audioDeletionPending || partialRecordingPending, withSavedEdits,
@@ -665,7 +664,7 @@ function MainWindow() {
         <ThemeNotifications locked={writeLocked} />
         <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage : state.kind === "error" ? state.message : ""} />
         <header className="topbar"><span>{detail ? "会議詳細" : screen === "recording" ? "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : "設定"}</span><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={() => void stopRecording()}>録音を終了</button>}</div><ToastHost docked={detail} /></header>
-        {detail && <div className="meeting-detail-status"><div><h1 title={selectedMeeting!.title}>{selectedMeeting!.title}</h1><p className="lead">作成 {new Date(selectedMeeting!.createdAt).toLocaleString("ja-JP")}</p></div>{navigationBusy && <span role="status">編集の保存を確認中</span>}<IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
+        {detail && <div className="meeting-detail-status"><div><h1 title={selectedMeeting!.title}>{selectedMeeting!.title}</h1><p className="lead">作成 {new Date(selectedMeeting!.createdAt).toLocaleString("ja-JP")}</p></div>{navigationBusy && <span role="status">{navigationPhase === "saving" ? "編集の保存を確認中" : "操作を実行中"}</span>}<IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
         {detail && <div className="meeting-detail-navigation"><div className="meeting-detail-tabs" role="tablist" aria-label="会議詳細">
           {(["transcript", "minutes"] as const).map(tab => <button key={tab} type="button" role="tab" id={`meeting-tab-${tab}`} aria-controls={`meeting-panel-${tab}`} aria-selected={detailTab === tab} tabIndex={detailTab === tab ? 0 : -1} disabled={navigationLocked} onClick={() => void switchDetailTab(tab)} onKeyDown={event => {
             if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
