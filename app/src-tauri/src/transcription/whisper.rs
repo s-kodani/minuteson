@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
+// Whisper decodes timestamp tokens inside a 30-second context. The last
+// segment can end in that window's padding, not at the final input sample.
+const TIMESTAMP_WINDOW_US: i64 = 30_000_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -94,9 +97,10 @@ pub fn parse_output(bytes: &[u8], model: &Path, duration_us: i64) -> Result<Vec<
     if output.transcription.len() > 100_000 {
         return Err("文字起こし区間数が多すぎます".into());
     }
+    let segment_count = output.transcription.len();
     let mut previous = -1;
     let mut result = Vec::new();
-    for raw in output.transcription {
+    for (index, raw) in output.transcription.into_iter().enumerate() {
         let start = raw
             .offsets
             .from
@@ -107,13 +111,22 @@ pub fn parse_output(bytes: &[u8], model: &Path, duration_us: i64) -> Result<Vec<
             .to
             .checked_mul(1000)
             .ok_or("文字起こし時刻が範囲外です")?;
-        // A small terminal timestamp quantization overrun is clipped, not used
-        // to invent audio beyond the input. Larger overruns are rejected.
+        // The CLI emits the decoded timestamp token without clamping it to
+        // seek_end (whisper.cpp v1.9.4, src/whisper.cpp:7745-7838). A terminal
+        // segment can therefore extend into a padded inference window. Accept
+        // that bounded tail only if it begins in real audio and is the last
+        // segment, then intersect it with the actual input below. Keep the
+        // prior 100ms quantization allowance for other segments. Do not invent
+        // audio, move starts, rewrite text, or accept an unbounded future end.
+        let terminal_window = index + 1 == segment_count
+            && end
+                .checked_sub(start)
+                .is_some_and(|span| span <= TIMESTAMP_WINDOW_US);
         if start < 0
             || start < previous
             || end <= start
             || start >= duration_us
-            || end > duration_us.saturating_add(100_000)
+            || (end > duration_us.saturating_add(100_000) && !terminal_window)
             || raw.text.chars().count() > 20_000
         {
             return Err("文字起こし区間の時刻または本文が不正です".into());
@@ -332,7 +345,13 @@ mod tests {
         let mut wrong = output();
         wrong["model"]["multilingual"] = json!(false);
         assert!(parse_output(&serde_json::to_vec(&wrong).unwrap(), path, 1_000_000).is_err());
-        for (from, to) in [(-1, 100), (10, 10), (1001, 1010), (10, 1200), (0, i64::MAX)] {
+        for (from, to) in [
+            (-1, 100),
+            (10, 10),
+            (1001, 1010),
+            (10, 30_011),
+            (0, i64::MAX),
+        ] {
             let mut wrong = output();
             wrong["transcription"][0]["offsets"] = json!({"from":from,"to":to});
             assert!(parse_output(&serde_json::to_vec(&wrong).unwrap(), path, 1_000_000).is_err());
@@ -344,6 +363,68 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn terminal_decoded_padding_is_intersected_with_actual_samples_without_changing_raw_output() {
+        let path = Path::new("/model.bin");
+        let duration = 29_610_375;
+        // Native v1.9.4 + small output on the 473766-frame synthetic QA audio:
+        // 29.980s is a decoded timestamp, not 29.610375s of available samples.
+        let mut raw = output();
+        raw["transcription"] = json!([
+            {"offsets":{"from":0,"to":3880},"text":"これはアプリの動作確認用の音声です"},
+            {"offsets":{"from":3880,"to":7840},"text":"今日の会議では設備の点検費を決めます"},
+            {"offsets":{"from":7840,"to":11380},"text":"点検費は来週の月曜日にします"},
+            {"offsets":{"from":11380,"to":13840},"text":"担当者は田中さんです"},
+            {"offsets":{"from":13840,"to":19480},"text":"田中さんは金曜日までに点検の資料を準備してください"},
+            {"offsets":{"from":19480,"to":23840},"text":"佐藤さんは準備した資料を確認してください"},
+            {"offsets":{"from":23840,"to":27280},"text":"次の会議で進み具合を確認します"},
+            {"offsets":{"from":27280,"to":29980},"text":"以上で会議を終わります"}
+        ]);
+        let bytes = serde_json::to_vec(&raw).unwrap();
+        let segments = parse_output(&bytes, path, duration).unwrap();
+        assert_eq!(segments.len(), 8);
+        assert_eq!(segments[6].end_us, 27_280_000);
+        assert_eq!(segments[7].start_us, 27_280_000);
+        assert_eq!(segments[7].end_us, duration);
+        assert_eq!(segments[7].text, "以上で会議を終わります");
+        assert!(segments
+            .iter()
+            .all(|s| s.start_us >= 0 && s.start_us < s.end_us && s.end_us <= duration));
+        let logical = Path::new("mon-unavailable:synthetic-fixed-model");
+        let saved = logical_output(&bytes, path, logical, duration).unwrap();
+        let saved_value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(saved_value["transcription"], raw["transcription"]);
+        assert_eq!(parse_output(&saved, logical, duration).unwrap(), segments);
+    }
+
+    #[test]
+    fn decoded_terminal_window_is_bounded_and_cannot_create_out_of_input_segments() {
+        let path = Path::new("/model.bin");
+        let mut raw = output();
+        raw["transcription"][0]["offsets"] = json!({"from":10,"to":1200});
+        let clipped = parse_output(&serde_json::to_vec(&raw).unwrap(), path, 1_000_000).unwrap();
+        assert_eq!(
+            (clipped[0].start_us, clipped[0].end_us),
+            (10_000, 1_000_000)
+        );
+        for (from, to) in [(10, 30_011), (1000, 1020), (1001, 1020), (0, i64::MAX)] {
+            raw["transcription"][0]["offsets"] = json!({"from":from,"to":to});
+            assert!(parse_output(&serde_json::to_vec(&raw).unwrap(), path, 1_000_000).is_err());
+        }
+        // A large crossing cannot be hidden by appending another in-range
+        // segment or by making the crossing's text empty.
+        raw["transcription"] = json!([
+            {"offsets":{"from":0,"to":1200},"text":""},
+            {"offsets":{"from":100,"to":900},"text":"次の区間"}
+        ]);
+        assert!(parse_output(&serde_json::to_vec(&raw).unwrap(), path, 1_000_000).is_err());
+        raw["transcription"] = json!([
+            {"offsets":{"from":200,"to":500},"text":"前の区間"},
+            {"offsets":{"from":100,"to":1200},"text":"逆順"}
+        ]);
+        assert!(parse_output(&serde_json::to_vec(&raw).unwrap(), path, 1_000_000).is_err());
     }
 
     #[test]

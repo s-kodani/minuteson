@@ -328,6 +328,7 @@ fn speech_workspace_rejects_semantically_invalid_native_results_even_with_valid_
     for change in [
         "model-name",
         "transcription-time",
+        "transcription-start",
         "diarization-track",
         "diarization-time",
         "diarization-engine",
@@ -344,7 +345,18 @@ fn speech_workspace_rejects_semantically_invalid_native_results_even_with_valid_
             serde_json::from_slice(&std::fs::read(&source.assets[&asset]).unwrap()).unwrap();
         match change {
             "model-name" => result["params"]["model"] = json!("unrelated-model.bin"),
-            "transcription-time" => result["transcription"][0]["offsets"]["to"] = json!(11_000),
+            // A bounded final decoded window is valid padding, not a corrupt
+            // result. Reject a window longer than the decoder's 30s context.
+            "transcription-time" => {
+                let from = result["transcription"][0]["offsets"]["from"]
+                    .as_i64()
+                    .unwrap();
+                result["transcription"][0]["offsets"]["to"] = json!(from + 30_001);
+            }
+            "transcription-start" => {
+                result["transcription"][0]["offsets"]["from"] = json!(10_000);
+                result["transcription"][0]["offsets"]["to"] = json!(11_000);
+            }
             // Same meeting/duration/settings: a correct native result must also
             // belong to the exact checkpoint position, not just any track.
             "diarization-track" => result["trackId"] = json!("system-track"),
@@ -370,7 +382,10 @@ fn speech_workspace_rejects_semantically_invalid_native_results_even_with_valid_
         let work = FixedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
         let stage = work.stage.path().to_path_buf();
         let before = calls(&f);
-        let error = work.with_speech_artifacts(&fixed, &|| false).err().unwrap();
+        let error = work
+            .with_speech_artifacts(&fixed, &|| false)
+            .err()
+            .unwrap_or_else(|| panic!("invalid {change} was accepted"));
         if change == "diarization-track" {
             assert!(error.contains("チェックポイントのトラック"), "{error}");
         }

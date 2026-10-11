@@ -1,6 +1,6 @@
 # 文字起こしの同梱実行ファイル＋HTTPSモデル準備
 
-2026-10-11。M4-02の残る文字起こし導入を進める変更。正式評価／Windowsは保留、CI・コミット・Pushなし。既存のQA会議・設定へSQLを書き込まない。
+2026-10-11。M4-02の残る文字起こし導入を進める変更。正式評価／Windowsは保留、CIは実行しない。後続のユーザー指示でUI一区切りごとのコミット／Pushを再開。以下のコミット停止は先行時点の履歴。既存のQA会議・設定へSQLを書き込まない。
 
 ## 接続と境界
 
@@ -128,3 +128,47 @@ LLMだけ、この別QAの通常3選択肢から固定定義を選び、チェ�
 PID30978の通常終了・消失を確認後、DB＋WALだけを `/private/tmp/mon-onboarding-commit-db-audit.HoHJq5` へcloneしsnapshotをread-onlyで照合。実DBへのSQL書込なし。状態SHAは上記と一致、CPU成功3件、会議0／job0。集計時の存在しないengine列参照はstate集計へ修正して確認した。既存11会議QAも下書き／出力・版／head・設定／jobs・用語の4組SHAとbootstrapが以前の値に一致した。
 
 コミット前の最新フロント821成功／0失敗／0skip、1.762131042秒（ログSHA `37928deefe9c5b9af1909cc5394ef32f0f58edfb6165862fbfac77bcc7e49353`）。Python152件中151成功・専用1skip、10.915秒。型検査／Vite2.15秒成功（ログSHA `981f5dcc91f28304a25fb613ec3ed4921db90ef1f91413501aa6d01190bdffb0`）。既存Sonner use-client／chunk・QA公証未設定warningは残る。Rustは最新関連130成功／専用4ignored・専用実素材1成功以降変更していない。ユーザーの指示でUI一区切りごとのコミット／Pushを再開し、CIは引き続き実行しない。一般配布・全品質・全UI・録音／4時間・元の全23タスクを完了扱いにしない。
+
+## ガイド導入モデルから編集・議事録・出力までの実機統合
+
+前節の全変更は `ad391d887ccef742a00301b6ae8cef9a314589f9` としてmainへコミット／Push済み。今回、同じ独立QAに通常GUIからテスト会議1件を新規作成し、導入した標準3モデルの実利用を確認した。音声は以前作った単一話者TTSの読取りclone（29.610375秒、16kHz mono、473,766frames）で、マイク／PC録音はしない。素材SHA `ccc3316f158ff9691267f176c32039f51eb49d5faf79b21908f43e6f328bfa93`、会議ID `18de4837-b6e1-466b-86a6-ba145b3caed4`。追加ネット取得0、既知の完成ファイル累計約3.53GiBを維持した。
+
+### 実ASRで発見した最終時刻の失敗と修正
+
+最初のjob `c1a57a39-161d-4d08-9191-8553dcb8fb2f` はCLI終了0・8発言のJSONを得たが、製品parserが最終end 29,980,000usを実入力29,610,375us＋100msより先として拒否し、0/1・failedを保存した。CLI total4052.27msとjob8982msは別計測。原JSON SHA `61424439e48b48986626f17886e8fe39db80bc7e92af9f95fe68e981323c0499`、stderr SHA `c39d9b5f02422bab890b80eec79383c77e84df744156dbe31e468051035d607c`。失敗job・原JSON・PCM・ログは削除／上書きせず保持。
+
+[固定whisper.cppソース](https://github.com/ggml-org/whisper.cpp/blob/927cfce34f31707e17f2bff35c349632fb9e2c3a/src/whisper.cpp)の7745–7838行とCLI JSON writerを読取り確認すると、decoded timestamp／seek_deltaを区間endへ出し、通常結果のseek_endへのclampがない。実結果が推論窓のpaddingへ出たという判断は、この実測とソースからの推論である。既存の固定ソースarchive SHA `41b664fee09e79176ac277b5237debec34f8d74af3c7d71f333f1ec67989ecde` を再照合して読んだだけで再取得しない。
+
+`transcription/whisper.rs` は最後のsegmentだけ、startが実入力内・正の区間・decoded spanが1推論窓30秒以内の場合に実入力endとの交差を取る。前の区間への100ms許容は維持し、順序逆転／実入力外start／30秒超の窓／整数overflow等は拒否。開始時刻・認識本文・元JSONを変更せず、gapを埋める音声を作らない。実測8発言fixtureの最初の7区間一致・最終end clip・原JSON／再parse一致と、不正境界の通常回帰2件を追加した。復元の不正fixtureも、今は許容する最後の1秒paddingではなく30秒超のdecoded spanと実入力外startで検査する。
+
+### 通常GUIの再試行から冷起動まで
+
+修正後QA `/private/tmp/mon-onboarding-e2e-qa.e82opj/MON Onboarding QA.app`、main SHA `21ec4cd726f110b40268096944ace84894c8f58446f4fc8459de461879ce6d17`。Vite1.59秒／Cargo1分23秒、deep strictアドホック確認成功（正式署名／公証ではない）。失敗QAのPID33523消失後に起動し、GUIの「同じ条件で再試行」→確認から再実行した。
+
+| 実job | 保存結果 | job elapsed |
+|---|---|---:|
+| ASR `52c40efd-9aab-4560-9d11-ac17e2180fb2` | succeeded 1/1・attempt2・元failed jobへretry由来、候補#1・8発言 | 14,564ms |
+| Sherpa `22596325-46ef-4489-8714-845adac66a99` | succeeded 1/1・候補#3・8発言・推定1話者 | 6,763ms |
+| LLM `858678dc-dff2-4b03-83b7-b9279908e950` | succeeded 1/1・議事録候補#1・8項目 | 61,949ms |
+
+候補#3を内容確認後に明示採用。本文先頭へ`【QA編集確認】`、話者名へ`QA読み上げ`を通常GUIで保存し、議事録生成を開始した。LLMの固定入力解析版 `35d56feb-2515-4b6b-ada3-e6755cf9f10d` と根拠プレビューで編集本文・認識原文の区別・話者名・時刻を確認。議事録 `8054c0e5-cd4f-4869-93f5-a88b76c55602` を明示採用し、日付欄へ`（QA保存確認）`を追記して保存。OS保存画面から新規 `/private/tmp/mon-onboarding-e2e.4hj4gQ/onboarding-e2e-minutes.md` へ出力した。2,986bytes・SHA `ea4eff608194af1b983fcda8beceaf30659bc374e2f4dadaea2e36ca348c1c0a` がexport recordの成功／保存版／実ファイルと一致し、脚注8件と編集された固定引用を保持。
+
+通常終了PID34960消失→同じartifactの冷起動→本文・話者名・議事録の修正と保存済み表示保持→通常終了PID36551消失を確認。停止後DB＋WALの私的clone `/private/tmp/mon-onboarding-e2e-final-db.hYK5xv` と `/private/tmp/mon-onboarding-e2e-restart-db.5dQ0na` のread-only照合で、会議／下書き／解析版／議事録版／jobs／exportsソート内容SHA `bb1b6883ecb5c4720ede189e011e68c6be4d6a822fd54e197d3b4e4ddb01228a` が一致。設定／model profiles／components／CPU checksは導入時SHA `930443a4df65c963311152d73dc4d33cdd78a9945c47d21263d446e1eb3854c4` のまま。integrity_checkはok、foreign_key_checkは0行。外部SQL書込み・試験専用IPC・強制終了なし。
+
+既存11会議QAの保護対象4組とbootstrapも前節のSHAと不変。今回の変更は別namespaceのテスト会議だけ。再起動保持画像 `/private/tmp/mon-onboarding-e2e-restart-20261011.png` SHA `c03b0f1f18e9e9c2322df8794806d2b5f73566b7b39c534b52ed9a3369dcc389`、出力直後画像 `/private/tmp/mon-onboarding-e2e-minutes-20261011.png` SHA `bc1eaf76ea931e45e9f4e32a5f98244ad7028530b54540df7e395c79e348a465`。
+
+限定範囲の実機統合成功であり、単一TTSは3／10話者・長時間・精度・録音の代替ではない。今回のLLM結果は全8項目を概要へ分類し、ToDo／決定／担当期限の抽出品質は合格としない。生成中も「編集の保存を確認中」と出る表示は処理中表示との区別が残る。初回取り込み直後に会議操作モーダルのAX本文が消える事象も観測し、Escapeで復帰、再起動後の再試行／候補／採用は列挙できたが、原因解決や全VoiceOver合格としない。全23タスク・配布・実録音の残件、正式評価／Windows保留を維持する。
+
+### この修正の検証時間
+
+実装・調査の記録区間UTC05:36:42〜05:41:19は4分37秒（復元fixture追修正・文書整理は別、累積実装工数ではない）。QA構築は上記1分23秒＋Vite1.59秒。初回関連Rust476件は461成功・1失敗・14専用ignored、libtest271.96秒／構築98.06秒／runner execution279.53秒。復元fixtureが許容paddingを不正と期待した失敗で、endを31秒へ変えた第一追修正でもfixtureのfrom2.5秒との差28.5秒が許容内となり、再実行も461成功・1失敗・14ignored（libtest276.18秒／構築382.04秒／runner284.02秒）。この追修正の誤りを保持し、最終fixtureは実from＋30,001msのspan超過と実入力外startを検査する。製品parserは最初の修正から変えていないため、最後はWhisperと音声復元の全境界を再確認。15成功・0失敗・専用1ignored、libtest14.20秒／構築381.55秒／runner22.03秒、終了0。先の成功461件と重複加算せず、この15件だけを通常全Rustの合格としない。画面側は今回も821成功・0失敗・0skip、1.916381417秒。format／diff check成功。CIは実行しない。
+
+今回のRust構築3回の小計861.65秒、runner execution小計585.58秒（うちlibtest562.34秒）。実機確認と並行しており、これらの合計をターンの壁時計時間や実装工数としない。最後のrunnerは管理する再生成可能cache4342.1MiBだけを回収し、保持8356.4MiB・終了後上限10240MiB。ビルド中の一時領域まで10GiBに制限する設定ではない。会議・モデル・QA原本の削除なし。
+
+| ログ（`/private/tmp/`） | SHA-256 |
+|---|---|
+| mon-onboarding-e2e-qa-build-20261011.log | fc3b023cf14214310f5cd48a5d38cea98297e02dce0185e5afac1184be034515 |
+| mon-onboarding-e2e-rust-20261011.log | 13b3bef339b58200aefe0f6cec639b6b79500d1d9f2773a53dd41075e7fb890a |
+| mon-onboarding-e2e-rust-retest-20261011.log | 75c1548fbe03802ea42ee9b57f64f167d5011f6ce7f8c572cd2225c18ecec7b2 |
+| mon-onboarding-e2e-boundaries-final-20261011.log | 10889cc50edb8740e818e8fa5137617a186de5a489a2684f9f3dfd1154d7a245 |
+| mon-onboarding-e2e-frontend-20261011.log | 451747c7734e0f8d0e0905057fd21187faef5d86c1abb7e39b16b22477d37b97 |
