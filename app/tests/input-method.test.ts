@@ -23,3 +23,16 @@ test("synthetic IME browser driver is executable and verifies confirmed-only sav
   assert.match(source, /compositionend did not save exactly one confirmed update/);
   assert.match(source, /plain Enter after composition stopped adding one newline/);
 });
+test("rich input uses native plain-text history and only native Undo/Redo may recover same-epoch evidence", () => {
+  const field = readFileSync(new URL("../src/minutes-rich-field.tsx", import.meta.url), "utf8");
+  assert.match(field, /document.execCommand\("insertText", false, value\)/);
+  assert.doesNotMatch(field, /range.deleteContents\(\)|range.insertNode\(/);
+  assert.match(field, /inputType === "historyUndo" \|\| inputType === "historyRedo"/);
+  const editor = readFileSync(new URL("../src/minutes-editor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /inputEvidence.current.epoch !== epoch \|\| inputEvidence.current.viewId !== view.id/);
+  assert.match(editor, /nativeHistory \? \[\.\.\.inputEvidence.current.links.values\(\)\] : \[\]/);
+  const driver = readFileSync(new URL("minutes-input-undo-browser-check.js", import.meta.url), "utf8");
+  assert.doesNotThrow(() => new Function(`return (${driver})`));
+  assert.match(driver, /Meta\+Shift\+z/);
+  assert.match(driver, /native input Undo called durable edit Undo/);
+});

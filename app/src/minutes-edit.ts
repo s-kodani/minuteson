@@ -1,4 +1,4 @@
-import type { Block, Inline, MinutesContent, MinutesItem, TextBlock } from "./minutes-state";
+import type { Block, Evidence, Inline, MinutesContent, MinutesItem, TextBlock } from "./minutes-state";
 
 export interface InlineAddress { block: number; item?: number; row?: number; column?: number; header?: boolean }
 export interface InlineSelection { address: InlineAddress; start: number; end: number }
@@ -69,12 +69,27 @@ export function reconcileDocument(doc: MinutesContent): MinutesContent {
   for (const e of removed) manual(doc, e.minutesItemId, true);
   return doc;
 }
-export function editInline(original: MinutesContent, address: InlineAddress, value: Inline[]): MinutesContent {
+export function editInline(original: MinutesContent, address: InlineAddress, value: Inline[], undoEvidence: readonly Evidence[] = []): MinutesContent {
   const doc = structuredClone(original);
   const before = inlineAt(doc, address);
   const nodes = compactInline(value);
   const owner = ownerAt(doc, address);
   const allowed = new Set(before.flatMap((n) => n.type === "evidence" ? [n.evidenceLinkId] : []));
+  let recovered = false;
+  // Only the editor's same-epoch native Undo/Redo may supply previously removed
+  // fixed references. Ordinary typing/paste still cannot introduce a link.
+  for (const node of nodes) if (node.type === "evidence" && !allowed.has(node.evidenceLinkId)) {
+    const restored = undoEvidence.find(e => e.id === node.evidenceLinkId && e.minutesItemId === owner && node.minutesItemId === owner);
+    if (restored && !doc.evidence.some(e => e.id === restored.id)) {
+      doc.evidence.push({ ...restored, sourceType: "manual", verificationState: "unverified" });
+      allowed.add(restored.id);
+      recovered = true;
+    }
+  }
+  if (recovered) {
+    const order = new Map(undoEvidence.map((e, index) => [e.id, index]));
+    doc.evidence.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+  }
   if (nodes.some((n) => n.type === "evidence" && (!allowed.has(n.evidenceLinkId) || n.minutesItemId !== owner))) throw new Error("別の項目の根拠は貼り付けできません");
   const b = doc.blocks[address.block];
   if (b.type === "table" && owner && address.column === 3 && plain(nodes).trim()) throw new Error("ToDoの根拠欄には固定参照だけを保持します");

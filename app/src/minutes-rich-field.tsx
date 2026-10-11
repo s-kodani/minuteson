@@ -47,9 +47,13 @@ function read(root: HTMLElement, known: Map<string, Inline>): Inline[] {
     const id = node.getAttribute("data-evidence-id");
     if (id) { const original = known.get(id); if (!original) throw new Error("不明な根拠の貼り付けを拒否しました"); nodes.push({ ...original }); return; }
     if (["SCRIPT", "STYLE", "IFRAME", "OBJECT"].includes(node.tagName)) return;
-    if (node.tagName === "BR") { append("\n", bold, italic); return; }
+    // Native editing uses a terminal BR as an empty-line placeholder, not an
+    // additional newline (including the sole BR after deleting all content).
+    if (node.tagName === "BR") { if (node.nextSibling) append("\n", bold, italic); return; }
     const last = nodes.at(-1);
-    if (["DIV", "P"].includes(node.tagName) && last && !(last.type === "text" && last.text.endsWith("\n"))) append("\n", bold, italic);
+    if (["DIV", "P"].includes(node.tagName) && node.previousSibling &&
+      (node.previousSibling instanceof Element && ["DIV", "P"].includes(node.previousSibling.tagName) ||
+        last && !(last.type === "text" && last.text.endsWith("\n")))) append("\n", bold, italic);
     for (const child of Array.from(node.childNodes)) walk(child, bold || node.tagName === "STRONG" || node.tagName === "B", italic || node.tagName === "EM" || node.tagName === "I");
   };
   for (const child of Array.from(root.childNodes)) walk(child, false, false);
@@ -69,7 +73,7 @@ function terminalCaret(root: HTMLElement) {
 export function MinutesRichField({ value, label, blockIndex, addressKey, disabled, evidenceOnly = false, chipLabel, onChange, onSelection, onFailure, onCompositionChange, onEvidence }: {
   value: Inline[]; label: string; blockIndex: number; addressKey: string; disabled: boolean; evidenceOnly?: boolean;
   chipLabel: (id: string) => string;
-  onChange: (value: Inline[]) => void; onSelection: (range: { start: number; end: number }) => void; onFailure: (cause: unknown) => void; onCompositionChange: (active: boolean) => void;
+  onChange: (value: Inline[], nativeHistory?: boolean) => void; onSelection: (range: { start: number; end: number }) => void; onFailure: (cause: unknown) => void; onCompositionChange: (active: boolean) => void;
   onEvidence?: (id: string, opener: HTMLElement) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -77,13 +81,20 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
   const known = useRef(new Map<string, Inline>());
   for (const node of value) if (node.type === "evidence") known.current.set(node.evidenceLinkId, node);
   const capture = () => { if (root.current) { const range = position(root.current); if (range) onSelection(range); } };
-  const changed = () => {
+  const changed = (inputType?: string) => {
     if (!root.current || composing.current) return;
-    try { const nodes = read(root.current, known.current); onChange(nodes); capture(); } catch (cause) { onFailure(cause); }
+    try { const nodes = read(root.current, known.current); onChange(nodes, inputType === "historyUndo" || inputType === "historyRedo"); capture(); } catch (cause) { onFailure(cause); }
   };
   const insertText = (value: string) => {
     const field = root.current; const selection = window.getSelection(); if (!field || !selection?.rangeCount || !position(field)) return;
-    const range = selection.getRangeAt(0); range.deleteContents(); const text = document.createTextNode(value); range.insertNode(text); terminalCaret(field); range.setStart(text, value.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); changed();
+    // Range mutations bypass WebKit/Chromium's editing history. insertText is
+    // the native plain-text editing transaction, retaining Undo/Redo without
+    // admitting clipboard HTML. Fail closed if this engine cannot execute it.
+    if (!document.execCommand("insertText", false, value)) {
+      onFailure(new Error("この環境では本文を挿入できません"));
+      return;
+    }
+    terminalCaret(field); changed();
   };
   useLayoutEffect(() => {
     const field = root.current; if (!field) return;
@@ -144,7 +155,7 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
     onFocus={capture} onKeyUp={capture} onMouseUp={capture} onSelect={capture}
     onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled && !composing.current) onEvidence?.(chip.dataset.evidenceId!, chip); }}
     onKeyDown={event => { if (inputMethodOwnsEvent(event.nativeEvent, composing.current) || event.repeat) return; const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!, chip); } }}
-    onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={changed}
+    onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={event => changed((event.nativeEvent as InputEvent).inputType)}
     onPaste={(event) => {
       event.preventDefault(); if (disabled || evidenceOnly || composing.current) return;
       const value = event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");

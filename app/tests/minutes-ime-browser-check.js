@@ -47,11 +47,11 @@ async page => {
   await page.waitForTimeout(1000);
   check(await count() === 0, "composition debounce saved unconfirmed text");
   await field().evaluate(element => element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "点検日を確認する" })));
-  await page.waitForFunction(() => window.__mon.drafts.a.payload.blocks[1].content.map(node => node.text ?? "").join("") === "点検日を確認する");
+  await page.waitForFunction(() => window.__mon.drafts.a.payload.blocks[1].content.map(node => node.text ?? "").join("") === "点検日を確認する", null, { timeout: 10000 });
   check(await field().textContent() === "点検日を確認する", "compositionend lost confirmed Japanese text");
   check(await count() === 1, "compositionend did not save exactly one confirmed update");
   await field().click(); await field().press("End"); await field().press("Enter");
-  await page.waitForFunction(() => window.__mon.drafts.a.payload.blocks[1].content.map(node => node.text ?? "").join("") === "点検日を確認する\n");
+  await page.waitForFunction(() => window.__mon.drafts.a.payload.blocks[1].content.map(node => node.text ?? "").join("") === "点検日を確認する\n", null, { timeout: 10000 });
   check(await count() === 2, "plain Enter after composition stopped adding one newline");
   const nativeFlag = await field().evaluate(element => {
     const before = element.innerHTML;

@@ -84,6 +84,25 @@ test("deleting chips, items and blocks reconciles all annotations while leaving 
   assert.deepEqual(removedBlock.items.map(i => i.id), ["decision"]); assert.deepEqual(removedBlock.evidence.map(e => e.id), ["link"]);
   assert.equal(original.evidence.length, 2);
 });
+test("native text Undo restores only the same owner's frozen reference from its editing epoch", () => {
+  const original = document(), address = { block: 1, item: 0 };
+  const removed = editInline(original, address, []);
+  assert.throws(() => editInline(removed, address, inlineAt(original, address)), /別の項目/);
+  const restored = editInline(removed, address, inlineAt(original, address), original.evidence);
+  assert.deepEqual(inlineAt(restored, address), inlineAt(original, address));
+  assert.deepEqual(restored.evidence.find(e => e.id === "link"), { ...original.evidence[0], sourceType: "manual", verificationState: "unverified" });
+  assert.deepEqual(restored.evidence.find(e => e.id === "todo-link"), original.evidence[1]);
+  assert.deepEqual(restored.evidence.map(e => e.id), original.evidence.map(e => e.id));
+  assert.equal(restored.items[0].body, original.items[0].body);
+  assert.throws(() => editInline(removed, address, [{ ...chip, minutesItemId: "todo", evidenceLinkId: "todo-link" }], original.evidence), /別の項目/);
+  assert.throws(() => editInline(removed, address, [chip], []), /別の項目/);
+  assert.throws(() => editInline(removed, address, [chip], [{ ...original.evidence[0], minutesItemId: "todo" }]), /別の項目/);
+  assert.equal(original.evidence.length, 2);
+  assert.equal(removed.evidence.length, 1);
+  const redone = editInline(restored, address, []);
+  assert.equal(redone.evidence.length, 1);
+  assert.deepEqual(inlineAt(editInline(redone, address, inlineAt(original, address), restored.evidence), address), inlineAt(original, address));
+});
 test("table row insertion adds a manual ungrounded ToDo with unknown metadata, generic table columns remain rectangular", () => {
   const original = document(); const added = changeTable(original, { block: 2, row: 0 }, "addRow");
   assert.equal(added.items.length, 3); assert.equal(added.items[2].sourceType, "manual"); assert.equal(added.items[2].assigneeName, null); assert.equal(added.items[2].dueDate, null); assert.equal(added.evidence.length, 2);
