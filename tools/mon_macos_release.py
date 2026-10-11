@@ -201,6 +201,18 @@ def digest(path):
     return hasher.hexdigest()
 
 
+def expected_notices():
+    """Recollect offline from the current locked inputs; never write or approve."""
+    spec = importlib.util.spec_from_file_location("mon_release_notices", REPOSITORY / "tools/mon_third_party_notices.py")
+    collector = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(collector)
+    stdout, _ = command(["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+                         "--filter-platform", "aarch64-apple-darwin"],
+                        cwd=REPOSITORY / "app/src-tauri", timeout=120)
+    lock = json.loads(private_path(REPOSITORY / "app/package-lock.json").read_text(encoding="utf8"))
+    return collector.collect(REPOSITORY, json.loads(stdout), lock)
+
+
 def verify_notices(app):
     """Verify collection/copy evidence, never elevate it to license approval."""
     inventory_path = private_path(app / "Contents/Resources/third-party-inventory.json")
@@ -221,6 +233,10 @@ def verify_notices(app):
             or inventory.get("noticesBytes") != text_path.stat().st_size
             or inventory.get("noticesSha256") != digest(text_path)):
         raise ValueError("dependency notices are missing, stale or changed; no license approval")
+    expected_text, expected_inventory = expected_notices()
+    if (text_path.read_bytes() != expected_text
+            or json.dumps(inventory, sort_keys=True) != json.dumps(expected_inventory, sort_keys=True)):
+        raise ValueError("dependency notices differ from current offline collection; no license approval")
     return {"state": "collected_not_reviewed", "packages": len(inventory["packages"]),
             "missingNoticeTexts": inventory["missingNoticeTexts"],
             "supplementManifestSha256": inventory["supplementManifestSha256"],

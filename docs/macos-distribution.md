@@ -48,7 +48,7 @@ Invalid・処理中・不正応答・署名／ticket検証失敗は成功にし�
 
 Macの準備ビルドはオフラインで依存通知文を収集し、`Contents/Resources/THIRD_PARTY_NOTICES.txt`と`third-party-inventory.json`を同梱する。現在のCargo normal/build依存・npm production依存を保守的に対象とし、正確な使用版・申告ライセンス・収集文の容量／SHA・lock SHA・候補が見つからない依存を記録する。MON自身、標準ライブラリ／Apple SDK、別導入のAIエンジン・モデル等は別確認。全収集物の存在は条件充足の証明ではなく、欠落文・追加NOTICE・対応ソースの取得案内等の確認を残す。[同梱範囲と実検証](verification/macos-dependency-notices-2026-10-10.md)を参照。
 
-コピー後と最終検査後に通知文の容量／SHA・現在のlock・未承認状態を照合し、欠落・旧版・改変・自己承認を拒否する。build-resultの`dependencyNotices`は`collected_not_reviewed`であり、ライセンス全体の確認には昇格しない。
+コピー後と最終検査後に通知文の容量／SHA・現在のlock・未承認状態を照合し、欠落・旧版・改変・自己承認を拒否する。さらに現在のlocked・offline Cargo metadataとnpm lock／配置済みproduction依存、固定補完indexからメモリ上で再収集し、通知本文の全bytesと全inventoryを照合する。本文を保ったまま不足一覧やpackage情報を変えても拒否する。再収集で通信／build／file書換えは行わず、不一致は署名・送信前に停止する。[回帰と実offline照合](verification/macos-notice-source-verification-2026-10-11.md)。build-resultの`dependencyNotices`は`collected_not_reviewed`であり、ライセンス全体の確認には昇格しない。
 
 パッケージに本文がない場合の補完資料はcrateの正確な版・申告・配布checksum・公開VCS commit／pathに固定し、出典／容量／SHAを保持する。`upstream_license_reference`は説明・参照だけで、不足本文を解消しない。配布時の照合は補完index SHAにも及ぶ。MPL対象の正確な版の公開ソースarchive URLとSHAは通知文にも含める。通常ビルドでは通信せず、ソースの実取得確認や最終的な配布条件確認は別。現在の不足12件、SDK由来等の残条件、実11件のarchive照合については[版固定補完の記録](verification/macos-notice-supplements-2026-10-10.md)を参照。
 

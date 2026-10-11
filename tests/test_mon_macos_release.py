@@ -50,6 +50,10 @@ class ReleaseTests(unittest.TestCase):
                           "packages": [{"name": "synthetic"}], "missingNoticeTexts": ["synthetic"],
                           "noticesSha256": release.digest(self.notice_text), "noticesBytes": self.notice_text.stat().st_size}
         self.file(self.notice_inventory, json.dumps(self.inventory).encode())
+        expected = patch.object(release, "expected_notices", return_value=(
+            self.notice_text.read_bytes(), json.loads(json.dumps(self.inventory))))
+        expected.start()
+        self.addCleanup(expected.stop)
         runtime_spec = importlib.util.spec_from_file_location("release_test_runtime", release.REPOSITORY / "tools/mon_whisper_runtime.py")
         runtime = importlib.util.module_from_spec(runtime_spec)
         runtime_spec.loader.exec_module(runtime)
@@ -322,6 +326,33 @@ class ReleaseTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
             self.pipeline("existing-explicit-profile")
         self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
+
+    def test_notice_metadata_cannot_hide_missing_texts_or_replace_package_provenance(self):
+        for key, value in [("missingNoticeTexts", []),
+                           ("packages", [{"name": "foreign-but-nonempty"}])]:
+            self.file(self.notice_inventory, json.dumps({**self.inventory, key: value}).encode())
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                release.verify_notices(self.app)
+
+    def test_notice_recollection_is_offline_locked_read_only_and_uses_actual_inputs(self):
+        # The pipeline tests use a synthetic recollection boundary. Exercise
+        # that boundary's real implementation separately without Cargo/network.
+        spec = importlib.util.spec_from_file_location("release_recollection_test", SPEC.origin)
+        actual = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(actual)
+        metadata = b'{"resolve":{"root":null,"nodes":[]},"packages":[]}'
+        with patch.object(actual, "command", return_value=(metadata, b"")) as command, self.assertRaises(ValueError):
+            actual.expected_notices()
+        command.assert_called_once_with(["cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+                                         "--filter-platform", "aarch64-apple-darwin"],
+                                        cwd=actual.REPOSITORY / "app/src-tauri", timeout=120)
+
+    def test_notice_metadata_mismatch_refuses_pipeline_before_sign_or_upload(self):
+        self.file(self.notice_inventory, json.dumps({**self.inventory, "missingNoticeTexts": []}).encode())
+        with redirect_stderr(io.StringIO()), self.assertRaises(ValueError):
+            self.pipeline("existing-explicit-profile")
+        self.assertFalse(any("--sign" in argv or "notarytool" in argv for argv in self.calls))
+        self.assertFalse((self.root / "distribution/build-result.json").exists())
 
     def test_asr_resource_verification_does_not_claim_inner_cli_signed_or_notarized(self):
         proof = release.verify_asr_runtime(self.app)
