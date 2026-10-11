@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useSyncExternalStore, type ComponentPropsWithoutRef, type ReactNode, type RefObject } from "react";
-import { modalKeyGuard, modalOrder, outsideDialog, topOpenModal } from "./modal-state";
+import { modalKeyGuard, modalOrder, outsideDialog, topOpenModal, visibleModalTarget } from "./modal-state";
 import { closeInfoPopovers } from "./info-popover";
 import { confirmations } from "./confirmation-service";
 import { ConfirmationBody } from "./confirmation-body";
@@ -116,8 +116,8 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       // mounted host here makes macOS WebKit lose its accessibility subtree.
       element.showModal();
       modalOrder.opened(element);
-      const cancel = element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)");
-      const heading = element.querySelector<HTMLElement>("h2, h3");
+      const cancel = visibleModalTarget(element, "[data-dialog-cancel]");
+      const heading = visibleModalTarget(element, "h2, h3");
       initialFocusPending.current = !cancel;
       if (!cancel && heading) heading.tabIndex = -1;
       (cancel ?? heading ?? element).focus({ preventScroll: true });
@@ -141,14 +141,16 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
   }, [open, ref, nested]);
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!open || blocked || !initialFocusPending.current || !element?.open) return;
+    if (!open || blocked || owned || replacement || !initialFocusPending.current || !element?.open || topOpenModal() !== element) return;
     const active = document.activeElement;
-    if (active === element || active === element.querySelector("h2, h3")) {
-      element.querySelector<HTMLElement>("[data-dialog-cancel]:not(:disabled)")?.focus({ preventScroll: true });
+    if (active === element || active === document.body || active === visibleModalTarget(element, "h2, h3")) {
+      const cancel = visibleModalTarget(element, "[data-dialog-cancel]");
+      if (!cancel) return;
+      cancel.focus({ preventScroll: true });
       element.scrollTop = 0;
     }
     initialFocusPending.current = false;
-  }, [open, blocked, ref]);
+  }, [open, blocked, owned?.id, replacement?.key, ref]);
   useLayoutEffect(restore, [open, restoreReady]);
   useLayoutEffect(() => {
     const element = ref.current;

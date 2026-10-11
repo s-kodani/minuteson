@@ -2,6 +2,8 @@
 
 2026-10-11。M3-05／M3-08の限定検証。正式評価・Windows・実録音の保留を維持し、全UI／VoiceOverの完了宣言ではない。直前の保存待ち表示修正は `ed6ea85d9271cd9b2e741dcbd13b24bd82a5d851` でmainへPush済み。
 
+後続で取り込みreadiness後の初期focusも修正し、Mac通常選択2回で×focusと安全な確認／復帰を取得した。[現在の限定証拠](ui-import-initial-focus-2026-10-11.md)。以下のcontainer残留は本記録時点の履歴であり、全modal／VoiceOver・IMEの完了にはしない。
+
 ## 失敗比較と採用した変更
 
 独立QA `jp.mon.desktop.qa.onboarding20261011` で、通常ファイル選択→保存→詳細の会議操作を開く順序のnative AX欠落が再現していた。描画と×focusはあってもHTML本文・ボタンがAXから消え、Escapeで元画面へ戻る。前の証拠は[実機記録](model-asr-onboarding-2026-10-11.md#保存待ちと操作中の表示を分離)。

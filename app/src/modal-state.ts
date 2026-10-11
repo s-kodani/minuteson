@@ -12,6 +12,13 @@ export function modalKeyGuard(event: Pick<KeyboardEvent, "key" | "defaultPrevent
   return "handle";
 }
 
+// Persistent portal views share a boundary but only the displayed owner can
+// supply focus. A disabled header must not fall through to a hidden sibling.
+export function visibleModalTarget(root: ParentNode, selector: string): HTMLElement | null {
+  return Array.from(root.querySelectorAll<HTMLElement>(selector)).find(target => target.isConnected
+    && !target.matches(":disabled") && !target.closest("[hidden], [inert]") && !!target.getClientRects().length) ?? null;
+}
+
 // Portaled triggers can open a dialog mounted before its parent in the DOM.
 // Native top-layer order follows showModal(), not document order.
 export function createModalOrder<T extends object>() {

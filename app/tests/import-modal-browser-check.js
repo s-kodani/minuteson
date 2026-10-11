@@ -10,6 +10,8 @@ async (page) => {
   const open = async () => { await trigger().click(); await modal().waitFor(); await page.waitForFunction(() => window.monImportFixture.import.phase === "ready"); await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).waitFor(); await page.waitForFunction(() => !document.querySelector('dialog[open] [aria-label="確認をキャンセル"]')?.disabled && document.querySelector('dialog[open] input')?.value === "会議"); };
   const closed = async () => { await modal().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "音声を取り込む"); };
   await boot(); await open();
+  check(await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "ready import stayed on container or focused a hidden sibling's cancellation");
+  results.push("busy initial import exposes only its visible cancellation after readiness, not retained hidden sibling controls");
   for (const label of ["取り込み後の解析", "取り込みの用語"]) {
     const before = await page.evaluate(() => JSON.stringify(window.monImportFixture.import));
     const icon = modal().getByRole("button", { name: `${label}の説明を開く`, exact: true });
