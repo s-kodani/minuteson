@@ -1,6 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { InfoPopover } from "./info-popover";
 import { topOpenModal } from "./modal-state";
 import { guidedModelSource, importRoles, modelFileName, type ChosenModelFile, type GuidedModelSource, type ImportEngine, type ImportRole } from "./model-import-guide-state";
 
@@ -54,7 +53,8 @@ export function ModelImportGuide({ disabled, onInspect, onChanged, onPickingChan
   const ready = importRoles[engine].every(item => files.some(file => file.role === item.role));
   const blocked = disabled || picking || !isTauri();
   return <section className="model-import-guide" aria-label="ファイルを選んでモデルを取り込む">
-    <div className="heading-with-info"><p>実行ファイルとモデルを選んで取り込みます。</p><InfoPopover label="ファイルからのモデル取り込み">JSONの作成や元ファイルの移動は不要です。macOS Apple Silicon用のCLI実行ファイルを選んでください。配布元・利用条件は別途確認が必要です。ファイル名をモデル名とし、版は「未申告」で記録します。性能・精度は未評価です。</InfoPopover></div>
+    <p>実行ファイルとモデルを選んで取り込みます。元ファイルの移動やJSONの作成は不要です。</p>
+    <p className="field-note">macOS Apple Silicon用のCLIを選んでください。配布元と利用条件は別途確認が必要です。モデルの版は「未申告」で記録します。</p>
     <label className="prompt-label">取り込むAI<select value={engine} disabled={blocked} onChange={event => { sequence.current++; setEngine(event.target.value as ImportEngine); setFiles([]); setError(""); onChanged(); }}>
       <option value="whisper.cpp">文字起こし（whisper.cpp）</option><option value="sherpa-onnx">話者分離（sherpa-onnx）</option><option value="llama.cpp">議事録生成（llama.cpp）</option>
     </select></label>

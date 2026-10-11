@@ -692,3 +692,19 @@ button:disabled { opacity:.5; }
 .model-import-file > button { flex: 0 0 auto; }
 .model-import-guide > button { justify-self: start; }
 .model-import-legacy { margin-top: 20px; }
+.model-setup-entrypoints {display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin:16px 0 24px;}
+.model-inspection>h2 {font-size:17px; margin-top:0;}
+.model-setup-entrypoints>.model-download {margin:0; padding:0; border:0;}
+.model-inventory {display:grid; gap:12px; margin-top:8px;}
+.model-inventory h3,.model-inventory p {margin:0;}
+.model-inventory ul {display:grid; gap:0; list-style:none; padding:0; margin:0;}
+.model-inventory li {display:flex; align-items:center; justify-content:space-between; gap:20px; padding:16px 0; border-bottom:1px solid var(--border);}
+.model-inventory li:last-child {border-bottom:0;}
+.model-inventory-name {display:grid; gap:6px; min-width:0; overflow-wrap:anywhere;}
+.model-inventory-name span,.model-inventory-state {color:var(--muted); font-size:13px; line-height:1.5;}
+.model-inventory-state {flex-shrink:0;}
+.model-setup-steps,.model-application-review,.model-download-review {display:grid; gap:16px; margin-top:16px;}
+.model-setup-steps label {display:grid; gap:8px;}
+.model-setup-steps label:has(input[type=checkbox]) {display:flex; align-items:flex-start; gap:8px;}
+.model-setup-steps select {width:100%; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit;}
+@media(max-width:700px) {.model-inventory li {align-items:flex-start; flex-direction:column; gap:8px;}.model-inventory-state {flex-shrink:1;}}

@@ -2,120 +2,112 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
+
 test("settings keep mounted modal inputs and attention never opens a background modal", () => {
-  const view = source("settings-disclosure.tsx");
-  assert.match(view,/<OptionsModal label=\{label\} className=\{`settings-disclosure \$\{className\}`\} attention=\{attention\}[^\n]*>\{children\}/);
-  assert.doesNotMatch(view,/useEffect|setOpen|disabled=\{attention\}/);
-  const modal=source("options-modal.tsx");
-  assert.match(modal,/aria-haspopup="dialog"/);
-  assert.match(modal,/<CommonModal[^\n]*open=\{open && !hidden\} nested data-settings-modal/);
-  assert.match(modal,/\{children\}<\/div>/);
-  assert.doesNotMatch(modal,/open && children|flush\(|invoke\(/);
+  const view = source("settings-disclosure.tsx"), modal = source("options-modal.tsx");
+  assert.match(view, /<OptionsModal label=\{label\} className=\{`settings-disclosure \$\{className\}`\} attention=\{attention\}[^\n]*>\{children\}/);
+  assert.doesNotMatch(view, /useEffect|setOpen|disabled=\{attention\}/);
+  assert.match(modal, /aria-haspopup="dialog"/);
+  assert.match(modal, /<CommonModal[^\n]*open=\{open && !hidden\} nested data-settings-modal/);
+  assert.doesNotMatch(modal, /open && children|flush\(|invoke\(/);
 });
 
-test("model settings keep their spacing scope on the portaled dialog host", () => {
-  const view=source("settings-disclosure.tsx"), modal=source("options-modal.tsx"), css=source("prototype-alignment.css");
-  assert.match(view,/className\?: string/);
-  assert.match(modal,/createPortal\(<div className=\{`options-modal \$\{className\}`\}/);
-  assert.equal((source("model-inspection.tsx").match(/<SettingsDisclosure[^\n]*className="model-inspection-settings"/g) ?? []).length,2);
-  assert.equal((source("model-download.tsx").match(/<SettingsDisclosure[^\n]*className="model-download-settings"/g) ?? []).length,3);
-  assert.match(source("model-download.tsx"), /label="モデルをダウンロード" className="model-download-settings"/);
-  assert.match(css,/\.model-inspection-settings \.options-dialog-content>section \{\s*display:grid; gap:12px;/);
-  assert.match(css,/\.model-download-settings \.model-download-catalog \{[^}]*max-height:none; overflow:visible;/);
-  assert.match(css,/\.model-inspection-settings \.prompt-label input \{[^}]*border:1px solid/);
-  assert.match(css,/\.model-inspection-settings pre \{[^}]*white-space:pre-wrap; overflow-wrap:anywhere;/);
-  assert.doesNotMatch(css,/\.model-(?:inspection|download) \.options-dialog-content/);
+test("model settings expose only two onboarding entries and keep portaled spacing", () => {
+  const local = source("model-inspection.tsx"), download = source("model-download.tsx"), css = source("prototype-alignment.css");
+  assert.equal((local.match(/<SettingsDisclosure/g) ?? []).length, 1);
+  assert.equal((download.match(/<SettingsDisclosure/g) ?? []).length, 1);
+  assert.match(local, /label="ローカルから取り込む" className="model-inspection-settings"/);
+  assert.match(download, /label="モデルをダウンロード" className="model-download-settings"/);
+  assert.doesNotMatch(local + download, /<CommonModal|label="取得定義からダウンロード"|label="取得記録"|label="モデルの配置・構成記録"|reviewDeletion|reviewNew\(/);
+  assert.match(css, /\.model-inspection-settings \.options-dialog-content>section \{\s*display:grid; gap:12px;/);
+  assert.match(css, /\.model-download-settings \.model-download-catalog \{[^}]*max-height:none; overflow:visible;/);
+  assert.match(css, /\.model-setup-entrypoints \{[^}]*align-items:center;[^}]*gap:12px/);
 });
-test("normal settings keep primary theme and model summary but fold diagnostics", () => {
-  const main = source("main.tsx"), theme = source("theme.tsx"), models = source("model-inspection.tsx");
+
+test("normal settings retain theme but show installed models inline, not record/help modals", () => {
+  const main = source("main.tsx"), local = source("model-inspection.tsx"), inventory = source("model-inventory.tsx");
   assert.match(main, /<ThemeSettingsPanel compact locked/);
   assert.match(main, /<ModelInspectionPanel compact locked/);
-  assert.ok(theme.indexOf('<ThemeSelection locked={locked} />') < theme.indexOf('<SettingsDisclosure label="本文と再生の表示設定"'));
-  assert.match(theme, /attention=\{!!\(state.error \|\| state.busy \|\| state.uncertain \|\| state.pendingPreferences\)\}/);
-  assert.match(models, /standard \? profileConfigurationLabel\(standard\)/);
-  assert.match(models, /attention=\{recordsAttention\}/);
-  assert.match(models, /entry.bodyRemoved !== true && entry.compatibility\?\.state !== "succeeded"/);
-  assert.match(models, /<\/SettingsDisclosure>\s*\{deletionReview && <CommonModal/);
+  assert.match(local, /<ModelInventory entries=\{placements\} profiles=\{profiles\} loading=\{catalogLoading\} error=\{catalogError\}/);
+  assert.doesNotMatch(local, /InfoPopover|CommonModal/);
+  assert.doesNotMatch(source("model-issue.tsx"), /InfoPopover|CommonModal|<button/);
+  assert.match(source("model-issue.tsx"), /role="alert"/);
+  assert.match(inventory, /aria-label="導入済みモデル"/);
+  assert.match(inventory, /モデル一覧を確認できません/);
+  assert.match(inventory, /!loading && !error && loaded.length === 0/);
 });
-test("download recovery and confirmation are not hidden with the form or catalog", () => {
+
+test("download review, receipt and uncertainty remain in the initiating onboarding dialog", () => {
   const view = source("model-download.tsx");
-  assert.match(view, /<\/SettingsDisclosure>\s*\{!!busy && <p role="status"/);
-  assert.match(view, /<\/SettingsDisclosure>\s*<CommonModal open=\{!!modal\}/);
-  assert.match(view, /entry.state !== "completion_recorded"/);
-  assert.match(view, /<SettingsDisclosure label="取得定義からダウンロード"[^\n]*pending \|\| modal \|\| error/);
-  const form = view.slice(view.indexOf('<SettingsDisclosure label="取得定義からダウンロード"'), view.indexOf('<SettingsDisclosure label="取得記録"'));
-  assert.doesNotMatch(form.split('>')[0], /\|\| review|\|\| receipt/);
-  assert.ok(form.indexOf('aria-label="照合済み取得素材"') > form.indexOf('</SettingsDisclosure>'));
+  const dialog = view.slice(view.indexOf('<SettingsDisclosure'), view.indexOf('</SettingsDisclosure>'));
+  for (const label of ["未確定のモデル取得操作", "照合済み取得素材", "ダウンロードと取り込みの確認"]) assert.ok(dialog.includes(`aria-label="${label}"`));
+  assert.match(dialog, /未完了・過去のダウンロード/);
+  assert.match(view, /await invoke\("cancel_model_inspection", \{ token: value.token \}\)/);
+  assert.match(view, /if \(lifetime.active \|\| !lifetime.cancelled\) throw Error/);
+  assert.match(view, /自動再取得は行いません/);
 });
 
-test("model preflight results stay inside the initiating modal and next-step navigation never executes work", () => {
-  const view=source("model-inspection.tsx");
-  const manual=view.slice(view.indexOf('<SettingsDisclosure label="ローカルから取り込む"'),view.indexOf('<ModelDownloadPanel'));
-  assert.match(manual,/aria-label="モデル検査結果"/);
-  assert.match(manual,/onClick=\{\(\) => void place\(\)\}>管理領域へコピー/);
-  assert.match(manual,/onClick=\{\(\) => setPreparationView\("records"\)\}>配置・構成記録を開く/);
-  assert.match(manual,/disabled=\{busy\} onClick/);
-  assert.match(manual,/setDirectory\(event.target.value\); setReport\(null\); setError\(""\); setNotice\(null\)/);
-  assert.doesNotMatch(view.slice(view.indexOf("const inspect ="),view.indexOf("const stoppedApplication")),/setPreparationView/);
-  assert.match(view,/preparationView === view && !confirm.pending && !\(application && applicationVisible\)/);
-  assert.match(view,/<IssueStatus label="モデル準備" message=\{error\}/);
-  for (const target of ["manual","records"]) {
-    assert.ok(view.includes(`open={preparationView === "${target}"}`));
-    assert.ok(view.includes(`restoreTarget={() => ${target}Trigger.current}`));
-    assert.ok(view.includes(`{preparationFeedback("${target}")}`));
-  }
+test("manual copy and CPU execution need explicit actions but never additional confirmation modals", () => {
+  const view = source("model-inspection.tsx");
+  assert.match(view, /assertGuidedInspection\(result, source\)/);
+  assert.match(view, /onClick=\{\(\) => void place\(\)\}>取り込む/);
+  assert.match(view, /setReport\(null\); reviewSource.current = null;/);
+  assert.match(view, /trustedPackage !== selected.packageId/);
+  assert.match(view, /current.current.trustedPackage !== entry.packageId/);
+  assert.match(view, /最大120秒/);
+  assert.match(view, /隔離する仕組みはありません/);
+  assert.match(view, /setTrustedPackage\(""\)/);
+  assert.match(view, /if \(!\(locked \|\| recordingActive\) \|\| !running.current\) return/);
+  assert.match(view, /cancel_model_inspection.*, \{ token \}/);
+  const inspect = view.slice(view.indexOf('const inspectSource ='), view.indexOf('const place ='));
+  assert.doesNotMatch(inspect, /check_model_compatibility|apply_model_profile_application|place_model_package/);
 });
 
-test("controlled settings pass presentation and an explicit restore target without save or polling effects", () => {
-  const view=source("settings-disclosure.tsx"), modal=source("options-modal.tsx");
-  assert.match(view,/open=\{open\} onOpenChange=\{onOpenChange\} triggerRef=\{triggerRef\} restoreTarget=\{restoreTarget\}/);
-  assert.match(modal,/<CommonModal[^\n]*restoreTarget=\{restoreTarget\}/);
-  assert.doesNotMatch(view,/useEffect|invoke\(|\.flush\(/);
+test("controlled settings pass presentation and explicit restoration without save effects", () => {
+  const view = source("settings-disclosure.tsx"), modal = source("options-modal.tsx");
+  assert.match(view, /open=\{open\} onOpenChange=\{onOpenChange\} triggerRef=\{triggerRef\} restoreTarget=\{restoreTarget\}/);
+  assert.match(modal, /<CommonModal[^\n]*restoreTarget=\{restoreTarget\}/);
+  assert.doesNotMatch(view, /useEffect|invoke\(|\.flush\(/);
 });
 
-test("download record readback exposes the next step only after completion, with no automatic copy or execution", () => {
+test("download readback is read-only and exposes a next step without copy, execute or apply", () => {
   const view = source("model-download.tsx");
-  const inspect = view.slice(view.indexOf("const inspectEntry ="), view.indexOf("const supported ="));
+  const inspect = view.slice(view.indexOf('const inspectEntry ='), view.indexOf('const supported ='));
   assert.match(inspect, /result.state === "complete" && recordsVisible.current/);
-  assert.match(inspect, /recordsCopyFocus.current = true; setRecordsOpen\(false\)/);
   assert.match(inspect, /setRecordsFeedback\(feedback\)/);
   assert.match(inspect, /setRecordsError\(String\(cause\)\)/);
-  assert.doesNotMatch(inspect, /start_model_download|place_downloaded_model|run_model|apply_model|copy\(\)|start\(\)/);
-  const records = view.slice(view.indexOf('<SettingsDisclosure label="取得記録"'), view.indexOf('<CommonModal open={!!modal}'));
-  assert.match(records, /restoreTarget=\{restoreRecordsFocus\}/);
-  assert.match(records, /recordsCopyFocus.current = false; setRecordsOpen\(open\)/);
-  assert.match(records, /<IssueStatus label="取得素材の照合" message=\{recordsError\}/);
-  assert.match(records, /aria-label="取得記録の照合結果"/);
-  assert.match(view, /<button ref=\{receiptButton\}/);
+  assert.doesNotMatch(inspect, /start_model_download|place_downloaded_model|check_model_compatibility|apply_model|copy\(\)|start\(\)/);
 });
 
-test("completed download readback reveals its restored action without scrolling ordinary cancellation or stealing focus", () => {
+test("completed inline download readback restores only its owned visible next action", () => {
   const view = source("model-download.tsx");
-  const restore = view.slice(view.indexOf("const restoreRecordsFocus ="), view.indexOf("const supported ="));
-  assert.match(restore, /recordsCopyFocus.current \? receiptButton.current : recordsTrigger.current/);
-  assert.match(restore, /if \(recordsCopyFocus.current && target\) queueMicrotask/);
-  assert.match(restore, /recordsCopyFocus.current && !recordsVisible.current && document.activeElement === target/);
+  const restore = view.slice(view.indexOf('useLayoutEffect(() =>'), view.indexOf('const current ='));
+  assert.match(restore, /officialOpen && recordsVisible.current && source.isConnected && document.activeElement === source/);
+  assert.match(restore, /!target.disabled && !target.closest\("\[hidden\], \[inert\]"\)/);
+  assert.match(restore, /target.focus\(\{ preventScroll: true \}\)/);
   assert.match(restore, /target.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
-  assert.doesNotMatch(restore, /\.focus\(|invoke\(|start\(|copy\(/);
+  assert.doesNotMatch(restore, /invoke\(|start\(|copy\(/);
 });
 
-test("model help describes guided preparation and preserves formal quality and execution boundaries", () => {
+test("same application operation survives uncertain results and can be explicitly released after fencing and fresh read", () => {
   const view = source("model-inspection.tsx");
-  assert.match(view, /「モデルをダウンロード」から文字起こし・話者分離・議事録生成を選べます/);
-  assert.match(view, /管理コピー・CPU動作確認・標準／高精度への適用を別々に確認/);
-  assert.match(view, /正式品質・性能とWindowsの取得は保留/);
-  assert.match(view, /内包CLIの正式署名・公証は未検証/);
-  assert.match(view, /保存した構成は新規解析が参照し、既存ジョブの条件は変更しません/);
-  assert.doesNotMatch(view, /配布先・実モデルの検証とWindowsの取得は保留|管理パッケージとジョブの構成版参照への統合は開発中/);
+  assert.match(view, /assertApplicationPreview\(preview, entry, name, profile\)/);
+  assert.match(view, /assertApplicationResult\(result, operationId, preview\)/);
+  assert.match(view, /assertAppliedPreferences\(preferences, preview\)/);
+  assert.match(view, /unresolvedApplication = \{ application: structuredClone\(value\)/);
+  const release = view.slice(view.indexOf('const releaseUnknownApplication ='), view.indexOf('const setupContent ='));
+  assert.match(release, /cancel_model_inspection.*token: value.operationId/);
+  assert.match(release, /get_model_placements.*get_model_profiles/);
+  assert.match(release, /entries.forEach\(placementLabel\); assertProfileCatalog\(views\)/);
+  assert.match(release, /current.current.application\?\.operationId !== value.operationId/);
+  assert.match(view, /保存の取消や巻き戻しは行いません/);
 });
 
-test("download readback distinguishes material inspection from a matching copy record and opens records without recopy", () => {
+test("matching downloaded copy selects the installed model without inviting another copy", () => {
   const view = source("model-download.tsx"), parent = source("model-inspection.tsx");
   assert.match(view, /entry.placementRecorded && entry.sourceType === "download"/);
   assert.match(view, /entry.download\?\.operationId === receipt.operationId && entry.download.recipeHash === receipt.recipeHash && entry.reviewHash === receipt.report.reviewHash/);
   assert.match(view, /pending \|\| knownCopy \|\| !acknowledged/);
-  assert.match(view, /if \(knownCopy\) \{ onShowPlacements\?\.\(\); return; \}/);
-  assert.match(view, /knownCopy \? "配置・構成記録を開く" : "照合済み素材のコピーを確認"/);
-  assert.match(parent, /placements=\{placements\} onShowPlacements=\{\(\) => setPreparationView\("records"\)\}/);
-  assert.doesNotMatch(view, /素材照合済み・未配置|選択した素材を照合しました。未配置・未実行/);
+  assert.match(view, /if \(knownEntry\) \{ onPlaced\?\.\(knownEntry.packageId\)/);
+  assert.match(parent, /onPlaced=\{setSelectedPackage\} setupContent=\{setupContent\}/);
 });

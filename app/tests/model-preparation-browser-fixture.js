@@ -11,6 +11,9 @@ f.fileSelections = [["/synthetic/models/engine-cli"], ["/synthetic/models/model.
 f.failInspect = parameters.get("failInspect") === "1";
 if (["success", "lost", "forged", "failed", "brief_delay"].includes(parameters.get("mode"))) f.mode = parameters.get("mode");
 const inspectDelay = Math.min(10000, Math.max(0, Number(parameters.get("inspectDelay")) || 0));
+const profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+const preferences = { lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", vadModelPath: null, threads: 1, useGpu: false }, highAccuracy: { executablePath: "", modelPath: "", vadModelPath: null, threads: 1, useGpu: false } } };
+f.failCatalog = parameters.get("failCatalog") === "1";
 f.recordingChanged = async () => { f.recording = { ...f.recording, revision: f.recording.revision + 1, phase: "recording", meetingId: "synthetic-meeting", sessionId: "synthetic-session" }; await emit("session-changed", structuredClone(f.recording)); };
 window.isTauri = true; mockWindows("main");
 mockIPC(async (command, args) => {
@@ -23,7 +26,21 @@ mockIPC(async (command, args) => {
   if (command === "get_vocabulary_book") return { id: "global", payload: [], lockVersion: 0 };
   if (command === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
   if (command === "get_model_placements") { if (f.failCatalog) throw Error("模擬配置記録の読込失敗"); return structuredClone(f.entries); }
-  if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+  if (command === "get_model_profiles") return structuredClone(profiles);
+  if (command === "get_model_download_catalog") return { supported: true, unknownEntries: 0, entries: [] };
+  if (command === "get_official_model_options") return [];
+  if (command === "get_analysis_preferences") return structuredClone(preferences);
+  if (command === "preview_model_profile_application") {
+    const selected = f.entries.find(item => item.packageId === args.packageId), profile = profiles.find(item => item.name === args.profile), key = args.profile === "standard" ? "standard" : "highAccuracy";
+    return { schemaVersion: 1, profile: args.profile, packageId: selected.packageId, reviewHash: selected.reviewHash, checkOperationId: selected.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? hash : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: preferences.lockVersion, before: { engine: "whisper.cpp", settings: structuredClone(preferences.payload[key]) }, after: { engine: "whisper.cpp", settings: { ...preferences.payload[key], executablePath: "/synthetic/copy/engine-cli", modelPath: "/synthetic/copy/model.bin" } }, reviewDigest: hash };
+  }
+  if (command === "apply_model_profile_application") {
+    f.activeToken = args.token;
+    const preview = args.preview, selected = f.entries.find(item => item.packageId === preview.packageId), profile = profiles.find(item => item.name === preview.profile), key = preview.profile === "standard" ? "standard" : "highAccuracy";
+    if (profile.id !== args.token) { profile.id = args.token; profile.profileVersion++; profile.components = [{ roles: ["asr"], packageId: selected.packageId, modelName: selected.modelName, modelVersion: selected.modelVersion, engine: selected.engine, checkOperationId: selected.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }]; preferences.payload[key] = structuredClone(preview.after.settings); preferences.lockVersion++; }
+    if (parameters.get("applicationLost") === "1") throw Error("合成の保存応答喪失");
+    return structuredClone(profile);
+  }
   if (command === "inspect_model_package") {
     f.activeToken = args.token; f.cancelled = false;
     if (inspectDelay) await new Promise(resolve => setTimeout(resolve, inspectDelay));
