@@ -32,13 +32,16 @@ async (page,capturePath,detailUI) => {
   for(const width of [1440,1280,1200,1120])for(const theme of ["light","dark"]){
     await page.setViewportSize({width,height:640});await detailUI.applyMinutesTheme(theme);await waitLayout();await close();
     check(await trigger().isVisible()&&await trigger().getAttribute("aria-expanded")==="false"&&await outline().isHidden(),"closed wide panel still exposed its outline");
+    const closed=await page.evaluate(()=>{const body=document.querySelector('.minutes-body-scroll'),paper=document.querySelector('.minutes-editor .minutes-document>div:not([hidden])').getBoundingClientRect(),button=document.querySelector('.minutes-split .workspace-drawer-trigger').getBoundingClientRect(),css=getComputedStyle(body);return {paperWidth:paper.width,available:body.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),rightGap:Math.abs(paper.right-button.right)};});
+    check(Math.abs(closed.paperWidth-closed.available)<1&&closed.rightGap<1,`closed minutes paper is capped or opener is misaligned: ${JSON.stringify(closed)}`);
     await openOutline();
     const bounds=await page.evaluate(()=>{const p=document.querySelector('.workspace-panel-shell[data-side="right"]').getBoundingClientRect(),b=document.querySelector(".minutes-body-scroll").getBoundingClientRect(),d=document.querySelector(".minutes-editor .minutes-document").getBoundingClientRect(),dock=document.querySelector(".meeting-playback-dock").getBoundingClientRect(),r=document.querySelector(".minutes-reference-body");return {width:p.width,gap:p.left-b.right,body:b.height,document:d.width,bottom:b.bottom,dock:dock.top,scroll:r.scrollHeight>r.clientHeight,overflow:document.documentElement.scrollWidth>innerWidth||document.documentElement.scrollHeight>innerHeight+1};});
-    check(bounds.width===280&&bounds.gap===24&&bounds.body>=120&&bounds.document<=760&&bounds.bottom<=bounds.dock&&bounds.scroll&&!bounds.overflow,`minutes layout invalid: ${JSON.stringify(bounds)}`);
+    const available=await body().evaluate(e=>{const css=getComputedStyle(e);return e.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight);});
+    check(bounds.width===280&&bounds.gap===24&&bounds.body>=120&&Math.abs(bounds.document-available)<1&&bounds.bottom<=bounds.dock&&bounds.scroll&&!bounds.overflow,`minutes layout invalid: ${JSON.stringify(bounds)}`);
     check(await outline().getByRole("button").count()===83&&await trigger().isHidden(),"outline lost canonical headings or exposed wide drawer trigger");
     await page.screenshot({path:`minutes-panel-${theme}-${width}.png`});
   }
-  results.push("1440/1280/1200/1120 by 640 in both externally confirmed themes: single paper by default, explicit max-760px document with 280px right panel, 24px gap and independent positive scroll regions");
+  results.push("1440/1280/1200/1120 by 640 in both externally confirmed themes: paper fills available width and closed opener aligns with its right edge; explicit 280px right panel retains 24px gap and independent positive scroll regions");
   await goHeading("追加節80",166);
   await page.waitForFunction(()=>document.activeElement?.dataset.minutesBlock==="165");
   check(await body().getByRole("navigation",{name:"議事録の閲覧ページ",exact:true}).innerText().then(s=>s.includes("9 / 9"))&&await toc("追加節80",166).getAttribute("aria-current")==="location","outline did not reach an off-page heading");

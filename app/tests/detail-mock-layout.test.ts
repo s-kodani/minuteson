@@ -2,6 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+test("minutes paper and basic toolbar use available width; opener shares the body's gutter", () => {
+  const css=source("prototype-alignment.css"), base=source("style.css");
+  assert.match(base,/\.minutes-split \.minutes-document,\.minutes-split \.minutes-wysiwyg \{ max-width:none;/);
+  assert.match(css,/\.minutes-primary-toolbar \{[^}]*max-width:none;/);
+  assert.match(css,/\.minutes-split \.minutes-document-layout \{ grid-template-columns:minmax\(0,1fr\); \}/);
+  assert.match(css,/\.minutes-split\[data-full=false\]:has\([^}]*>\.workspace-panel-shell \{[^}]*padding:2px 8px 2px 2px; overflow:hidden; scrollbar-gutter:stable;/);
+});
 test("meeting title precedes tabs and all fixed chrome participates in dock sizing", () => {
   const main = source("main.tsx");
   assert.ok(main.indexOf('{detail && <div className="meeting-detail-status"') < main.indexOf('{detail && <div className="meeting-detail-navigation"'));

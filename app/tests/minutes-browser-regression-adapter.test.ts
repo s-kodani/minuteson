@@ -119,6 +119,14 @@ test("minutes regression drivers use explicit panel, primary actions and rich ev
   assert.match(read("run-browser-checks.mjs"),/applyMinutesFixtureTheme.toString\(\)/);
 });
 
+test("minutes panel regression measures available paper width and aligned opener, not the old cap", () => {
+  const code=readFileSync(new URL("./minutes-panel-browser-check.js",import.meta.url),"utf8");
+  assert.doesNotThrow(()=>new Function(`return (${code})`));
+  assert.match(code,/Math.abs\(closed.paperWidth-closed.available\)<1&&closed.rightGap<1/);
+  assert.match(code,/Math.abs\(bounds.document-available\)<1/);
+  assert.doesNotMatch(code,/bounds.document<=760|max-760px/);
+});
+
 test("shared playback stays a compact row and settings use an explicit modal", () => {
   const css=readFileSync(new URL("../src/prototype-alignment.css",import.meta.url),"utf8");
   assert.match(css,/\.meeting-playback-dock \{ display:grid;[^}]*align-items:start;[^}]*max-height:none; overflow:visible;/);

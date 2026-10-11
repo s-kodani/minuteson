@@ -301,7 +301,7 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .minutes-split { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:24px; flex:1; min-height:0; min-width:0; }
 .minutes-split>.minutes-body-scroll { grid-column:1; grid-row:1; }
 .minutes-split>.workspace-panel-shell { grid-column:2; grid-row:1; }
-.minutes-split .minutes-document,.minutes-split .minutes-wysiwyg { max-width:760px; margin-inline:auto; }
+.minutes-split .minutes-document,.minutes-split .minutes-wysiwyg { max-width:none; margin-inline:0; }
 .minutes-editor>.transcript-actions[hidden],.minutes-format-tools[hidden],.minutes-wysiwyg[hidden] { display:none; }
 .minutes-split[data-full=true] { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
 .minutes-split[data-full=true]>.workspace-panel-shell { display:none; }
