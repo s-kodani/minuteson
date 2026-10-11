@@ -5,6 +5,8 @@
 
 ## 2026-10-11 UI調整の区切りとコミット再開
 
+Macで議事録の太字／斜体・見出し2／リスト・2列表と実Markdown、候補採用／直前版復元の取消・明示確定、冷起動後の書式／固定8根拠を確認。編集終了時のworkspace focus残りを補修し、最終Macの本文／表からの2反復で編集入口復帰、合成3秒保存中の別focus保持を確認した。838成功（1.873402084秒）、型検査／Vite1.56秒、QA Cargo1分11秒。復元後／冷起動／focus確認終了のDB＋WAL全dump SHA一致、旧QAのdraft／exportとbootstrap保持。[限定証拠・意図したテスト会議変更・時間](verification/minutes-rich-restore-native-2026-10-11.md)。全書式／競合／保存失敗／実IME／VoiceOver、実録音・配布／試用など全23タスクの残件は維持。CI・録音・追加取得・通常Rust再実行なし。
+
 取り込み読込後の初期focusを補修。非表示の兄弟viewの有効な取消を初期候補から除外し、readiness後の安全な×focusをMac通常選択2回・合成2回で確認。初期Enter／破棄確認取消・Tab／逆Tab・明示取消後入口復帰、停止DB＋WALの全dump SHA不変・5会議保持を確認。836成功（1.806819083秒）、型検査／Vite1.50秒、QA Cargo1分13秒。[限定証拠・時間](verification/ui-import-initial-focus-2026-10-11.md)。以下の取り込み初期focus残件は修正前の履歴。全UI／IME／VoiceOver・23タスクの完了ではなく、CI／録音／追加取得・通常Rust再実行なし。
 
 取り込み直後の会議操作AX欠落は、native close完了待ち案では実機再現したため取り下げ、取り込みを既存設定の共通native境界へ接続する修正を採用。最終Macの通常取り込み2件（再起動なし）で直後の本文／入力／操作・再表示、用語保持／破棄確認取消・入口復帰を確認。既存文字起こし／議事録設定も保持し、通常終了後DB＋WAL read-onlyで採用head／下書き／出力／設定と既存11会議保護を照合。832成功・型検査／Vite1.52秒・最終QA Cargo1分11秒。初期focus／全VoiceOver・IMEや全UIは残件。[失敗比較・限定実機証拠・時間](verification/ui-import-shared-modal-2026-10-11.md)。Rust変更／通常Rust再実行・CI・録音・追加取得なし。以下の初回取り込みAX欠落はこの修正前の履歴であり、23タスクの完了宣言ではない。

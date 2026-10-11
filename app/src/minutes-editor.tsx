@@ -181,20 +181,28 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
     ? <IconButton label={label} icon={formatIcons[label]!} disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={event => action(event.currentTarget)} />
     : <button type="button" className="small-secondary" disabled={changingPageDisabled || unavailable} onMouseDown={(e) => e.preventDefault()} onClick={event => action(event.currentTarget)}>{label}</button>;
   const manualLabel = (id: string | null | undefined) => id && doc.items.find((i) => i.id === id)?.sourceType === "manual" ? <small className="manual-label">手動追加・修正</small> : null;
-  const finishEditing = () => run(async () => {
-    if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください");
+  const finishEditing = (actionOpener: HTMLButtonElement) => {
+    // macOS pointer activation need not focus a button. Capture the explicit
+    // exit entry before run disables controls and the rich field loses focus.
+    actionOpener.focus({ preventScroll: true });
     const focused = document.activeElement;
+    return run(async () => {
+    if (failure.current || compositions.current.size) throw new Error("入力を確定してから編集を終了してください");
     await queue.flush();
-    const restore = focused === document.activeElement && (editorRoot.current?.contains(focused) || editToggle.current === focused);
+    const restore = (focused === document.activeElement || document.activeElement === document.body)
+      && (editorRoot.current?.contains(focused) || actionOpener === focused);
     setEditing(false); setSelection(null);
     if (restore) requestAnimationFrame(() => {
       const target = editToggle.current;
-      if (target?.getClientRects().length && !target.disabled && !document.querySelector("dialog[open]")) target.focus({ preventScroll: true });
+      const active = document.activeElement;
+      if (mounted.current && target?.getClientRects().length && !target.disabled
+        && (active === focused || active === document.body) && !document.querySelector("dialog[open]")) target.focus({ preventScroll: true });
     });
-  });
+    });
+  };
   const primaryActions = <div className="transcript-actions minutes-edit-actions" hidden={full}>
       {!editing && <IconButton ref={editToggle} label="議事録を編集" icon="edit" disabled={locked || busy} onClick={() => void begin()} />}
-      {editing && <IconButton ref={editToggle} label="編集を終了" icon="close" disabled={locked || busy} onClick={() => void finishEditing()} />}
+      {editing && <IconButton ref={editToggle} label="編集を終了" icon="close" disabled={locked || busy} onClick={event => void finishEditing(event.currentTarget)} />}
       {saved.draft && <span role="status" aria-label="議事録の保存状態" className="minutes-save-status">{saved.error ? "保存要確認" : saved.saving ? "保存中" : saved.dirty ? "未保存" : "保存済み"}</span>}
       {saved.error && <button type="button" className="small-secondary" disabled={locked || busy || saved.saving} onClick={() => void run(async () => { if (failure.current || compositions.current.size) throw new Error("入力を確定してから保存してください"); await queue.retry(); })}>議事録保存を再試行</button>}
       <OptionsModal className="minutes-edit-options" label="その他の編集操作" triggerLabel="編集の管理" icon="edit" hidden={!visible} triggerHost={optionsHost}>
