@@ -20,5 +20,8 @@ test("permission guidance is a modal and does not request or retry recording",()
   assert.match(help,/MON Capture Probe/);
   assert.match(help,/拒否されたとは判断できません/);
   assert.match(help,/端末の管理者/);
+  assert.match(help,/ScreenCaptureKit/);
+  assert.match(help,/「システムオーディオ録音のみ」とは別/);
+  assert.match(help,/画面へのアクセスも含む/);
   assert.doesNotMatch(help,/invoke\(|requestAccess|start_capture_test|start_recording/);
 });

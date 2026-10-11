@@ -1,9 +1,24 @@
 import AVFoundation
 import Foundation
+import ScreenCaptureKit
 
 /// Presentation only: keep status codes and evidence unchanged. Do not infer
 /// recovered audio, acquisition closure, a loss bound or permission to delete.
 enum CaptureFailureGuide {
+  static func systemCaptureFailure(_ error: Error) -> ProbeError {
+    let detail = error as NSError
+    // Only Apple's explicit authorization rejection is a permission failure.
+    // A matching number from another domain must not suggest an OS grant.
+    if detail.domain == SCStreamErrorDomain,
+      detail.code == SCStreamError.Code.userDeclined.rawValue
+    {
+      return .permission(
+        "PC音声の取得がOSで許可されていません。この録音方式（ScreenCaptureKit）は、システム設定 → プライバシーとセキュリティ → 画面収録とシステムオーディオ録音の許可を確認します。「システムオーディオ録音のみ」とは別の許可です。MON QA または MON Capture Probe（録音ヘルパー）の設定を確認し、許可する場合はご自身で変更してアプリを再起動してください。映像は保存しませんが、OS上の許可は画面へのアクセスも含むため、許可範囲を確認してください。自動で許可変更・再試行はしません。詳細: \(error)"
+      )
+    }
+    return .capture("PC音声の取得対象を準備できませんでした。対象アプリ・ディスプレイの状態を確認してください。権限拒否とは断定できません。詳細: \(error)")
+  }
+
   static func microphonePermission(_ status: AVAuthorizationStatus) -> String {
     let reason: String
     switch status {

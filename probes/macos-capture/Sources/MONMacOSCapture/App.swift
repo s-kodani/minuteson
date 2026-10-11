@@ -560,7 +560,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       content = try await SCShareableContent.excludingDesktopWindows(
         false, onScreenWindowsOnly: false)
     } catch {
-      throw ProbeError.permission("system audio permission or shareable content failed: \(error)")
+      throw CaptureFailureGuide.systemCaptureFailure(error)
     }
     try requireOwned(token)
     if let applicationIdentity { try verifyIdentity(applicationIdentity) }
