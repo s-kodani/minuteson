@@ -39,3 +39,17 @@ source契約3件を追加：native clickの明示入口、wideの条件付き移
 Macで全画面幅・全テーマ・全focus・実IME／VoiceOver・全異常順序を確認したとはしない。[全23タスク監査](implementation-completion-audit-2026-10-11.md)を維持。通常Rust再実行／Rustソース変更なし。正式評価／Windowsは保留、実録音は今は実施しない、Developer ID／公証等は外部準備待ち。
 
 残工数は暫定12〜29時間以上：非録音の未網羅UI／編集／異常経路4〜8時間、実録音／耐久5〜8時間（今は実施しない）、配布／更新／試用3〜13時間。署名等の外部準備待ちは別。限定修正で目標全体を完了にしない。
+
+## 追確認：入口の外側フォーカス枠の余白
+
+焦点復帰修正 `cd0d3d200634fa11ac50b6c78b8f8041ccd9f0d8` 後、保存したMac画像で入口の外側outlineが上下に欠けることを発見した。既存outline3px＋offset2pxに対し、overflow hiddenの入口行paddingが上下2pxしかなかった。左右の本文・gutter揃いは変えず、上下を6pxへ変更。wideの×にも上下／右端の外側枠を収める6px marginを設けた。新しいscrollportや操作を増やさず、パネル幅280px・本文との24px間隔を変更しない。
+
+専用合成画面で1440・1280・960・600・360・320px（高さ720）×light／darkを実際の開く→Enterで閉じる操作で確認。12配置すべて入口focus、outline3px＋offset2px、上下余白6px、白い本文との右端差0px、document／本文横溢れなし。本文clientHeightは順に288・288・288・312・272・207px。wideの×focusについてはoutline3px・offset0、overflow hidden／auto／scroll／clipの祖先rectに外側枠がはみ出す箇所0を測定。viewportはresetした。
+
+新規source回帰1件は修正前に失敗（runner0.081911584秒、全体個別未計測）。既存の左右gutter契約は上下6pxへ更新。最終849成功／0失敗／0skip、runner2.297303375秒・全体2.48秒。型検査＋Vite6.35秒（Vite1.51秒）。ログ `/private/tmp/mon-panel-ring-before-20261011.log`、`/private/tmp/mon-panel-ring-tests-20261011.log`、`/private/tmp/mon-panel-ring-build-20261011.log`。全driver再実行や全画面のfocus枠を保証しない。
+
+追確認QA `/private/tmp/mon-panel-ring-qa.UPySLJ/MON Onboarding QA.app`、main SHA `b3d1d8b0082e45e6674d31e26c5fcc0e7e8643bbcdd210717c9d2fc8fbe8851e`、ad-hoc deep／strict成功。QA全体82.42秒・Cargo1分12秒・Vite1.51秒・39.22MiB（ログ `/private/tmp/mon-panel-ring-qa-build-20261011.log`）。既存の警告・正式配布の保留は維持する。
+
+同じ自作会議を通常起動→議事録→目次入口クリックで×focus→Enterで閉じて入口focusと操作。保存画像 `/private/tmp/mon-panel-ring-native-20261011.png`（SHA `1f33070560bfbfea2c6774ee2ebcefd978be5921099707b4a493666bccb8875e`）を開いて、入口の紫色枠の全周が欠けず、左右に拡幅した白い枠との右端揃いを確認した。通常終了・対象process不在後、DB＋WALを `/private/tmp/mon-panel-ring-db.i2j2hR/meetings.sqlite3` にcloneしてread-only照合。全dump SHA `dd191a4b5afc39cb7677f318b7890f56c1d1dc0e672aab7bb5ee15cc4f68ddf1` は追確認前と一致、integrity `ok`・5会議・FK違反0。本文入力／設定変更／保存要求を増やさず、本番DBは対象外。専用合成tabは閉じた。
+
+この余白補修の実装・回帰追加は約1分（概算）、型検査／ViteとQAの全実行時間合計88.77秒（約1分29秒）、最終テスト2.48秒。修正前失敗はrunner0.081911584秒・全体未計測。画面確認はビルドと一部並行し、文書作成と集計は別。上記焦点復帰コミットの178.91秒に二重計上しない。CI・録音・追加取得・通常Rust／Python再実行なし。残工数12〜29時間以上の内訳と全23タスクの留保は変えない。

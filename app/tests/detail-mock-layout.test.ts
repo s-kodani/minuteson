@@ -7,7 +7,13 @@ test("minutes paper and basic toolbar use available width; opener shares the bod
   assert.match(base,/\.minutes-split \.minutes-document,\.minutes-split \.minutes-wysiwyg \{ max-width:none;/);
   assert.match(css,/\.minutes-primary-toolbar \{[^}]*max-width:none;/);
   assert.match(css,/\.minutes-split \.minutes-document-layout \{ grid-template-columns:minmax\(0,1fr\); \}/);
-  assert.match(css,/\.minutes-split\[data-full=false\]:has\([^}]*>\.workspace-panel-shell \{[^}]*padding:2px 8px 2px 2px; overflow:hidden; scrollbar-gutter:stable;/);
+  assert.match(css,/\.minutes-split\[data-full=false\]:has\([^}]*>\.workspace-panel-shell \{[^}]*padding:6px 8px 6px 2px; overflow:hidden; scrollbar-gutter:stable;/);
+});
+test("minutes panel entry and close reserve room for the shared external focus ring",()=>{
+  const css=source("prototype-alignment.css"), base=source("style.css");
+  assert.match(base,/button:focus-visible\{outline:3px solid var\(--focus\);outline-offset:2px\}/);
+  assert.match(css,/\.workspace-panel-close \{[^}]*margin:6px 6px 0 0;/);
+  assert.match(css,/padding:6px 8px 6px 2px; overflow:hidden; scrollbar-gutter:stable;/);
 });
 test("meeting title precedes tabs and all fixed chrome participates in dock sizing", () => {
   const main = source("main.tsx");
