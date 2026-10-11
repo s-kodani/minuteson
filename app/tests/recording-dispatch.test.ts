@@ -13,18 +13,13 @@ test("capture polling and stopping dispatch lock waits and file reads off the na
   assert.match(confirmation,/pub async fn decide_recording_confirmation/);
   assert.match(confirmation,/spawn_blocking\(move \|\| \{\s*decide_recording_confirmation_blocking/);
 });
-test("permission guidance is a modal and does not request or retry recording",()=>{
+test("input preparation has no permanent permission-help button or modal",()=>{
   const source=readFileSync(new URL("../src/capture-inputs.tsx",import.meta.url),"utf8");
-  const help=source.split('<OptionsModal label="録音の権限を確認"')[1]?.split("</OptionsModal>")[0];
-  assert.ok(help);
-  assert.match(help,/MON Capture Probe/);
-  assert.match(help,/拒否されたとは判断できません/);
-  assert.match(help,/端末の管理者/);
-  assert.match(help,/Core Audio Taps/);
-  assert.match(help,/「システムオーディオ録音のみ」/);
-  assert.match(help,/画面の収録許可は要求しません/);
-  assert.doesNotMatch(help,/ScreenCaptureKit|画面へのアクセスも含む/);
-  assert.doesNotMatch(help,/invoke\(|requestAccess|start_capture_test|start_recording/);
+  assert.doesNotMatch(source,/録音の権限を確認|OptionsModal|拒否されたとは判断できません/);
+  assert.match(source,/permission==="denied"\|\|permission==="restricted"\?<p role="alert">/);
+  assert.match(source,/マイクの利用を許可してください/);
+  assert.match(source,/macOSのシステム設定/);
+  assert.doesNotMatch(source,/requestAccess|start_capture_test|start_recording/);
 });
 test("production recording and five-second tests select audio-only taps with no screen fallback",()=>{
   for(const file of ["recorder.rs","capture_test.rs"]){
