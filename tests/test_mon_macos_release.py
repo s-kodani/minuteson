@@ -329,6 +329,23 @@ class ReleaseTests(unittest.TestCase):
         command.assert_not_called()
         self.assertFalse(target.exists())
 
+    def test_parent_and_capture_signing_allow_only_audio_input(self):
+        expected = {"com.apple.security.device.audio-input": True}
+        for name in ("main.plist", "capture.plist"):
+            with self.subTest(name=name):
+                self.assertEqual(release.read_plist(self.policy / name), expected)
+                self.assertEqual(release.POLICIES[name], expected)
+
+    def test_missing_parent_audio_input_is_rejected_before_build(self):
+        original = release.read_plist
+        def read(path):
+            return {} if path.name == "main.plist" else original(path)
+        target = self.root / "missing-audio-policy"
+        with patch.object(release.sys, "platform", "darwin"), patch.object(release, "read_plist", side_effect=read), patch.object(release, "command") as command, patch.object(release.shutil, "disk_usage", return_value=type("Disk", (), {"free": 8 * 1024 ** 3})()), self.assertRaises(ValueError):
+            release.build(target, IDENTITY, TEAM, None, {})
+        command.assert_not_called()
+        self.assertFalse(target.exists())
+
     def test_notices_missing_tampered_stale_or_self_approved_are_rejected(self):
         self.assertEqual(release.verify_notices(self.app)["state"], "collected_not_reviewed")
         for key, value in [("lockHashes", {}), ("noticesSha256", "0" * 64), ("noticesBytes", 0),

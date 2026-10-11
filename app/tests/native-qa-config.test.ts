@@ -41,6 +41,16 @@ test("all macOS flavors declare recording privacy purposes on the responsible pa
   assert.doesNotMatch(purposes, /com\.apple\.security/);
 });
 
+test("the responsible parent app permits audio input under Hardened Runtime without granting OS consent", () => {
+  assert.equal(macos.bundle.macOS.entitlements, "release-entitlements/main.plist");
+  const entitlements = readFileSync(new URL(`../src-tauri/${macos.bundle.macOS.entitlements}`, import.meta.url), "utf8");
+  assert.match(entitlements, /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\s*\/>/u);
+  assert.doesNotMatch(entitlements, /get-task-allow|disable-library-validation|allow-unsigned-executable-memory|allow-jit/u);
+  // TCC consent remains an OS/user decision; do not reset it or auto-retry requests.
+  const release = json("../src-tauri/tauri.release.conf.json");
+  assert.equal(release.bundle.macOS.entitlements, undefined);
+});
+
 test("native macOS packaging includes the generated headless embedding helper at the runtime resource path", () => {
   assert.equal(macos.bundle.resources["../../probes/speaker-embedding/.build/mon-speaker-embedding"], "mon-speaker-embedding");
   const build = readFileSync(new URL("../build-macos.sh", import.meta.url), "utf8");

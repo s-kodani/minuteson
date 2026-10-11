@@ -1,6 +1,28 @@
 # 録音開始の相互待ち対策と権限失敗の案内
 
-2026-10-11。MON QAの5秒テストでマイク不一致が表示され、その後の録音開始で空のミニパネルとメイン画面の応答停止が報告された。開始・状態取得間の相互待ちを防ぐ修正と、初期化失敗の原因を隠さない表示を追加する。実録音の再試験は実施時間をユーザーと確認してから行い、4時間検証へ直行しない。
+2026-10-11。MON QAの5秒テストでマイク不一致が表示され、その後の録音開始で空のミニパネルとメイン画面の応答停止が報告された。開始・状態取得間の相互待ちを防ぐ修正と、初期化失敗の原因を隠さない表示を追加した。ユーザーが許可した短時間再試験では、親アプリの音声入力entitlement不足によるOS側の要求拒否を特定し、署名設定を補修した。成功録音と実録音中の二画面応答は引き続き未確認で、4時間検証は実施しない。
+
+## 短時間再試験と音声入力の署名設定
+
+ユーザーの「今から短時間の再試験を行ってよい」を受け、20時20分頃に先行修正版で5秒テストを開始した。マイク不一致ではなく、マイク権限が未決定であることとシステム設定への案内が表示され、メインの操作は復帰した。OSの許可ダイアログはエージェントの確認画面には表示されず、取得ヘルパーは終了した。5秒の成功結果や音声の保存完了ではない。
+
+同じQAの署名はHardened Runtimeが有効だが、親アプリに `com.apple.security.device.audio-input` がなかった。MONだけに絞ったTCCの読取りログでも20:20:05に、親アプリにこのentitlementがないためマイクのpromptを許可しないという拒否を確認した。AppleはHardened Runtimeでの音声入力にこのentitlementを要求する。[Audio Input Entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.device.audio-input)。これは今回の先行修正版で許可要求が進まなかった原因の確認であり、強制終了された旧プロセスの応答停止原因の確定ではない。
+
+共通macOS設定に `release-entitlements/main.plist` を接続し、親アプリの許容項目を音声入力だけに変更した。Developer ID配布経路の厳密な署名検査も同じ方針に更新する。ライブラリ検証・JIT・debug等の例外は親アプリへ追加しない。利用目的の宣言と音声入力entitlementを併用し、OSのユーザー同意とは区別する。TCCリセット・許可DB変更・自動許可は行わない。
+
+補修QAは `/private/tmp/mon-recording-audio-input-qa.PDcqeJ/MON QA.app`。39.94MiB、deep／strict署名検査成功、最終署名のentitlementを読んで音声入力だけであることを確認した。本体SHA-256は `e17eb4c9d175e30ade048aede56a893c8a0e0ffae2ee0431e80355ddd3549b80`、ヘルパーは前版と同じ `0aec730443ea441b59ac86d697fe7d2c38d4854b46a15b1a42ba86395f376db1`。
+
+補修QAでも通常UIから5秒テストを開始し、TCCログの20:24:18.608では `kTCCServiceMicrophone` の `AUTHREQ_PROMPTING` に進んだ。画面には初期化待ちが続き、エージェントが確認したOSのマイク許可一覧にMONはなかった。ログの提示段階と、ユーザーに実際のダイアログが見えていることは同一と扱わない。ログにはQAのLaunch Servicesレコードが見つからないという診断もあり、実際の表示・応答は引き続き確認が必要。
+
+テスト取消のクリックは受け付けられ、停止完了後にナビゲーションと開始操作へ復帰した。「初期化または停止が時間上限を超えました。取得プロセスは終了しました」と表示され、残存ヘルパーなしをプロセスで照合した。OSの許可確認ウィンドウは画面操作ツールの安全制限により操作できないため、他の手段で迂回せず、ユーザーにダイアログの有無とご自身での許可操作を依頼した。許可待ちの間に本録音を繰り返し開始しない。
+
+最初の再試験後、通常終了・プロセス不在を確認してDB＋WALとテスト所有台帳を `/private/tmp/mon-recording-retest-after.3Ydwce` へコピーした。12会議、整合性ok、外部キー違反0、全DB dumpのSHA-256は先行確認と同じ `9c7c4996cd3142f4f8afb80c0738a15d70127265676e61239e1adf2a9e5abeab`。bootstrapと不具合セッションmanifestのSHAも不変。新規テスト1件は終了時にアプリの所有者付き経路で `removed` となり、旧テスト2件の記録は保持された。エージェントによる既存会議や中断録音の削除はない。失敗表示の画像は `/private/tmp/mon-recording-retest-permission-failure-2026-10-11.png`。
+
+フロント859成功、配布経路31成功、失敗0。配布テストの合成失敗出力は意図した異常経路で、実配布の署名・公証は行っていない。Rust／Swiftのロジック変更はなく、通常Rustテストの全再実行はしない。QAビルドは82.76秒（Rust release 1分12秒を含む）。フロント検査2.08秒、配布経路検査0.55秒。調査・補修・文書整理は約10分、実機操作・確認は約5分の概算で、個別作業を計時していない。並行工程を合算して経過時間としない。再利用release cacheは構築途中2,258MiB、終了後2,222MiBで、テストcacheの上限とは別である。CIは実行しない。
+
+今回のログは `/private/tmp/mon-recording-audio-entitlement-frontend-tests.log`（SHA-256 `2413a0ac9cf66d0d4dfa0f0331ceed7f6d0d0877f3c78bb9d1173a03dd314f02`）、`/private/tmp/mon-recording-audio-entitlement-release-tests.log`（`7a7a611e25b371331f8ec1cb267513d1edb88ce201d78d806d542419567e11a6`）、`/private/tmp/mon-recording-audio-entitlement-qa-build.log`（`9298dd42277ebe870c6203fb99f75a7a373135cca0cb5b884aba3ce0104d1fd4`）。残る短時間検証は、ユーザーがOS許可を確認した後の成功5秒テスト、短い本録音の開始／停止・両画面応答・保存・再起動で30〜60分を見込む。以下の「最終QA」は署名設定補修前の検査履歴である。
+
+取消完了の画像は `/private/tmp/mon-recording-retest-cancelled-2026-10-11.png`。補修QAは録音していない準備画面でユーザーの許可確認待ちとし、テスト取消後のヘルパー不在を確認した。OS設定の閲覧だけを行い、他アプリの許可や設定も変更しない。
 
 ## 保存状態と原因の区別
 

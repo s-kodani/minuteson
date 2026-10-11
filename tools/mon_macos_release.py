@@ -24,7 +24,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 TEAM = re.compile(r"[A-Z0-9]{10}\Z")
 NOTARY_ENV = ("APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_PATH",
               "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_PROVIDER_SHORT_NAME")
-POLICIES = {"main.plist": {}, "capture.plist": {"com.apple.security.device.audio-input": True},
+POLICIES = {"main.plist": {"com.apple.security.device.audio-input": True}, "capture.plist": {"com.apple.security.device.audio-input": True},
             "embedding.plist": {"com.apple.security.cs.disable-library-validation": True}}
 
 
