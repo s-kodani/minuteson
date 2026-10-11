@@ -192,20 +192,6 @@ fn recovery_round_trip_remaps_split_and_manual_ids_preserving_text_names_and_sta
 }
 
 #[test]
-fn portable_v27_and_v28_have_exact_version_specific_tables() {
-    let old = portable::schema(27).unwrap();
-    let new = portable::schema(28).unwrap();
-    assert_eq!(portable::tables(&old).unwrap().len(), 31);
-    assert_eq!(portable::tables(&new).unwrap().len(), 32);
-    assert!(!portable::tables(&old)
-        .unwrap()
-        .iter()
-        .any(|t| t.name == "transcript_edit_recovery"));
-    crate::storage::edit_recovery::verify_all(&old, &|| false).unwrap();
-    crate::storage::edit_recovery::verify_all(&new, &|| false).unwrap();
-}
-
-#[test]
 fn reviewed_discard_round_trip_remaps_ownership_but_preserves_historical_proof() {
     use crate::storage::edit_recovery::review::DiscardRequest;
     let mut roots = vec![tempfile::tempdir().unwrap()];

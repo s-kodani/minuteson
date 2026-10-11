@@ -3,6 +3,20 @@ use crate::audio_import::ImportOptions;
 use serde_json::{json, Value};
 use std::cell::Cell;
 
+// Local database migration fixtures only, never a backup reader or writer.
+pub(in crate::storage::backup) fn migration_database(db: Connection, version: usize) -> Connection {
+    db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
+    for &(version, sql) in &MIGRATIONS[..version] {
+        db.execute_batch(sql).unwrap();
+        db.execute(
+            "INSERT INTO schema_migrations VALUES(?1,?2,0)",
+            params![version, format!("{:x}", Sha256::digest(sql.as_bytes()))],
+        )
+        .unwrap();
+    }
+    db
+}
+
 pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
     let options = ImportOptions {
         profile: "high_accuracy".into(),
@@ -85,192 +99,48 @@ fn payloads(archive: &VerifiedArchive) -> Vec<Vec<u8>> {
         .collect()
 }
 
-pub(in crate::storage::backup) fn legacy_payloads_without_input_snapshot(
-    source: &VerifiedArchive,
-    manifest: &mut Manifest,
-) -> Vec<Vec<u8>> {
-    assert!((20..=28).contains(&manifest.schema_version));
-    let table = manifest
-        .tables
-        .iter_mut()
-        .find(|table| table.name == "recording_sessions")
-        .unwrap();
-    let before = table.columns.clone();
-    let indices: Vec<_> = [
-        "input_history_snapshot_json",
-        "input_delivery_transfer_json",
-    ]
-    .iter()
-    .map(|name| {
-        before
-            .iter()
-            .position(|column| column.name == *name)
-            .unwrap()
-    })
-    .collect();
-    for &index in indices.iter().rev() {
-        table.columns.remove(index);
-    }
-    let historical = portable::tables(&portable::schema(manifest.schema_version).unwrap()).unwrap();
-    let expected = historical
-        .iter()
-        .find(|table| table.name == "recording_sessions")
-        .unwrap();
-    assert_eq!(table.columns, expected.columns);
-    let count = table.row_count;
-    let mut payloads = payloads(source);
-    assert_eq!(manifest.entries[0].path, "database.jsonl");
-    let mut logical = Vec::new();
-    let mut recordings = 0;
-    for line in std::str::from_utf8(&payloads[0])
-        .unwrap()
-        .split_inclusive('\n')
-    {
-        let mut row: Value = serde_json::from_str(line).unwrap();
-        if row["table"] == "recording_sessions" {
-            let original = row.clone();
-            let cells = row["cells"].as_array_mut().unwrap();
-            assert_eq!(cells.len(), before.len());
-            // Do not discard real historical evidence to imitate an older
-            // format. Both new evidence cells must be NULL in these fixtures.
-            for &index in indices.iter().rev() {
-                assert_eq!(cells.remove(index), json!({"type": "null"}));
-            }
-            let mut round_trip = row.clone();
-            for &index in &indices {
-                round_trip["cells"]
-                    .as_array_mut()
-                    .unwrap()
-                    .insert(index, json!({"type": "null"}));
-            }
-            assert_eq!(round_trip, original);
-            logical.extend(serde_json::to_vec(&row).unwrap());
-            logical.push(b'\n');
-            recordings += 1;
-        } else {
-            logical.extend_from_slice(line.as_bytes());
-        }
-    }
-    assert_eq!(recordings, count);
-    manifest.entries[0].size = logical.len() as u64;
-    manifest.entries[0].sha256 = format!("{:x}", Sha256::digest(&logical));
-    payloads[0] = logical;
-    payloads
-}
-
 #[test]
-fn restore_ledger_reader_keeps_v20_archives_compatible_with_current_reconstruction() {
+fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existing_data() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = meeting(&storage, "legacy-20");
-    let (path, _) = write(&storage, output.path());
-    let source = verified(&path, output.path());
-    let mut manifest = source.manifest.clone();
-    assert_eq!(manifest.tables.last().unwrap().name, "restore_provenance");
-    assert_eq!(manifest.tables.last().unwrap().row_count, 0);
-    manifest.tables.pop();
-    manifest
-        .tables
-        .retain(|t| t.name != "transcript_edit_recovery");
-    manifest.schema_version = 20;
-    manifest.format_version = 1;
-    manifest.model_catalog = None;
-    let legacy = output.path().join("legacy.monbackup");
-    let legacy_payloads = legacy_payloads_without_input_snapshot(&source, &mut manifest);
-    pack(&legacy, &manifest, &legacy_payloads);
-    let source = verified(&legacy, output.path());
-    assert_eq!(portable::tables(&source.database).unwrap().len(), 30);
-    let ids = super::super::restore_ids::RestoreIds::prepare(
-        &source,
-        output.path(),
-        &Uuid::new_v4().to_string(),
-        &|| false,
-    )
-    .unwrap();
-    let fixed =
-        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let work = super::super::restore_fixed::workspace::FixedWorkspace::prepare(
-        &fixed,
-        output.path(),
-        &|| false,
-    )
-    .unwrap()
-    .with_speech_artifacts(&fixed, &|| false)
-    .unwrap()
-    .with_generation_artifacts(&fixed, &|| false)
-    .unwrap()
-    .with_processing_history(&fixed, &|| false)
-    .unwrap()
-    .with_provenance(&fixed, &|| false)
-    .unwrap();
-    assert_ne!(ids.get("meetings", "", &meeting).unwrap(), meeting);
-    drop(work);
-    assert!(storage.get_meeting(&meeting).unwrap().is_some());
-}
-
-#[test]
-fn restore_journal_reader_publishes_v21_archives_with_current_local_recovery_ledger() {
-    let root = tempfile::tempdir().unwrap();
-    let output = tempfile::tempdir().unwrap();
+    let target_root = tempfile::tempdir().unwrap();
     let source_storage = Storage::open(root.path().into()).unwrap();
-    let original = meeting(&source_storage, "legacy-21");
+    meeting(&source_storage, "current-only-source");
     let (path, _) = write(&source_storage, output.path());
     let source = verified(&path, output.path());
-    let mut manifest = source.manifest.clone();
-    manifest.schema_version = 21;
-    manifest
-        .tables
-        .retain(|t| t.name != "transcript_edit_recovery");
-    manifest.format_version = 1;
-    manifest.model_catalog = None;
-    let legacy = output.path().join("legacy-21.monbackup");
-    let legacy_payloads = legacy_payloads_without_input_snapshot(&source, &mut manifest);
-    pack(&legacy, &manifest, &legacy_payloads);
-    let source = verified(&legacy, output.path());
-    assert_eq!(
-        super::super::super::verify_migration_history(&source.database).unwrap(),
-        21
-    );
-    let target_root = tempfile::tempdir().unwrap();
+    let payloads = payloads(&source);
     let target = Storage::open(target_root.path().into()).unwrap();
-    let ids = match super::super::restore_ids::RestoreIds::prepare_for_batch(
-        &source,
-        output.path(),
-        &Uuid::new_v4().to_string(),
-        &target.connection.lock().unwrap(),
-        &|| false,
-    )
-    .unwrap()
-    {
-        super::super::restore_ids::BatchPreparation::Pending(ids) => ids,
-        _ => panic!(),
-    };
-    let fixed =
-        super::super::restore_fixed::FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let sealed = super::super::restore_fixed::workspace::seal::SealedWorkspace::prepare(
-        &fixed,
-        output.path(),
-        &|| false,
-    )
-    .unwrap();
-    assert!(matches!(
-        target.publish_restore(&sealed, &ids, &|| false).unwrap(),
-        super::super::publication::Publication::Published { meetings: 1, .. }
-    ));
-    assert_eq!(target.list_meetings().unwrap().len(), 1);
-    assert_ne!(target.list_meetings().unwrap().remove(0).id, original);
-    assert!(source_storage.get_meeting(&original).unwrap().is_some());
-    assert_eq!(
-        target
-            .connection
-            .lock()
-            .unwrap()
-            .query_row("SELECT state FROM maintenance_operations", [], |r| r
-                .get::<_, String>(0))
-            .unwrap(),
-        "completed"
-    );
+    meeting(&target, "preserve-existing");
+    let before = super::super::publication::tests::all_rows(&target.connection.lock().unwrap());
+    let mut versions = (0..MIGRATIONS.len())
+        .chain([MIGRATIONS.len() + 1])
+        .map(|schema| (2, schema))
+        .collect::<Vec<_>>();
+    versions.extend([
+        (1, MIGRATIONS.len()),
+        (0, MIGRATIONS.len()),
+        (4, MIGRATIONS.len()),
+    ]);
+    for (format, schema) in versions {
+        let mut manifest = source.manifest.clone();
+        manifest.format_version = format;
+        manifest.schema_version = schema;
+        let invalid = output.path().join("unsupported.monbackup");
+        pack(&invalid, &manifest, &payloads);
+        let count = std::fs::read_dir(output.path()).unwrap().count();
+        let error = read(&mut File::open(&invalid).unwrap(), output.path(), &|| false)
+            .err()
+            .unwrap();
+        assert_eq!(error, "現在の形式ではないバックアップは復元できません");
+        assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), count);
+        assert!(target
+            .prepare_additive_restore(&invalid, &|| false, &|_| {})
+            .is_err());
+        assert_eq!(
+            super::super::publication::tests::all_rows(&target.connection.lock().unwrap()),
+            before
+        );
+    }
 }
 
 #[test]

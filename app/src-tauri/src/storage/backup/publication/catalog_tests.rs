@@ -142,8 +142,6 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
         verified
             .manifest
             .model_catalog
-            .as_ref()
-            .unwrap()
             .file_references()
             .unwrap()
             .iter()
@@ -232,30 +230,6 @@ fn catalog_reader_rejects_rehashed_missing_mixed_version_foreign_paths_availabil
         assert_eq!(target.list_meetings().unwrap(), vec![keep.clone()]);
         assert!(target.model_catalog_history().unwrap().is_empty());
     }
-    // A format-1, v26 archive has no catalog field at all; omission must keep
-    // the canonical manifest bytes/fingerprint compatible with older batches.
-    let mut legacy = verified.manifest.clone();
-    legacy.format_version = 1;
-    legacy.schema_version = 26;
-    legacy
-        .tables
-        .retain(|t| t.name != "transcript_edit_recovery");
-    legacy.model_catalog = None;
-    let legacy_payloads =
-        archive::tests::legacy_payloads_without_input_snapshot(&verified, &mut legacy);
-    let manifest = serde_json::to_vec(&legacy).unwrap();
-    assert!(!serde_json::from_slice::<serde_json::Value>(&manifest)
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .contains_key("modelCatalog"));
-    let path = output.path().join("legacy-v26.monbackup");
-    archive::tests::pack(&path, &legacy, &legacy_payloads);
-    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &|| false).unwrap();
-    assert!(source.manifest.model_catalog.is_none());
-    restore(&source, &target, output.path(), &Uuid::new_v4().to_string());
-    assert!(target.model_catalog_history().unwrap().is_empty());
-    assert_eq!(target.get_meeting(&keep.id).unwrap(), Some(keep));
 }
 fn archive(storage: &Storage, output: &Path, name: &str) -> archive::VerifiedArchive {
     let path = output.join(name);
@@ -283,9 +257,8 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
     let output = tempfile::tempdir().unwrap();
     let mut original = archive(&storage, output.path(), "source.monbackup");
     assert_eq!(original.manifest.format_version, 2);
-    let native = serde_json::to_value(original.manifest.model_catalog.as_ref().unwrap()).unwrap()
-        ["catalogs"][0]
-        .clone();
+    let native =
+        serde_json::to_value(&original.manifest.model_catalog).unwrap()["catalogs"][0].clone();
     assert_eq!(native["packages"].as_array().unwrap().len(), 4);
     assert_eq!(native["profiles"].as_array().unwrap().len(), 6);
     assert!(!serde_json::to_string(&original.manifest)
@@ -328,8 +301,6 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
     assert!(!original
         .manifest
         .model_catalog
-        .as_ref()
-        .unwrap()
         .origin_ids()
         .contains(&entries[0].id));
     let next_batch = Uuid::new_v4().to_string();
@@ -371,8 +342,7 @@ fn catalog_archive_additive_restore_preserves_all_unused_models_profiles_prefere
             output.path(),
             &format!("next-{generation}.monbackup"),
         );
-        let bundle =
-            serde_json::to_value(original.manifest.model_catalog.as_ref().unwrap()).unwrap();
+        let bundle = serde_json::to_value(&original.manifest.model_catalog).unwrap();
         assert!(bundle["catalogs"].as_array().unwrap().contains(&native));
         assert_eq!(
             bundle["catalogs"].as_array().unwrap().len(),

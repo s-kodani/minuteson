@@ -12,8 +12,10 @@ fn read(storage: &Storage, output: &Path) -> archive::VerifiedArchive {
 fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabulary() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
-    let database =
-        portable::initialize(Connection::open(root.join("meetings.sqlite3")).unwrap(), 20).unwrap();
+    let database = archive::tests::migration_database(
+        Connection::open(root.join("meetings.sqlite3")).unwrap(),
+        20,
+    );
     let storage = Storage {
         deletion_fence: crate::storage::deletion::fence::Fence::open(&database).unwrap(),
         #[cfg(unix)]

@@ -790,7 +790,7 @@ fn legacy_twenty_eight_schema_has_no_snapshot_column_and_migrates_without_changi
 ) {
     let root = tempfile::tempdir().unwrap();
     let db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
-    let db = portable::initialize(db, 28).unwrap();
+    let db = super::super::archive::tests::migration_database(db, 28);
     assert!(!has_column(&db).unwrap());
     validate_database(&db, &|| false).unwrap();
     drop(db);

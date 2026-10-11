@@ -281,11 +281,9 @@ impl<'a> RestoreIds<'a> {
         };
         plan.reserve(&plan.batch_id)?;
         plan.reserve(&plan.archive_id)?;
-        if let Some(catalog) = &archive.manifest.model_catalog {
-            for id in catalog.origin_ids() {
-                check_cancelled(cancelled)?;
-                plan.reserve(&id)?;
-            }
+        for id in archive.manifest.model_catalog.origin_ids() {
+            check_cancelled(cancelled)?;
+            plan.reserve(&id)?;
         }
         plan.verify_draft_history(cancelled)?;
         plan.order_dependencies(cancelled)?;

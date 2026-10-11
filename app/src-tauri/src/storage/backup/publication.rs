@@ -296,9 +296,10 @@ impl Storage {
                 check,
                 &|id| ids.unused_identity(id),
             )?;
-            if let Some(catalog) = &ids.source().manifest.model_catalog {
-                catalog.retain(&tx, check, &|id| ids.unused_identity(id))?;
-            }
+            ids.source()
+                .manifest
+                .model_catalog
+                .retain(&tx, check, &|id| ids.unused_identity(id))?;
             #[cfg(unix)]
             if let Some(seed) = &unavailable {
                 crate::storage::deletion::audio::restored::verify_retained(

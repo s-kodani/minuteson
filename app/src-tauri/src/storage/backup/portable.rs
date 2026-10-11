@@ -89,7 +89,7 @@ pub(super) fn schema(version: usize) -> Result<Connection, String> {
 }
 
 pub(super) fn initialize(db: Connection, version: usize) -> Result<Connection, String> {
-    if version < 20 || version > MIGRATIONS.len() {
+    if version != MIGRATIONS.len() {
         return Err("未対応のバックアップDB形式です".into());
     }
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
@@ -116,114 +116,24 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    let has_ledger: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=21)",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let has_recovery: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=28)",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
     let expected: BTreeSet<String> = TABLES
         .iter()
-        .filter(|&&name| has_ledger || name != "restore_provenance")
-        .filter(|&&name| has_recovery || name != "transcript_edit_recovery")
-        .chain(["app_settings", "schema_migrations"].iter())
-        .chain(if has_ledger {
-            ["restore_batches", "restore_identity_maps"].as_slice()
-        } else {
-            &[]
-        })
         .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=22)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                ["maintenance_operations", "maintenance_paths"].as_slice()
-            } else {
-                &[]
-            },
+            [
+                "app_settings",
+                "schema_migrations",
+                "restore_batches",
+                "restore_identity_maps",
+                "maintenance_operations",
+                "maintenance_paths",
+                "restore_omitted_assets",
+                "model_compatibility_checks",
+                "model_catalog_history",
+                "recording_input_delivery",
+            ]
+            .iter(),
         )
-        .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=23)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                crate::storage::model_metadata::TABLES
-            } else {
-                &[]
-            },
-        )
-        .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=23)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                ["restore_omitted_assets"].as_slice()
-            } else {
-                &[]
-            },
-        )
-        .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=24)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                ["model_compatibility_checks"].as_slice()
-            } else {
-                &[]
-            },
-        )
-        .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=27)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                ["model_catalog_history"].as_slice()
-            } else {
-                &[]
-            },
-        )
-        .chain(
-            if db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=30)",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(|e| e.to_string())?
-            {
-                ["recording_input_delivery"].as_slice()
-            } else {
-                &[]
-            },
-        )
+        .chain(crate::storage::model_metadata::TABLES.iter())
         .map(|s| (*s).to_owned())
         .collect();
     if actual != expected {
@@ -231,8 +141,6 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
     }
     TABLES
         .iter()
-        .filter(|&&name| has_ledger || name != "restore_provenance")
-        .filter(|&&name| has_recovery || name != "transcript_edit_recovery")
         .map(|&name| {
             let columns = db
                 .prepare(&format!("PRAGMA table_info(\"{name}\")"))

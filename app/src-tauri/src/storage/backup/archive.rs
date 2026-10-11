@@ -72,8 +72,7 @@ pub(crate) struct Manifest {
     pub(super) entries: Vec<Entry>,
     pub(super) omitted_assets: Vec<OmittedAsset>,
     pub(super) file_references: Vec<FileReference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) model_catalog: Option<crate::storage::model_profiles::portable::history::Bundle>,
+    pub(super) model_catalog: crate::storage::model_profiles::portable::history::Bundle,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) deleted_audio: Vec<deleted_audio::Descriptor>,
 }
@@ -289,7 +288,7 @@ impl Snapshot<'_> {
             entries,
             omitted_assets: omitted,
             file_references: references.into_iter().collect(),
-            model_catalog: Some(model_catalog),
+            model_catalog,
             deleted_audio,
         };
         validate_manifest(&manifest)?;
@@ -425,10 +424,10 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if !matches!(m.format_version, 1 | 2 | 3)
-        || m.schema_version < 20
-        || m.schema_version > MIGRATIONS.len()
-        || !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
+    if !matches!(m.format_version, 2 | 3) || m.schema_version != MIGRATIONS.len() {
+        return Err("現在の形式ではないバックアップは復元できません".into());
+    }
+    if !Uuid::parse_str(&m.archive_id).is_ok_and(|id| id.to_string() == m.archive_id)
         || m.created_at < 0
         || m.entries.is_empty()
         || m.entries.len() + m.omitted_assets.len() > MAX_ENTRIES
@@ -436,16 +435,10 @@ fn validate_manifest(m: &Manifest) -> Result<(), String> {
     {
         return Err("バックアップの形式版・件数が不正です".into());
     }
-    match (m.format_version, &m.model_catalog) {
-        (1, None) if m.schema_version <= 26 => {}
-        (2 | 3, Some(catalog)) if m.schema_version >= 27 => {
-            catalog.validate()?;
-            let references: BTreeSet<_> = m.file_references.iter().cloned().collect();
-            if !catalog.file_references()?.is_subset(&references) {
-                return Err("モデル構成履歴の全ファイル情報がmanifestにありません".into());
-            }
-        }
-        _ => return Err("バックアップの形式版とモデル構成履歴が一致しません".into()),
+    m.model_catalog.validate()?;
+    let references: BTreeSet<_> = m.file_references.iter().cloned().collect();
+    if !m.model_catalog.file_references()?.is_subset(&references) {
+        return Err("モデル構成履歴の全ファイル情報がmanifestにありません".into());
     }
     let mut meetings = BTreeSet::new();
     for meeting in &m.meetings {
