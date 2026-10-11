@@ -140,7 +140,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const changingPageDisabled = disabled || !!failure.current || compositions.current.size > 0;
   const chipLabel = (id: string) => { const e = doc.evidence.find((e) => e.id === id); return e ? `${timeLabel(e.startUs)}${e.verificationState === "user_verified" ? " ✓" : " · 未確認"}` : "根拠"; };
   const field = (nodes: Inline[], address: InlineAddress, label: string, evidenceOnly = false) => <MinutesRichField key={`${epoch}:${JSON.stringify(address)}`} value={nodes} label={label} blockIndex={address.block} addressKey={inlineAddressKey(address)} disabled={disabled} evidenceOnly={evidenceOnly} chipLabel={chipLabel}
-    onChange={(nodes) => edit((d) => editInline(d, address, nodes), true)} onSelection={(range) => setSelection({ address, ...range })} onFailure={failed} onEvidence={id => documentHandle.current?.showEvidence(id)}
+    onChange={(nodes) => edit((d) => editInline(d, address, nodes), true)} onSelection={(range) => setSelection({ address, ...range })} onFailure={failed} onEvidence={(id,opener) => documentHandle.current?.showEvidence(id,opener)}
     onCompositionChange={(active) => { const key = JSON.stringify(address); if (active) compositions.current.add(key); else compositions.current.delete(key); setSaved(queue.snapshot()); }} />;
   const selectedBlock = selection ? doc.blocks[selection.address.block] : null;
   const structural = (action: (doc: MinutesContent) => MinutesContent, next: InlineAddress | number = selection?.address ?? { block: 0 }) => {

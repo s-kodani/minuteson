@@ -4,6 +4,8 @@
 
 ## 今回確認した現在の検査結果
 
+目次入口と閲覧／rich根拠のnative clickが実openerを記録できずregionへ戻る問題を再現・補修。最終Macで目次の×・Tab／逆Tab／Enter往復と、閲覧／rich根拠を閉じた時刻focus、全DB＋WAL dump不変を確認。合成狭幅Escape・保存要求0、848成功・QA成功。[限定証拠](workspace-panel-focus-native-2026-10-11.md)。M3-08／M3-04の全画面・異常順序・IME／VoiceOver、実録音・配布／試用等の23タスク残件を維持する。
+
 通知inventoryの不足一覧／package改変が旧検査を通ることを再現し、現在のoffline locked依存から本文／全inventoryへ照合する検査を補強。Python155件中154成功・専用1skip、実QA2同梱物はmockなしで一致。278依存・未承認・不足12件を保持し、署名／送信前拒否はunit検査のみ。[限定証拠](macos-notice-source-verification-2026-10-11.md)。M4-02の正式署名・内包CLI／モデルを含む配布条件・更新／試用と全23タスクの残件を維持する。
 
 議事録枠の760px上限を外し、目次入口を白い枠の右端へ揃えた。合成24配置で右端差0・横溢れなし、最終Macの通常閲覧／編集と目次開閉、終了後の全DB＋WAL dump不変を確認。[限定証拠](minutes-paper-width-2026-10-11.md)。全画面／全focus／実IME・VoiceOverや全23タスクの完了には拡大しない。

@@ -28,6 +28,20 @@ async (page,capturePath,detailUI) => {
   };
   const selectEvidence=async()=>{const rich=editor().locator(".minutes-wysiwyg");const chip=(await rich.isVisible()?rich:doc()).locator(".evidence-chip").first();await chip.evaluate(e=>{window.referenceOpener=e;});await chip.click();await group().getByRole("article",{name:"固定根拠1",exact:true}).getByRole("region",{name:"生成時に固定した文字起こし",exact:true}).waitFor();};
   await boot();
+  await trigger().click();
+  const closeEntry=editor().getByRole("button",{name:"議事録の目次・根拠を閉じる",exact:true});
+  await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="議事録の目次・根拠を閉じる");
+  await page.keyboard.press("Tab");
+  check(await editor().locator(".minutes-outline-tools>summary").evaluate(e=>e===document.activeElement),"wide panel Tab did not reach outline from explicit entry");
+  await page.keyboard.press("Shift+Tab");
+  check(await closeEntry.evaluate(e=>e===document.activeElement),"wide panel reverse Tab lost close entry");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(()=>document.activeElement?.textContent==="議事録の目次・根拠を開く");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="議事録の目次・根拠を閉じる");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(()=>document.activeElement?.textContent==="議事録の目次・根拠を開く");
+  results.push("explicit wide panel entry focuses close, Tab/reverse Tab reaches outline and Enter round trips back to the same opener");
   const original=await page.evaluate(()=>JSON.stringify({draft:window.__mon.drafts.a,current:window.__mon.current,view:window.__mon.views.a}));
   for(const width of [1440,1280,1200,1120])for(const theme of ["light","dark"]){
     await page.setViewportSize({width,height:640});await detailUI.applyMinutesTheme(theme);await waitLayout();await close();

@@ -11,6 +11,7 @@ export function WorkspacePanel({ content, label, active = true, side: placement 
   const [open, setOpen] = useState(false);
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
+  const closeEntry = useRef<HTMLButtonElement>(null);
   const side = useRef<HTMLDivElement>(null), drawer = useRef<HTMLDivElement>(null);
   const focus = useRef<HTMLElement | null>(null);
   const restore = useRef<(() => HTMLElement | null) | null>(null);
@@ -24,11 +25,20 @@ export function WorkspacePanel({ content, label, active = true, side: placement 
   const dismiss = (target?: () => HTMLElement | null) => { restore.current = target ?? null; setOpen(false); };
   useImperativeHandle(handle, () => ({ reveal, dismiss }), [narrow,active,collapsible,open]);
   useLayoutEffect(() => {
+    const opened = !previousOpen.current && open;
     const closed = previousOpen.current && !open;
     previousOpen.current = open;
-    if (!closed || narrow || !collapsible || !active) return;
+    if ((!closed && !opened) || narrow || !collapsible || !active) return;
     const frame = requestAnimationFrame(() => {
       if (!currentActive.current || document.querySelector("dialog[open]")) return;
+      if (opened) {
+        const active = document.activeElement;
+        // Only the explicit entry transfers focus. Evidence navigation and a
+        // later user-selected control keep their own focus destination.
+        if (opener.current === trigger.current && (active === opener.current || active === document.body))
+          closeEntry.current?.focus({ preventScroll:true });
+        return;
+      }
       const candidate = restore.current?.() ?? opener.current;
       const usable = (target: HTMLElement | null) => target?.isConnected && !!target.getClientRects().length && !target.matches(":disabled") && !target.closest("[hidden]");
       (usable(candidate) ? candidate : trigger.current)?.focus({ preventScroll:true });
@@ -73,9 +83,9 @@ export function WorkspacePanel({ content, label, active = true, side: placement 
   return <>
     <aside className="workspace-panel-shell" aria-label={label} data-narrow={narrow} data-side={placement} data-collapsible={collapsible} data-open={open}>
       <button ref={trigger} type="button" className="small-secondary workspace-drawer-trigger" hidden={!narrow && (!collapsible || open)}
-        aria-haspopup={narrow ? "dialog" : undefined} aria-expanded={open} aria-controls={narrow ? id : `${id}-side`} onClick={() => reveal()}>{label}を開く</button>
+        aria-haspopup={narrow ? "dialog" : undefined} aria-expanded={open} aria-controls={narrow ? id : `${id}-side`} onClick={event => { event.currentTarget.focus({ preventScroll:true }); reveal(event.currentTarget); }}>{label}を開く</button>
       <div id={`${id}-side`} className="workspace-panel-side-host" hidden={narrow || collapsible && !open}>
-        {collapsible && <IconButton className="workspace-panel-close" label={`${label}を閉じる`} icon="close" onClick={() => dismiss()} />}
+        {collapsible && <IconButton ref={closeEntry} className="workspace-panel-close" label={`${label}を閉じる`} icon="close" onClick={() => dismiss()} />}
         <div ref={side} className="workspace-panel-side-content" />
       </div>
     </aside>

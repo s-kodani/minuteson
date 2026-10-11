@@ -9,7 +9,7 @@ import { MinutesPages } from "./minutes-pages";
 import type { WorkspacePanelHandle } from "./workspace-panel";
 
 // Typed document nodes become React text elements, never model-supplied HTML.
-export type MinutesDocumentHandle = { showEvidence: (id: string) => void };
+export type MinutesDocumentHandle = { showEvidence: (id: string, opener?: HTMLElement) => void };
 export function MinutesDocument({ content, title, view, locked = false, verify, panelHost = null, panelHandle, active = true, onFullChange, navigateHeading, readerHidden = false, handle }: {
   content: MinutesContent; title: string; view: MinutesView; locked?: boolean; verify?: (id: string, verified: boolean) => void;
   panelHost?: HTMLElement | null; panelHandle?: RefObject<WorkspacePanelHandle | null>; active?: boolean; onFullChange?: (full: boolean) => void;
@@ -99,9 +99,10 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
     // Recenter only a newly selected reference. Returning from a different
     // member of its group must restore the actual opener's bookmark instead.
   }, [selected,panelHost]);
-  const showEvidence = (id: string) => {
+  const showEvidence = (id: string, from?: HTMLElement) => {
     if (locked || full || !active || !content.evidence.some(entry => entry.id === id)) return;
-    evidenceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (from?.isConnected && from.getClientRects().length && !from.matches(":disabled") && !from.closest("[hidden]")) from.focus({ preventScroll:true });
+    evidenceOpener.current = from ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setSelected(id); setEvidencePage(null); panelHandle?.current?.reveal(evidenceOpener.current);
   };
   useImperativeHandle(handle, () => ({ showEvidence }), [locked,full,active,content.evidence,panelHandle]);
@@ -109,7 +110,7 @@ export function MinutesDocument({ content, title, view, locked = false, verify, 
   const inline = (nodes: Inline[]) => nodes.map((node, index) => {
     if (node.type === "evidence") {
       const e = content.evidence.find((e) => e.id === node.evidenceLinkId && e.minutesItemId === node.minutesItemId);
-      return e ? <button type="button" className="evidence-chip" disabled={locked} key={index} onClick={() => showEvidence(e.id)} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
+      return e ? <button type="button" className="evidence-chip" disabled={locked} key={index} onClick={event => showEvidence(e.id, event.currentTarget)} title="生成時に固定した発言を確認">{timeLabel(e.startUs)}{e.verificationState === "user_verified" ? " ✓" : " · 未確認"}</button> : <span key={index}>根拠不明</span>;
     }
     let text = <span className="document-text">{node.text}</span>;
     if (node.bold) text = <strong>{text}</strong>;

@@ -116,6 +116,9 @@ test("minutes regression drivers use explicit panel, primary actions and rich ev
   assert.match(panel,/await rich.isVisible\(\)\?rich:doc\(\)/);
   assert.doesNotMatch(panel,/editor\(\).getByRole\("button",\{name:"(?:議事録を編集|編集を終了|議事録保存を再試行)"/);
   assert.match(panel,/document.activeElement===window.referenceOpener/);
+  assert.match(panel,/wide panel Tab did not reach outline from explicit entry/);
+  assert.match(panel,/wide panel reverse Tab lost close entry/);
+  assert.match(panel,/explicit wide panel entry focuses close/);
   assert.match(read("run-browser-checks.mjs"),/applyMinutesFixtureTheme.toString\(\)/);
 });
 

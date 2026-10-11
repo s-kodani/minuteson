@@ -69,7 +69,7 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
   value: Inline[]; label: string; blockIndex: number; addressKey: string; disabled: boolean; evidenceOnly?: boolean;
   chipLabel: (id: string) => string;
   onChange: (value: Inline[]) => void; onSelection: (range: { start: number; end: number }) => void; onFailure: (cause: unknown) => void; onCompositionChange: (active: boolean) => void;
-  onEvidence?: (id: string) => void;
+  onEvidence?: (id: string, opener: HTMLElement) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
@@ -140,8 +140,8 @@ export function MinutesRichField({ value, label, blockIndex, addressKey, disable
   };
   return <div ref={root} className="minutes-rich-field" data-block={blockIndex} data-inline-address={addressKey} data-placeholder={evidenceOnly ? "根拠なし（手動追加）" : "入力してください"} contentEditable={!disabled} suppressContentEditableWarning role="textbox" aria-label={label} aria-multiline="true" aria-readonly={disabled} tabIndex={0}
     onFocus={capture} onKeyUp={capture} onMouseUp={capture} onSelect={capture}
-    onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled) onEvidence?.(chip.dataset.evidenceId!); }}
-    onKeyDown={event => { const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!); } }}
+    onClick={event => { const chip = evidenceTarget(event.target); if (chip && !disabled) onEvidence?.(chip.dataset.evidenceId!, chip); }}
+    onKeyDown={event => { const chip = evidenceTarget(event.target); if (chip && onEvidence && ["Enter", " "].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (!disabled) onEvidence(chip.dataset.evidenceId!, chip); } }}
     onCompositionStart={() => { composing.current = true; onCompositionChange(true); }} onCompositionEnd={() => { composing.current = false; changed(); onCompositionChange(false); }} onInput={changed}
     onPaste={(event) => {
       event.preventDefault(); if (disabled || evidenceOnly) return;
