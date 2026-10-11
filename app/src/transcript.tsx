@@ -722,22 +722,22 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
         <OptionsModal className="speaker-merge-tools" label="話者を統合" hidden={!visible}><div className="transcript-actions" aria-label="話者統合">
           <label>統合元 <select value={mergeSource} disabled={!editable} onChange={e=>setMergeSource(e.target.value)}><option value="">選択</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
           <label>統合先 <select value={mergeTarget} disabled={!editable} onChange={e=>setMergeTarget(e.target.value)}><option value="">選択</option>{speakers.filter(s=>s.id!==mergeSource).map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label>
-          <button type="button" disabled={!editable||!mergeSource||!mergeTarget||mergeSource===mergeTarget} onClick={()=>{
+          <button type="button" disabled={!editable||!mergeSource||!mergeTarget||mergeSource===mergeTarget} onClick={event=>{
             if(!view||!payload)return;
             const count=view.utterances.filter(u=>u.speakerIds.includes(mergeSource)).length;
             const message=`${speakerLabels.get(mergeSource)}の${count}発言を${speakerLabels.get(mergeTarget)}にまとめます。本文・時刻・推定元の区間は変更しません。続けますか？`;
             const expected = JSON.stringify(saveQueue.snapshot().payload), source = mergeSource, target = mergeTarget;
-            void confirm({ title: "話者の統合を確認", target: `${speakerLabels.get(source)} → ${speakerLabels.get(target)} · ${count}発言`, confirmLabel: "話者を統合する", message: `${message} 直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { if (await structuralEdit(p=>mergeSpeaker(analysis,p,source,target),"話者を統合しました。直前の編集を取り消すことができます。",true)) { setMergeSource("");setMergeTarget("");setBulkSpeaker(""); } } });
+            void confirm({ opener: event.currentTarget, title: "話者の統合を確認", target: `${speakerLabels.get(source)} → ${speakerLabels.get(target)} · ${count}発言`, confirmLabel: "話者を統合する", message: `${message} 直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { if (await structuralEdit(p=>mergeSpeaker(analysis,p,source,target),"話者を統合しました。直前の編集を取り消すことができます。",true)) { setMergeSource("");setMergeTarget("");setBulkSpeaker(""); } } });
           }}>話者を統合</button>
         </div></OptionsModal>
         {!!payload?.speaker_merges?.length&&<p className="hint">統合済みラベルは割り当て候補から除外しています。推定区間には統合前のラベルを残します。</p>}
         <div className="speaker-diarization-entry" ref={bindDiarizationHost} hidden={!visible} />
         </>,speakerMount)}
         <section className="transcript-options-section" aria-label="複数発言の話者変更"><h3>まとめて話者を変更</h3><p className="hint">選択 {selection.length} 発言（全ページ）</p>
-        <div className="transcript-options-bulk-controls"><label>割り当て先<select value={bulkSpeaker} disabled={!editable} onChange={e=>setBulkSpeaker(e.target.value)}><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><div className="transcript-options-buttons"><button type="button" disabled={!editable||!selection.length} onClick={()=>{
+        <div className="transcript-options-bulk-controls"><label>割り当て先<select value={bulkSpeaker} disabled={!editable} onChange={e=>setBulkSpeaker(e.target.value)}><option value="">話者不明</option>{speakers.map(s=><option key={s.id} value={s.id}>{s.displayName||s.label}</option>)}</select></label><div className="transcript-options-buttons"><button type="button" disabled={!editable||!selection.length} onClick={event=>{
           if(!payload)return;
           const ids = [...selection], speaker = bulkSpeaker, expected = JSON.stringify(saveQueue.snapshot().payload);
-          void confirm({ title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
+          void confirm({ opener: event.currentTarget, title: "複数発言の話者変更を確認", target: `選択した${ids.length}発言 → ${speakerLabels.get(speaker)||"話者不明"}`, confirmLabel: "選択した発言に適用する", message: `選択した${ids.length}発言の割り当てを${speakerLabels.get(speaker)||"話者不明"}に置き換えます。複数話者の割り当ても置き換えます。本文は変更しません。直前の編集を取り消すことで戻せます。`, validate: () => JSON.stringify(saveQueue.snapshot().payload) === expected, action: async () => { await structuralEdit(p=>assignSpeakers(analysis,p,ids,speaker?[speaker]:[]),"選択した発言の話者を変更しました。取り消しが可能です。",true); } });
         }}>選択した発言に適用</button><button type="button" className="small-secondary" disabled={!selection.length||busy} onClick={()=>setSelection([])}>選択解除</button></div></div></section>
         </div></OptionsModal>} />
         <div className="transcript-actions transcript-search" aria-label="発言の絞り込み"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" value={query} disabled={loading} onChange={e=>setQuery(e.target.value)} maxLength={1000}/></label><span>{filtered.length} / {view?.utterances.length??0} 発言</span></div>
