@@ -266,3 +266,7 @@ fn replay(
 #[cfg(all(test, unix))]
 #[path = "generation_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "markdown_tests.rs"]
+mod markdown_tests;

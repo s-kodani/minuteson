@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
+pub(super) mod restore;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
@@ -76,9 +78,20 @@ fn checked_parameters(
     spec: &JobSpec,
     input: &MinutesInput,
 ) -> Result<Parameters, String> {
+    checked_fixed_parameters(spec, input, &storage.fixed_job_initial_operation(job_id)?)
+}
+// No filesystem access: the restore image intentionally has unavailable model
+// paths. Its coordinator has separately verified the input and retry lineage.
+fn checked_fixed_parameters(
+    spec: &JobSpec,
+    input: &MinutesInput,
+    initial_operation: &str,
+) -> Result<Parameters, String> {
     let envelope: Envelope =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let p = envelope.generation;
+    p.engine.validate()?;
+    p.markdown_target.validate()?;
     let name = spec.profile_snapshot["profile"]
         .as_str()
         .ok_or("議事録プロファイルがありません")?;
@@ -87,7 +100,7 @@ fn checked_parameters(
         || p.schema_version != 5
         || p.markdown_target.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
-        || envelope.request.operation_id != storage.fixed_job_initial_operation(job_id)?
+        || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
         || p.prompt_budget > super::budget(&p.engine)?
         || p.plan != plan::build(input, p.prompt_budget)?
@@ -167,6 +180,17 @@ fn replay(
     c: &Checkpoint,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<(Vec<String>, Option<plan::Cursor>)>, String> {
+    replay_with(input, p, c, cancelled, |task, artifacts| {
+        super::verify_task_artifacts(storage, meeting, task, artifacts)
+    })
+}
+fn replay_with(
+    input: &MinutesInput,
+    p: &Parameters,
+    c: &Checkpoint,
+    cancelled: &impl Fn() -> bool,
+    mut verify: impl FnMut(&Task, &[Artifact]) -> Result<Value, String>,
+) -> Result<Option<(Vec<String>, Option<plan::Cursor>)>, String> {
     let mut outputs = vec![];
     for saved in &c.outputs {
         if cancelled() {
@@ -177,12 +201,7 @@ fn replay(
                 if saved.batches.len() != 1 {
                     return Err("抽出の保存形式が不正です".into());
                 }
-                markdown::text(super::verify_task_artifacts(
-                    storage,
-                    meeting,
-                    &extract_task(input, slices)?,
-                    &saved.batches[0],
-                )?)?
+                markdown::text(verify(&extract_task(input, slices)?, &saved.batches[0])?)?
             }
             node => {
                 let mut current = cursor(node, &outputs, p.prompt_budget)?;
@@ -190,12 +209,7 @@ fn replay(
                     if cancelled() {
                         return Ok(None);
                     }
-                    let text = markdown::text(super::verify_task_artifacts(
-                        storage,
-                        meeting,
-                        &merge_task(&current)?,
-                        batch,
-                    )?)?;
+                    let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
                     current.accept(text)?;
                 }
                 current
@@ -221,12 +235,7 @@ fn replay(
             if cancelled() {
                 return Ok(None);
             }
-            let text = markdown::text(super::verify_task_artifacts(
-                storage,
-                meeting,
-                &merge_task(&current)?,
-                batch,
-            )?)?;
+            let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
             current.accept(text)?;
         }
         if current.result().is_some() {

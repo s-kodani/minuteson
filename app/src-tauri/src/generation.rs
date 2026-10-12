@@ -203,6 +203,9 @@ pub(crate) fn restore_checkpoint_references(
     value: Value,
     mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
 ) -> Result<Value, String> {
+    if parameters["schemaVersion"] == 5 {
+        return markdown_job::restore::references(job, parameters, value, map);
+    }
     use crate::saved_artifact::Role;
     let parameters: Parameters = serde_json::from_value(parameters).map_err(|e| e.to_string())?;
     if !matches!(parameters.schema_version, 1 | 2 | 3 | 4)

@@ -51,10 +51,14 @@ pub(crate) struct GenerationTarget {
     pub expected: Option<MarkdownStamp>,
 }
 impl GenerationTarget {
-    pub(crate) fn check(&self, db: &Connection, meeting: &str) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 || self.expected.as_ref().is_some_and(|s| !valid_stamp(s)) {
             return Err("議事録生成の保存条件が不正です".into());
         }
+        Ok(())
+    }
+    pub(crate) fn check(&self, db: &Connection, meeting: &str) -> Result<(), String> {
+        self.validate()?;
         if read(db, meeting)?.as_ref().map(MarkdownDocument::stamp) != self.expected {
             return Err("生成の確認後に議事録が更新されています。人間の編集を保持します".into());
         }

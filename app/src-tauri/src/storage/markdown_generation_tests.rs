@@ -5,7 +5,7 @@ use crate::generation::{self, markdown_job};
 use crate::local_engine::Fingerprint;
 use std::os::unix::fs::PermissionsExt;
 
-fn engine(root: &Path, kind: &str) -> LlamaConfig {
+pub(in crate::storage) fn engine(root: &Path, kind: &str) -> LlamaConfig {
     let executable = root.join("llama-completion");
     let model = root.join("model.gguf");
     let script = format!(
@@ -78,7 +78,7 @@ fn save(
         })
         .unwrap()
 }
-fn calls(root: &Path) -> usize {
+pub(in crate::storage) fn calls(root: &Path) -> usize {
     std::fs::read_to_string(root.join("calls"))
         .unwrap_or_default()
         .lines()
@@ -92,7 +92,7 @@ fn claim(storage: &Storage, job: &JobSnapshot) {
 }
 // Share one dispatcher instantiation instead of compiling the full generation
 // pipeline again for every synthetic callback type.
-fn process(
+pub(in crate::storage) fn process(
     storage: &Storage,
     job: &str,
     stopping: &dyn Fn() -> bool,

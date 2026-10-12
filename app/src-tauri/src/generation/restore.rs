@@ -239,6 +239,9 @@ pub(crate) fn checkpoint(
     assets: &mut impl Assets,
     check: &impl Fn() -> bool,
 ) -> Result<Value, String> {
+    if markdown_job::is_markdown(old.spec) || markdown_job::is_markdown(new.spec) {
+        return markdown_job::restore::checkpoint(old, new, value, assets, check);
+    }
     cancelled(check)?;
     if serde_json::to_vec(&value).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
         return Err("復元元の生成チェックポイントが容量上限を超えています".into());
