@@ -33,3 +33,22 @@ test("Quit still enters the existing fail-closed save and worker shutdown barrie
   assert.match(exit, /main\.emit\("main-close-requested", serde_json::json!\(\{"quit": true\}\)\)/u);
   assert.match(lib, /ExitGuard>\(\)\.0\.store\(true, Ordering::SeqCst\);\s+window\.app_handle\(\)\.exit\(0\)/u);
 });
+
+test("native termination is cancelled and queued through the same save barrier", () => {
+  const callback = source.slice(source.indexOf('extern "C" fn application_should_terminate'), source.indexOf("fn guarded_delegate_class"));
+  assert.match(callback, /app\.exit\(0\)/u);
+  assert.match(callback, /NSApplicationTerminateReply::TerminateCancel/u);
+  assert.doesNotMatch(callback, /TerminateNow|TerminateLater|\.wait\(|\.join\(|\.lock\(|finish_main_close\(|\.store\(/u);
+  assert.match(source, /install_native_quit_barrier\(app\)\?/u);
+});
+
+test("native Quit preserves Tao's existing delegate instance and layout", () => {
+  assert.match(source, /MainThreadMarker::new\(\)/u);
+  assert.match(source, /parent\.name\(\) != c"TaoAppDelegateParent"/u);
+  assert.match(source, /class\.instance_size\(\) != parent\.instance_size\(\)/u);
+  assert.match(source, /class\.superclass\(\) != Some\(parent\)/u);
+  assert.match(source, /AnyObject::set_class\(delegate, class\)/u);
+  const implementation = source.slice(0, source.indexOf("#[cfg(test)]"));
+  assert.doesNotMatch(implementation, /add_ivar|setDelegate|set_implementation|exchange_implementation/u);
+  assert.match(implementation, /instance_method\(sel!\(applicationShouldTerminate:\)\)/u);
+});
