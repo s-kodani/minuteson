@@ -1,6 +1,422 @@
 use super::*;
 use crate::minutes_document::{Block, Inline};
 
+fn generation_source(storage: &Storage) -> super::super::minutes_input::MinutesJobRequest {
+    let meeting = super::super::analysis::tests::saved_meeting(storage);
+    let analysis = storage
+        .create_analysis_candidate(&meeting.id, super::super::analysis::tests::input())
+        .unwrap();
+    let current = storage
+        .commit_analysis_candidate(&meeting.id, &analysis, 0, false)
+        .unwrap();
+    super::super::minutes_input::MinutesJobRequest {
+        meeting_id: meeting.id,
+        operation_id: Uuid::new_v4().to_string(),
+        expected_analysis_id: analysis,
+        expected_content_hash: current.content_hash,
+        expected_meeting_lock_version: current.meeting_lock_version,
+        expected_draft: None,
+    }
+}
+fn generation_job(
+    storage: &Storage,
+    source: &super::super::minutes_input::MinutesJobRequest,
+    expected: Option<MarkdownStamp>,
+) -> JobSnapshot {
+    storage
+        .enqueue_markdown_minutes_job_configured(
+            source.clone(),
+            serde_json::json!({"engine":"synthetic-markdown"}),
+            GenerationTarget {
+                schema_version: 1,
+                expected,
+            },
+            |_| Ok((serde_json::json!({"format":"markdown"}), Some(1))),
+        )
+        .unwrap()
+}
+fn completed_generation(
+    storage: &Storage,
+    source: &super::super::minutes_input::MinutesJobRequest,
+    expected: Option<MarkdownStamp>,
+    text: &str,
+) -> JobSnapshot {
+    let job = generation_job(storage, source, expected);
+    assert_eq!(
+        storage
+            .acquire_job_kind(Some(JobKind::MinutesGeneration))
+            .unwrap()
+            .unwrap()
+            .id,
+        job.id
+    );
+    storage
+        .save_job_checkpoint(
+            &job.id,
+            0,
+            1,
+            serde_json::json!({"markdownHash":content_hash(text)}),
+        )
+        .unwrap();
+    storage.get_job(&job.id).unwrap()
+}
+
+#[test]
+fn generation_publishes_exact_markdown_and_success_without_candidates_evidence_or_backups() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let mut source = generation_source(&storage);
+    let first = " \n# 初回\n- 決定事項\n[区間](audio:00:00:00.000001-00:00:00.999999)\n";
+    let job = completed_generation(&storage, &source, None, first);
+    let published = storage
+        .finish_minutes_markdown(&job.id, 1, first.into())
+        .unwrap();
+    assert_eq!(published.markdown, first);
+    assert_eq!(published.operation_id, source.operation_id);
+    let succeeded = storage.get_job(&job.id).unwrap();
+    assert_eq!(succeeded.state, "succeeded");
+    assert_eq!(succeeded.output_minutes_id, None);
+    let human = storage
+        .save_minutes_markdown(request(
+            &source.meeting_id,
+            Some(published.stamp()),
+            "人間が編集した本文",
+        ))
+        .unwrap();
+    source.operation_id = Uuid::new_v4().to_string();
+    let job = completed_generation(&storage, &source, Some(human.stamp()), "# 明示再生成\n");
+    let next = storage
+        .finish_minutes_markdown(&job.id, 1, "# 明示再生成\n".into())
+        .unwrap();
+    assert_eq!(next.lock_version, 3);
+    assert_eq!(
+        storage.get_minutes_markdown(&source.meeting_id).unwrap(),
+        Some(next.clone())
+    );
+    assert!(storage
+        .finish_minutes_markdown(&job.id, 1, "# 明示再生成\n".into())
+        .is_err());
+    assert_eq!(
+        generation_job(&storage, &source, Some(human.stamp())).id,
+        job.id
+    ); // lost admission response is read back
+    let db = storage.connection.lock().unwrap();
+    for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
+        assert_eq!(
+            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table}"
+        );
+    }
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM working_drafts WHERE target_kind='minutes'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.target_kind='minutes'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM minutes_markdown", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(db);
+    drop(storage);
+    assert_eq!(
+        Storage::open(root.path().into())
+            .unwrap()
+            .get_minutes_markdown(&source.meeting_id)
+            .unwrap(),
+        Some(next)
+    );
+}
+
+#[test]
+fn human_save_during_generation_defeats_publication_without_failing_or_replacing_the_human_body() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let source = generation_source(&storage);
+    let base = storage
+        .save_minutes_markdown(request(&source.meeting_id, None, "生成前"))
+        .unwrap();
+    let job = completed_generation(&storage, &source, Some(base.stamp()), "生成後");
+    let human = storage
+        .save_minutes_markdown(request(
+            &source.meeting_id,
+            Some(base.stamp()),
+            "生成中に人間が保存",
+        ))
+        .unwrap();
+    assert!(storage
+        .finish_minutes_markdown(&job.id, 1, "生成後".into())
+        .unwrap_err()
+        .contains("更新"));
+    assert_eq!(
+        storage.get_minutes_markdown(&source.meeting_id).unwrap(),
+        Some(human)
+    );
+    assert_eq!(storage.get_job(&job.id).unwrap(), job);
+}
+
+#[test]
+fn admission_rejects_stale_target_or_bad_uuid_before_copying_fixed_input() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let mut source = generation_source(&storage);
+    let base = storage
+        .save_minutes_markdown(request(&source.meeting_id, None, "現在の本文"))
+        .unwrap();
+    let before = storage.list_jobs(&source.meeting_id).unwrap();
+    for target in [
+        GenerationTarget {
+            schema_version: 1,
+            expected: None,
+        },
+        GenerationTarget {
+            schema_version: 2,
+            expected: Some(base.stamp()),
+        },
+        GenerationTarget {
+            schema_version: 1,
+            expected: Some(MarkdownStamp {
+                lock_version: base.lock_version + 1,
+                content_hash: base.content_hash.clone(),
+            }),
+        },
+    ] {
+        assert!(storage
+            .enqueue_markdown_minutes_job_configured(
+                source.clone(),
+                serde_json::json!({}),
+                target,
+                |_| Ok((serde_json::json!({}), Some(1)))
+            )
+            .is_err());
+    }
+    source.operation_id = "bad-uuid".into();
+    assert!(storage
+        .enqueue_markdown_minutes_job_configured(
+            source.clone(),
+            serde_json::json!({}),
+            GenerationTarget {
+                schema_version: 1,
+                expected: Some(base.stamp())
+            },
+            |_| Ok((serde_json::json!({}), Some(1)))
+        )
+        .is_err());
+    assert_eq!(storage.list_jobs(&source.meeting_id).unwrap(), before);
+    assert_eq!(
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM analysis_revisions WHERE publication_state='internal_snapshot'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn incomplete_paused_or_mismatched_output_never_publishes_generated_body() {
+    for mode in [
+        "queued",
+        "incomplete",
+        "paused",
+        "wrong_hash",
+        "empty",
+        "nul",
+        "oversize",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        let source = generation_source(&storage);
+        let base = storage
+            .save_minutes_markdown(request(&source.meeting_id, None, "保持する本文"))
+            .unwrap();
+        let job = generation_job(&storage, &source, Some(base.stamp()));
+        if mode != "queued" {
+            storage
+                .acquire_job_kind(Some(JobKind::MinutesGeneration))
+                .unwrap();
+            if mode != "incomplete" {
+                storage
+                    .save_job_checkpoint(
+                        &job.id,
+                        0,
+                        1,
+                        serde_json::json!({"markdownHash":content_hash("生成結果")}),
+                    )
+                    .unwrap();
+            }
+            if mode == "paused" {
+                storage.request_job_pause(&job.id, "user").unwrap();
+                storage
+                    .save_job_checkpoint(
+                        &job.id,
+                        1,
+                        1,
+                        serde_json::json!({"markdownHash":content_hash("生成結果")}),
+                    )
+                    .unwrap();
+            }
+        }
+        let text = match mode {
+            "wrong_hash" => "別の結果".into(),
+            "empty" => " \n".into(),
+            "nul" => "a\0b".into(),
+            "oversize" => "あ".repeat(MAX_BYTES / 3 + 1),
+            _ => "生成結果".into(),
+        };
+        let before = storage.get_job(&job.id).unwrap();
+        assert!(
+            storage.finish_minutes_markdown(&job.id, 1, text).is_err(),
+            "{mode}"
+        );
+        assert_eq!(storage.get_job(&job.id).unwrap(), before);
+        assert_eq!(
+            storage.get_minutes_markdown(&source.meeting_id).unwrap(),
+            Some(base)
+        );
+    }
+}
+
+#[test]
+fn failure_to_mark_job_succeeded_rolls_back_the_generated_markdown_update() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let source = generation_source(&storage);
+    let base = storage
+        .save_minutes_markdown(request(&source.meeting_id, None, "保持する本文"))
+        .unwrap();
+    let job = completed_generation(&storage, &source, Some(base.stamp()), "生成結果");
+    storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER synthetic_generation_commit_failure BEFORE UPDATE OF state ON processing_jobs WHEN NEW.state='succeeded' BEGIN SELECT RAISE(ABORT,'synthetic job failure'); END;").unwrap();
+    assert!(storage
+        .finish_minutes_markdown(&job.id, 1, "生成結果".into())
+        .unwrap_err()
+        .contains("synthetic job failure"));
+    assert_eq!(
+        storage.get_minutes_markdown(&source.meeting_id).unwrap(),
+        Some(base)
+    );
+    assert_eq!(storage.get_job(&job.id).unwrap(), job);
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER synthetic_generation_commit_failure;")
+        .unwrap();
+    storage
+        .finish_minutes_markdown(&job.id, 1, "生成結果".into())
+        .unwrap();
+}
+
+#[test]
+fn generation_commit_failure_rolls_back_body_and_success_after_both_sql_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let source = generation_source(&storage);
+    let base = storage
+        .save_minutes_markdown(request(&source.meeting_id, None, "保持する本文"))
+        .unwrap();
+    let job = completed_generation(&storage, &source, Some(base.stamp()), "生成結果");
+    storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER synthetic_generation_deferred_failure AFTER UPDATE OF state ON processing_jobs WHEN NEW.state='succeeded' BEGIN INSERT INTO minutes_markdown SELECT 'absent-generated-meeting',markdown,content_hash,lock_version,operation_id,base_lock_version,base_content_hash,updated_at FROM minutes_markdown WHERE meeting_id=NEW.meeting_id; END; PRAGMA defer_foreign_keys=ON;").unwrap();
+    assert!(storage
+        .finish_minutes_markdown(&job.id, 1, "生成結果".into())
+        .is_err());
+    assert_eq!(
+        storage.get_minutes_markdown(&source.meeting_id).unwrap(),
+        Some(base)
+    );
+    assert_eq!(storage.get_job(&job.id).unwrap(), job);
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER synthetic_generation_deferred_failure;")
+        .unwrap();
+    storage
+        .finish_minutes_markdown(&job.id, 1, "生成結果".into())
+        .unwrap();
+}
+
+#[test]
+fn duplicate_generation_target_and_unread_existing_minutes_do_not_enqueue_or_publish() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let source = generation_source(&storage);
+    assert!(storage
+        .enqueue_markdown_minutes_job_configured(
+            source.clone(),
+            serde_json::json!({}),
+            GenerationTarget {
+                schema_version: 1,
+                expected: None
+            },
+            |_| Ok((
+                serde_json::json!({"markdownTarget":{"schemaVersion":1,"expected":null}}),
+                Some(1)
+            ))
+        )
+        .is_err());
+    assert!(storage.list_jobs(&source.meeting_id).unwrap().is_empty());
+    // The saved-meeting fixture has a fixed recording-start operation ID.
+    // Use an independent synthetic DB, not a second recording with that ID.
+    let legacy_root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(legacy_root.path().into()).unwrap();
+    let (legacy_meeting, _) = legacy(&storage);
+    let existing = storage.get_meeting(&legacy_meeting).unwrap().unwrap();
+    let versions = storage.analysis_versions(&legacy_meeting).unwrap();
+    let version = versions
+        .versions
+        .iter()
+        .find(|v| Some(&v.id) == versions.current_id.as_ref())
+        .unwrap();
+    let request = super::super::minutes_input::MinutesJobRequest {
+        meeting_id: legacy_meeting,
+        operation_id: Uuid::new_v4().to_string(),
+        expected_analysis_id: version.id.clone(),
+        expected_content_hash: version.content_hash.clone(),
+        expected_meeting_lock_version: existing.lock_version,
+        expected_draft: versions.draft,
+    };
+    assert!(storage
+        .enqueue_markdown_minutes_job_configured(
+            request.clone(),
+            serde_json::json!({}),
+            GenerationTarget {
+                schema_version: 1,
+                expected: None
+            },
+            |_| Ok((serde_json::json!({}), Some(1)))
+        )
+        .unwrap_err()
+        .contains("読み込"));
+    assert!(
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM minutes_markdown WHERE meeting_id=?1)",
+                [request.meeting_id],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap()
+            == false
+    );
+}
+
 fn meeting(storage: &Storage) -> String {
     storage.create_meeting("Markdown").unwrap().id
 }

@@ -92,6 +92,7 @@ const suites = [
   ["model-profile-toast", "model-profile-browser-fixture.js", "model-profile-toast-browser-check.js"],
   ["job-notifications", "browser-fixture.js", "job-notifications-browser-check.js"],
   ["publication-toast", "browser-fixture.js", "publication-toast-browser-check.js"],
+  ["plain-minutes", null, "minutes-markdown-editor-browser-check.js"],
   // addInitScript affects subsequent navigations in the selected browser page.
   ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
   ["detail-minutes", "minutes-init", "detail-minutes-browser-check.js"],

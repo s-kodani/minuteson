@@ -51,6 +51,30 @@ impl Storage {
         profile: Value,
         make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
     ) -> Result<JobSnapshot, String> {
+        self.enqueue_minutes_job_with_target(request, profile, None, make_generation)
+    }
+
+    pub(crate) fn enqueue_markdown_minutes_job_configured(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        target: super::minutes_markdown::GenerationTarget,
+        make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
+    ) -> Result<JobSnapshot, String> {
+        self.enqueue_minutes_job_with_target(request, profile, Some(target), make_generation)
+    }
+
+    fn enqueue_minutes_job_with_target(
+        &self,
+        request: MinutesJobRequest,
+        profile: Value,
+        target: Option<super::minutes_markdown::GenerationTarget>,
+        make_generation: impl FnOnce(&MinutesInput) -> Result<(Value, Option<i64>), String>,
+    ) -> Result<JobSnapshot, String> {
+        self.require_data_writable()?;
+        if target.is_some() && !super::minutes_markdown::uuid(&request.operation_id) {
+            return Err("議事録生成の操作IDが不正です".into());
+        }
         if request.operation_id.trim().is_empty()
             || request.operation_id.len() > 128
             || request.expected_meeting_lock_version < 0
@@ -62,9 +86,25 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
+        self.require_data_writable()?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let bind_target = |mut parameters: Value| -> Result<Value, String> {
+            if let Some(target) = &target {
+                let object = parameters
+                    .as_object_mut()
+                    .ok_or("議事録生成の設定が不正です")?;
+                if object.contains_key("markdownTarget") {
+                    return Err("議事録生成の保存条件が重複しています".into());
+                }
+                object.insert(
+                    "markdownTarget".into(),
+                    serde_json::to_value(target).map_err(|e| e.to_string())?,
+                );
+            }
+            Ok(parameters)
+        };
         let existing: Option<String> = tx
             .query_row(
                 "SELECT id FROM processing_jobs WHERE operation_id = ?1",
@@ -77,6 +117,7 @@ impl Storage {
             let (spec, _) = super::jobs::read_fixed_input(&tx, &id)?;
             let input = read_input(&tx, &spec)?;
             let (generation_parameters, total_units) = make_generation(&input)?;
+            let generation_parameters = bind_target(generation_parameters)?;
             let parameters =
                 json!({"schemaVersion":1, "request":request, "generation":generation_parameters});
             if spec.kind != JobKind::MinutesGeneration
@@ -88,6 +129,11 @@ impl Storage {
                 return Err("同じ操作IDで異なる議事録生成が指定されました".into());
             }
             return super::jobs::load_job(&tx, &id)?.ok_or("処理が見つかりません".into());
+        }
+        // Existing operation IDs may be read back after completion, but a new
+        // operation must compare its human-confirmed base before copying input.
+        if let Some(target) = &target {
+            target.check(&tx, &request.meeting_id)?;
         }
         let (mut source, draft, title, created_at, started_at) =
             current_working(&tx, &request.meeting_id)?;
@@ -138,6 +184,7 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let fixed = read_snapshot(&tx, &request.meeting_id, &id, &hash)?;
         let (generation_parameters, total_units) = make_generation(&fixed)?;
+        let generation_parameters = bind_target(generation_parameters)?;
         if !generation_parameters.is_object() {
             return Err("議事録生成の設定が不正です".into());
         }

@@ -1,6 +1,7 @@
 //! Fixed-input llama.cpp extraction and merging with durable unit provenance.
 mod adaptive;
 pub(crate) mod llama;
+pub(crate) mod markdown;
 mod merge;
 mod plan;
 pub(crate) mod restore;

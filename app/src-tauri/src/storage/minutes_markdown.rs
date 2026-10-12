@@ -42,7 +42,34 @@ pub(crate) struct SaveMarkdownRequest {
     pub markdown: String,
 }
 
-fn uuid(value: &str) -> bool {
+/// Fixed at generation admission; it contains only a CAS stamp, never the old
+/// Markdown. The worker cannot choose a different target when it completes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct GenerationTarget {
+    pub schema_version: u32,
+    pub expected: Option<MarkdownStamp>,
+}
+impl GenerationTarget {
+    pub(crate) fn check(&self, db: &Connection, meeting: &str) -> Result<(), String> {
+        if self.schema_version != 1 || self.expected.as_ref().is_some_and(|s| !valid_stamp(s)) {
+            return Err("議事録生成の保存条件が不正です".into());
+        }
+        if read(db, meeting)?.as_ref().map(MarkdownDocument::stamp) != self.expected {
+            return Err("生成の確認後に議事録が更新されています。人間の編集を保持します".into());
+        }
+        require_read_current(db, meeting)
+    }
+}
+
+fn require_read_current(db: &Connection, meeting: &str) -> Result<(), String> {
+    if read(db,meeting)?.is_none() && db.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND current_minutes_id IS NOT NULL)",[meeting],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
+        return Err("保存済み議事録を読み込んでから保存してください。入力は保持してください".into());
+    }
+    Ok(())
+}
+
+pub(super) fn uuid(value: &str) -> bool {
     Uuid::parse_str(value).is_ok_and(|id| {
         id.get_version_num() == 4
             && id.get_variant() == ::uuid::Variant::RFC4122
@@ -231,6 +258,68 @@ fn import_current_document(
 }
 
 impl Storage {
+    /// Publish the sole Markdown body and job success in one transaction. No
+    /// candidate, old-body backup, item/evidence projection or draft is made.
+    pub(crate) fn finish_minutes_markdown(
+        &self,
+        job_id: &str,
+        completed_units: i64,
+        markdown: String,
+    ) -> Result<MarkdownDocument, String> {
+        self.require_data_writable()?;
+        validate_text(&markdown)?;
+        if markdown.trim().is_empty() {
+            return Err("議事録の生成結果が空です。現在の本文は保持します".into());
+        }
+        let mut db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.require_data_writable()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let job = super::jobs::load_job(&tx, job_id)?.ok_or("議事録ジョブがありません")?;
+        let (spec, checkpoint) = super::jobs::read_fixed_input(&tx, job_id)?;
+        if spec.kind != JobKind::MinutesGeneration
+            || job.state != "running"
+            || completed_units < 1
+            || job.completed_units != completed_units
+            || job.total_units != Some(completed_units)
+            || job.output_minutes_id.is_some()
+        {
+            return Err("議事録生成の状態・完了位置が一致しません".into());
+        }
+        super::jobs::verify_latest_checkpoint(&tx, job_id)?;
+        let target: GenerationTarget =
+            serde_json::from_value(spec.parameters["generation"]["markdownTarget"].clone())
+                .map_err(|_| "議事録生成の固定保存条件がありません")?;
+        target.check(&tx, &spec.meeting_id)?;
+        if checkpoint.as_ref().and_then(|c| c["markdownHash"].as_str())
+            != Some(content_hash(&markdown).as_str())
+        {
+            return Err("議事録生成の保存済み結果と本文が一致しません".into());
+        }
+        // Also verify the fixed transcript snapshot. Its later human edits do
+        // not invalidate this input, but tampering with the fixed copy does.
+        super::minutes_input::read_input(&tx, &spec)?;
+        let document = save(
+            &tx,
+            &SaveMarkdownRequest {
+                meeting_id: spec.meeting_id,
+                operation_id: spec.operation_id,
+                expected: target.expected,
+                markdown,
+            },
+        )?;
+        let changed = tx.execute("UPDATE processing_jobs SET state='succeeded',finished_at=?1,updated_at=?1 WHERE id=?2 AND state='running' AND completed_units=?3",params![now_ms()?,job_id,completed_units]).map_err(|e|e.to_string())?;
+        if changed != 1 {
+            return Err("議事録生成の完了競合が発生しました".into());
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(document)
+    }
+
     pub(crate) fn get_minutes_markdown(
         &self,
         meeting: &str,
@@ -266,9 +355,7 @@ impl Storage {
         // A missing new-format row is not proof that this meeting has no
         // existing saved minutes. Require their verified first read before a
         // native caller can claim an absent base and overwrite them.
-        if read(&tx,&request.meeting_id)?.is_none() && tx.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND current_minutes_id IS NOT NULL)",[&request.meeting_id],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
-            return Err("保存済み議事録を読み込んでから保存してください。入力は保持してください".into());
-        }
+        require_read_current(&tx, &request.meeting_id)?;
         let document = save(&tx, &request)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(document)
