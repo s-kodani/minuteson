@@ -32,6 +32,9 @@ export const toastKey = (scope: string, type: string) => JSON.stringify([scope, 
 export class ToastController {
   private entries = new Map<string, Entry>();
   private acknowledged = new Map<string, string>();
+  // Keep exact operation receipts across transient empty reads and view changes.
+  // Bound memory; never deduplicate different meetings/events by message alone.
+  private acknowledgedEvents = new Map<string, true>();
   private listeners = new Set<() => void>();
   private pauses = new Set<string>();
   private serial = 0;
@@ -73,6 +76,7 @@ export class ToastController {
   show(input: ToastInput) {
     if (!input.message.trim()) { this.resolve(input.key); return; }
     const old = this.entries.get(input.key), stamp = signature(input);
+    if (input.eventId && this.acknowledgedEvents.has(JSON.stringify([input.key, stamp]))) return;
     if (!old && this.acknowledged.get(input.key) === stamp) return;
     if (old && signature(old.toast) === stamp) {
       // Do not restart a timer or repeat a live announcement on polling updates.
@@ -100,6 +104,12 @@ export class ToastController {
     const entry = this.entries.get(key);
     if (!entry || entry.toast.id !== id) return;
     this.stop(entry); this.acknowledged.set(key, signature(entry.toast)); this.entries.delete(key);
+    if (entry.toast.eventId) {
+      const receipt = JSON.stringify([key, signature(entry.toast)]);
+      this.acknowledgedEvents.delete(receipt);
+      this.acknowledgedEvents.set(receipt, true);
+      if (this.acknowledgedEvents.size > 512) this.acknowledgedEvents.delete(this.acknowledgedEvents.keys().next().value!);
+    }
     this.publish(); entry.toast.onClose?.();
   }
   pause(key: string, reason: string, paused: boolean, id?: number) {

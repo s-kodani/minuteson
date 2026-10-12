@@ -1,11 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notificationCapacity, removedPresentationIds, presentationId, stackCardExposed } from "../src/toast-presentation.ts";
+import { notificationCapacity, removedPresentationIds, presentationId, presentationStamp, stackCardExposed } from "../src/toast-presentation.ts";
 import { ToastController } from "../src/toast-state.ts";
 
 test("visual removal only selects exact old event ids, not semantic acknowledgement", () => {
   assert.deepEqual(removedPresentationIds(new Set([presentationId(1), presentationId(2)]), [{ id: 2 }, { id: 3 }]), [presentationId(1)]);
   assert.deepEqual(removedPresentationIds(new Set([presentationId(2)]), [{ id: 2 }]), []);
+});
+test("polling callbacks and timer pauses do not resubmit visual notifications", () => {
+  const toast = { id: 1, key: "one", level: "error" as const, message: "保存できません", important: true,
+    action: { kind: "retry" as const, label: "再試行", run: () => {} } };
+  const stamp = presentationStamp(toast, 0);
+  assert.equal(presentationStamp({ ...toast, onClose: () => {}, action: { ...toast.action, run: () => {} } }, 0), stamp);
+  for (const changed of [{ ...toast, id: 2 }, { ...toast, actionBusy: true }, { ...toast, action: { ...toast.action, disabled: true } }, { ...toast, message: "別の問題" }]) {
+    assert.notEqual(presentationStamp(changed, 0), stamp);
+  }
+  assert.notEqual(presentationStamp(toast, 1), stamp);
 });
 test("a collapsed rear, exiting or overflow notice is not a presentation receipt", () => {
   assert.equal(stackCardExposed({ expanded: "false", front: "true", mounted: "true" }), true);

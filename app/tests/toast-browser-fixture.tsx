@@ -7,17 +7,19 @@ import { toastKey, type ToastInput } from "../src/toast-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
 
-declare global { interface Window { toastFixture: { keys: Set<string>; show: (input: ToastInput) => void; clear: () => void; issue: (message: string) => void; changeScope: () => void; detach: () => void; retryCalls: number; unsafeCommands: number; actionCalls: number; showAction: () => void } } }
+declare global { interface Window { toastFixture: { keys: Set<string>; show: (input: ToastInput) => void; clear: () => void; issue: (message: string) => void; changeScope: () => void; detach: () => void; retryCalls: number; unsafeCommands: number; actionCalls: number; showAction: () => void; debugState?: () => unknown } } }
 function Fixture() {
   const [counts, setCounts] = useState({ receipts: 0, retries: 0, actions: 0 });
   const [dark, setDark] = useState(false);
   useLayoutEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
   const [error, setError] = useState(""), [result, setResult] = useState(""), [mounted, setMounted] = useState(true), [open, setOpen] = useState(false);
   const [scope, setScope] = useState("fixture");
+  const [eventMounted, setEventMounted] = useState(true), [eventMessage, setEventMessage] = useState("");
   const [docked, setDocked] = useState(new URLSearchParams(location.search).get("docked") === "1");
   const trigger = useRef<HTMLButtonElement>(null);
   window.toastFixture ??= { keys: new Set(), show: () => {}, clear: () => {}, issue: setError, changeScope: () => {}, detach: () => {}, retryCalls: 0, unsafeCommands: 0, actionCalls: 0, showAction: () => {} };
   const fixture = window.toastFixture;
+  fixture.debugState = () => ({ pauses: [...Reflect.get(toasts, "pauses")], entries: [...Reflect.get(toasts, "entries").values()].map(e => ({ key: e.toast.key, pauses: [...e.pauses], remaining: e.remaining, started: e.started })) });
   fixture.keys.add(toastKey(scope, "save"));
   fixture.changeScope = () => { setError(""); setScope("other-meeting"); };
   fixture.show = input => { fixture.keys.add(input.key); toasts.show(input); };
@@ -29,6 +31,10 @@ function Fixture() {
     <header className="topbar"><span>検証用ヘッダー</span><div className="header-recording">待機中</div><ToastHost docked={docked} /></header>
     <main className="content" aria-label="通知検証ワークスペース"><h1>通知の合成検証</h1>
       <label>保持する入力<input aria-label="保持する入力" defaultValue="編集中の点検日" /></label>
+      <button type="button" onClick={() => setEventMessage("同じ処理の保存が完了しました")}>同じイベントを通知</button>
+      <button type="button" onClick={() => setEventMessage("")}>イベント状態を一時クリア</button>
+      <button type="button" onClick={() => setEventMounted(value => !value)}>イベント表示を切り替え</button>
+      {eventMounted && <ToastNotice scope="event-fixture" type="result" eventId="save-1" message={eventMessage} level="error" />}
       <button type="button" onClick={() => setResult("書き出しました")}>成功を通知</button>
       <button type="button" onClick={() => setResult("表示設定を保存しました。")}>表示設定の成功を通知</button>
       <button type="button" onClick={() => fixture.show({ key: "multiline", message: "表示設定を保存しました。長い通知でも本文と説明アイコン、閉じるボタンの上下中央を揃えます。", level: "info" })}>複数行を通知</button>

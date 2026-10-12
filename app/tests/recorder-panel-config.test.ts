@@ -36,5 +36,14 @@ test("mini issue badge uses a separate grid row and adjacent buttons stay top al
   const badge=base.match(/\.recorder-operation-badge \{([^}]*)\}/)?.[1]??"";
   assert.ok(badge.includes("line-height:10px"));
   assert.doesNotMatch(badge,/position:absolute|bottom:|left:|width:/);
-  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; margin:0; align-items:flex-start; \}/);
+  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; height:32px; margin:0; align-items:flex-start; \}/);
+});
+test("mini centers its content and larger drag grip independently of its top-right close",()=>{
+  const mini=source("../src/recorder-panel.css");
+  assert.match(mini,/\.mini-shell \{[^}]*display:flex;[^}]*justify-content:center;/);
+  assert.match(mini,/\.mini-shell \.mini-row \{[^}]*align-items:center;[^}]*padding-right:36px;/);
+  assert.match(mini,/\.mini-shell \.mini-drag \{[^}]*width:18px;[^}]*font-size:24px;/);
+  assert.match(mini,/\.mini-shell \.mini-close\.icon-button \{[^}]*position:absolute; top:10px; right:14px;/);
+  const panel=source("../src/main.tsx").split("function RecorderPanel()")[1].split("function MainWindow()")[0];
+  assert.match(panel,/<\/div>\s*<\/div>\s*<IconButton label="ミニパネルを閉じる"[^>]*mini-close/);
 });

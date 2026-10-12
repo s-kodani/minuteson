@@ -24,6 +24,10 @@ button:disabled { opacity:.5; }
 .sidebar .nav-item:last-child { margin-top:auto; }
 .sidebar-foot { padding:17px 12px; }
 .topbar { min-height:64px; padding:10px 28px; font-size:13px; font-weight:500; }
+.screen-navigation { display:flex; align-items:center; gap:8px; min-width:0; }
+.screen-navigation>span[aria-current] { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.screen-navigation .breadcrumb-button { padding:0; border:0; background:transparent; color:var(--muted); font:inherit; white-space:nowrap; }
+.screen-navigation>.icon-button { flex:none; }
 /* Only visible retained notices consume space; portal toasts leave no blank row. */
 .recorder-operation-notifications { flex:none; min-width:0; --recorder-notice-gutter:28px; }
 .recorder-operation-notifications>.issue-status { margin:0; padding:12px var(--recorder-notice-gutter); }

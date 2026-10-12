@@ -4,6 +4,7 @@ import { closeInfoPopovers } from "./info-popover";
 import { confirmations } from "./confirmation-service";
 import { ConfirmationBody } from "./confirmation-body";
 import { ActionIcon } from "./action-icon";
+import { createPortal } from "react-dom";
 
 // A review can replace its settings view inside the same native boundary.
 // The original inputs remain mounted, and confirmation ownership is unchanged.
@@ -32,6 +33,8 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
   dismissText?: string;
   externalContent?: boolean;
   nested?: boolean;
+  // A row action must not inherit the hidden maintenance settings view.
+  portal?: boolean;
   replacement?: ModalReplacement | null;
   // A secondary view can keep its fields mounted in this same native boundary
   // while inactive. Replacement still owns dismissal/focus, never persistence.
@@ -43,7 +46,7 @@ type Props = Omit<ComponentPropsWithoutRef<"dialog">, "open" | "ref" | "onCancel
 // Let showModal/close expose actual modality; closed and queued dialogs must
 // not advertise an independent, permanent ARIA modal state to WebKit AX.
 // Controllers retain all command, identity, consent and unknown-result guards.
-export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, nested = false, replacement = null, persistentReplacement, className = "", children, ...attributes }: Props) {
+export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss, restoreTarget, restoreReady = true, dismissLabel = "キャンセル", dismissText, externalContent = false, nested = false, portal = false, replacement = null, persistentReplacement, className = "", children, ...attributes }: Props) {
   const ownRef = useRef<HTMLDialogElement>(null);
   const ref = suppliedRef ?? ownRef;
   const confirmation = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
@@ -263,7 +266,7 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     element.addEventListener("keydown",keyDown);
     return () => element.removeEventListener("keydown",keyDown);
   }, [externalContent,ref,owned?.id,owned?.phase,effectiveBlocked]);
-  return <dialog {...attributes} ref={ref} data-common-modal aria-label={owned || replacement ? undefined : attributes["aria-label"]} aria-labelledby={owned ? `${owned.id}-title` : replacement?.labelledBy ?? attributes["aria-labelledby"]} className={`common-modal ${className} ${replacement?.className ?? ""}`}
+  const dialog = <dialog {...attributes} ref={ref} data-common-modal aria-label={owned || replacement ? undefined : attributes["aria-label"]} aria-labelledby={owned ? `${owned.id}-title` : replacement?.labelledBy ?? attributes["aria-labelledby"]} className={`common-modal ${className} ${replacement?.className ?? ""}`}
     onCancel={event => { event.preventDefault(); dismiss(); }}
     onPointerDown={event => { downOutside.current = event.target === event.currentTarget && outsideDialog(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect()); }}
     onClick={event => {
@@ -282,4 +285,5 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
     <div ref={baseBody} className="common-modal-body" hidden={!!owned || !!replacement}>{children}</div>
     {(replacement || persistentReplacement != null) && <div className="common-modal-replacement" hidden={!replacement || !!owned}>{persistentReplacement ?? replacement?.content}</div>}
   </dialog>;
+  return portal ? createPortal(dialog, document.body) : dialog;
 }

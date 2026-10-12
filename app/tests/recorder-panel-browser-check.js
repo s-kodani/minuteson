@@ -45,7 +45,15 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     check(!bounds.overflow, `${phase} mini overflowed native geometry`);
     const buttons = await page.locator(".mini-bottom button").evaluateAll(list => list.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
     check(buttons.every(r => r.x >= 0 && r.x + r.width <= 360 && r.y >= 0 && r.y + r.height <= 116 && Math.abs(r.y - buttons[0].y) < 1 && r.height === 32), `${phase} controls clipped or misaligned`);
-    if (["recording", "error"].includes(phase)) await page.screenshot({ path: capturePath(`mini-${phase}.png`) });
+    const layout = await page.locator(".mini-shell").evaluate(shell => {
+      const rect = selector => { const r=shell.querySelector(selector).getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,center:(r.top+r.bottom)/2}; };
+      const grip=shell.querySelector(".mini-drag");
+      return { row:rect(".mini-row"), summary:rect(".mini-summary"), grip:rect(".mini-drag"), main:rect('[aria-label="メインを開く"]'), info:rect(".info-trigger"), close:rect(".mini-close"), dragFont:getComputedStyle(grip).fontSize, dragRegion:grip.hasAttribute("data-tauri-drag-region") };
+    });
+    check(Math.abs(layout.row.center - 58)<1 && [layout.summary,layout.grip,layout.main,layout.info].every(r=>Math.abs(r.center-layout.row.center)<1), `${phase} content is not vertically centered`);
+    check(layout.close.top===11 && layout.close.right===345 && layout.close.top<layout.info.top, `${phase} close is not independently top-right`);
+    check(layout.info.right+8<=layout.close.left && layout.dragFont==="24px" && layout.grip.right-layout.grip.left===18 && layout.dragRegion, `${phase} larger grip or close clearance invalid`);
+    if (["idle", "recording", "error"].includes(phase)) await page.screenshot({ path: capturePath(`mini-${phase}.png`) });
     await checkClose();
   }
   readFailure = true; await boot(); await checkClose();

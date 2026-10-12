@@ -1,0 +1,5 @@
+.meeting-row-menu { position:fixed; inset:auto; margin:0; padding:6px; border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text); box-shadow:0 8px 24px #0002; overflow:auto; }
+.meeting-row-menu button { display:flex; align-items:center; justify-content:flex-start; width:100%; min-height:36px; margin:0; padding:8px 10px; border:0; border-radius:8px; background:transparent; color:var(--text); font:inherit; font-size:13px; }
+.meeting-row-menu button:hover:not(:disabled),.meeting-row-menu button:focus-visible { background:var(--raised); }
+.meeting-row-menu .deletion-trigger { color:var(--danger-text); }
+.meeting-row-menu [role=status] { display:block; padding:8px 10px; font-size:12px; }

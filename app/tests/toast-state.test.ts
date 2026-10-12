@@ -136,6 +136,36 @@ test("distinct operation IDs notify identical result text without duplicating re
   c.show(notice("one", { eventId: "operation-2" })); advance(1000); assert.equal(c.getSnapshot().length, 0);
 });
 
+test("acknowledged event receipts survive empty reads, remounts and older event replay", () => {
+  const { c } = setup(); let closed = 0;
+  const first = notice("one", { eventId: "operation-1", onClose: () => closed++ });
+  c.show(first); c.dismiss("one", c.getSnapshot()[0].id);
+  c.resolve("one"); c.show(first);
+  assert.equal(c.getSnapshot().length, 0);
+  c.show(notice("one", { eventId: "operation-2" }));
+  const newer = c.getSnapshot()[0];
+  c.show(first); assert.equal(c.getSnapshot()[0], newer);
+  c.dismiss("one", newer.id); c.resolve("one"); c.show(first);
+  assert.equal(c.getSnapshot().length, 0); assert.equal(closed, 1);
+  c.show(notice("another-meeting", { eventId: "operation-1" }));
+  assert.equal(c.getSnapshot().length, 1);
+  c.show(notice("one", { eventId: "operation-1", message: "保存結果に問題が見つかりました", level: "error" }));
+  assert.equal(c.getSnapshot().length, 2);
+});
+
+test("event receipt retention is bounded and never suppresses unshown or distinct events", () => {
+  const { c } = setup();
+  for (let i = 0; i <= 512; i++) {
+    c.show(notice("one", { eventId: `operation-${i}` }));
+    c.dismiss("one", c.getSnapshot()[0].id); c.resolve("one");
+  }
+  c.show(notice("one", { eventId: "operation-1" })); assert.equal(c.getSnapshot().length, 0);
+  c.show(notice("one", { eventId: "operation-0" })); assert.equal(c.getSnapshot().length, 1);
+  c.resolve("one"); c.show(notice("one", { eventId: "unshown" }));
+  c.resolve("one"); c.show(notice("one", { eventId: "unshown" }));
+  assert.equal(c.getSnapshot().length, 1);
+});
+
 test("render confirmation requires the exact visible card and is emitted once, not by reception or promotion", () => {
   const { c } = setup(); let rendered = 0;
   c.show(notice("one", { onRendered: () => rendered++ })); const id = c.getSnapshot()[0].id;

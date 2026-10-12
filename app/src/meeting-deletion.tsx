@@ -1,5 +1,6 @@
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { rowMenuReturnTarget } from "./row-menu";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
@@ -71,7 +72,7 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   };
   const review = async (id: string, pendingReview: boolean) => {
     if (!(pendingReview ? canReviewPending : canReviewMeeting)) return;
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
     await protect(async () => {
       await stopAllPlayback(); opener.current = active; setOpen(false); setToast("");
       choice.current = { id, pending: pendingReview, revision: latest.current.operation.getSnapshot()?.revision ?? -1 };
@@ -166,7 +167,7 @@ export function MeetingDeletionPanel({ operation, control, visible, compact = fa
       <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s.errorMessage : "")} />
       {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の操作結果がある場合は、先に状態を再確認してください。</p><button type="button" disabled={c.rpcBusy || !!s?.busy || c.unknown} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
     </section>}
-    <CommonModal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("deletion-panel-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
+    <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("deletion-panel-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
       <h2 id="deletion-confirm-title" ref={c.heading} tabIndex={-1}>{isDeletionReconfirmation(p?.phase) ? "変更後の残り範囲への再同意" : "会議の完全削除を確認"}</h2>
       {p && <><h3>{p.title}</h3><p className="data-path">会議ID: {p.meetingId}</p><p>管理音声、文字起こし、議事録、現在・直前・内部参照版、候補、下書き・手動編集、会議別用語と処理履歴を削除します。アプリ内では復元できません。</p><p>外部の元音声・書き出し・バックアップ、AIモデル・共通用語、旧保存先・保持コピー・会議ツリー外の一時領域は対象外です。媒体上の安全消去は保証しません。</p><dl className="import-info"><dt>確認時のファイル</dt><dd>{p.fileCount} 件 · 実在容量 {bytesLabel(p.bytes)}</dd><dt>欠落・登録時と変更・未登録</dt><dd>{p.missingCount} / {p.changedCount} / {p.unregisteredCount} 件</dd><dt>{p.rowPhaseCommitted ? "元の確認時のDB行（削除済み）" : "確認時のDB行"}</dt><dd>{p.rowCount} 件</dd><dt>{isDeletionReconfirmation(p.phase) ? "現在の確認段階" : "保存済み段階"}</dt><dd>{deletionPhaseLabel(p.phase)}</dd><dt>処理済みパス</dt><dd>{p.processedPaths} / {p.pathCount}（フォルダー・欠落を含み、消したファイル数ではありません）</dd></dl>
       {p.pending && <p role="alert">途中まで削除している可能性があります。既に消したデータは復元しません。{isDeletionReconfirmation(p.phase) ? "この一覧は再同意前の確認です。再検査で確認IDが変わると、新しい範囲への同意をやり直します。" : "再検査は元の確認範囲を照合し、新しい未知物を自動採用しません。"}</p>}

@@ -232,7 +232,7 @@ mockIPC(async (command, args) => {
     if (f.finishLost) throw Error("模擬終了受付の応答喪失");
     return null;
   }
-  if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft"].includes(command)) return null;
+  if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft", "get_minutes_markdown"].includes(command)) return null;
   if (["get_analysis_jobs", "get_minutes_exports"].includes(command)) return [];
   if (["get_analysis_versions", "get_minutes_versions"].includes(command)) return { meetingLockVersion: data.meetings[0].lockVersion, currentId: null, previousId: null, draft: null, versions: [] };
   if (command === "get_meeting_vocabulary") return { global: clone(data.book), meeting: { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 } };

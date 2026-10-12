@@ -1,0 +1,32 @@
+async page => {
+  const results = [], check = (condition, message) => { if (!condition) throw Error(message); };
+  const host = page.getByRole("complementary", { name: "通知", exact: true });
+  const notify = page.getByRole("button", { name: "同じイベントを通知", exact: true });
+  await notify.click(); await host.getByRole("alert").waitFor();
+  const first = await host.locator(".toast-card").getAttribute("data-toast-id");
+  await host.locator(".toast-card").hover();
+  await page.waitForTimeout(400); await page.mouse.move(8, 8);
+  await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).focus();
+  await page.waitForTimeout(400);
+  check(await host.locator(".toast-card").count() === 1 && await host.locator(".toast-card").getAttribute("data-toast-id") === first, "reading duplicated the same notification");
+  results.push("hover, focus and visibility polling retain one card and the same notification identity");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => !document.querySelector(".toast-host .toast-card"));
+  await page.getByRole("button", { name: "イベント状態を一時クリア", exact: true }).click();
+  await notify.click(); await page.waitForTimeout(500);
+  check(await host.locator(".toast-card").count() === 0, "a transient empty read resurrected an acknowledged event");
+  results.push("an acknowledged event does not reappear after an empty state and repeated observation");
+  await page.getByRole("button", { name: "イベント表示を切り替え", exact: true }).click();
+  await page.getByRole("button", { name: "イベント表示を切り替え", exact: true }).click();
+  await page.waitForTimeout(500);
+  check(await host.locator(".toast-card").count() === 0, "remount replayed a closed event");
+  results.push("unmount/remount and StrictMode do not replay the same closed event");
+  await page.evaluate(() => window.toastFixture.show({ key: "distinct-event", eventId: "save-2", message: "同じ処理の保存が完了しました", level: "error" }));
+  await host.getByRole("alert").waitFor();
+  await page.evaluate(() => window.toastFixture.show({ key: "different-meeting", eventId: "save-1", message: "同じ処理の保存が完了しました", level: "error" }));
+  await page.waitForFunction(() => document.querySelectorAll(".toast-host .toast-card").length === 2);
+  check(await host.locator(".toast-card").count() === 2, "text-based dedup lost separate events or meetings");
+  results.push("distinct operations and meetings with identical text are still delivered separately");
+  await page.evaluate(() => window.toastFixture.clear());
+  return { passed: results.length, results };
+}

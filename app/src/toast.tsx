@@ -3,7 +3,7 @@ import { Toaster, toast as sonnerToast } from "sonner";
 import { InfoPopover } from "./info-popover";
 import { ActionIcon } from "./action-icon";
 import { ToastController, toastKey, type Toast, type ToastAction, type ToastLevel } from "./toast-state";
-import { notificationCapacity, notificationPresenterId, presentationId, removedPresentationIds, stackCardExposed } from "./toast-presentation";
+import { notificationCapacity, notificationPresenterId, presentationId, presentationStamp, removedPresentationIds, stackCardExposed } from "./toast-presentation";
 
 export const toasts = new ToastController();
 const labels: Record<ToastLevel, string> = { success: "成功", info: "情報", warning: "注意", error: "エラー" };
@@ -82,6 +82,7 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
   const [top, setTop] = useState(76);
   const measured = useRef({ width: 0, height: 116 });
   const presented = useRef(new Set<string>()), reading = useRef({ hover: false, focus: false });
+  const content = useRef(new Map<string, string>());
   const host = useRef<HTMLElement>(null), previous = useRef<HTMLElement | null>(null), restore = useRef(() => {});
   restore.current = () => {
     const target = previous.current;
@@ -97,13 +98,17 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
       const card = host.current?.querySelector(`[data-toast-id="${id.replace("mon-notice-", "")}"]`);
       if (card?.contains(document.activeElement)) stableRestore();
       sonnerToast.dismiss(id);
+      content.current.delete(id);
     }
     presented.current = new Set(notices.map(toast => presentationId(toast.id)));
     // Sonner prepends new notices; present the highest-priority entry last.
     for (const toast of [...notices].reverse()) {
       for (const reason of ["hover", "focus"] as const) toasts.pause(toast.key, `stack-${reason}`, reading.current[reason], toast.id);
+      const id = presentationId(toast.id), stamp = presentationStamp(toast, toasts.pendingCount);
+      if (content.current.get(id) === stamp) continue;
+      content.current.set(id, stamp);
       sonnerToast.custom(() => <ToastCard key={toast.id} toast={toast} restoreFocus={stableRestore} pendingCount={toasts.pendingCount} />, {
-        id: presentationId(toast.id), toasterId: notificationPresenterId,
+        id, toasterId: notificationPresenterId,
         duration: Infinity, dismissible: false,
       });
     }
@@ -111,6 +116,7 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
   useEffect(() => () => {
     for (const id of presented.current) sonnerToast.dismiss(id);
     presented.current.clear();
+    content.current.clear();
     for (const toast of toasts.getSnapshot()) for (const reason of ["hover", "focus"] as const) toasts.pause(toast.key, `stack-${reason}`, false, toast.id);
     toasts.setVisibleLimit(3);
   }, []);
@@ -143,15 +149,25 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     };
     if (document.activeElement instanceof HTMLElement) previous.current = document.activeElement;
     const visibility = () => toasts.pauseAll("hidden", document.hidden);
-    const modal = () => toasts.pauseAll("modal", !!document.querySelector("dialog[open]"));
+    const hover = () => {
+      const hovered = !!host.current?.matches(":hover");
+      if (reading.current.hover !== hovered) pauseStack("hover", hovered);
+    };
+    const modal = () => {
+      const covered = !!document.querySelector("dialog[open]");
+      toasts.pauseAll("modal", covered);
+      // Removing a hovered card or opening a native modal can suppress
+      // pointerleave. Do not carry that old pause into the next notification.
+      if (covered && reading.current.hover) pauseStack("hover", false);
+    };
     const shortcut = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.code !== "KeyT" || event.isComposing || document.hidden || document.querySelector("dialog[open]")) return;
       const target = host.current?.querySelector<HTMLButtonElement>('[data-sonner-toast][data-front=true]:not([data-removed=true]) button:not(:disabled)');
       if (target) { event.preventDefault(); target.focus({ preventScroll: true }); }
     };
     const observer = new MutationObserver(modal); observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"], childList: true });
-    visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus); document.addEventListener("keydown", shortcut);
-    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus); document.removeEventListener("keydown", shortcut); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
+    visibility(); modal(); document.addEventListener("visibilitychange", visibility); document.addEventListener("focusin", focus, true); document.addEventListener("pointermove", hover, true); document.addEventListener("keydown", shortcut);
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", visibility); document.removeEventListener("focusin", focus, true); document.removeEventListener("pointermove", hover, true); document.removeEventListener("keydown", shortcut); toasts.pauseAll("hidden", false); toasts.pauseAll("modal", false); };
   }, []);
   return <aside ref={host} className="toast-host" data-docked={docked} data-pending-count={toasts.pendingCount} aria-label="通知"
     onPointerEnter={() => pauseStack("hover", true)} onPointerLeave={() => pauseStack("hover", false)}

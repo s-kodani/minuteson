@@ -2,6 +2,7 @@ import {invoke,isTauri} from "@tauri-apps/api/core";
 import {useEffect,useRef,useState} from "react";
 import {checkedCaptureInputs,microphoneChoice,usableMicrophone,type CaptureInputs} from "./capture-input-state";
 import {InfoPopover} from "./info-popover";
+import {IconButton} from "./action-icon";
 import {CaptureApplicationSelection,type useCaptureScope} from "./capture-applications";
 
 export function useCaptureInputs(enabled:boolean,meetingId:string|null){
@@ -26,7 +27,7 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
   const present=inputs?.devices.find(d=>d.uid===uid);
   const permission=inputs?.microphonePermission;
   return <section className="capture-input-selection" aria-label="録音の入力準備">
-    <div className="card-head"><h3>マイク</h3><button type="button" className="small-secondary" disabled={locked||loading} onClick={control.reload}>マイク一覧を再確認</button></div>
+    <div className="card-head"><h3>マイク</h3><IconButton type="button" className="small-secondary" icon="refresh" label="マイク一覧を再確認" disabled={locked||loading} onClick={control.reload}/></div>
     <label>録音するマイク<select aria-label="録音するマイク" value={uid} disabled={locked||loading||!inputs} onChange={e=>control.select(e.target.value)}>
       {!present&&<option value={uid}>{uid?"選択したマイク（未接続）":"マイクを選択してください"}</option>}
       {inputs?.devices.map(d=><option key={d.uid} value={d.uid}>{d.name}{d.isDefault?"（OSの既定）":""}</option>)}

@@ -75,8 +75,10 @@ async page => {
     await page.goto("http://127.0.0.1:1420/?window=recorder"); await page.waitForFunction(() => !!window.closeFixture); await page.setViewportSize({ width: 360, height: 116 });
     await page.evaluate(() => window.closeFixture.recordChanged({ phase: "recording", sessionId: crypto.randomUUID(), meetingId: crypto.randomUUID() })); await set(1, true, 1);
     await page.locator(".mini-input-notice").waitFor(); await page.waitForFunction(() => ["microphone", "system"].every(input => window.closeFixture.queueState.lanes[input][0].delivery.rendered));
-    check(await page.locator(".mini-shell").evaluate(e => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1), "queued mini notice overflowed 360x116");
-    check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "loss metadata disappeared"); await page.screenshot({ path: "input-queue-mini-360x116.png" });
+    await page.screenshot({ path: "input-queue-mini-360x116.png" });
+    const bounds=await page.locator(".mini-shell").evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,width:e.clientWidth,scrollWidth:e.scrollWidth,rows:[...e.children].map(child=>({class:child.className,height:child.getBoundingClientRect().height,top:child.getBoundingClientRect().top,width:child.getBoundingClientRect().width}))}));
+    check(bounds.scrollHeight <= bounds.height + 1 && bounds.scrollWidth <= bounds.width + 1, `queued mini notice overflowed 360x116: ${JSON.stringify(bounds)}`);
+    check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "loss metadata disappeared");
     check(await page.locator('[data-input-kind="microphone"] > span').isVisible() && (await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "loss warning hidden by compact ellipsis");
     results.push("independent microphone/system rendering and retained loss indication fit the native mini geometry");
     await page.locator(".mini-input-notice").getByRole("button", { name: "入力通知を閉じる", exact: true }).click(); await page.waitForFunction(() => ["microphone", "system"].every(input => window.closeFixture.queueState.lanes[input][0]?.delivery.sequence === 2));

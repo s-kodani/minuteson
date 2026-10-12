@@ -1,0 +1,63 @@
+async page => {
+  const results = [], check = (condition, message) => { if (!condition) throw Error(message); };
+  const route = /^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/;
+  await page.context().route(route, async request => {
+    const response = await request.fetch();
+    const body = (await response.text()).replace(/<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u, '<script type="module">await import("/tests/application-close-browser-fixture.js");</script>');
+    await request.fulfill({ response, body });
+  });
+  await page.goto("http://127.0.0.1:1420/"); await page.waitForFunction(() => !!window.closeFixture);
+  const back = () => page.getByRole("navigation", { name: "画面の移動" }).getByRole("button", { name: "前の画面へ戻る", exact: true });
+  await page.getByRole("button", { name: "新しい録音", exact: true }).click();
+  const title = page.locator("#recording-title"), microphone = page.getByRole("combobox", { name: "録音するマイク", exact: true });
+  await title.fill("保持する録音準備"); await microphone.waitFor();
+  await page.waitForFunction(() => !document.querySelector('[aria-label="録音するマイク"]').disabled);
+  const uid = await microphone.inputValue();
+  const refresh = page.getByRole("button", { name: "マイク一覧を再確認", exact: true });
+  check(await refresh.locator("svg").count() === 1 && await refresh.innerText() === "", "microphone refresh is not an icon-only control");
+  results.push("microphone refresh is one labelled icon with its original action");
+  await page.getByRole("button", { name: "AIモデルの設定を開く", exact: true }).click();
+  await page.getByRole("heading", { name: "設定", exact: true }).waitFor();
+  await back().click(); await title.waitFor();
+  await page.waitForFunction(() => !document.querySelector('[aria-label="録音するマイク"]').disabled);
+  check(await title.inputValue() === "保持する録音準備" && await microphone.inputValue() === uid, "back lost preparation title or microphone identity");
+  check(await page.evaluate(() => !window.closeFixture.calls.some(call => ["start_recording", "start_capture_test", "create_meeting"].includes(call.command))), "navigation replayed capture or creation");
+  results.push("settings back retains the same preparation and microphone without starting or creating anything");
+  await back().click(); await page.locator(".meeting-table").waitFor();
+  check(await page.getByRole("navigation", { name: "画面の移動" }).getByRole("button", { name: "前の画面へ戻る" }).count() === 0, "back loop returned to settings instead of list");
+  results.push("repeated back follows history to the list without a settings/recording loop");
+  const trigger = page.locator(".meeting-row-actions > button").first();
+  const row = trigger.locator("xpath=ancestor::tr"), before = await row.boundingBox();
+  await trigger.click();
+  const menu = page.getByRole("menu"); await menu.waitFor();
+  const after = await row.boundingBox();
+  check(Math.abs(before.height - after.height) < 1 && await menu.evaluate(element => element.matches(":popover-open")), "row expanded instead of opening a top-layer popup");
+  check(await menu.getByRole("menuitem", { name: "開く", exact: true }).evaluate(element => element === document.activeElement), "menu did not focus its first enabled action");
+  await page.keyboard.press("ArrowDown");
+  check(await menu.evaluate(element => element.contains(document.activeElement)), "keyboard navigation left the menu");
+  await page.keyboard.press("Escape"); await menu.waitFor({ state: "hidden" });
+  check(await trigger.evaluate(element => element === document.activeElement), "Escape did not restore the ellipsis trigger");
+  results.push("row popup does not expand the table and supports arrows/Escape with focus return");
+  await trigger.click(); await menu.waitFor();
+  await page.getByRole("heading", { name: "会議一覧", exact: true }).click(); await menu.waitFor({ state: "hidden" });
+  check(await page.evaluate(() => !window.closeFixture.calls.some(call => /delete|start_data_operation/u.test(call.command))), "outside dismissal executed a menu operation");
+  results.push("outside dismissal closes only the popup and executes no destructive operation");
+  await trigger.click(); await menu.getByRole("menuitem", { name: "開く", exact: true }).click();
+  await page.getByRole("tab", { name: "文字起こし", exact: true }).waitFor();
+  await page.getByRole("button", { name: "設定", exact: true }).click(); await back().click();
+  await page.getByRole("tab", { name: "文字起こし", exact: true }).waitFor();
+  check(await page.locator(".meeting-detail-status h1").count() === 1, "settings back did not return to the selected meeting");
+  await back().click(); await page.locator(".meeting-table").waitFor();
+  check(await page.locator('.toast-card [role="alert"]').count() === 0, "navigation left an operation error visible");
+  results.push("meeting/settings/list navigation returns to the selected meeting and then its list without an operation error");
+  for (const width of [1280, 360]) {
+    await page.setViewportSize({ width, height: 640 });
+    await trigger.click(); await menu.waitFor();
+    const bounds = await menu.boundingBox();
+    check(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width && bounds.y + bounds.height <= 640, `popup escaped ${width}px viewport`);
+    await page.screenshot({ path: `row-menu-${width}.png` });
+    await page.keyboard.press("Escape"); await menu.waitFor({ state: "hidden" });
+  }
+  results.push("wide and narrow popups remain inside the viewport without clipping");
+  return { passed: results.length, results };
+}

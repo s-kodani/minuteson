@@ -1,4 +1,12 @@
 /** Sonner owns motion only. Product acknowledgement and expiry stay in ToastController. */
+import type { Toast } from "./toast-state";
+
+/** Pausing expiry is not a new presentation or announcement. Actions read the
+ * controller's current callbacks, so callback identity is not visual content. */
+export function presentationStamp(toast: Toast, pendingCount: number) {
+  return JSON.stringify([toast.key, toast.id, toast.level, toast.message, toast.important,
+    toast.action?.kind, toast.action?.label, toast.action?.disabled, toast.actionBusy, pendingCount]);
+}
 export const notificationPresenterId = "mon-notifications";
 export const presentationId = (id: number) => `mon-notice-${id}`;
 export function notificationCapacity(availableHeight: number, cardHeight = 116) {

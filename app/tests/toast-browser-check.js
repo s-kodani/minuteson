@@ -3,6 +3,7 @@ async page => {
   const host = page.getByRole("complementary", { name: "通知", exact: true }), input = page.getByRole("textbox", { name: "保持する入力", exact: true });
   const clear = async () => { await page.evaluate(() => window.toastFixture.clear()); await page.waitForFunction(() => !document.querySelector('.toast-host .toast-card')); };
   const show = async notice => { await page.evaluate(n => window.toastFixture.show(n), notice); };
+  try {
   await input.focus(); await show({ key: "ordinary", level: "success", message: "会議を書き出しました" });
   await host.getByRole("status").waitFor(); check(await input.evaluate(e => e === document.activeElement), "notification stole typing focus");
   check((await host.innerText()).includes("成功："), "success lacks a non-color label");
@@ -105,4 +106,11 @@ async page => {
   check(await page.evaluate(() => window.toastFixture.unsafeCommands) === 0, "notification fixture executed an unsafe command");
   results.push("light/dark and wide/narrow layouts reserve header and player space while scrolling; no unsafe command is present");
   return { passed: results.length, results };
+  } catch (cause) {
+    const cards = await host.locator('.toast-card').evaluateAll(elements => elements.map(element => ({ text: element.innerText, rect: element.getBoundingClientRect().toJSON(), data: { ...element.closest('[data-sonner-toast]').dataset } })));
+    const state = await page.evaluate(async () => {
+      return { hidden: document.hidden, focus: document.activeElement?.outerHTML, modals: [...document.querySelectorAll('dialog[open]')].map(e => e.outerHTML), controller: window.toastFixture.debugState() };
+    });
+    throw Error(`after ${results.length} cases (${results.at(-1) ?? "setup"}): ${cause}; cards=${JSON.stringify(cards)}; state=${JSON.stringify(state)}`);
+  }
 }
