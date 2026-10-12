@@ -161,7 +161,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const choices = JSON.parse(readFileSync(new URL("../model-catalog/macos.json", import.meta.url), "utf8"));
   const native = await Promise.all(choices.map(async (choice: any) => {
     const recipe = canonicalRecipe(choice.recipe);
-    return { id: choice.id, label: choice.label, description: choice.description, definition: JSON.stringify(recipe), review: {
+    return { id: choice.id, label: choice.label, description: choice.description, tokenLimits: choice.tokenLimits ?? null, definition: JSON.stringify(recipe), review: {
       manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 2, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe),
       totalBytes: recipe.manifest.files.reduce((n, f) => n + f.expectedSize, 0), publisherAuthenticity: "not_verified", installed: false, ready: false,
     } };
@@ -169,6 +169,8 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const options = await assertOfficialModelOptions(native);
   assert.equal(options.length, 2);
   assert.equal(options[0].review.manifest.engine, "llama.cpp");
+  assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
+  assert.equal(options[1].tokenLimits, null);
   assert.equal(options[0].review.manifest.files.filter(f => f.role === "notice").length, 2);
   assert.equal(options[0].review.downloadBytes, 1_129_407_950);
   assert.equal(options[0].review.recipeHash, "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba");
@@ -181,4 +183,10 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));
   await assert.rejects(assertOfficialModelOptions([{ ...native[0], definition: JSON.stringify(recipe) }]));
   await assert.rejects(assertOfficialModelOptions([{ ...native[0], review: { ...native[0].review, ready: true } }]));
+  for (const patch of [null, { maxInputTokens: 0 }, { maxOutputTokens: 32769 }, { maxContextTokens: 0 },
+    { maxInputTokens: 32769 }, { maxOutputTokens: 1.5 }, { maxInputTokens: "32768" }, { tokenizer: "unknown" }, { extra: 1 }]) {
+    const tokenLimits = patch === null ? null : { ...native[0].tokenLimits, ...patch };
+    await assert.rejects(assertOfficialModelOptions([{ ...native[0], tokenLimits }]));
+  }
+  await assert.rejects(assertOfficialModelOptions([{ ...native[1], tokenLimits: native[0].tokenLimits }]));
 });

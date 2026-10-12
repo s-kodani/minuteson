@@ -61,8 +61,9 @@ pub(in crate::generation) fn references(
     bounded(&value)?;
     let p: Parameters = serde_json::from_value(parameters).map_err(|e| e.to_string())?;
     p.engine.validate()?;
+    validate_capacity(&p)?;
     p.markdown_target.validate()?;
-    if !matches!(p.schema_version, 5 | 6)
+    if !matches!(p.schema_version, 5 | 6 | 7)
         || job.kind != "minutes_generation"
         || job.total_units != Some(p.plan.nodes.len() as i64)
         || p.plan.nodes.is_empty()
@@ -117,6 +118,8 @@ pub(in crate::generation) fn checkpoint(
         }
     }
     if old_p.engine != engine
+        || old_p.schema_version != new_p.schema_version
+        || old_p.capacity != new_p.capacity
         || old_p.prompt_budget != new_p.prompt_budget
         || old_p.plan != new_p.plan
         || old_p.markdown_target != new_p.markdown_target

@@ -12,7 +12,8 @@ export type DownloadReceipt = { operationId: string; recipeHash: string; directo
 export type DownloadReadback = { state: "incomplete" | "complete"; review: DownloadReview; receipt: DownloadReceipt | null };
 export type DownloadCatalog = { supported: boolean; unknownEntries: number; entries: { operationId: string; recipeHash: string | null; modelName: string | null; modelVersion: string | null; totalBytes: number | null; state: "attention" | "incomplete" | "completion_recorded" }[] };
 export type DownloadProgress = { operationId: string; recipeHash: string; receivedBytes: number; totalBytes: number };
-export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview };
+export type ModelTokenLimits = { maxInputTokens: number; maxOutputTokens: number; maxContextTokens: number; tokenizer: "utf8_byte_bpe" };
+export type OfficialModelOption = { id: string; label: string; description: string; definition: string; review: DownloadReview; tokenLimits: ModelTokenLimits | null };
 function fail(): never { throw Error("取得の定義・操作・応答が一致しません。同じ操作の結果を確認してください。"); }
 function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) fail(); return value as Record<string, unknown>; }
 function keys(value: Record<string, unknown>, allowed: string[]) { if (Object.keys(value).some(key => !allowed.includes(key))) fail(); }
@@ -102,12 +103,21 @@ export async function assertOfficialModelOptions(value: unknown): Promise<Offici
   const seen = new Set<string>();
   const result: OfficialModelOption[] = [];
   for (const entry of value) {
-    const option = object(entry); keys(option, ["id", "label", "description", "definition", "review"]);
+    const option = object(entry); keys(option, ["id", "label", "description", "definition", "review", "tokenLimits"]);
     const id = text(option.id, 128);
     if (!/^[a-z0-9-]+$/u.test(id) || seen.has(id)) fail(); seen.add(id);
     const definition = text(option.definition, 65_536), recipe = parseDownloadDefinition(definition);
+    let tokenLimits: ModelTokenLimits | null = null;
+    if (recipe.manifest.engine === "llama.cpp") {
+      const limits = object(option.tokenLimits); keys(limits, ["maxInputTokens", "maxOutputTokens", "maxContextTokens", "tokenizer"]);
+      const integer = (n: unknown, min: number, max: number): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= min && n <= max;
+      if (!integer(limits.maxContextTokens, 2048, 1048576) || !integer(limits.maxInputTokens, 2048, limits.maxContextTokens)
+        || !integer(limits.maxOutputTokens, 64, limits.maxContextTokens) || limits.tokenizer !== "utf8_byte_bpe") fail();
+      tokenLimits = { maxInputTokens: limits.maxInputTokens as number, maxOutputTokens: limits.maxOutputTokens as number,
+        maxContextTokens: limits.maxContextTokens as number, tokenizer: "utf8_byte_bpe" };
+    } else if (option.tokenLimits != null) fail();
     result.push({ id, label: text(option.label, 128), description: text(option.description, 1024), definition,
-      review: await assertDownloadReview(option.review, await downloadDigest(recipe)) });
+      review: await assertDownloadReview(option.review, await downloadDigest(recipe)), tokenLimits });
   }
   return result;
 }

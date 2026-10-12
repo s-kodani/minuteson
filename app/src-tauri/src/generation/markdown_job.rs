@@ -1,5 +1,5 @@
 //! Markdown-only generation. No candidate adoption or structured evidence.
-use super::{markdown, markdown_plan as plan, Artifact, Task};
+use super::{markdown, markdown_plan as plan, model_budget::Capacity, Artifact, Task};
 use crate::storage::minutes_markdown::{content_hash, GenerationTarget, MarkdownStamp};
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::storage::{JobKind, JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
@@ -14,6 +14,8 @@ pub(super) mod restore;
 struct Parameters {
     schema_version: u32,
     engine: super::llama::LlamaConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capacity: Option<Capacity>,
     prompt_budget: usize,
     plan: plan::Plan,
     markdown_target: GenerationTarget,
@@ -43,7 +45,7 @@ pub(crate) fn is_markdown(spec: &JobSpec) -> bool {
     spec.kind == JobKind::MinutesGeneration
         && matches!(
             spec.parameters["generation"]["schemaVersion"].as_u64(),
-            Some(5 | 6)
+            Some(5 | 6 | 7)
         )
 }
 pub(crate) fn enqueue(
@@ -54,10 +56,51 @@ pub(crate) fn enqueue(
     prompt_budget: usize,
     expected: Option<MarkdownStamp>,
 ) -> Result<JobSnapshot, String> {
+    let capacity = Capacity::reviewed(&engine.model)?;
+    enqueue_with_capacity(
+        storage,
+        request,
+        engine,
+        capacity,
+        name,
+        prompt_budget,
+        expected,
+    )
+}
+#[cfg(test)]
+pub(crate) fn enqueue_synthetic(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: super::llama::LlamaConfig,
+    name: &str,
+    prompt_budget: usize,
+    expected: Option<MarkdownStamp>,
+) -> Result<JobSnapshot, String> {
+    let capacity = Capacity::synthetic(&engine, 32768, 8192);
+    enqueue_with_capacity(
+        storage,
+        request,
+        engine,
+        capacity,
+        name,
+        prompt_budget,
+        expected,
+    )
+}
+fn enqueue_with_capacity(
+    storage: &Storage,
+    request: MinutesJobRequest,
+    engine: super::llama::LlamaConfig,
+    capacity: Capacity,
+    name: &str,
+    prompt_budget: usize,
+    expected: Option<MarkdownStamp>,
+) -> Result<JobSnapshot, String> {
     if !matches!(name, "standard" | "high_accuracy") || prompt_budget > super::budget(&engine)? {
         return Err("議事録プロファイルまたは入力上限が不正です".into());
     }
     engine.verify(&|| false)?;
+    let plan_limit = capacity.plan_limit(&engine, prompt_budget)?;
     let selected = storage.job_model_selection(
         &request.meeting_id,
         &request.operation_id,
@@ -70,9 +113,9 @@ pub(crate) fn enqueue(
         expected,
     };
     storage.enqueue_markdown_minutes_job_configured(request,profile,target,|input|{
-        let plan=plan::build(input,prompt_budget)?;let total=plan.nodes.len() as i64;
+        let plan=plan::build(input,plan_limit)?;let total=plan.nodes.len() as i64;
         // Storage binds the fixed target once within its admission transaction.
-        let parameters=serde_json::json!({"schemaVersion":6,"engine":engine,"promptBudget":prompt_budget,"plan":plan});
+        let parameters=serde_json::json!({"schemaVersion":7,"engine":engine,"capacity":capacity,"promptBudget":prompt_budget,"plan":plan});
         Ok((parameters,Some(total)))
     })
 }
@@ -95,19 +138,20 @@ fn checked_fixed_parameters(
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let p = envelope.generation;
     p.engine.validate()?;
+    validate_capacity(&p)?;
     p.markdown_target.validate()?;
     let name = spec.profile_snapshot["profile"]
         .as_str()
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || !matches!(p.schema_version, 5 | 6)
+        || !matches!(p.schema_version, 5 | 6 | 7)
         || p.markdown_target.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
         || !matches!(name, "standard" | "high_accuracy")
         || p.prompt_budget > super::budget(&p.engine)?
-        || p.plan != plan::build(input, p.prompt_budget)?
+        || p.plan != plan::build(input, plan_limit(&p)?)?
         || spec.total_units != Some(p.plan.nodes.len() as i64)
         || managed::rebinding::base_profile(&spec.profile_snapshot)?
             != managed::attach(
@@ -151,6 +195,28 @@ fn checked_checkpoint(
     }
     Ok(c)
 }
+fn validate_capacity(p: &Parameters) -> Result<(), String> {
+    match (p.schema_version, &p.capacity) {
+        (7, Some(capacity)) => {
+            capacity.plan_limit(&p.engine, p.prompt_budget)?;
+            Ok(())
+        }
+        (5 | 6, None) => Ok(()),
+        _ => Err("議事録の固定モデル上限が不足・不正です".into()),
+    }
+}
+fn plan_limit(p: &Parameters) -> Result<usize, String> {
+    p.capacity.as_ref().map_or(Ok(p.prompt_budget), |c| {
+        c.plan_limit(&p.engine, p.prompt_budget)
+    })
+}
+fn task_system(system: &str, p: &Parameters) -> String {
+    if p.schema_version == 7 {
+        format!("{system}{}", super::model_budget::COMPLETION_INSTRUCTION)
+    } else {
+        system.into()
+    }
+}
 fn task_schema(p: &Parameters) -> Value {
     if p.schema_version == 6 {
         markdown::bounded_schema(p.engine.prediction_tokens)
@@ -164,7 +230,7 @@ fn extract_task(
     p: &Parameters,
 ) -> Result<Task, String> {
     Ok(Task {
-        system: markdown::system().into(),
+        system: task_system(markdown::system(), p),
         prompt: plan::extract_prompt(input, slices)?,
         schema: task_schema(p),
         local: None,
@@ -172,7 +238,7 @@ fn extract_task(
 }
 fn merge_task(cursor: &plan::Cursor, p: &Parameters) -> Result<Task, String> {
     Ok(Task {
-        system: plan::MERGE_SYSTEM.into(),
+        system: task_system(plan::MERGE_SYSTEM, p),
         prompt: cursor.task()?,
         schema: task_schema(p),
         local: None,
@@ -219,7 +285,7 @@ fn replay_with(
                 markdown::text(verify(&extract_task(input, slices, p)?, &saved.batches[0])?)?
             }
             node => {
-                let mut current = cursor(node, &outputs, p.prompt_budget)?;
+                let mut current = cursor(node, &outputs, plan_limit(p)?)?;
                 for batch in &saved.batches {
                     if cancelled() {
                         return Ok(None);
@@ -245,7 +311,7 @@ fn replay_with(
         return Err("議事録Markdownの生成結果ハッシュが一致しません".into());
     }
     let pending = if let Some(saved) = &c.pending {
-        let mut current = cursor(&p.plan.nodes[saved.index], &outputs, p.prompt_budget)?;
+        let mut current = cursor(&p.plan.nodes[saved.index], &outputs, plan_limit(p)?)?;
         for batch in &saved.batches {
             if cancelled() {
                 return Ok(None);
@@ -301,7 +367,10 @@ fn infer(
     p: &Parameters,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<(String, Vec<Artifact>)>, String> {
-    if !plan::fits(&task.system, &task.prompt, p.prompt_budget) {
+    let input_limit = p.capacity.as_ref().map_or(Ok(p.prompt_budget), |c| {
+        c.input_limit(&p.engine, p.prompt_budget)
+    })?;
+    if !plan::fits(&task.system, &task.prompt, input_limit) {
         return Err("議事録の入力が固定上限を超えています".into());
     }
     managed::verify(
@@ -311,8 +380,11 @@ fn infer(
     )?;
     let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
     let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
+    let execution = p.capacity.as_ref().map_or(Ok(runtime.clone()), |c| {
+        c.execution(&runtime, &task.system, &task.prompt)
+    })?;
     let Some(raw) = super::llama::run_unit(
-        &runtime,
+        &execution,
         &directory,
         &task.system,
         &task.prompt,
@@ -417,7 +489,7 @@ pub(crate) fn process(
                 node => {
                     let mut current = match resumed.take() {
                         Some(c) => c,
-                        None => cursor(node, &outputs, p.prompt_budget)?,
+                        None => cursor(node, &outputs, plan_limit(&p)?)?,
                     };
                     if checkpoint.pending.is_none() {
                         checkpoint.pending = Some(Output {

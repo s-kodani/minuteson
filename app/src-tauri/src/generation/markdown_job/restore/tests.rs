@@ -129,6 +129,7 @@ fn fixture(long: bool, pending: bool, queued: bool) -> Fixture {
     };
     let p = Parameters {
         schema_version: 5,
+        capacity: None,
         engine,
         prompt_budget: 2400,
         plan: plan::build(&old_input, 2400).unwrap(),
@@ -268,6 +269,34 @@ fn markdown_restore_keeps_exact_text_intervals_and_four_files_without_models_or_
         )
         .unwrap();
         assert_eq!(mapped, restored);
+    }
+}
+#[test]
+fn markdown_restore_preserves_model_capacity_and_schema_even_before_first_output() {
+    for changed in [false, true] {
+        let mut f = fixture(false, false, true);
+        for spec in [&mut f.old_spec, &mut f.new_spec] {
+            let mut p: Parameters =
+                serde_json::from_value(spec.parameters["generation"].clone()).unwrap();
+            p.schema_version = 7;
+            p.capacity = Some(crate::generation::model_budget::Capacity::synthetic(
+                &p.engine, 32768, 8192,
+            ));
+            p.plan = plan::build(&f.old_input, plan_limit(&p).unwrap()).unwrap();
+            spec.parameters["generation"] = serde_json::to_value(p).unwrap();
+        }
+        assert!(f.run(&|| false).is_ok());
+        if changed {
+            f.new_spec.parameters["generation"]["capacity"]["maxOutputTokens"] = json!(4096);
+        } else {
+            f.new_spec.parameters["generation"]["schemaVersion"] = json!(6);
+            f.new_spec.parameters["generation"]
+                .as_object_mut()
+                .unwrap()
+                .remove("capacity");
+        }
+        assert!(f.run(&|| false).is_err());
+        assert!(f.assets.target.is_empty());
     }
 }
 #[test]

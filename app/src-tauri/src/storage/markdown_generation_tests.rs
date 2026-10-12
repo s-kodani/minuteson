@@ -22,6 +22,13 @@ assert 'utteranceId' not in json.dumps(p) and 'speakerId' not in json.dumps(p)
 kind={kind:?}
 if kind=='invalid': print(json.dumps({{'items':[]}}));sys.exit(0)
 if kind=='truncated': print('{{"markdown":"unfinished');sys.exit(0)
+if kind=='budget':
+    system=pathlib.Path(arg('--system-prompt-file')).read_bytes()
+    prompt=pathlib.Path(arg('--file')).read_bytes()
+    expected=min(8192,int(arg('--ctx-size'))-len(system)-len(prompt)-512)
+    assert int(arg('--predict'))==expected and expected>2048
+    assert 'maxLength' not in schema['properties']['markdown']
+    print(json.dumps({{'markdown':'# 点検会議\n'+'- 確認する事項\n'*100}},ensure_ascii=False));sys.exit(0)
 if kind=='wide' and 'utterances' in p: text='異なる確認事項\n'*230
 else: text=' \n# 点検会議\n- 点検日\n[区間](audio:00:00:00.100001-00:00:00.799999)\n'
 print(json.dumps({{'markdown':text}},ensure_ascii=False))
@@ -71,7 +78,7 @@ fn incomplete_markdown_preserves_human_body_and_never_commits_a_partial_unit() {
     let storage = Storage::open(root.path().into()).unwrap();
     let req = request(&storage, false);
     let human = save(&storage, &req.meeting_id, None, "保持する人間の本文");
-    let job = markdown_job::enqueue(
+    let job = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "truncated"),
@@ -81,7 +88,7 @@ fn incomplete_markdown_preserves_human_body_and_never_commits_a_partial_unit() {
     )
     .unwrap();
     let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
-    assert_eq!(spec.parameters["generation"]["schemaVersion"], 6);
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 7);
     claim(&storage, &job);
     let error = markdown_job::process(&storage, &job.id, &|| false, &|_| {}).unwrap_err();
     assert!(error.contains("minutes_output_incomplete"));
@@ -94,6 +101,72 @@ fn incomplete_markdown_preserves_human_body_and_never_commits_a_partial_unit() {
     );
     assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 0);
     assert!(storage.fixed_job_input(&job.id).unwrap().1.is_none());
+}
+
+#[test]
+fn model_budget_drives_actual_cli_and_saves_more_than_480_characters_without_truncation() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let req = request(&storage, false);
+    let job = markdown_job::enqueue_synthetic(
+        &storage,
+        req.clone(),
+        engine(root.path(), "budget"),
+        "standard",
+        2400,
+        None,
+    )
+    .unwrap();
+    let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
+    assert_eq!(
+        spec.parameters["generation"]["capacity"]["maxInputTokens"],
+        32768
+    );
+    assert_eq!(
+        spec.parameters["generation"]["capacity"]["maxOutputTokens"],
+        8192
+    );
+    claim(&storage, &job);
+    assert!(markdown_job::process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    let body = storage
+        .get_minutes_markdown(&req.meeting_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        body.markdown,
+        format!("# 点検会議\n{}", "- 確認する事項\n".repeat(100))
+    );
+    assert!(body.markdown.chars().count() > 480);
+    // Reopening represents a restart, not a second simultaneous DB owner.
+    drop(storage);
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        reopened
+            .get_minutes_markdown(&req.meeting_id)
+            .unwrap()
+            .unwrap(),
+        body
+    );
+}
+
+#[test]
+fn unknown_selected_model_is_rejected_before_enqueuing_or_running_an_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let req = request(&storage, false);
+    let error = markdown_job::enqueue(
+        &storage,
+        req,
+        engine(root.path(), "unknown"),
+        "standard",
+        2400,
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("minutes_model_limits_unknown"));
+    assert!(!root.path().join("calls").exists());
 }
 fn save(
     storage: &Storage,
@@ -138,7 +211,7 @@ fn markdown_worker_publishes_exact_model_text_directly_and_reopen_keeps_it_witho
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let req = request(&storage, false);
-    let job = markdown_job::enqueue(
+    let job = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -199,7 +272,7 @@ fn markdown_regeneration_replaces_one_body_without_structured_versions_or_edit_h
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let mut req = request(&storage, false);
-    let first = markdown_job::enqueue(
+    let first = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -228,7 +301,7 @@ fn markdown_regeneration_replaces_one_body_without_structured_versions_or_edit_h
         .unwrap()
         .unwrap()
         .lock_version;
-    let second = markdown_job::enqueue(
+    let second = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -293,7 +366,7 @@ fn markdown_worker_preserves_human_save_after_start_and_rejects_initial_result_c
     let storage = Storage::open(root.path().into()).unwrap();
     let req = request(&storage, false);
     let base = save(&storage, &req.meeting_id, None, "開始前の本文");
-    let job = markdown_job::enqueue(
+    let job = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -326,7 +399,7 @@ fn markdown_invalid_model_result_and_changed_engine_never_replace_saved_human_te
         let req = request(&storage, false);
         let base = save(&storage, &req.meeting_id, None, "保持する本文");
         let config = engine(root.path(), mode);
-        let job = markdown_job::enqueue(
+        let job = markdown_job::enqueue_synthetic(
             &storage,
             req.clone(),
             config.clone(),
@@ -352,7 +425,7 @@ fn markdown_completed_unit_pauses_resumes_after_reopen_and_does_not_rerun_the_mo
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let req = request(&storage, false);
-    let job = markdown_job::enqueue(
+    let job = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -390,7 +463,7 @@ fn markdown_partial_merge_resumes_exact_subunits_and_rejects_tampered_raw_bytes(
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
         let req = request(&storage, true);
-        let job = markdown_job::enqueue(
+        let job = markdown_job::enqueue_synthetic(
             &storage,
             req.clone(),
             engine(root.path(), "wide"),
@@ -476,7 +549,7 @@ fn markdown_stopping_before_first_unit_pauses_without_running_or_publishing() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let req = request(&storage, false);
-    let job = markdown_job::enqueue(
+    let job = markdown_job::enqueue_synthetic(
         &storage,
         req.clone(),
         engine(root.path(), "normal"),
@@ -504,7 +577,7 @@ fn markdown_terminal_retry_reuses_verified_units_without_publishing_on_failure_o
         let storage = Storage::open(root.path().into()).unwrap();
         let req = request(&storage, false);
         let human = save(&storage, &req.meeting_id, None, "人間の本文を保持");
-        let job = markdown_job::enqueue(
+        let job = markdown_job::enqueue_synthetic(
             &storage,
             req.clone(),
             engine(root.path(), "normal"),

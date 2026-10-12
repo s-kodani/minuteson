@@ -42,7 +42,7 @@ mockIPC(async (command, args) => {
   if (command === "get_official_model_options") {
     if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([hybridChoice, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
-      return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition) };
+      return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition), tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null };
     }));
     return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review: await reviewed(f.definition) }];
   }

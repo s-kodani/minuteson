@@ -49,7 +49,7 @@ fn queued(storage: &Storage, root: &Path, partial: bool) -> (String, JobSnapshot
         .get_minutes_markdown(&meeting)
         .unwrap()
         .map(|d| d.stamp());
-    let job = crate::generation::markdown_job::enqueue(
+    let job = crate::generation::markdown_job::enqueue_synthetic(
         storage,
         req,
         synthetic::engine(root, if partial { "wide" } else { "normal" }),
@@ -268,7 +268,7 @@ fn markdown_generation_queued_archive_restores_without_a_fake_result_or_inferenc
             lock_version: draft.lock_version,
         }),
     };
-    let job = crate::generation::markdown_job::enqueue(
+    let job = crate::generation::markdown_job::enqueue_synthetic(
         &storage,
         req,
         synthetic::engine(root.path(), "normal"),

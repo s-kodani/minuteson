@@ -11,6 +11,8 @@ struct Choice {
     label: String,
     description: String,
     recipe: Recipe,
+    #[serde(default)]
+    token_limits: Option<crate::generation::model_budget::TokenLimits>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +22,7 @@ pub(crate) struct OptionView {
     description: String,
     definition: String,
     review: crate::model_download_recipe::Review,
+    token_limits: Option<crate::generation::model_budget::TokenLimits>,
 }
 fn options() -> Result<Vec<OptionView>, String> {
     let choices: Vec<Choice> = serde_json::from_str(include_str!("../../model-catalog/macos.json"))
@@ -27,12 +30,22 @@ fn options() -> Result<Vec<OptionView>, String> {
     choices
         .into_iter()
         .map(|choice| {
+            if choice.recipe.manifest.engine == crate::model_inspection::Engine::Llama {
+                choice
+                    .token_limits
+                    .as_ref()
+                    .ok_or("議事録モデルの入力・出力トークン上限がありません")?
+                    .validate()?;
+            } else if choice.token_limits.is_some() {
+                return Err("トークン上限は議事録モデルにだけ指定してください".into());
+            }
             Ok(OptionView {
                 id: choice.id,
                 label: choice.label,
                 description: choice.description,
                 definition: String::from_utf8(choice.recipe.bytes()?).map_err(|e| e.to_string())?,
                 review: choice.recipe.review()?,
+                token_limits: choice.token_limits,
             })
         })
         .collect()
@@ -67,7 +80,7 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
     result.insert(0, OptionView {
         id: "whisper-194-small-multilingual".into(), label: "文字起こし".into(),
         description: "アプリ同梱のCPU実行ファイルと、固定版Whisper small（多言語）を準備します。品質・速度は正式評価前です。".into(),
-        definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?, review: recipe.review()?,
+        definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?, review: recipe.review()?, token_limits: None,
     });
     Ok(result)
 }
@@ -83,6 +96,28 @@ mod tests {
         for choice in choices {
             assert!(ids.insert(choice.id));
             let recipe = Recipe::parse(choice.definition.as_bytes()).unwrap();
+            if let Some(limits) = &choice.token_limits {
+                let file = recipe
+                    .manifest
+                    .files
+                    .iter()
+                    .find(|f| f.role == crate::model_inspection::Role::Llm)
+                    .unwrap();
+                let proof = crate::local_engine::Fingerprint {
+                    path: "/not-executed/model.gguf".into(),
+                    size: file.expected_size.unwrap(),
+                    sha256: file.expected_hash.clone().unwrap(),
+                };
+                crate::generation::model_budget::Capacity::reviewed(&proof).unwrap();
+                assert_eq!(
+                    (
+                        limits.max_input_tokens,
+                        limits.max_output_tokens,
+                        limits.max_context_tokens
+                    ),
+                    (32768, 8192, 32768)
+                );
+            }
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
             let (expected, notices) = match recipe.manifest.engine {
                 crate::model_inspection::Engine::Llama => (

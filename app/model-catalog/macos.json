@@ -1,6 +1,7 @@
 [
   {
     "id": "llama-b11533-qwen25-15b-q4km",
+    "tokenLimits": { "maxInputTokens": 32768, "maxOutputTokens": 8192, "maxContextTokens": 32768, "tokenizer": "utf8_byte_bpe" },
     "label": "議事録生成",
     "description": "Qwen 2.5 1.5B・Q4_K_M。品質・速度は正式評価前です。取得後にCPU動作確認と適用が必要です。",
     "recipe": {
