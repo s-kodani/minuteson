@@ -29,6 +29,7 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     const trigger = page.getByRole("button", { name: "録音パネルの説明を開く", exact: true });
     await trigger.waitFor(); await page.getByText("00:00:45", { exact: true }).waitFor();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    check(await page.locator(".recorder-operation-badge").count() === 0, "healthy mini unexpectedly reserves an issue label");
     check(calls.filter(c => c.command === "show_recorder_info").length === 0, "initial render showed help");
     check(await trigger.getAttribute("aria-expanded") === "false", "initial expanded state");
     await trigger.focus(); await page.keyboard.press("Enter");
@@ -74,6 +75,20 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "error widened mini panel");
     check(JSON.stringify(recording) === before && !calls.some(c => /^(start_recording|stop_recording|decide_recording_confirmation|save_|delete_)/u.test(c.command)), "help mutated recording/data");
     results.push("close failure permits retry, forged reads stay errors and recording identity/state remain unchanged");
+    for (const theme of ["light", "dark"]) for (const width of [360, 440]) {
+      await page.setViewportSize({ width, height:116 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      check(await page.locator(".recorder-info-trigger").evaluate(e => {
+        const button=e.querySelector("button").getBoundingClientRect(), badge=e.querySelector(".recorder-operation-badge").getBoundingClientRect();
+        const buttons=[...e.parentElement.querySelectorAll("button")].map(b=>b.getBoundingClientRect());
+        return badge.top >= button.bottom + 4 - .5 && badge.bottom <= innerHeight
+          && Math.abs((badge.left+badge.right)/2-(button.left+button.right)/2)<1
+          && buttons.every(b=>Math.abs(b.top-button.top)<1 && b.height===32 && b.left>=0 && b.right<=innerWidth);
+      }), `issue badge overlaps or misaligns controls: ${theme}/${width}`);
+      check(await page.locator(".mini-shell").evaluate(e=>e.scrollHeight<=e.clientHeight && e.scrollWidth<=e.clientWidth), "issue badge clips mini geometry");
+      await page.screenshot({path:capturePath(`mini-issue-badge-${theme}-${width}.png`)});
+      results.push(`issue badge is 4px below frame, centered and unclipped; controls align: ${theme}/${width}`);
+    }
     return results;
   } finally { await popup.close(); }
 }

@@ -30,3 +30,11 @@ test("mini close stays usable while stop confirmation keeps stop controls guarde
   assert.deepEqual(permission.windows,["recorder"]);
   assert.ok(permission.permissions.includes("core:window:allow-start-dragging"));
 });
+test("mini issue badge uses a separate grid row and adjacent buttons stay top aligned",()=>{
+  const base=source("../src/style.css"), mini=source("../src/recorder-panel.css");
+  assert.match(base,/\.recorder-info-trigger \{ display:inline-grid; position:relative; justify-items:center; gap:4px; \}/);
+  const badge=base.match(/\.recorder-operation-badge \{([^}]*)\}/)?.[1]??"";
+  assert.ok(badge.includes("line-height:10px"));
+  assert.doesNotMatch(badge,/position:absolute|bottom:|left:|width:/);
+  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; margin:0; align-items:flex-start; \}/);
+});
