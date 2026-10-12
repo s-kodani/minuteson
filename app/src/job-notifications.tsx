@@ -1,9 +1,8 @@
-import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { InfoPopover } from "./info-popover";
-import { IssueNotice, IssueStatus, ToastNotice } from "./toast";
+import { IssueNotice, ToastNotice, toasts } from "./toast";
+import { toastKey } from "./toast-state";
 import { JobNotificationTracker, jobGroup, jobName, verifiedJobOutput, type JobNotice, type NotificationJob } from "./job-notification-state";
 
 /** One main-window owner, independent of the selected meeting or workspace.
@@ -16,9 +15,6 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   const [listenerError, setListenerError] = useState("");
   const [workerError, setWorkerError] = useState("");
   const [reading, setReading] = useState(false);
-  const [page, setPage] = useState(0);
-  const issueDetails = useRef<HTMLDetailsElement>(null);
-  const showPage = (next: number) => { setPage(next); requestAnimationFrame(() => issueDetails.current?.scrollIntoView({ block: "start" })); };
   const guard = useRef({ locked, onOpen }); guard.current = { locked, onOpen };
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const open = async (id: string) => { if (!guard.current.locked) await guard.current.onOpen(id); };
@@ -50,7 +46,6 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
             if (disposed) return;
             const state = tracker.ingest(rows);
             setIssues(state.issues);
-            setPage(current => Math.min(current, Math.max(0, Math.ceil(state.issues.length / 50) - 1)));
             const groups = new Set((rows as NotificationJob[]).map(jobGroup));
             publish(state.events, groups, new Set(state.issues.map(jobGroup)));
             let proofError = "";
@@ -85,21 +80,19 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   }, [tracker]);
 
   const retryRead = async () => { if (!guard.current.locked) await refreshRef.current(); };
-  const shown = issues.slice(page * 50, (page + 1) * 50);
-  return <section className="job-notifications" aria-label="解析の通知と要対応状態">
-    {[...notices].map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
-    <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" toastMessage="解析通知の読込・結果確認に失敗しました" action={{ kind: "retry", label: "状態だけを再読込", disabled: locked || reading, run: retryRead }}>
-      <IconButton label="状態だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()} />
-    </IssueNotice>
-    <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。再起動後に受信状態を確認してください。` : ""} label="解析通知の受信" toastMessage="解析通知の受信に失敗しました"><span>定期読込は継続</span></IssueNotice>
-    <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? "解析ワーカーから異常の通知がありました。状態を確認してください" : ""} level="error" important />
-    <IssueStatus message={workerError ? `${workerError}\n通知を閉じても解決にはなりません。再起動後にジョブの再開状態を確認してください。` : ""} label="解析ワーカー"><IconButton label="状態だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={locked || reading} onClick={() => void retryRead()} /></IssueStatus>
-    {issues.length > 0 && <details ref={issueDetails} className="job-issues"><summary>解析の要対応：{issues.length}件</summary>
-      <ul>{shown.map(job => <li key={job.id}><span>「{job.meetingTitle}」の{jobName(job.kind)}：{job.state === "failed" ? "失敗" : "中断"}</span>
-        <InfoPopover label={`「${job.meetingTitle}」の${jobName(job.kind)}の要対応`}><p>ジョブID：{job.id}</p><p>{job.errorCode ?? "再開状態を確認してください。"}</p><p>通知を閉じてもジョブや現在版は変わりません。会議を開き、固定条件と再開・再試行の可否を確認してください。</p></InfoPopover>
-        <button type="button" className="small-secondary" disabled={locked} onClick={() => void open(job.meetingId)}>会議を開く</button>
-      </li>)}</ul>
-      {issues.length > 50 && <div className="transcript-pages"><button type="button" disabled={page === 0} onClick={() => showPage(page - 1)}>前へ</button><span>{page + 1} / {Math.ceil(issues.length / 50)}</span><button type="button" disabled={(page + 1) * 50 >= issues.length} onClick={() => showPage(page + 1)}>次へ</button></div>}
-    </details>}
-  </section>;
+  return <>
+    {[...notices].filter(([, event])=>event?.topic!=="issue").map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} meetingId={event?.job.meetingId} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
+    <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" action={{ kind: "retry", label: "状態を再読込", disabled: locked || reading, run: retryRead }} />
+    <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。` : ""} label="解析通知の受信" />
+    <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? `解析ワーカー：${workerError}\n再起動後にジョブの再開状態を確認してください。` : ""} level="error" important action={{kind:"retry",label:"状態を再読込",disabled:locked||reading,run:retryRead}} />
+    {issues.map(job=><JobIssue key={job.id} job={job} locked={locked} onOpen={open} historical={![...notices.values()].some(event=>event?.topic==="issue"&&event.job.id===job.id)}/>)}
+  </>;
+}
+
+function JobIssue({job,locked,onOpen,historical}:{job:NotificationJob;locked:boolean;onOpen:(id:string)=>Promise<void>;historical:boolean}){
+  useEffect(()=>()=>toasts.resolve(toastKey("analysis-issues",job.id)),[job.id]);
+  return <ToastNotice scope="analysis-issues" type={job.id} level={job.state==="failed"?"error":"warning"} important historyOnly={historical} meetingId={job.meetingId}
+    eventId={JSON.stringify([job.id,job.updatedAt,job.state,job.errorCode])}
+    message={`「${job.meetingTitle}」の${jobName(job.kind)}：${job.state==="failed"?"失敗":"中断"}。 ${job.errorCode??"会議を開いて再開状態を確認してください。"}`}
+    action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>onOpen(job.meetingId)}}/>;
 }

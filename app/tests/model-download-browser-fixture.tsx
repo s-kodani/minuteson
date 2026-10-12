@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "./startup-ready-mocks";
 import { emit } from "@tauri-apps/api/event";
 import { ModelInspectionPanel } from "../src/model-inspection";
-import { ToastHost } from "../src/toast";
+import { NotificationList } from "../src/toast";
 import { parseDownloadDefinition, downloadDigest, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
@@ -118,6 +118,6 @@ function Fixture() {
     {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button>
       <button onClick={() => { f.readMissing = true; }}>合成の実体照合失敗</button><button onClick={() => { f.readMissing = false; }}>合成の実体照合復帰</button>
       <button onClick={() => { for (const item of f.operations.values()) item.state = "incomplete"; }}>合成の記録を未完了にする</button></>}
-    {visible && <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} />}<ToastHost /></main>;
+    {visible && <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} />}<NotificationList visible={false}/></main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

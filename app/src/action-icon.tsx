@@ -1,10 +1,11 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "close" | "open" | "edit" | "preview" | "play" | "pause" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
   return <svg className="action-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {name === "bell" && <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></>}
     {name === "close" && <path d="m6 6 12 12M18 6 6 18" />}
     {name === "open" && <><path d="M14 3h7v7M21 3 11 13M10 4H4v16h16v-6" /></>}
     {name === "edit" && <><path d="m14 5 5 5M4 20l4.5-1L20 7.5a2.8 2.8 0 0 0-4-4L4.5 15 4 20Z" /><path d="M13 20h7" /></>}

@@ -16,6 +16,7 @@ const engine = { executablePath: "", modelPath: "", vadModelPath: null, threads:
 const diarEngine = { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 4, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
 const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPlayback: false, failPreferences: false, failAdopt: false, failRetry: false, persistenceDelayMs: 0, draft: null,
   showToast: input => toasts.show(input),
+  notifications: () => toasts.getSnapshot().map(({key,id,message})=>({key,id,message})),
   notificationJobs: [], notificationProofMode: "valid", notificationReadFail: false, notificationProofReads: [],
   lostRetryResponse: false,
   transcriptHistory: [],

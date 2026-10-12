@@ -1,11 +1,10 @@
-import { IconButton } from "./action-icon";
 import {invoke,isTauri} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
 import {useEffect,useRef,useState} from "react";
 import {ArchivedInputController,type ArchivedAttempt,type ArchivedInputView} from "./archived-input-controller";
 import {InputLevelClock} from "./input-level-state";
 import type {InputKind} from "./recording-input-state";
-import {IssueNotice,IssueStatus,ToastNotice,toasts} from "./toast";
+import {IssueNotice,ToastNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
 
 const lanes:InputKind[]=["microphone","system"];
@@ -13,10 +12,11 @@ const scope=(owner:string)=>`archived-input:${owner}`;
 function OwnerNotices({view,locked,onOpen,onRendered,onClose}:{view:ArchivedInputView;locked:boolean;onOpen:(id:string)=>Promise<void>;onRendered:(owner:string,id:string,generation:number)=>void;onClose:(owner:string,input:InputKind)=>void}){
   // ToastNotice normally outlives a view. This bounded historical owner must
   // explicitly resolve its presentation on eviction/deletion/unmount instead.
-  useEffect(()=>()=>{for(const input of lanes)toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
+  useEffect(()=>()=>{for(const input of [...lanes,"diagnostic"])toasts.resolve(toastKey(scope(view.sessionId),input));},[view.sessionId]);
   return <>{lanes.map(input=>{
     const n=view.notices.find(n=>n.input===input),label=input==="microphone"?"マイク":"PC音声";
     return <ToastNotice key={input} scope={scope(view.sessionId)} type={input}
+      meetingId={view.meetingId}
       message={n?`終了した録音「${view.title}」：${label}の取得が${n.kind==="interrupted"?"中断していました":"復帰していました"}。保存された音声と欠損範囲を確認してください。`:""}
       level={n?.kind==="interrupted"?"warning":"info"} important={n?.kind==="interrupted"}
       eventId={n?`${n.id}:${n.delivery!.generation}`:undefined}
@@ -72,27 +72,24 @@ export function ArchivedInputNotices({paused,locked,onOpen}:{paused:boolean;lock
   },[]);
   useEffect(()=>{refresh.current();},[paused]);
   const open=async(id:string)=>{if(!guard.current.locked)await guard.current.onOpen(id);};
-  const problems=views.filter(v=>v.unavailable||v.deliveryUnavailable||v.historyIssue!==null||v.historySaveIssue||v.loss.microphone>0||v.loss.system>0||lanes.some(input=>v.reception[input]==="unconfirmed"));
-  const [page,setPage]=useState(0),lastPage=Math.max(0,Math.ceil(problems.length/16)-1),shownPage=Math.min(page,lastPage);
-  // ToastNotice renders into the shared host, not this section. An empty
-  // section must not consume the detail workspace's flex gap/body height.
-  return <section className="archived-input-notices" aria-label="終了済み録音の入力通知" hidden={!problems.length&&!readError&&!listenerError&&!readPending}>
+  return <>
     {views.map(view=><OwnerNotices key={view.sessionId} view={view} locked={locked} onOpen={open} onRendered={(...args)=>actions.current.rendered(...args)} onClose={(...args)=>actions.current.close(...args)}/>)}
-    <IssueNotice scope="archived-input" type="read" message={readError} label="終了済み録音の通知読込" toastMessage="終了済み録音の通知履歴を確認できません" action={{kind:"retry",label:"通知履歴だけを再読込",disabled:paused||reading,run:()=>refresh.current()}}>
-      <IconButton label="通知履歴だけを再読込" icon="refresh" type="button" className="small-secondary" disabled={paused||reading} onClick={()=>refresh.current()} />
-    </IssueNotice>
+    <IssueNotice scope="archived-input" type="read" message={readError} label="終了済み録音の通知読込" action={{kind:"retry",label:"通知履歴を再読込",disabled:paused||reading,run:()=>refresh.current()}} />
     <IssueNotice scope="archived-input" type="listen" message={listenerError} label="終了済み録音の通知受信"/>
-    <IssueStatus label="終了済み録音の通知読込待ち" message={readPending?"通知履歴の読込結果を確認中です。応答待ちの読込みは重ねず、受付期限を確認できなくなった通知の表示を止めています。音声の取得・保存結果を示す状態ではありません。":""}/>
-    {problems.length>0&&<details className="job-issues"><summary>終了済み録音の通知履歴：要確認 {problems.length}件</summary>
-      <p>現在の機器接続・取得・保存の状態ではありません。通知を閉じても履歴の診断は残ります。欠損の有無と範囲は保存された音声の情報で確認してください。</p>
-      <ul>{problems.slice(shownPage*16,(shownPage+1)*16).map(view=><li key={view.sessionId}><span>「{view.title}」：{[
-        view.unavailable?"通知履歴を読めません":"",view.historyIssue==="missing"?"取得履歴がありません":view.historyIssue==="invalid"?"取得履歴を照合できません":"",
+    <ToastNotice scope="archived-input" type="pending" level="info" message={readPending?"終了済み録音の通知履歴を確認中です。音声の取得・保存結果を示す状態ではありません。":""}/>
+    {views.map(view=>{
+      const diagnostics=[
+        view.unavailable?"通知履歴を読めません":"",
+        view.historyIssue==="missing"?"取得履歴がありません":view.historyIssue==="invalid"?"取得履歴を照合できません":"",
         view.deliveryUnavailable?"復元した通知の受付を確認できません":"",
         view.historySaveIssue?({failed:"取得履歴の書込みを確定できません",invalid:"取得履歴の保存を停止しました",unconfirmed:"停止時の取得履歴保存が未確定です",unavailable:"停止時の履歴保存診断を確認できません"}[view.historySaveIssue]):"",
-        view.loss.microphone>0?`マイク通知の保持不足 ${view.loss.microphone}件`:"",view.loss.system>0?`PC音声通知の保持不足 ${view.loss.system}件`:"",
-        lanes.some(input=>view.reception[input]==="unconfirmed")?"通知処理の結果確認待ち":""].filter(Boolean).join(" / ")}</span>
-        <button type="button" className="small-secondary" disabled={locked} onClick={()=>void open(view.meetingId)}>会議を開く</button></li>)}</ul>
-      {lastPage>0&&<div className="transcript-pages"><button type="button" disabled={shownPage===0} onClick={()=>setPage(shownPage-1)}>前へ</button><span>{shownPage+1} / {lastPage+1}</span><button type="button" disabled={shownPage===lastPage} onClick={()=>setPage(shownPage+1)}>次へ</button></div>}
-    </details>}
-  </section>;
+        view.loss.microphone>0?`マイク通知の保持不足 ${view.loss.microphone}件`:"",
+        view.loss.system>0?`PC音声通知の保持不足 ${view.loss.system}件`:"",
+        lanes.some(input=>view.reception[input]==="unconfirmed")?"通知処理の結果確認待ち":""
+      ].filter(Boolean).join(" / ");
+      return <ToastNotice key={view.sessionId} scope={scope(view.sessionId)} type="diagnostic" level="warning" important historyOnly meetingId={view.meetingId}
+        message={diagnostics?`終了した録音「${view.title}」：${diagnostics}。保存された音声で欠損範囲を確認してください。`:""}
+        action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>open(view.meetingId)}}/>;
+    })}
+  </>;
 }

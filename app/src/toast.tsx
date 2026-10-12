@@ -1,38 +1,67 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { Toaster, toast as sonnerToast } from "sonner";
+import { notificationCapacity, notificationPresenterId, presentationId, presentationStamp, removedPresentationIds, stackCardExposed } from "./toast-presentation";
 import { InfoPopover } from "./info-popover";
 import { ActionIcon } from "./action-icon";
+import { topOpenModal } from "./modal-state";
 import { ToastController, toastKey, type Toast, type ToastAction, type ToastLevel } from "./toast-state";
-import { notificationCapacity, notificationPresenterId, presentationId, presentationStamp, removedPresentationIds, stackCardExposed } from "./toast-presentation";
 
+// Sonner shows new events; the menu retains their history separately.
 export const toasts = new ToastController();
 const labels: Record<ToastLevel, string> = { success: "成功", info: "情報", warning: "注意", error: "エラー" };
 const icons: Record<ToastLevel, string> = { success: "✓", info: "ⓘ", warning: "⚠", error: "!" };
 
 /** An event notification, not operation state. Clearing it never clears an error
  * or submits a command. Only the originating controller can resolve a problem. */
-export function ToastNotice({ scope, type, message, level = "success", important, onClose, onRendered, action, eventId }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string }) {
+export function ToastNotice({ scope, type, message, level = "success", important, onClose, onRendered, action, eventId, meetingId, historyOnly = false }: { scope: string; type: string; message: string | null | undefined; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string; meetingId?: string; historyOnly?: boolean }) {
   const key = toastKey(scope, type), latest = useRef({ onClose, onRendered, action });
   const priorKey = useRef(key);
   latest.current = { onClose, onRendered, action };
   useLayoutEffect(() => {
     let active = true;
     const run = async () => { const current = latest.current.action; if (active && current && !current.disabled) await current.run(); };
-    if (message) toasts.show({ key, message, level, important, eventId, onClose: () => { if (active) latest.current.onClose?.(); }, onRendered:()=>{if(active)latest.current.onRendered?.();}, action: action ? { ...action, run } : undefined });
+    if (message) (historyOnly ? toasts.record.bind(toasts) : toasts.show.bind(toasts))({ key, message, level, important, eventId, meetingId, onClose: () => { if (active) latest.current.onClose?.(); }, onRendered:()=>{if(active)latest.current.onRendered?.();}, action: action ? { ...action, run } : undefined });
     else { toasts.resolve(key); if (priorKey.current !== key) toasts.resolve(priorKey.current); }
     priorKey.current = key;
     return () => { active = false; toasts.detachAction(key, run); };
-  }, [key, message, level, important, eventId, action?.kind, action?.label, action?.disabled]);
+  }, [key, message, level, important, eventId, action?.kind, action?.label, action?.disabled, meetingId, historyOnly]);
   return null;
 }
 
-export function IssueNotice({ scope, type, message, label, children, action, toastMessage }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction; toastMessage?: string }) {
-  return <><ToastNotice scope={scope} type={type} message={message ? toastMessage ?? `${label}: ${message}` : ""} level="error" action={action} /><IssueStatus message={message} label={label}>{children}</IssueStatus></>;
+export function IssueNotice({ scope, type, message, label, action }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction; toastMessage?: string }) {
+  return <ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} />;
 }
 
 /** Retained state for sources whose one notification owner outlives a view. */
-export function IssueStatus({ message, label, children }: { message: string | null | undefined; label: string; children?: ReactNode }) {
-  return message ? <div className="issue-status" aria-label={`${label}の要対応状態`}><strong>要対応：{label}</strong><InfoPopover label={label}>{message}</InfoPopover>{children}</div> : null;
+export function IssueStatus(_props: { message: string | null | undefined; label: string; children?: ReactNode }) {
+  // Its originating notification owner publishes the same operation error.
+  // Do not duplicate it as an inline banner when a view opens.
+  return null;
+}
+
+export function NotificationList({ visible, onOpen, locked=false }: { visible: boolean; onOpen?:(meetingId:string)=>Promise<void>;locked?:boolean }) {
+  const history = useSyncExternalStore(toasts.subscribe, toasts.getHistorySnapshot);
+  const current = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
+  const restore = useRef(() => document.querySelector<HTMLButtonElement>('.notifications-dialog[open] [data-dialog-cancel]')?.focus({ preventScroll: true })).current;
+  return visible ? <section className="notification-list" aria-label="通知一覧の内容">
+    {history.length===0?<p className="notification-empty">通知はありません。</p>:<div className="notification-rows">{history.map(notice=><NotificationHistoryRow key={notice.id} notice={notice} active={toasts.isActive(notice.key,notice.id)} onOpen={onOpen} locked={locked} restoreFocus={restore}/>)}</div>}
+  </section>:null;
+}
+function NotificationHistoryRow({notice,active,onOpen,locked,restoreFocus}:{notice:Toast;active:boolean;onOpen?: (meetingId:string)=>Promise<void>;locked:boolean;restoreFocus:()=>void}){
+  const element=useRef<HTMLElement>(null);
+  useEffect(()=>{
+    if(!active)return;
+    const check=()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);};
+    const timer=window.setInterval(check,250);check();return()=>clearInterval(timer);
+  },[active,notice.key,notice.id]);
+  const action=notice.action;
+  return <section ref={element} className={`toast-card toast-${notice.level}`} data-history-id={notice.id}>
+    <span className="toast-icon" aria-hidden="true">{icons[notice.level]}</span>
+    <div className="toast-body"><p><span className="toast-label">{labels[notice.level]}： </span>{notice.message}</p>
+      {notice.meetingId&&onOpen?<button type="button" className="small-secondary" disabled={locked} onClick={()=>void onOpen(notice.meetingId!)}>会議を開く</button>:active&&action?<button type="button" className="small-secondary" disabled={action.disabled||notice.actionBusy} onClick={()=>void toasts.act(notice.key,notice.id,true).catch(cause=>toasts.show({key:toastKey(notice.key,"action-failed"),level:"error",message:String(cause)}))}>{notice.actionBusy?"実行中":action.label}</button>:null}
+    </div>
+    {active&&<button type="button" className="icon-button small-secondary" aria-label={`${labels[notice.level]}通知を閉じる`} title="通知を閉じる" onClick={()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);restoreFocus();toasts.dismiss(notice.key,notice.id);}}><ActionIcon name="close"/></button>}
+  </section>;
 }
 
 function ToastCard({ toast, restoreFocus, pendingCount }: { toast: Toast; restoreFocus: () => void; pendingCount: number }) {
@@ -61,7 +90,8 @@ function ToastCard({ toast, restoreFocus, pendingCount }: { toast: Toast; restor
   </section>;
 }
 export function noticeElementVisible(element:HTMLElement|null){
-  if(!element?.isConnected||document.hidden||document.querySelector("dialog[open]")||element.closest("[hidden], [inert]")||!element.getClientRects().length)return false;
+  if(!element?.isConnected||document.hidden||element.closest("[hidden], [inert]")||!element.getClientRects().length)return false;
+  const modal=topOpenModal(); if(modal&&!modal.contains(element))return false;
   const r=element.getBoundingClientRect();
   if(r.width<=0||r.height<=0||r.top<0||r.left<0||r.bottom>innerHeight||r.right>innerWidth)return false;
   for(let node:HTMLElement|null=element;node;node=node.parentElement){

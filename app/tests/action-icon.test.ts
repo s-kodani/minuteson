@@ -81,7 +81,7 @@ test("ordinary refresh, pause and page navigation labels do not remain as text-o
     visit(parsed);
   }
   assert.deepEqual(remaining,[]);
-  assert.ok(icons>=40,`expected remaining secondary paths, found ${icons}`);
+  assert.ok(icons>=38,`expected remaining secondary paths, found ${icons}`);
 });
 
 test("recovery pagination icons preserve guarded read actions and explicit labels", () => {

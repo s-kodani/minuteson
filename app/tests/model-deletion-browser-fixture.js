@@ -3,7 +3,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "./startup-ready-mocks.ts";
 import { ModelInspectionPanel } from "../src/model-inspection.tsx";
-import { ToastHost } from "../src/toast.tsx";
+import { NotificationList } from "../src/toast.tsx";
 import "../src/style.css";
 const packageId = "11111111-1111-4111-8111-111111111111";
 const entry = { packageId, modelName: "合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test only", totalBytes: 20, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null };
@@ -11,7 +11,7 @@ const row = (relativePath, patch = {}) => ({ relativePath, directory: false, reg
 const directory = (relativePath, patch = {}) => row(relativePath, { directory: true, bytes: null, sha256: null, ...patch });
 const data = window.modelDeletionFixture = { calls: [], mode: "success", pending: null, complete: () => {}, partial: false, busyCatalog: false, failCatalog: false, locked: false, recordingActive: false, mounted: true };
 const root = createRoot(document.getElementById("root"));
-const render = () => root.render(React.createElement(React.Fragment, null, React.createElement(ToastHost), data.mounted ? React.createElement(ModelInspectionPanel, { locked: data.locked, recordingActive: data.recordingActive }) : React.createElement("p", null, "模擬アンマウント")));
+const render = () => root.render(React.createElement(React.Fragment, null, React.createElement(NotificationList,{visible:false}), data.mounted ? React.createElement(ModelInspectionPanel, { locked: data.locked, recordingActive: data.recordingActive }) : React.createElement("p", null, "模擬アンマウント")));
 data.update = patch => { Object.assign(data, patch); render(); };
 window.isTauri = true;
 mockWindows("main");

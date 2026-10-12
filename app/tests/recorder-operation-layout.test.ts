@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-
-test("retained recorder notices share header gutters without padding an empty host", () => {
-  const source = readFileSync(new URL("../src/recorder-operation-notices.tsx", import.meta.url), "utf8");
-  const css = readFileSync(new URL("../src/prototype-alignment.css", import.meta.url), "utf8");
-  assert.match(source, /className="recorder-operation-notifications" aria-label="録音パネルからの操作通知"/);
-  assert.match(css, /\.recorder-operation-notifications \{ flex:none; min-width:0; --recorder-notice-gutter:28px; \}/);
-  assert.match(css, /\.recorder-operation-notifications>\.issue-status \{ margin:0; padding:12px var\(--recorder-notice-gutter\); \}/);
-  assert.match(css, /\.recorder-operation-notifications>\.issue-status>strong \{ min-width:0; overflow-wrap:anywhere; \}/);
-  assert.match(css, /\.main-column:has\(\.meeting-detail-status\)>\.recorder-operation-notifications \{ --recorder-notice-gutter:16px; \}/);
-  assert.doesNotMatch(css, /\.recorder-operation-notifications \{[^}]*padding:/);
+test("recording operation and archived diagnostics only publish menu notifications",()=>{
+  const source=(name:string)=>readFileSync(new URL(`../src/${name}`,import.meta.url),"utf8");
+  const operation=source("recorder-operation-notices.tsx").split("export function RecorderOperationNotifications")[1];
+  assert.doesNotMatch(operation,/className="issue-status"|<InfoPopover|<section/);
+  assert.match(operation,/operationNames\[e.source\].*e.message/);
+  assert.match(operation,/dismiss_recorder_operation_notice/);
+  const archive=source("archived-input-notices.tsx");
+  assert.doesNotMatch(archive,/<details|<section|終了済み録音の通知履歴：/);
+  assert.match(archive,/type="diagnostic"/);
+  assert.match(archive,/onRendered.*actions.current.rendered/);
 });

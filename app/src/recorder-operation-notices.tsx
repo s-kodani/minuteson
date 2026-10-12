@@ -64,10 +64,8 @@ export function RecorderOperationNotifications() {
     try { state.accept(await invoke("dismiss_recorder_operation_notice", { source, expectedRevision, eventId })); setError(""); }
     catch (cause) { setError(String(cause)); await state.refresh(); }
   };
-  const causes = state.snapshot.entries.filter(e => e.message);
-  return <section className="recorder-operation-notifications" aria-label="録音パネルからの操作通知">
-    {state.snapshot.entries.map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}で要対応です` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
+  return <>
+    {state.snapshot.entries.map(e => <ToastNotice key={e.source} scope="recorder-operation" type={e.source} message={!e.dismissed && e.message ? `${operationNames[e.source]}：${e.message}` : ""} level="error" important eventId={e.eventId ?? undefined} onClose={() => { if (e.eventId) void dismiss(e.source, e.revision, e.eventId); }} />)}
     <IssueNotice scope="recorder-operation" type="read" label="録音パネルの操作通知" message={state.error || error} toastMessage="録音パネルの操作通知を確認できません" />
-    {causes.length > 0 && <div className="issue-status"><strong>要対応：録音パネルの操作 {causes.length}件</strong><InfoPopover label="録音パネルの操作の要対応">{causes.map(e => `${operationNames[e.source]}：${e.message}`).join("\n\n")}通知を閉じても原因は消えません。元の録音パネルの操作から再確認してください。</InfoPopover></div>}
-  </section>;
+  </>;
 }

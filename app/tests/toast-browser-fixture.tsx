@@ -28,7 +28,7 @@ function Fixture() {
   fixture.detach = () => setMounted(false);
   fixture.showAction = () => fixture.show({ key: "action", message: "話者変更を保存しました", level: "success", action: { kind: "undo", label: "元に戻す", run: () => { fixture.actionCalls++; setCounts(c => ({ ...c, actions: c.actions + 1 })); } } });
   return <div className="app-layout" data-theme={dark ? "dark" : "light"}><aside className="sidebar">検証用</aside><div className="main-column">
-    <header className="topbar"><span>検証用ヘッダー</span><div className="header-recording">待機中</div><ToastHost docked={docked} /></header>
+    <header className="topbar"><span>検証用ヘッダー</span><div className="header-recording">待機中</div><ToastHost docked={docked}/></header>
     <main className="content" aria-label="通知検証ワークスペース"><h1>通知の合成検証</h1>
       <label>保持する入力<input aria-label="保持する入力" defaultValue="編集中の点検日" /></label>
       <button type="button" onClick={() => setEventMessage("同じ処理の保存が完了しました")}>同じイベントを通知</button>

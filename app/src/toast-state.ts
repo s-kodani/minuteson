@@ -11,6 +11,7 @@ export interface ToastInput {
   message: string;
   important?: boolean;
   eventId?: string;
+  meetingId?: string;
   action?: ToastAction;
   onClose?: () => void;
   onRendered?: () => void;
@@ -31,6 +32,9 @@ export const toastKey = (scope: string, type: string) => JSON.stringify([scope, 
  * Important notices beyond the three visible slots wait, rather than being lost. */
 export class ToastController {
   private entries = new Map<string, Entry>();
+  private history = new Map<number, Toast>();
+  private historyIds = new Map<string, number>();
+  private historySnapshot: readonly Toast[] = [];
   private acknowledged = new Map<string, string>();
   // Keep exact operation receipts across transient empty reads and view changes.
   // Bound memory; never deduplicate different meetings/events by message alone.
@@ -47,6 +51,21 @@ export class ToastController {
   }) { this.clock = clock; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
+  getHistorySnapshot = () => this.historySnapshot;
+  isActive = (key: string, id: number) => this.entries.get(key)?.toast.id === id;
+  private recordHistory(input: ToastInput, id?: number) {
+    const stamp=JSON.stringify([input.key,signature(input)]), prior=this.historyIds.get(stamp);
+    const identity=id??prior??++this.serial;
+    this.historyIds.set(stamp,identity);
+    this.history.set(identity,{...input,id:identity,important:input.important??input.level==="error"});
+    while(this.history.size>512){const oldest=this.history.keys().next().value!;this.history.delete(oldest);for(const [key,value]of this.historyIds)if(value===oldest)this.historyIds.delete(key);}
+  }
+  record(input:ToastInput) {
+    if(!input.message.trim())return;
+    const stamp=JSON.stringify([input.key,signature(input)]), id=this.historyIds.get(stamp), old=id===undefined?null:this.history.get(id);
+    this.recordHistory(input);
+    if(!old||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
+  }
   get pendingCount() { return Math.max(0, this.entries.size - this.snapshot.length); }
   setVisibleLimit(limit: number) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw Error("Invalid notification display limit");
@@ -71,6 +90,8 @@ export class ToastController {
       }
     }
     this.snapshot = visible.map(e => e.toast);
+    for(const entry of ordered)this.recordHistory(entry.toast,entry.toast.id);
+    this.historySnapshot=[...this.history.values()].sort((a,b)=>b.id-a.id);
     for (const listener of this.listeners) listener();
   }
   show(input: ToastInput) {
@@ -95,9 +116,9 @@ export class ToastController {
     const entry = this.entries.get(key);
     if (entry) { this.stop(entry); this.entries.delete(key); this.publish(); }
   }
-  markRendered(key:string,id:number){
+  markRendered(key:string,id:number,fromList=false){
     const entry=this.entries.get(key);
-    if(!entry||entry.toast.id!==id||entry.rendered||this.pauses.size||!this.snapshot.some(t=>t.key===key&&t.id===id)||!entry.toast.onRendered)return;
+    if(!entry||entry.toast.id!==id||entry.rendered||[...this.pauses].some(reason=>!fromList||reason!=="modal")||!fromList&&!this.snapshot.some(t=>t.key===key&&t.id===id)||!entry.toast.onRendered)return;
     entry.rendered=true;entry.toast.onRendered();
   }
   dismiss(key: string, id: number) {
@@ -124,11 +145,14 @@ export class ToastController {
   }
   detachAction(key: string, run: ToastAction["run"]) {
     const entry = this.entries.get(key);
-    if (entry?.toast.action?.run === run) { entry.toast = { ...entry.toast, action: undefined }; this.publish(); }
+    let changed=false;
+    if (entry?.toast.action?.run === run) { entry.toast = { ...entry.toast, action: undefined }; changed=true; }
+    for(const [id,value]of this.history)if(value.key===key&&value.action?.run===run){this.history.set(id,{...value,action:undefined});changed=true;}
+    if(changed)this.publish();
   }
-  async act(key: string, id: number) {
+  async act(key: string, id: number, fromList=false) {
     const entry = this.entries.get(key), action = entry?.toast.action;
-    if (!entry || entry.toast.id !== id || !action || action.disabled || entry.pauses.has("action") || this.pauses.size) return;
+    if (!entry || entry.toast.id !== id || !action || action.disabled || entry.pauses.has("action") || [...this.pauses].some(reason=>!fromList||reason!=="modal")) return;
     entry.toast = { ...entry.toast, actionBusy: true };
     this.pause(key, "action", true);
     try { await action.run(); }
