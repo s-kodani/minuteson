@@ -18,15 +18,3 @@ test("wide panel entry moves into the close control only for its own lost trigge
   assert.match(panel,/document.querySelector\("dialog\[open\]"\)/);
   assert.match(panel,/cancelAnimationFrame\(frame\)/);
 });
-
-test("reader and rich evidence forward the actual clicked chip before opening its reference panel",()=>{
-  const source=(name:string)=>readFileSync(new URL(`../src/${name}`,import.meta.url),"utf8");
-  const reader=source("minutes-document.tsx"),field=source("minutes-rich-field.tsx"),editor=source("minutes-editor.tsx");
-  assert.match(reader,/onClick=\{event => showEvidence\(e.id, event.currentTarget\)\}/);
-  assert.match(reader,/const showEvidence = \(id: string, from\?: HTMLElement\)/);
-  assert.match(reader,/evidenceOpener.current = from \?\? \(document.activeElement/);
-  assert.match(reader,/from.focus\(\{ preventScroll:true \}\)/);
-  assert.match(field,/onEvidence\?\.\(chip.dataset.evidenceId!, chip\)/);
-  assert.match(field,/onEvidence\(chip.dataset.evidenceId!, chip\)/);
-  assert.match(editor,/onEvidence=\{\(id,opener\) => documentHandle.current\?\.showEvidence\(id,opener\)\}/);
-});

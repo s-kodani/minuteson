@@ -38,22 +38,7 @@ test("minutes comparison replaces settings without introducing a second native d
   assert.doesNotMatch(panel,/replacement=|MinutesDocument|setPreview|直前版|候補を採用/);
 });
 
-test("closing detailed formatting resumes the new field without stealing a later focus move",()=>{
-  const editor=source("minutes-editor.tsx");
-  assert.match(editor,/focusAfterOptions.current=!next;setFormatOpen\(next\)/);
-  assert.match(editor,/afterOptions && document.activeElement !== formatTrigger.current && document.activeElement !== document.body/);
-  assert.match(editor,/if \(!afterConfirmation && !afterOptions\) \{ focus\(\); return; \}/);
-  assert.match(editor,/requestAnimationFrame\(focus\)/);
-  assert.match(editor,/busy, locked,formatOpen\]/);
-});
 
-test("block deletion retains text selection while explicitly restoring its pointer-invoked toolbar opener",()=>{
-  const editor=source("minutes-editor.tsx");
-  assert.match(editor,/onMouseDown=\{\(e\) => e.preventDefault\(\)\}/);
-  assert.match(editor,/onClick=\{event => action\(event.currentTarget\)\}/);
-  assert.match(editor,/toolbarButton\("ブロックを削除", opener =>/);
-  assert.match(editor,/void confirm\(\{ opener, title: "議事録ブロックの削除を確認"/);
-});
 
 
 test("nested settings restore to their parent but unrelated dialogs remain queued",()=>{

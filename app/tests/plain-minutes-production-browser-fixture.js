@@ -1,7 +1,7 @@
 // Product main window with synthetic in-memory storage. No native DB/model,
-// recording, playback or file writes. Old fixture supplies unrelated commands.
-import { installMinutesFixture } from "./minutes-browser-fixture.js";
-await installMinutesFixture({ addInitScript: async initialize => initialize(), reload: async () => {} });
+// recording, playback or file writes. Window fixture supplies unrelated current commands.
+import { installPlainMinutesWindowFixture } from "./plain-minutes-window-fixture.js";
+await installPlainMinutesWindowFixture({ addInitScript: async initialize => initialize(), reload: async () => {} });
 const data=window.__mon, copy=value=>structuredClone(value);
 const op=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 data.plain={m1:{meetingId:"m1",markdown:"# 点検会議\n\n- 点検日を確認する\n\n人間の保存済み追記\n",lockVersion:1,contentHash:"a".repeat(64),operationId:op(1),updatedAt:1}};

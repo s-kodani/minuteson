@@ -743,23 +743,6 @@ fn get_analysis_versions(
 
 
 
-#[tauri::command]
-async fn start_minutes_generation(
-    window: WebviewWindow,
-    request: generation::StartRequest,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can start minutes generation".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 async fn start_markdown_minutes_generation(
@@ -784,59 +767,6 @@ fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
     Ok(window.app_handle().clone())
 }
 
-#[tauri::command]
-async fn get_minutes_exports(
-    window: WebviewWindow,
-    meeting_id: String,
-) -> Result<Vec<storage::ExportRecord>, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().exports(&meeting_id))
-        .await
-        .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-async fn export_minutes_markdown(
-    window: WebviewWindow,
-    request: storage::ExportRequest,
-) -> Result<Option<storage::ExportRecord>, String> {
-    let app = minutes_app(&window)?;
-    app.state::<Storage>().require_data_writable()?;
-    let admission = app.state::<AnalysisController>().begin_export()?;
-    let lease = app.state::<exports::ExportController>().begin()?;
-    // Own both guards in a detached task: losing the command receiver must not
-    // unblock backup/exit while a save dialog or blocking publication is alive.
-    tauri::async_runtime::spawn(async move {
-        let _admission = admission;
-        let _lease = lease;
-        let worker = app.clone();
-        let query = request.clone();
-        if let Some(record) = tauri::async_runtime::spawn_blocking(move || {
-            worker.state::<Storage>().existing_export(&query)
-        })
-        .await
-        .map_err(|e| e.to_string())??
-        {
-            return Ok(Some(record));
-        }
-        let worker = app.clone();
-        let prepared = tauri::async_runtime::spawn_blocking(move || {
-            worker.state::<Storage>().prepare_export(request)
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        let Some(path) = exports::save_dialog(&window, prepared.filename.clone()).await? else {
-            return Ok(None);
-        };
-        tauri::async_runtime::spawn_blocking(move || {
-            app.state::<Storage>().write_export(prepared, &path)
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map(Some)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -909,23 +839,6 @@ async fn get_plain_minutes_export_status(
         record,
     })
 }
-#[tauri::command]
-async fn get_minutes_export_status(
-    window: WebviewWindow,
-    request: storage::ExportRequest,
-) -> Result<ExportStatus, String> {
-    let app = minutes_app(&window)?;
-    let worker = app.clone();
-    let record = tauri::async_runtime::spawn_blocking(move || {
-        worker.state::<Storage>().existing_export(&request)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    Ok(ExportStatus {
-        active: app.state::<exports::ExportController>().active(),
-        record,
-    })
-}
 
 #[tauri::command]
 fn get_minutes_preferences(
@@ -976,138 +889,13 @@ async fn save_minutes_markdown(
     Ok(document)
 }
 
-#[tauri::command]
-async fn get_minutes_versions(
-    window: WebviewWindow,
-    meeting_id: String,
-) -> Result<storage::MinutesVersionState, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().minutes_versions(&meeting_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn get_minutes_preview(
-    window: WebviewWindow,
-    meeting_id: String,
-    minutes_id: String,
-) -> Result<Option<storage::MinutesView>, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .load_minutes_content(&meeting_id, &minutes_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn get_minutes_draft(
-    window: WebviewWindow,
-    meeting_id: String,
-    minutes_id: Option<String>,
-) -> Result<Option<storage::MinutesDraft>, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .load_minutes_draft(&meeting_id, minutes_id.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn create_minutes_draft(
-    window: WebviewWindow,
-    meeting_id: String,
-    minutes_id: String,
-) -> Result<storage::MinutesDraft, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .create_minutes_draft(&meeting_id, &minutes_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn save_minutes_draft(
-    window: WebviewWindow,
-    draft_id: String,
-    expected_lock_version: i64,
-    payload: minutes_document::MinutesContent,
-) -> Result<storage::MinutesDraft, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .save_minutes_draft(&draft_id, expected_lock_version, payload)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn undo_minutes_edit(
-    window: WebviewWindow,
-    draft_id: String,
-    expected_lock_version: i64,
-) -> Result<storage::MinutesDraft, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .undo_minutes_edit(&draft_id, expected_lock_version)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn adopt_minutes_candidate(
-    window: WebviewWindow,
-    request: storage::MinutesAdoptRequest,
-) -> Result<storage::CommittedMinutes, String> {
-    let app = minutes_app(&window)?;
-    let meeting = request.meeting_id.clone();
-    let worker = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        worker.state::<Storage>().adopt_minutes(request)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let _ = app.emit("minutes-version-changed", meeting);
-    Ok(result)
-}
 
-#[tauri::command]
-async fn restore_minutes_version(
-    window: WebviewWindow,
-    meeting_id: String,
-    expected_meeting_lock_version: i64,
-    expected_previous_id: String,
-    expected_content_hash: String,
-    expected_draft: Option<storage::DraftStamp>,
-) -> Result<storage::CommittedMinutes, String> {
-    let app = minutes_app(&window)?;
-    let meeting = meeting_id.clone();
-    let worker = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        worker.state::<Storage>().restore_minutes_checked(
-            &meeting_id,
-            expected_meeting_lock_version,
-            &expected_previous_id,
-            &expected_content_hash,
-            expected_draft,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let _ = app.emit("minutes-version-changed", meeting);
-    Ok(result)
-}
 
 
 #[tauri::command]
@@ -1367,31 +1155,7 @@ async fn cancel_analysis_job(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-async fn get_minutes_evidence_source(
-    window: WebviewWindow,
-    request: storage::MinutesEvidenceRequest,
-) -> Result<storage::MinutesEvidenceSource, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().minutes_evidence_source(&request)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn get_minutes_transcript_page(
-    window: WebviewWindow,
-    request: storage::MinutesTranscriptRequest,
-) -> Result<storage::MinutesTranscriptPage, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>().minutes_transcript_page(&request)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 fn register_playback_preparation(
@@ -1433,43 +1197,7 @@ fn finish_playback_preparation(
         .acknowledge(&preparation_id, &playback_token)
 }
 
-#[tauri::command]
-async fn prepare_minutes_transcript_playback(
-    window: WebviewWindow,
-    request: storage::MinutesTranscriptAudioRequest,
-    preparation_id: String,
-) -> Result<PlaybackInfo, String> {
-    let app = minutes_app(&window)?;
-    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app
-            .state::<Storage>()
-            .prepare_minutes_transcript_audio_cancellable(&request, &|| guard.cancelled())?;
-        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn prepare_minutes_evidence_playback(
-    window: WebviewWindow,
-    request: storage::MinutesEvidenceRequest,
-    preparation_id: String,
-) -> Result<PlaybackInfo, String> {
-    let app = minutes_app(&window)?;
-    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        guard.check()?;
-        let audio = app
-            .state::<Storage>()
-            .prepare_minutes_evidence_audio_cancellable(&request, &|| guard.cancelled())?;
-        guard.publish(|| app.state::<PlaybackStore>().insert(audio))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 async fn prepare_meeting_playback(
@@ -2470,10 +2198,6 @@ pub fn run() {
                 get_meeting_audio_summary,
                 prepare_markdown_interval_playback,
                 prepare_draft_utterance_playback,
-                get_minutes_evidence_source,
-                get_minutes_transcript_page,
-                prepare_minutes_transcript_playback,
-                prepare_minutes_evidence_playback,
                 read_playback_chunk,
                 close_playback,
                 finish_main_close,
@@ -2486,25 +2210,13 @@ pub fn run() {
                 continue_analysis_flow,
                 retry_diarization,
                 get_diarization_tracks,
-                start_minutes_generation,
                 start_markdown_minutes_generation,
-                get_minutes_versions,
                 get_minutes_markdown,
                 save_minutes_markdown,
-                get_minutes_exports,
-                get_minutes_export_status,
-                export_minutes_markdown,
                 export_plain_minutes_markdown,
                 get_plain_minutes_export_status,
                 get_minutes_preferences,
                 save_minutes_preferences,
-                get_minutes_preview,
-                get_minutes_draft,
-                create_minutes_draft,
-                save_minutes_draft,
-                undo_minutes_edit,
-                adopt_minutes_candidate,
-                restore_minutes_version,
                 get_analysis_jobs,
                 get_analysis_notification_jobs,
                 get_analysis_notification_output,

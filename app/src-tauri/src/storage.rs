@@ -35,7 +35,6 @@ mod meeting_playback;
 mod migration_update_tests;
 mod minutes;
 mod minutes_drafts;
-mod minutes_evidence;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
@@ -76,10 +75,6 @@ pub(crate) use jobs::{
 pub(crate) use meeting_playback::{MeetingPlaybackRequest, MeetingIntervalRequest, MeetingAudioSummary};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
-pub(crate) use minutes_evidence::{
-    MinutesEvidenceRequest, MinutesEvidenceSource, MinutesTranscriptAudioRequest,
-    MinutesTranscriptPage, MinutesTranscriptRequest,
-};
 pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
 pub(crate) use minutes_ui::{MinutesAdoptRequest, MinutesVersionState};

@@ -10,13 +10,13 @@ function fixture(patch:Partial<PreparationBridge>={}){
   const bridge:PreparationBridge={register:async id=>{calls.push(`register:${id}`);},prepare:async(command,args)=>{calls.push(`prepare:${command}:${args.preparationId}`);return info;},cancel:async id=>{calls.push(`cancel:${id}`);},acknowledge:async(id,token)=>{calls.push(`ack:${id}:${token}`);},close:async token=>{closed.push(token);},...patch};
   return {pool:new PlaybackPreparationPool(bridge,()=>`id-${++sequence}`),calls,closed};
 }
-test("all five preparation paths reserve then prepare then acknowledge the exact received token",async()=>{
+test("all current preparation paths reserve then prepare then acknowledge the exact received token",async()=>{
   const f=fixture();
-  for(const command of ["prepare_utterance_playback","prepare_draft_utterance_playback","prepare_minutes_evidence_playback","prepare_minutes_transcript_playback","prepare_meeting_playback"]){
+  for(const command of ["prepare_utterance_playback","prepare_draft_utterance_playback","prepare_markdown_interval_playback","prepare_meeting_playback"]){
     assert.equal(await f.pool.run(command,{request:{fixed:"reference"},preparationId:"untrusted"}),info);
   }
-  assert.equal(f.calls.length,15);for(let i=0;i<5;i++){assert.equal(f.calls[i*3],`register:id-${i+1}`);assert.match(f.calls[i*3+1],new RegExp(`:id-${i+1}$`));assert.equal(f.calls[i*3+2],`ack:id-${i+1}:audio`);}
-  await f.pool.stop();assert.equal(f.calls.length,15);assert.deepEqual(f.closed,[]);
+  assert.equal(f.calls.length,12);for(let i=0;i<4;i++){assert.equal(f.calls[i*3],`register:id-${i+1}`);assert.match(f.calls[i*3+1],new RegExp(`:id-${i+1}$`));assert.equal(f.calls[i*3+2],`ack:id-${i+1}:audio`);}
+  await f.pool.stop();assert.equal(f.calls.length,12);assert.deepEqual(f.closed,[]);
 });
 test("cancel while registration is pending waits for registration and never starts expensive preparation",async()=>{
   const reg=deferred<void>();const f=fixture({register:async id=>{f.calls.push(`register:${id}`);await reg.promise;}});

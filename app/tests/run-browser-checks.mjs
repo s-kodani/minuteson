@@ -106,8 +106,7 @@ const readiness = {
 };
 for (const [name, fixture, source] of suites) {
   const check = localPort(readFileSync(resolve(tests, source), "utf8"));
-  const setup = fixture === "minutes-init" ? `await page.goto("${origin}/"); await (${localPort(readFileSync(resolve(tests, "minutes-browser-fixture.js"), "utf8").replace('export async function', 'async function'))})(page);`
-    : fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("${origin}/");` : "";
+  const setup = fixture ? `await page.context().route(${indexRoute}, async route=>{const response=await route.fetch(); const body=(await response.text()).replace(${entryScript}, ${JSON.stringify(`<script type="module">await import("/tests/${fixture}");</script>`)}); await route.fulfill({response,body});}); await page.goto("${origin}/");` : "";
   const ready = readiness[fixture] ? `await page.waitForFunction(name=>!!window[name],${JSON.stringify(readiness[fixture])});` : "";
   // The browser daemon's cwd can differ from this runner's cwd. Always route
   // generated captures to the explicit output directory, not the repo root.

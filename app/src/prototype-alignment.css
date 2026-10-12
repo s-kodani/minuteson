@@ -106,8 +106,6 @@ button:disabled { opacity:.5; }
 .utterance-edit-tools { margin-top:8px; font-size:12px; color:var(--muted); }
 .utterance-edit-tools>summary { cursor:pointer; }
 .utterance-edit-tools>label { display:flex; align-items:center; gap:6px; margin-block:10px; }
-.minutes-editor-actions-host,.minutes-edit-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.minutes-edit-actions[hidden] { display:none; }
 .settings-disclosure { margin-top:12px; }
 .settings-disclosure-body[hidden] { display:none; }
 .settings-disclosure-body { padding-top:12px; }
@@ -115,7 +113,6 @@ button:disabled { opacity:.5; }
 .options-modal[hidden] { display:none; }
 .options-modal[data-portaled=true]:not([hidden]) { display:contents; }
 .options-modal-trigger[hidden] { display:none; }
-.minutes-settings-actions-host,.minutes-format-actions-host { display:flex; align-items:center; }
 .options-modal.workspace-tools { border:0; padding:0; background:transparent; }
 .options-modal-trigger { min-height:var(--action-height,40px); padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); font-weight:500; }
 .options-attention { color:var(--danger-text); font-size:11px; }
@@ -123,7 +120,7 @@ button:disabled { opacity:.5; }
 .options-dialog h2 { margin:0 0 20px; font-size:19px; }
 .options-dialog-content { display:grid; gap:16px; min-width:0; }
 .options-dialog .workspace-tools-body { max-height:none; overflow:visible; padding:0; }
-.options-dialog .minutes-toolbar,.options-dialog .analysis-settings { max-height:none; overflow:visible; }
+.options-dialog .analysis-settings { max-height:none; overflow:visible; }
 .options-dialog .analysis-settings { margin:12px 0; }
 .analysis-engine-view:not([hidden]) { display:grid; gap:16px; min-width:0; }
 .analysis-engine-view>h2 { margin:0; font-size:19px; }
@@ -170,38 +167,13 @@ button:disabled { opacity:.5; }
 .workspace-panel-side-content { display:flex; flex:1; min-height:0; min-width:0; }
 .workspace-panel-shell[data-collapsible=true]>.workspace-panel-side-host { flex-direction:column; gap:8px; }
 .workspace-panel-close { align-self:flex-end; flex:none; font-size:12px; margin:6px 6px 0 0; }
-.minutes-split[data-full=false]:has(>.workspace-panel-shell[data-collapsible=true][data-open=false]) { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:6px; }
-.minutes-split[data-full=false]:has(>.workspace-panel-shell[data-collapsible=true][data-open=false])>.workspace-panel-shell { grid-column:1; grid-row:1; align-items:flex-end; padding:6px 8px 6px 2px; overflow:hidden; scrollbar-gutter:stable; }
-.minutes-split[data-full=false]:has(>.workspace-panel-shell[data-collapsible=true][data-open=false])>.minutes-body-scroll { grid-row:2; }
-.minutes-split .workspace-drawer-trigger { font-size:12px; min-height:28px; padding:4px 8px; }
-.minutes-outline-tools { margin-bottom:12px; font-size:12px; }
-.minutes-outline-tools>summary { cursor:pointer; color:var(--muted); }
-.minutes-primary-toolbar { display:flex; flex-wrap:wrap; gap:6px; max-width:none; margin:0 0 12px; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:8px; }
-.minutes-split .minutes-document-layout { grid-template-columns:minmax(0,1fr); }
-.minutes-primary-toolbar[hidden],.minutes-document>div[hidden] { display:none; }
-.minutes-primary-toolbar button { min-height:30px; padding:4px 10px; font-size:12px; }
-.minutes-editor .minutes-wysiwyg { padding:28px 32px; }
-.minutes-rich-field [data-evidence-id][role=button] { cursor:pointer; }
-.minutes-rich-field [data-evidence-id][role=button]:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-.minutes-edit-options { font-size:12px; color:var(--muted); }
-.minutes-edit-options>summary { cursor:pointer; }
-.minutes-edit-options[open] { max-width:280px; }
 .minutes-empty-state { padding:32px 16px; text-align:center; color:var(--muted); }
-.meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]),.minutes-workspace-tools:not([open]),.minutes-format-tools:not([open]) { padding:0; border:0; background:transparent; }
-.meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary,.minutes-workspace-tools:not([open])>summary,.minutes-format-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
+.meeting-workspace-tools:not([open]),.transcript-workspace-tools:not([open]) { padding:0; border:0; background:transparent; }
+.meeting-workspace-tools:not([open])>summary,.transcript-workspace-tools:not([open])>summary { padding:0; line-height:18px; color:var(--muted); font-size:12px; }
 .transcript-main>.transcript-actions:first-child h2 { margin:0 auto 0 0; font-size:17px; }
 .speaker-panel-body .speaker-label { border:0; border-radius:6px; padding:4px 7px; }
 .utterance-meta .speaker-label { border:0; border-radius:6px; }
-.minutes-editor .minutes-document>div:not([hidden]) { padding:28px 32px; background:var(--surface); border:1px solid var(--border); border-radius:12px; }
-.minutes-editor .minutes-document>div:not([hidden])>h3 { margin:0 0 18px; color:var(--muted); font-size:12px; font-weight:500; }
-.minutes-editor .minutes-document-layout article { line-height:1.9; }
-.minutes-editor .minutes-document-layout article h1 { font-size:1.6em; margin:0 0 22px; }
-.minutes-editor .minutes-document-layout article h2 { font-size:1.2em; margin:26px 0 10px; }
-.minutes-editor .minutes-document-layout article h3 { font-size:1.0667em; }
-.meeting-detail-content .minutes-document-status .data-updated { margin:0; }
-.meeting-detail-content .minutes-document-status .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
 @media(max-width:1119px) {
-  .minutes-split .workspace-drawer-trigger { min-height:28px; padding:4px 8px; }
   .transcript-split .workspace-drawer-trigger { min-height:28px; padding:4px 8px; }
   .meeting-detail-content .transcript-split { gap:6px; }
 }
@@ -214,7 +186,6 @@ button:disabled { opacity:.5; }
 @media(max-width:760px) {
   .meeting-detail-status { padding:16px; }
   .meeting-detail-status h1 { font-size:20px; }
-  .minutes-editor .minutes-document>div:not([hidden]) { padding:22px 18px; }
 }
 .meeting-detail-content>.meetings-card:not([hidden]),.meeting-detail-content>.meeting-analysis-tools:not([hidden]) { flex:none; max-height:20dvh; overflow:auto; }
 .meeting-detail-navigation { flex:none; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; padding:0 28px; border-bottom:1px solid var(--border); background:var(--surface); }
@@ -236,7 +207,6 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .transcript-feedback>.issue-status { margin:0; max-height:none; flex:0 1 auto; }
 .transcript-feedback .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
 .utterance-text { margin:8px 0; line-height:1.9; }
-.minutes-wysiwyg { padding:35px 42px; border-radius:12px; border-color:var(--border); }
 .info-popover,dialog { border-radius:var(--floating-radius); background-clip:padding-box; isolation:isolate; box-shadow:var(--floating-shadow); }
 .common-modal { border-radius:var(--floating-radius); }
 /* Detached drawers must round all four corners, including the screen-facing edge. */
@@ -345,7 +315,6 @@ button:disabled { opacity:.5; }
 @media(max-width:760px) {
   .content { padding:22px 16px; }
   .content h1 { font-size:22px; }
-  .minutes-wysiwyg { padding:22px 19px; }
   .meeting-list li { padding:14px 12px; flex-wrap:wrap; }
   .meeting-table th,.meeting-table td { padding:14px 12px; }
   .meeting-date { white-space:normal; }
@@ -354,13 +323,11 @@ button:disabled { opacity:.5; }
 /* Text actions share one metric per row, including portaled settings triggers.
    A minimum, not a fixed height, lets long labels wrap without being clipped. */
 :is(.analysis-actions,.transcript-actions,.card-actions,.recovery-actions,
-    .transcript-options-buttons,.transcript-options-recovery,.minutes-toolbar,
-    .minutes-primary-toolbar,.meeting-audio-actions,.audio-controls,.mini-bottom,
+    .transcript-options-buttons,.transcript-options-recovery,.meeting-audio-actions,.audio-controls,.mini-bottom,
     .transcript-pages,.utterance-meta,.preview-utterance-meta,.version-row,
-    .common-modal,.theme-settings,.settings-disclosure,
-    .meeting-detail-content .minutes-primary-actions) button:not(:is(.info-trigger,
+    .common-modal,.theme-settings,.settings-disclosure) button:not(:is(.info-trigger,
     .info-close,.toast-close,.utterance-stamp,.speaker-name-button,.speaker-count-filter,
-  .transcript-body-edit,.utterance-play-icon,.evidence-chip,[data-evidence-id])) {
+  .transcript-body-edit,.utterance-play-icon)) {
   display:inline-flex; align-items:center; justify-content:center;
   min-height:var(--action-height,40px);
   padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px;
@@ -369,33 +336,17 @@ button:disabled { opacity:.5; }
   min-width:0; max-width:100%; overflow-wrap:anywhere;
   vertical-align:middle; white-space:normal;
 }
-.meeting-detail-content .minutes-primary-actions,
-.meeting-detail-content .transcript-actions,.transcript-workspace-tools,.minutes-primary-toolbar,
+
+.meeting-detail-content .transcript-actions,.transcript-workspace-tools,
 .meeting-playback-dock,.mini-bottom {
   --action-height:32px; --action-font-size:12px; --action-line-height:18px;
 }
 /* A modal starts a new action row rather than inheriting its compact opener. */
-.common-modal,.common-modal :is(.analysis-actions,.transcript-actions,.minutes-toolbar,
-    .minutes-primary-toolbar,.meeting-audio-actions,.audio-controls) {
+.common-modal,.common-modal :is(.analysis-actions,.transcript-actions,.meeting-audio-actions,.audio-controls) {
   --action-height:40px; --action-font-size:13px; --action-line-height:20px;
 }
 .analysis-actions,.card-actions,.recovery-actions,
-.transcript-options-buttons,.transcript-options-recovery,.minutes-toolbar,
-.minutes-primary-toolbar { align-items:stretch; }
-.minutes-format-tools .workspace-tools-body { display:grid; gap:16px; min-width:0; }
-.minutes-format-tools .workspace-tools-body>p { margin:0; }
-.minutes-format-tools .minutes-toolbar { margin:0; gap:10px; }
-.minutes-workspace-tools .workspace-tools-body { display:grid; gap:20px; min-width:0; }
-.minutes-settings-controls { display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; min-width:0; }
-.minutes-settings-controls>.minutes-editor-options-host { display:contents; }
-.minutes-workspace-tools .workspace-tools-body>:is(p,.analysis-jobs) { margin:0; }
-.minutes-workspace-tools .analysis-settings { display:grid; gap:16px; min-width:0; margin:0; }
-.minutes-workspace-tools .analysis-settings>:is(h3,p,.analysis-actions) { margin:0; }
-.minutes-workspace-tools .analysis-settings>fieldset { display:grid; gap:16px; min-width:0; margin:0; }
-.minutes-workspace-tools .analysis-settings label { margin:0; gap:8px; }
-.minutes-workspace-tools .info-field { display:grid; gap:8px; min-width:0; }
-.minutes-workspace-tools :is(.analysis-versions,.minutes-export-history) { display:grid; gap:12px; min-width:0; }
-.minutes-workspace-tools :is(.analysis-versions,.minutes-export-history)>:is(h3,p) { margin:0; }
+.transcript-options-buttons,.transcript-options-recovery { align-items:stretch; }
 .info-trigger,.info-close { min-height:32px; }
 
 /* Empty/loading states live outside the padded transcript split. */
@@ -445,7 +396,7 @@ button:disabled { opacity:.5; }
 .common-modal.analysis-dialog .preview-columns { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .preview-columns>section { min-width:0; }
 .card-actions { flex-wrap:wrap; }
-.analysis-actions>span,.transcript-actions>span,.minutes-toolbar>span,.minutes-primary-toolbar>span { align-self:center; }
+.analysis-actions>span,.transcript-actions>span { align-self:center; }
 .vocabulary-list .analysis-actions label { gap:8px; }
 .action-error:has(>button) { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; }
 .action-error>button { flex:none; max-width:100%; }
@@ -473,9 +424,6 @@ button:disabled { opacity:.5; }
 .common-modal .playback-follow-choice input[type=checkbox],.vocabulary-list input[type=checkbox] { margin:0; flex:none; }
 .meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
 .meeting-detail-content .minutes-card>.card-head { gap:12px; }
-.minutes-save-status { font-size:11px; white-space:nowrap; color:var(--muted); }
-.minutes-primary-actions>.minutes-editor-actions-host { min-width:0; }
-.minutes-document-status>.heading-with-info { gap:4px; }
 .transcript-main>.transcript-actions:first-child { min-height:32px; }
 .meeting-audio-settings-fields>.playback-follow-choice { display:flex; align-items:center; gap:8px; }
 .import-term label:has(>input[type=checkbox]) { flex-direction:row; align-items:center; gap:8px; }
@@ -511,11 +459,10 @@ button:disabled { opacity:.5; }
 .transcript-pages { flex-wrap:wrap; gap:10px 12px; }
 .transcript-pages :is(form,label) { min-width:0; flex-wrap:wrap; gap:8px; }
 .transcript-pages input[type=number] { min-height:var(--action-height,40px); padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 10px; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border-radius:8px; }
-.evidence-verification { flex-wrap:wrap; gap:8px 12px; }
 .common-modal label:has(>input[type=checkbox]):not(.import-checkbox) { display:flex; align-items:center; gap:8px; }
 .common-modal label>input:is([type=checkbox],[type=radio]) { flex:none; margin:0; }
 .utterance-meta .assigned-speakers { margin:0; align-items:center; }
-.meeting-detail-content .utterance-list,.meeting-detail-content .minutes-body-scroll { padding-right:8px; scrollbar-gutter:stable; }
+.meeting-detail-content .utterance-list { padding-right:8px; scrollbar-gutter:stable; }
 .meeting-detail-content .transcript-search { align-items:center; gap:8px 12px; max-height:none; overflow:visible; }
 .playback-follow-status { max-height:none; overflow:visible; padding-block:8px; }
 .playback-follow-status>span { min-width:0; overflow-wrap:anywhere; }
@@ -613,14 +560,6 @@ button:disabled { opacity:.5; }
 .model-preparation-next>button { justify-self:start; max-width:100%; }
 /* Keep reference headings centered with their adjacent close action, and
    leave a real gap between expandable records and playback controls. */
-.minutes-reference-body .fixed-evidence-group>.card-head { align-items:center; gap:12px; }
-.fixed-transcript-workspace>.card-head>h3 { min-width:0; margin:0; }
-.fixed-evidence>.evidence-record-details { margin-block:12px; }
-.evidence-record-details>small { display:block; margin-top:8px; overflow-wrap:anywhere; }
-.fixed-evidence>.audio-controls { align-items:stretch; gap:10px 12px; }
-.fixed-evidence>.audio-controls>button { min-width:0; max-width:100%; }
-.fixed-transcript article>.document-text { margin-block:8px; }
-.fixed-transcript article>small.document-text { display:block; }
 .analysis-jobs li>div:first-child,.speaker-review li>span { min-width:0; overflow-wrap:anywhere; }
 /* Nested count settings cannot rely on the outer dialog's grid to space
    their own children. Keep conditional count inputs in the same track. */
@@ -658,12 +597,6 @@ button:disabled { opacity:.5; }
 .meeting-list-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; min-width:0; }
 .meeting-list-notice>button { flex:none; max-width:100%; }
 .common-modal .card-head>:is(h2,h3,h4) { min-width:0; margin:0; }
-.minutes-page-navigation { display:grid; gap:12px; min-width:0; margin-top:16px; }
-.minutes-page-navigation>.transcript-pages,.minutes-page-navigation>.action-error { margin:0; }
-.minutes-page-navigation .transcript-pages input[type=number],
-.fixed-transcript-workspace .transcript-pages input[type=number] {
-  padding:calc((var(--action-height,40px) - var(--action-line-height,20px) - 2px) / 2) 12px;
-}
 @media(max-width:600px) {
   .options-dialog .diarization-tracks { grid-template-columns:minmax(0,1fr); }
 }
@@ -687,11 +620,6 @@ button:disabled { opacity:.5; }
   .meeting-detail-status { padding:12px 16px 8px; }
   .meeting-detail-content .minutes-card { padding:12px 16px; gap:8px; }
   .meeting-detail-content .minutes-card>.card-head { gap:8px; align-items:center; }
-  .meeting-detail-content .minutes-primary-actions { gap:6px; min-width:0; max-width:100%; }
-  .minutes-editor-actions-host,.minutes-edit-actions { gap:6px; }
-  .meeting-detail-content .minutes-document-status { gap:6px; font-size:11px; }
-  .meeting-detail-content .minutes-document-status .data-updated { padding:2px 4px; font-size:11px; }
-  .meeting-detail-content .minutes-document-status .info-trigger { width:20px; min-height:20px; height:20px; }
   .meeting-playback-dock { padding-block:8px; }
 }
 /* Guided imports share the compact modal control rhythm; long names wrap. */

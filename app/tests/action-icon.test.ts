@@ -40,16 +40,6 @@ test("shared icon controls remain square and centered at each action row size", 
   assert.match(css, /\.action-icon \{ display:block; flex:none; pointer-events:none/);
 });
 
-test("standard document formatting uses icons without losing selection or editing guards", () => {
-  const editor = source("minutes-editor.tsx"), icon = source("action-icon.tsx");
-  for (const [label, name] of Object.entries({ "太字":"bold", "斜体":"italic", "見出し1":"heading1", "見出し2":"heading2", "見出し3":"heading3", "箇条書き":"list", "番号付きリスト":"numberedList", "表を挿入":"table" })) {
-    assert.ok(editor.includes(`"${label}": "${name}"`));
-    assert.ok(icon.includes(`name === "${name}"`));
-  }
-  assert.match(editor, /<IconButton label=\{label\} icon=\{formatIcons\[label\]!\} disabled=\{changingPageDisabled \|\| unavailable\} onMouseDown=\{\(e\) => e\.preventDefault\(\)\} onClick=\{event => action\(event\.currentTarget\)\}/);
-  assert.match(editor, /triggerLabel="書式の詳細" icon="more"/);
-  assert.match(editor, /toolbarButton\("ブロックを削除", opener =>/);
-});
 
 test("playback speed never shrinks into the timestamp and matches adjacent icon heights", () => {
   const css = source("prototype-alignment.css");
@@ -62,7 +52,7 @@ test("playback speed never shrinks into the timestamp and matches adjacent icon 
 test("ordinary refresh, pause and page navigation labels do not remain as text-only buttons", () => {
   const directory = new URL("../src/", import.meta.url);
   const remaining: string[] = [];
-  let icons = 0;
+  const icons = new Set<string>();
   for (const file of readdirSync(directory).filter(name => name.endsWith(".tsx"))) {
     const text = readFileSync(new URL(file,directory),"utf8");
     const parsed = ts.createSourceFile(file,text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -74,18 +64,12 @@ test("ordinary refresh, pause and page navigation labels do not remain as text-o
       }
       if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(parsed)==="IconButton") {
         const label=node.attributes.properties.find(p=>ts.isJsxAttribute(p)&&p.name.getText(parsed)==="label");
-        if (label && ts.isJsxAttribute(label) && label.initializer && ts.isStringLiteral(label.initializer) && ordinary(label.initializer.text)) icons++;
+        if (label && ts.isJsxAttribute(label) && label.initializer && ts.isStringLiteral(label.initializer) && ordinary(label.initializer.text)) icons.add(`${file}:${label.initializer.text}`);
       }
       ts.forEachChild(node,visit);
     }
     visit(parsed);
   }
   assert.deepEqual(remaining,[]);
-  // Manual recovery/model-deletion and redundant display controls were removed.
-  assert.ok(icons>=27,`expected remaining secondary paths, found ${icons}`);
-});
-
-test("recovery pagination icons preserve guarded read actions and explicit labels", () => {
-  assert.match(source("minutes-evidence.tsx"),/label="前の10根拠" icon="previous".*disabled=\{locked \|\| group.page === 0\}/);
-  assert.match(source("fixed-transcript.tsx"),/label="議事録の元の位置へ戻る" icon="previous".*onClick=\{back\}/);
+  for (const entry of ["minutes.tsx:議事録を再読込","recording-workspace.tsx:会議一覧へ戻る","playback-missing.tsx:前の欠損一覧"]) assert.ok(icons.has(entry),entry);
 });

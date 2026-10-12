@@ -3,7 +3,6 @@ import { InfoPopover } from "./info-popover";
 import { IconButton } from "./action-icon";
 import { useEffect, useRef, useState } from "react";
 import { ChunkPlayer, playbackStartFrame,type AudioPacket, type PlaybackClock, type PlaybackInfo } from "./playback";
-import type { MinutesEvidenceRequest, MinutesTranscriptAudioRequest } from "./minutes-state";
 import type { DraftUtteranceAudioRequest } from "./transcript-state";
 import { registerPlaybackStop } from "./playback-barrier";
 import { appShortcut, overlayOpen } from "./keyboard";
@@ -121,7 +120,7 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     };
   }, [clock, player, owner,nativePreparations]);
 
-  const startInner = async (analysisId: string, utteranceId: string, reference?: MinutesEvidenceRequest | MinutesTranscriptAudioRequest | DraftUtteranceAudioRequest | MeetingPlaybackRequest | MarkdownIntervalRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore, preserveFollow = false) => {
+  const startInner = async (analysisId: string, utteranceId: string, reference?: DraftUtteranceAudioRequest | MeetingPlaybackRequest | MarkdownIntervalRequest, absoluteStartUs?: number, restore?: MeetingPlaybackRestore, preserveFollow = false) => {
     if (locked) return;
     clear();
     const meeting = reference && "mode" in reference ? reference : null;
@@ -140,7 +139,6 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       // Resume in the user's click, before hashing or IPC awaits lose activation.
       await clock.resume();
       if (generation !== request.current) return;
-      const transcript = reference && "reference" in reference ? reference : null;
       const split=reference && "expectedDraft" in reference ? reference : null;
       const info = interval
         ? await nativePreparations.run("prepare_markdown_interval_playback", { request: interval })
@@ -148,10 +146,6 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
         ? await nativePreparations.run("prepare_meeting_playback", { request: meeting })
         : split
         ? await nativePreparations.run("prepare_draft_utterance_playback",{request:split})
-        : transcript
-        ? await nativePreparations.run("prepare_minutes_transcript_playback", { request: transcript })
-        : reference
-        ? await nativePreparations.run("prepare_minutes_evidence_playback", { request: reference })
         : await nativePreparations.run("prepare_utterance_playback", { meetingId, analysisId, utteranceId });
       if (generation !== request.current) {
         await closeToken(info.token);
@@ -159,8 +153,8 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
       }
       token.current = info.token;
       if (!meeting && info.missingRanges?.length) throw new Error("発言音声に会議全体の欠損情報が含まれています");
-      const startUs = split?.expectedStartUs ?? transcript?.expectedStartUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.startUs : undefined);
-      const endUs = split?.expectedEndUs ?? transcript?.expectedEndUs ?? (reference && "expectedEvidence" in reference ? reference.expectedEvidence.endUs : undefined);
+      const startUs = split?.expectedStartUs;
+      const endUs = split?.expectedEndUs;
       if (reference && !meeting && (info.startUs !== startUs || info.endUs !== endUs)) {
         await closeToken(info.token);
         token.current = null;

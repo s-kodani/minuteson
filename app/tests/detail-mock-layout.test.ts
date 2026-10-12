@@ -2,19 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
-test("minutes paper and basic toolbar use available width; opener shares the body's gutter", () => {
-  const css=source("prototype-alignment.css"), base=source("style.css");
-  assert.match(base,/\.minutes-split \.minutes-document,\.minutes-split \.minutes-wysiwyg \{ max-width:none;/);
-  assert.match(css,/\.minutes-primary-toolbar \{[^}]*max-width:none;/);
-  assert.match(css,/\.minutes-split \.minutes-document-layout \{ grid-template-columns:minmax\(0,1fr\); \}/);
-  assert.match(css,/\.minutes-split\[data-full=false\]:has\([^}]*>\.workspace-panel-shell \{[^}]*padding:6px 8px 6px 2px; overflow:hidden; scrollbar-gutter:stable;/);
-});
-test("minutes panel entry and close reserve room for the shared external focus ring",()=>{
-  const css=source("prototype-alignment.css"), base=source("style.css");
-  assert.match(base,/button:focus-visible\{outline:3px solid var\(--focus\);outline-offset:2px\}/);
-  assert.match(css,/\.workspace-panel-close \{[^}]*margin:6px 6px 0 0;/);
-  assert.match(css,/padding:6px 8px 6px 2px; overflow:hidden; scrollbar-gutter:stable;/);
-});
 test("meeting title precedes tabs and all fixed chrome participates in dock sizing", () => {
   const main = source("main.tsx");
   assert.ok(main.indexOf('{detail && <div className="meeting-detail-status"') < main.indexOf('{detail && <div className="meeting-detail-navigation"'));
@@ -82,8 +69,8 @@ test("adjacent text actions share height and typography across portaled triggers
   assert.match(css,/line-height:var\(--action-line-height,20px\); font-weight:500/);
   assert.match(css,/--action-height:32px; --action-font-size:12px; --action-line-height:18px/);
   assert.match(css,/\.common-modal,\.common-modal :is\([\s\S]*?--action-height:40px; --action-font-size:13px; --action-line-height:20px;/);
-  assert.match(css,/\.minutes-primary-toolbar \{ align-items:stretch; \}/);
-  assert.match(css,/\.transcript-body-edit,\.utterance-play-icon,\.evidence-chip,\[data-evidence-id\]/);
+  assert.match(source("minutes-markdown-editor.css"),/\.plain-minutes-actions \{ display:flex; align-items:center;/);
+  assert.match(css,/\.transcript-body-edit,\.utterance-play-icon/);
 });
 
 test("minutes edit actions use the existing editor owner and generation stays guarded", () => {
@@ -170,12 +157,6 @@ test("workspace search fields override inherited input fonts and retain consiste
   assert.match(css,/\.meetings-card>\.card-head>button \{[^}]*min-height:40px;[^}]*font-size:13px; line-height:20px;/);
 });
 
-test("minutes format options space their nested explanation and wrapped actions explicitly", () => {
-  const css=source("prototype-alignment.css");
-  assert.match(css,/\.minutes-format-tools \.workspace-tools-body \{ display:grid; gap:16px; min-width:0; \}/);
-  assert.match(css,/\.minutes-format-tools \.workspace-tools-body>p \{ margin:0; \}/);
-  assert.match(css,/\.minutes-format-tools \.minutes-toolbar \{ margin:0; gap:10px; \}/);
-});
 
 test("minutes settings group portaled management with reload and generation without touching actions", () => {
   const css=source("minutes-markdown-editor.css"), minutes=source("minutes.tsx");
@@ -192,13 +173,12 @@ test("pagination and metadata actions use the same metrics and can wrap", () => 
   assert.match(css,/\.transcript-pages :is\(form,label\) \{ min-width:0; flex-wrap:wrap; gap:8px;/);
   assert.match(css,/\.transcript-pages input\[type=number\] \{ min-height:var\(--action-height,40px\);/);
   assert.match(css,/\.version-row \{ flex-wrap:wrap; gap:12px;/);
-  assert.match(css,/\.evidence-verification \{ flex-wrap:wrap; gap:8px 12px;/);
   assert.match(css,/\.utterance-meta \.assigned-speakers \{ margin:0; align-items:center;/);
 });
 
 test("reading surfaces reserve scrollbar clearance and short controls have no nested scrollport", () => {
   const css=source("prototype-alignment.css");
-  assert.match(css,/\.meeting-detail-content \.utterance-list,\.meeting-detail-content \.minutes-body-scroll \{ padding-right:8px; scrollbar-gutter:stable;/);
+  assert.match(css,/\.meeting-detail-content \.utterance-list \{ padding-right:8px; scrollbar-gutter:stable;/);
   assert.match(css,/\.meeting-detail-content \.transcript-search \{ align-items:center; gap:8px 12px; max-height:none; overflow:visible;/);
   assert.match(css,/\.playback-follow-status \{ max-height:none; overflow:visible; padding-block:8px;/);
   assert.match(css,/\.info-popover-head \{ align-items:center;/);
@@ -225,15 +205,6 @@ test("nested model settings reserve space between headings, fields, records and 
   assert.match(css,/\.model-inspection-settings \.options-dialog-content>section>article \{\s*display:grid; gap:8px;/);
 });
 
-test("minutes reference headers are centered and expanded records cannot touch playback actions", () => {
-  const css=source("prototype-alignment.css");
-  assert.match(css,/\.minutes-reference-body \.fixed-evidence-group>\.card-head \{ align-items:center; gap:12px; \}/);
-  assert.match(css,/\.fixed-transcript-workspace>\.card-head>h3 \{ min-width:0; margin:0; \}/);
-  assert.match(css,/\.fixed-evidence>\.evidence-record-details \{ margin-block:12px; \}/);
-  assert.match(css,/\.evidence-record-details>small \{ display:block; margin-top:8px; overflow-wrap:anywhere; \}/);
-  assert.match(css,/\.fixed-evidence>\.audio-controls \{ align-items:stretch; gap:10px 12px; \}/);
-  assert.match(css,/\.fixed-evidence>\.audio-controls>button \{ min-width:0; max-width:100%; \}/);
-});
 
 test("speaker count settings keep one spacing rhythm and full-width aligned fields", () => {
   const css=source("prototype-alignment.css");
@@ -314,13 +285,6 @@ test("restored meeting notices separate the message and action without inline wh
   assert.match(source("prototype-alignment.css"),/\.meeting-list-notice \{ display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px;/);
 });
 
-test("minutes page controls use explicit group spacing and matching field insets", () => {
-  assert.match(source("minutes-pages.tsx"),/<nav className="minutes-page-navigation"/);
-  const css=source("prototype-alignment.css");
-  assert.match(css,/\.minutes-page-navigation \{ display:grid; gap:12px; min-width:0; margin-top:16px; \}/);
-  assert.match(css,/\.minutes-page-navigation>\.transcript-pages,\.minutes-page-navigation>\.action-error \{ margin:0; \}/);
-  assert.match(css,/\.minutes-page-navigation \.transcript-pages input\[type=number\],[\s\S]*?padding:calc\(\(var\(--action-height,40px\) - var\(--action-line-height,20px\) - 2px\) \/ 2\) 12px;/);
-});
 
 test("modal row headings cannot use default margins to offset neighboring controls", () => {
   assert.match(source("prototype-alignment.css"),/\.common-modal \.card-head>:is\(h2,h3,h4\) \{ min-width:0; margin:0; \}/);

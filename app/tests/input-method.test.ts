@@ -9,30 +9,15 @@ test("IME ownership retains active composition, native flags and WebKit confirma
   }
 });
 
-test("rich editor guards native conversion before newline mutation and prevents composition-time paste and evidence actions", () => {
-  const source = readFileSync(new URL("../src/minutes-rich-field.tsx", import.meta.url), "utf8");
-  assert.match(source, /if \(inputMethodOwnsEvent\(event, composing.current\)\) return;\s+if \(\["insertParagraph", "insertLineBreak"\]/);
-  assert.match(source, /inputMethodOwnsEvent\(event.nativeEvent, composing.current\) \|\| event.repeat/);
-  assert.match(source, /chip && !disabled && !composing.current/);
-  assert.match(source, /event.preventDefault\(\); if \(disabled \|\| evidenceOnly \|\| composing.current\) return/);
-});
 
-test("synthetic IME browser driver is executable and verifies confirmed-only saves and ordinary newlines", () => {
-  const source = readFileSync(new URL("minutes-ime-browser-check.js", import.meta.url), "utf8");
-  assert.doesNotThrow(() => new Function(`return (${source})`));
-  assert.match(source, /compositionend did not save exactly one confirmed update/);
-  assert.match(source, /plain Enter after composition stopped adding one newline/);
-});
-test("rich input uses native plain-text history and only native Undo/Redo may recover same-epoch evidence", () => {
-  const field = readFileSync(new URL("../src/minutes-rich-field.tsx", import.meta.url), "utf8");
-  assert.match(field, /document.execCommand\("insertText", false, value\)/);
-  assert.doesNotMatch(field, /range.deleteContents\(\)|range.insertNode\(/);
-  assert.match(field, /inputType === "historyUndo" \|\| inputType === "historyRedo"/);
-  const editor = readFileSync(new URL("../src/minutes-editor.tsx", import.meta.url), "utf8");
-  assert.match(editor, /inputEvidence.current.epoch !== epoch \|\| inputEvidence.current.viewId !== view.id/);
-  assert.match(editor, /nativeHistory \? \[\.\.\.inputEvidence.current.links.values\(\)\] : \[\]/);
-  const driver = readFileSync(new URL("minutes-input-undo-browser-check.js", import.meta.url), "utf8");
-  assert.doesNotThrow(() => new Function(`return (${driver})`));
-  assert.match(driver, /Meta\+Shift\+z/);
-  assert.match(driver, /native input Undo called durable edit Undo/);
+
+test("plain Markdown editing keeps native input history and guards explicit saving during IME", () => {
+  const source = readFileSync(new URL("../src/minutes-markdown-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /<textarea/);
+  assert.doesNotMatch(source, /contentEditable|execCommand|onBeforeInput|onPaste/);
+  assert.match(source, /onCompositionStart=\{\(\)=>controller.setComposing\(true\)\}/);
+  assert.match(source, /onCompositionEnd=\{\(\)=>controller.setComposing\(false\)\}/);
+  assert.match(source, /if\(!event.nativeEvent.isComposing\)void save\(\)/);
+  assert.match(source, /onChange=\{event=>controller.edit\(event.target.value\)\}/);
+  assert.doesNotMatch(source, /setInterval\(|setTimeout\(/);
 });
