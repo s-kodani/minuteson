@@ -118,13 +118,14 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   }
 }
 
-const pendingEdits = new Set<() => Promise<void>>();
+export type PendingEditReason = "leave" | "tab";
+const pendingEdits = new Set<(reason: PendingEditReason) => Promise<void>>();
 
-export function registerPendingEdits(flush: () => Promise<void>): () => void {
+export function registerPendingEdits(flush: (reason: PendingEditReason) => Promise<void>): () => void {
   pendingEdits.add(flush);
   return () => { pendingEdits.delete(flush); };
 }
 
-export async function flushPendingEdits(): Promise<void> {
-  for (const flush of pendingEdits) await flush();
+export async function flushPendingEdits(reason: PendingEditReason = "leave"): Promise<void> {
+  for (const flush of pendingEdits) await flush(reason);
 }

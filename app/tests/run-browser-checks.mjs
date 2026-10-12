@@ -93,16 +93,9 @@ const suites = [
   ["job-notifications", "browser-fixture.js", "job-notifications-browser-check.js"],
   ["publication-toast", "browser-fixture.js", "publication-toast-browser-check.js"],
   ["plain-minutes", null, "minutes-markdown-editor-browser-check.js"],
-  // addInitScript affects subsequent navigations in the selected browser page.
-  ["minutes", "minutes-init", "minutes-modal-browser-check.js"],
-  ["detail-minutes", "minutes-init", "detail-minutes-browser-check.js"],
-  ["minutes-panel", "minutes-init", "minutes-panel-browser-check.js"],
-  ["frozen-speakers", "minutes-init", "frozen-speaker-colors-browser-check.js"],
-  ["meeting-minutes-audio", "minutes-init", "meeting-minutes-audio-browser-check.js"],
-  ["display-minutes", "minutes-init", "display-minutes-browser-check.js"],
-  ["minutes-edit", "minutes-init", "minutes-edit-confirmation-browser-check.js"],
-  ["minutes-toast", "minutes-init", "minutes-toast-browser-check.js"],
-  ["minutes-publication-toast", "minutes-init", "minutes-publication-toast-browser-check.js"],
+  ["plain-minutes-production", "plain-minutes-production-browser-fixture.js", "plain-minutes-production-browser-check.js"],
+  // Structured minutes/evidence/adoption suites no longer describe the product.
+  // Plain-body saving, generation and leaving are covered above instead.
   ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
 ].filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");

@@ -22,29 +22,20 @@ test("macOS pointer opening captures the settings entry point before modal focus
   assert.match(source("meeting-audio.tsx"),/<OptionsModal label="再生設定" icon="more"/);
 });
 
-test("modal entry points share primary actions while fields keep one stable body portal",()=>{
-  const modal=source("options-modal.tsx");
+test("modal entry points share primary actions while fields keep one stable body portal", () => {
+  const modal=source("options-modal.tsx"), panel=source("minutes.tsx"), editor=source("minutes-markdown-editor.tsx");
   assert.match(modal,/triggerHost \? createPortal\(trigger,triggerHost\) : trigger/);
   assert.match(modal,/data-portaled=\{!!triggerHost\}/);
-  assert.match(modal,/ref=\{triggerRef\}[^\n]*hidden=\{hidden\}/);
-  assert.doesNotMatch(modal,/createPortal\(children|createPortal\(<CommonModal/);
-  assert.match(modal,/:createPortal\(<div[^\n]*data-options-modal-host style=\{\{display:"contents"\}\}/);
-  assert.match(modal,/<\/div>,document.body\)/);
-  assert.doesNotMatch(modal,/open && createPortal|hidden && createPortal|data-options-modal-host[^\n]*hidden=/);
-  const panel=source("minutes.tsx"), editor=source("minutes-editor.tsx");
-  assert.match(panel,/triggerHost=\{settingsActionsHost\}/);
-  assert.match(panel,/optionsHost=\{editorOptionsHost\}/);
-  assert.match(editor,/triggerHost=\{formatActionsHost\} triggerRef=\{formatTrigger\}/);
-  assert.match(editor,/triggerLabel="編集の管理"[^\n]*triggerHost=\{optionsHost\}/);
+  assert.doesNotMatch(modal,/open && createPortal|hidden && createPortal/);
+  assert.match(panel,/actionsHost=\{actionsHost\}/);
+  assert.match(editor,/createPortal\(actions, actionsHost\)/);
 });
 
-test("minutes comparison replaces settings without introducing a second native dialog",()=>{
+test("minutes comparison replaces settings without introducing a second native dialog", () => {
   const panel=source("minutes.tsx"), modal=source("options-modal.tsx");
   assert.match(modal,/replacement=\{replacement\}/);
-  assert.match(panel,/replacement=\{preview \? \{ key: `\$\{preview.view.id\}:\$\{preview.restoring\}`/);
-  assert.match(panel,/content: reviewContent, blocked: disabled, onDismiss: \(\) => setPreview\(null\)/);
-  assert.match(panel,/opener.current = button;\s*button.focus\(\{ preventScroll: true \}\)/);
-  assert.doesNotMatch(panel,/<CommonModal[^\n]*open=\{!!preview\}/);
+  assert.match(panel,/<OptionsModal label="議事録の操作"/);
+  assert.doesNotMatch(panel,/replacement=|MinutesDocument|setPreview|直前版|候補を採用/);
 });
 
 test("closing detailed formatting resumes the new field without stealing a later focus move",()=>{

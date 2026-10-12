@@ -41,6 +41,7 @@ export class MarkdownSaveController {
   private inFlight: Promise<void> | null = null;
   private saving = false;
   private error: string | null = null;
+  private composing = false;
   private listeners = new Set<() => void>();
   private readonly meetingId: string;
   private readonly persist: (request: MarkdownSaveRequest) => Promise<MarkdownDocument>;
@@ -54,6 +55,8 @@ export class MarkdownSaveController {
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   private notify() { for (const listener of this.listeners) listener(); }
+  setComposing(value: boolean) { this.composing = value; }
+  isComposing() { return this.composing; }
   load(document: MarkdownDocument | null) {
     if (this.inFlight) throw Error("保存中は議事録を再読込できません。");
     if (document) assertMarkdownDocument(this.meetingId, document);
@@ -71,8 +74,19 @@ export class MarkdownSaveController {
     // saving rejects it. Never truncate the textarea or normalize whitespace.
     this.text = text; if (!this.pending) this.error = null; this.notify();
   }
+  discard(document: MarkdownDocument | null) {
+    if (document) assertMarkdownDocument(this.meetingId, document);
+    if (this.composing) throw Error("日本語入力を確定してから操作してください。入力は保持しています。");
+    // An unknown save may still be writing. A read of the same base cannot
+    // prove it stopped. Only a newer committed stamp makes its CAS harmless.
+    if (this.pending && (document?.lockVersion ?? 0) <= (this.pending.expected?.lockVersion ?? 0)) {
+      throw Error("前回の保存結果が未確認です。まず保存を再試行してから破棄してください。");
+    }
+    this.load(document);
+  }
   save(): Promise<void> {
     if (this.inFlight) return this.inFlight;
+    if (this.composing) return Promise.reject(Error("日本語入力を確定してから保存してください。"));
     if (!this.snapshot().dirty) return Promise.resolve();
     if (!this.pending) {
       try { validateMarkdown(this.text); }

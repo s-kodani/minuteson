@@ -4,6 +4,13 @@ import { DraftSaveQueue, flushPendingEdits, registerPendingEdits } from "../src/
 
 type Payload = { text: string };
 type Draft = { id: string; payload: Payload; lockVersion: number };
+test("tab reason preserves mounted minutes without bypassing other editors; leave remains the default",async()=>{
+  const calls:string[]=[];
+  const plain=registerPendingEdits(async reason=>{if(reason!=="tab")calls.push("minutes:"+reason);});
+  const transcript=registerPendingEdits(async()=>{calls.push("transcript");});
+  try {await flushPendingEdits("tab");assert.deepEqual(calls,["transcript"]);await flushPendingEdits();assert.deepEqual(calls,["transcript","minutes:leave","transcript"]);}
+  finally {plain();transcript();}
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

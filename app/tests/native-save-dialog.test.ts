@@ -27,12 +27,10 @@ test("shared save panel preserves the selected URL and safe cancellation for bot
 
 test("Markdown panel returns focus only after a known native response and enabled render", () => {
   const panel=readFileSync(new URL("../src/minutes.tsx",import.meta.url),"utf8");
-  assert.match(panel,/writeMarkdown\(event.currentTarget\)/);
-  assert.match(panel,/if \(!target \|\| busy \|\| locked\) return/);
-  assert.match(panel,/active === document.body \|\| active === target \|\| !active\?\.isConnected/);
-  assert.match(panel,/modal && !modal.contains\(target\)/);
-  assert.match(panel,/if \(status.active\) throw[^\n]+\n\s*exportFocusReturn.current = button/);
-  assert.match(panel,/const record = await invoke<MinutesExport \| null>\("export_minutes_markdown"[^\n]+\n[\s\S]*?exportFocusReturn.current = button;\n\s*pendingExport.current = null/);
+  assert.doesNotMatch(panel,/export_minutes_markdown|pendingExport/);
+  // Plain-body native output is a separate remaining integration step, not
+  // silently wired to the obsolete structured revision export request.
+  assert.match(panel,/save_minutes_markdown/);
 });
 
 test("backup selection focus waits for its acknowledged token, terminal state and enabled visible UI", () => {

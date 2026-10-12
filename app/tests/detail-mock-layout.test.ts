@@ -47,13 +47,9 @@ test("transcript primary reading keeps guarded text and time actions while advan
 test("fine settings open modals rather than resizing the reading workspace", () => {
   const transcript=source("transcript.tsx"), minutes=source("minutes.tsx"), main=source("main.tsx");
   assert.match(transcript,/<OptionsModal className="workspace-tools transcript-workspace-tools"/);
-  assert.match(transcript,/<div className="speaker-diarization-entry" ref=\{bindDiarizationHost\} hidden=\{!visible\}/);
-  assert.match(source("diarization-panel.tsx"),/<OptionsModal className="speaker-diarization-tools" label="人数指定・話者分離" hidden=\{!visible\}/);
-  assert.match(minutes,/<OptionsModal className="workspace-tools minutes-workspace-tools"/);
-  assert.match(source("minutes-editor.tsx"),/<OptionsModal className="workspace-tools minutes-format-tools"/);
+  assert.match(minutes,/<OptionsModal label="議事録の操作" icon="more" hidden=\{!visible\}/);
+  assert.doesNotMatch(minutes,/MinutesEditor|MinutesDocument|evidence|replacement=/);
   assert.match(main,/<OptionsModal className=\{detail \? "meeting-workspace-tools workspace-tools"/);
-  assert.match(main,/<section className="meetings-card" aria-label="保存済み会議" hidden=\{detail\}/);
-  assert.doesNotMatch(transcript,/<details className="(?:workspace-tools|speaker-merge-tools|speaker-diarization-tools|utterance-edit-tools)/);
 });
 
 test("speaker names open a guarded modal without an extra rename row", () => {
@@ -141,18 +137,12 @@ test("transcript options group fields and spaced actions without individual scro
   assert.doesNotMatch(css,/\.transcript-options[^}]*\{[^}]*overflow:(?:auto|scroll)/);
 });
 test("minutes edit actions use the existing editor owner and generation stays guarded", () => {
-  const panel = source("minutes.tsx"), editor = source("minutes-editor.tsx");
-  assert.match(panel, /actionsHost=\{editorActionsHost\}/);
-  assert.match(editor, /actionsHost \? createPortal\(primaryActions, actionsHost\) : primaryActions/);
-  assert.match(editor, /await queue\.flush\(\);[\s\S]*setEditing\(false\)/);
-  assert.match(editor, /focused === document\.activeElement/);
-  assert.match(editor, /target\.focus\(\{ preventScroll: true \}\)/);
-  assert.match(panel, /recordingActive \|\| pending \|\| !source\?\.currentId \|\| !engine \|\| !minutesConfigured\(engine\)/);
-  assert.match(panel, /className="minutes-empty-state"/);
-  const evidence = source("minutes-evidence.tsx");
-  assert.match(evidence, /<InfoPopover label="根拠の確認"/);
-  assert.match(evidence, /<details className="evidence-record-details"/);
-  assert.match(evidence, /根拠の音声を再生/);
+  const panel=source("minutes.tsx"), editor=source("minutes-markdown-editor.tsx");
+  assert.match(panel,/actionsHost=\{actionsHost\}/);
+  assert.match(editor,/actionsHost \? createPortal\(actions, actionsHost\) : actions/);
+  assert.match(panel,/recordingActive \|\| pending \|\| !source\?\.currentId \|\| !engine \|\| !minutesConfigured\(engine\)/);
+  assert.match(panel,/start_markdown_minutes_generation/);
+  assert.doesNotMatch(panel,/start_minutes_generation"|adopt_minutes_candidate|restore_minutes_version/);
 });
 
 test("desktop transcript keeps the mock's left speaker column and direct editing guards", () => {
@@ -236,8 +226,8 @@ test("minutes chrome keeps workspace insets and preview has one guarded dismiss 
   const css=source("prototype-alignment.css"), minutes=source("minutes.tsx");
   assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding:24px 32px; gap:12px;/);
   assert.match(css,/\.meeting-detail-content \.minutes-card \{ padding:16px;/);
-  assert.match(minutes,/dismissLabel: "閉じる", dismissText: "議事録プレビューを閉じる"/);
-  assert.doesNotMatch(minutes,/data-dialog-cancel[^>]*>議事録プレビューを閉じる/);
+  assert.match(minutes,/<MinutesMarkdownEditor/);
+  assert.doesNotMatch(minutes,/reviewContent|openPreview|議事録候補/);
 });
 
 test("secondary settings and vocabulary fields retain space between neighboring groups", () => {
@@ -276,12 +266,11 @@ test("minutes format options space their nested explanation and wrapped actions 
 });
 
 test("minutes settings group portaled management with reload and generation without touching actions", () => {
-  const css=source("prototype-alignment.css"), minutes=source("minutes.tsx");
-  assert.match(minutes,/<div className="minutes-settings-controls">\s*<div ref=\{setEditorOptionsHost\}/);
-  assert.match(css,/\.minutes-settings-controls \{ display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; min-width:0; \}/);
-  assert.match(css,/\.minutes-settings-controls>\.minutes-editor-options-host \{ display:contents; \}/);
-  assert.match(css,/\.minutes-workspace-tools \.workspace-tools-body \{ display:grid; gap:20px; min-width:0; \}/);
-  assert.match(css,/\.minutes-workspace-tools \.analysis-settings>fieldset \{ display:grid; gap:16px; min-width:0; margin:0; \}/);
+  const css=source("minutes-markdown-editor.css"), minutes=source("minutes.tsx");
+  assert.match(minutes,/<div className="plain-minutes-option-actions">/);
+  assert.match(css,/\.plain-minutes-option-actions,\.confirmation-actions \{ display:flex; align-items:center; flex-wrap:wrap; gap:12px;/);
+  assert.match(css,/\.plain-minutes-options-body \{ display:grid; gap:20px;/);
+  assert.doesNotMatch(minutes,/save_minutes_preferences|engine-numbers|executablePath.*<input/);
 });
 
 test("pagination and metadata actions use the same metrics and can wrap", () => {

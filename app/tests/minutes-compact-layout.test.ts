@@ -5,13 +5,11 @@ import ts from "typescript";
 const source=(name:string)=>readFileSync(new URL(`../src/${name}`,import.meta.url),"utf8");
 
 test("Markdown export is a labeled icon retaining the same request, busy guard and focus target", () => {
-  const panel=source("minutes.tsx"),icon=source("action-icon.tsx");
-  assert.match(panel,/<IconButton label=\{pendingExport.current \? "前回の書き出し結果を確認" : "Markdownを書き出す"\} icon="download" disabled=\{disabled\} onClick=\{event => void writeMarkdown\(event.currentTarget\)\}/);
-  assert.match(icon,/name === "download"/);
-  assert.match(panel,/exportFocusReturn.current/);
-  assert.match(panel,/保存済みの手動編集を含むことを示します/);
-  assert.match(panel,/currentDraft && "· 編集あり"/);
-  assert.match(panel,/role="status">元データ更新あり/);
+  const panel=source("minutes.tsx"), editor=source("minutes-markdown-editor.tsx");
+  assert.match(panel,/className="plain-minutes-primary-actions"/);
+  assert.match(editor,/label=\{editing\?"議事録のプレビューを表示":"議事録を編集"\}/);
+  assert.match(editor,/state\.saving\?"保存中":state\.dirty\?"未保存"/);
+  assert.doesNotMatch(panel,/現在版 #|元データ更新あり|根拠/);
 });
 
 test("formatting detail entry lives with the basic formatting icons, not in the meeting header", () => {

@@ -5,7 +5,7 @@ import { markdownAudioInterval, playableMarkdownInterval, type MarkdownAudioInte
 
 export function MinutesMarkdownPreview({ text, durationUs, locked = false, onPlay }: {
   text: string; durationUs: number | null; locked?: boolean;
-  onPlay: (interval: MarkdownAudioInterval) => void;
+  onPlay?: (interval: MarkdownAudioInterval) => void;
 }) {
   return <div className="minutes-markdown-preview">
     <Markdown remarkPlugins={[remarkGfm]} skipHtml
@@ -16,7 +16,7 @@ export function MinutesMarkdownPreview({ text, durationUs, locked = false, onPla
         img: ({ alt }) => <span className="markdown-image-label">{alt ?? ""}</span>,
         a: ({ href, children }) => {
           const interval = href ? playableMarkdownInterval(href, durationUs) : null;
-          return interval ? <button type="button" className="markdown-audio-link" disabled={locked}
+          return interval && onPlay ? <button type="button" className="markdown-audio-link" disabled={locked}
             title="この区間を再生" aria-label={`この区間を再生: ${href!.slice(6).replace("-", "–")}`}
             onClick={() => onPlay(interval)}><ActionIcon name="play" /><span>{children}</span></button> : <span>{children}</span>;
         },

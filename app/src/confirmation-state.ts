@@ -6,12 +6,14 @@ export type ConfirmationOptions = {
   validate?: () => boolean;
   onError?: (cause: unknown) => void;
   progressAction?: { label: string; action: () => Promise<void> };
+  alternativeAction?: { label: string; action: () => Promise<void> };
 };
 export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
   phase: ConfirmationPhase; error: string;
   progressLabel?: string; progressPending?: boolean; progressDone?: boolean; progressError?: string;
+  alternativeLabel?: string;
 };
 
 // No IPC, implicit acceptance, retry or queue. Only an explicit, caller-supplied
@@ -28,7 +30,7 @@ export class ConfirmationController<Parent, Opener> {
     if (this.snapshot) return Promise.resolve<ConfirmationOutcome>("cancelled");
     return new Promise<ConfirmationOutcome>(resolve => {
       this.pending = { options, resolve };
-      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, phase: "choosing", error: "", progressLabel: options.progressAction?.label });
+      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
     });
   }
   cancel(id: string) {
@@ -56,13 +58,13 @@ export class ConfirmationController<Parent, Opener> {
       if (this.pending === pending && this.snapshot?.phase === "running") this.publish({ ...this.snapshot, progressPending: false, progressError: String(cause) });
     }
   }
-  async execute(id: string) {
+  async execute(id: string, alternative = false) {
     const view = this.snapshot, pending = this.pending;
-    if (!view || view.id !== id || view.phase !== "choosing" || !pending) return;
+    if (!view || view.id !== id || view.phase !== "choosing" || !pending || alternative && !pending.options.alternativeAction) return;
     this.publish({ ...view, phase: "running" });
     try {
       if (pending.options.validate && !pending.options.validate()) throw Error("対象や利用条件が変更されています。この確認を閉じ、最新の内容を再確認してください。変更処理は開始していません。");
-      await pending.options.action();
+      await (alternative ? pending.options.alternativeAction!.action : pending.options.action)();
       this.finish("completed");
     } catch (cause) {
       if (this.pending !== pending || !this.snapshot) return;

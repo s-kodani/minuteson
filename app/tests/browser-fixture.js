@@ -283,6 +283,7 @@ mockIPC(async (command, args) => {
     case "get_current_minutes": return null;
     case "get_minutes_draft": return null;
     case "get_minutes_exports": return [];
+    case "get_minutes_markdown": return null;
     default: throw new Error(`Unexpected fixture command: ${command}`);
   }
 }, { shouldMockEvents: true });

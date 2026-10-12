@@ -216,12 +216,12 @@ function MainWindow() {
   const [analysisEpoch, setAnalysisEpoch] = useState(0);
   const navigating = useRef(false);
   const priorPhase = useRef<string | null>(null);
-  const withSavedEdits = async (action: () => void | Promise<void>) => {
+  const withSavedEdits = async (action: () => void | Promise<void>, reason: "leave" | "tab" = "leave") => {
     if (navigating.current) return;
     navigating.current = true;
     setMeetingError("");
     try {
-      await runAfterSaving(flushPendingEdits, action, setNavigationPhase);
+      await runAfterSaving(() => flushPendingEdits(reason), action, setNavigationPhase);
     } catch (cause) {
       setMeetingError(`操作を完了できませんでした。編集内容はこの画面に保持しています: ${String(cause)}`);
     } finally {
@@ -563,7 +563,7 @@ function MainWindow() {
       if (!owner || root.current.selectedMeeting?.id !== owner) throw Error("会議が変更されています。元のタブ切替は実行していません。");
       setDetailTab(tab);
       requestAnimationFrame(() => document.getElementById(`meeting-tab-${tab}`)?.focus({ preventScroll: true }));
-    });
+    }, "tab");
   };
   const keyboardAction = useRef<(event: KeyboardEvent) => void>(() => {});
   keyboardAction.current = event => {

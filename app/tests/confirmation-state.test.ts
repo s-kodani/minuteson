@@ -3,6 +3,16 @@ import assert from "node:assert/strict";
 import { ConfirmationController } from "../src/confirmation-state.ts";
 const options = (action: () => Promise<void>) => ({ title: "削除を確認", target: "固定した対象", message: "削除した入力は復元できません。", confirmLabel: "削除する", action });
 const controller = () => new ConfirmationController<object, object>();
+test("explicit alternative shares validation and prevents primary execution, double acceptance and dismissal while running",async()=>{
+  const c=controller();let primary=0,alternative=0,release!:()=>void;
+  const result=c.request({},null,null,{...options(async()=>{primary++;}),alternativeAction:{label:"破棄",action:async()=>{alternative++;await new Promise<void>(resolve=>{release=resolve;});}}});
+  const id=c.getSnapshot()!.id;assert.equal(c.getSnapshot()!.alternativeLabel,"破棄");
+  const execution=c.execute(id,true);await c.execute(id);c.cancel(id);assert.equal(c.getSnapshot()!.phase,"running");
+  release();await execution;assert.equal(await result,"completed");assert.equal(primary,0);assert.equal(alternative,1);
+  const absent=c.request({},null,null,options(async()=>{primary++;}));await c.execute(c.getSnapshot()!.id,true);assert.equal(c.getSnapshot()!.phase,"choosing");c.cancel(c.getSnapshot()!.id);await absent;
+  const stale=c.request({},null,null,{...options(async()=>{primary++;}),validate:()=>false,alternativeAction:{label:"破棄",action:async()=>{alternative++;}}});
+  await c.execute(c.getSnapshot()!.id,true);assert.equal(c.getSnapshot()!.phase,"failed");assert.equal(alternative,1);c.cancel(c.getSnapshot()!.id);assert.equal(await stale,"unconfirmed");
+});
 
 test("confirmation never runs before acceptance, cancellation settles without changes", async () => {
   const c = controller(); let calls = 0;
