@@ -29,6 +29,11 @@ const makePreview = (meetingId, phase = "review") => ({ confirmationId: crypto.r
   missingCount: 0, changedCount: 0, unregisteredCount: d.unknownCount, bytes: 1024 * 1024, rowCount: 20, rowPhaseCommitted: ["awaiting_ack", "database_files"].includes(phase),
   reconfirmationAllowed: false, previousProcessedPaths: null, previousPathCount: null });
 mockIPC(async (command, args) => {
+  // Opening a meeting now mounts the simple transcript/Markdown readers.
+  // Explicit empty results keep this fixture scoped to deletion, not AI work.
+  if (["get_current_analysis", "get_transcript_draft", "get_analysis_flow", "get_minutes_markdown"].includes(command)) return null;
+  if (["get_analysis_jobs", "list_restored_meeting_ids"].includes(command)) return [];
+  if (command === "get_analysis_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };
   if (["get_deletion_items", "review_meeting_deletion", "review_pending_deletion", "get_deletion_paths", "close_playback", "prepare_utterance_playback"].includes(command)
     || (["start_data_operation", "cancel_data_operation"].includes(command) && f.snapshot.kind === "deletion")) f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_deletion_items") {

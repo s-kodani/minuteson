@@ -57,7 +57,14 @@ export function RowMenu({ label, disabled, children }: { label: string; disabled
   }, [open, disabled]);
   return <div className="meeting-row-actions">
     <IconButton ref={trigger} icon="more" label={label} className="small-secondary" disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => open ? close(true) : setOpen(true)} />
-    <div ref={popup} id={id} popover="manual" role="menu" aria-label={label} className="meeting-row-menu" onClick={event => {
+    <div ref={popup} id={id} popover="manual" role="menu" aria-label={label} className="meeting-row-menu" onMouseDownCapture={event => {
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+      if (event.button !== 0 || !button || button.disabled || !event.currentTarget.contains(button)) return;
+      // WebKit otherwise focuses the containing workspace on mouse-down and
+      // our outside-focus handler hides the popover before its click arrives.
+      // Keep focus on the chosen item; actions still run only on click.
+      event.preventDefault(); button.focus({ preventScroll: true });
+    }} onClick={event => {
       const button = event.target instanceof Element ? event.target.closest("button") : null;
       if (button && !button.disabled) close();
     }} data-row-menu-trigger={id}>{children}</div>

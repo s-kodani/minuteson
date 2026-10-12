@@ -127,6 +127,16 @@ test("path pages bind exact confirmation, meeting and bounded metadata offsets",
   assert.throws(() => assertDeletionPathPage({ ...page, nextOffset: 1 }, id(2), 0, 1, id(4)));
   for (const relativePath of ["/outside", root + "/../outside", root + "/a\\b", root + "/" + "x".repeat(260)]) assert.throws(() => assertDeletionPathPage({ ...page, entries: [{ ...page.entries[0], relativePath }] }, id(2), 0, 1, id(4)));
 });
+test("deletion page directories carry no content byte count while files retain their measured size", () => {
+  const root = `meetings/${id(4)}`;
+  const directory = { relativePath: root, directory: true, registered: false, missing: false, changed: false, stageHint: null, bytes: null };
+  const file = { relativePath: root + "/audio/source.flac", directory: false, registered: true, missing: false, changed: false, stageHint: null, bytes: 6 };
+  const page = { confirmationId: id(2), offset: 0, total: 3, nextOffset: null, entries: [directory, { ...directory, relativePath: root + "/audio" }, file] };
+  assert.doesNotThrow(() => assertDeletionPathPage(page, id(2), 0, 3, id(4)));
+  for (const patch of [{ bytes: 96 }, { registered: true }, { changed: true }]) {
+    assert.throws(() => assertDeletionPathPage({ ...page, entries: [{ ...directory, ...patch }, page.entries[1], file] }, id(2), 0, 3, id(4)));
+  }
+});
 test("listing distinguishes write fence and restart, rejects duplicates and unsupported evidence", () => {
   const l = { items: [{ operationId: id(3), state: "cleanup", meetingId: null, errorCode: null }], deletingMeetingIds: [], writeBlocked: true, restartRequired: false, reason: "未完了削除" };
   assert.doesNotThrow(() => assertDeletionListing(l));

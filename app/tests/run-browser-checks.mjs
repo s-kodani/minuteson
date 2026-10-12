@@ -86,6 +86,7 @@ const suites = [
   ["toast-dedup", "toast-browser-fixture.tsx", "toast-dedup-browser-check.js"],
   ["navigation-menu", null, "navigation-menu-browser-check.js"],
   ["row-menu-confirmation", "audio-deletion-browser-fixture.js", "row-menu-confirmation-browser-check.js"],
+  ["row-menu-activation", "deletion-browser-fixture.js", "row-menu-activation-browser-check.js"],
 ].filter(([name]) => !selected || selected.has(name));
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");
 mkdirSync(output, { recursive: true });

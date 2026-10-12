@@ -153,6 +153,13 @@ fn deletion_path_pages_are_bounded_metadata_and_reject_stale_or_unaligned_offset
     let first = p.page(id, 0).unwrap();
     assert_eq!(first.entries.len(), 50);
     assert_eq!(first.next_offset, Some(50));
+    let directories: Vec<_> = first.entries.iter().filter(|entry| entry.directory).collect();
+    assert!(!directories.is_empty());
+    assert!(directories.iter().all(|entry| entry.bytes.is_none()
+        && !entry.registered && !entry.changed && !entry.missing));
+    let audio = first.entries.iter().find(|entry| entry.relative_path.ends_with("/source.flac")).unwrap();
+    assert_eq!(audio.bytes, Some(6));
+    assert!(audio.registered && !audio.missing && !audio.changed);
     assert_eq!(p.page(id, 50).unwrap().entries.len(), 50);
     assert!(p.page(id, 100).unwrap().entries.len() < 50);
     assert!(p.page("wrong", 0).is_err());
