@@ -1034,6 +1034,19 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var configurationRevision: UInt64 = 0
   private var recovery: MicrophoneRecovery?
   private var lastRecoveryAttempt: ContinuousClock.Instant?
+  private struct NormalPreparation {
+    let token: MicrophoneRecovery.Binding
+    let format: AVAudioFormat
+    var deadline: ContinuousClock.Instant?
+    var nextProof: ContinuousClock.Instant
+    var revision: UInt64?
+    var stableProofs = 0
+    var restarts = 0
+  }
+  private var normalPreparation: NormalPreparation?
+  // A stable engine may admit its first real PCM while still reconnecting.
+  // Connection/recovery is published only after that PCM has been saved.
+  private var normalAdmission: MicrophoneRecovery.Binding?
   private let outputURL: URL
   private let lock = NSLock()
   private var file: AVAudioFile?
@@ -1051,6 +1064,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let requestPermission: @Sendable () async -> Bool
   private let rawSegments: RawRecordingSegments?
   private let mayContinue: @Sendable () -> Bool
+  private let controlNow: @Sendable () -> ContinuousClock.Instant
   private var selectedDeviceID: AudioObjectID?
   private(set) var deviceUID: String?
 
@@ -1060,6 +1074,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     inputEventObserver: InputEventJournal.Observer? = nil,
     rawSegments: RawRecordingSegments? = nil,
     mayContinue: @escaping @Sendable () -> Bool = { true },
+    controlNow: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
     makeEngine: @escaping @Sendable () throws -> any MicrophoneCaptureEngine = {
       NativeMicrophoneCaptureEngine()
     },
@@ -1079,6 +1094,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     self.inputEventObserver = inputEventObserver
     self.rawSegments = rawSegments
     self.mayContinue = mayContinue
+    self.controlNow = controlNow
     self.makeEngine = makeEngine
     self.devices = devices
     self.permission = permission
@@ -1175,7 +1191,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       guard let self, let engine else { return }
       let receivedAt = self.levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
       let revision: UInt64? = self.lock.withLock {
-        guard self.mayContinue(), self.recovery?.accepts(token) == true,
+        guard self.mayContinue(), self.admitsPCM(token),
           !self.configurationChanged, self.selectedDeviceID == token.objectID
         else { return nil }
         return self.configurationRevision
@@ -1191,7 +1207,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       } catch { identityError = error }
       self.lock.lock()
       defer { self.lock.unlock() }
-      guard self.mayContinue(), self.recovery?.accepts(token) == true, !self.configurationChanged,
+      guard self.mayContinue(), self.admitsPCM(token), !self.configurationChanged,
         self.configurationRevision == revision, self.selectedDeviceID == token.objectID
       else {
         return
@@ -1277,6 +1293,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
         }
         try self.rawSegments?.enqueue(
           buffer, observation: observation, sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
+        if self.normalAdmission == token {
+          try self.recovery?.activate(token)
+          self.normalAdmission = nil
+        }
       } catch {
         self.stats.appendFailures += 1
         self.stats.retainCaptureFailure(error)
@@ -1319,8 +1339,15 @@ final class MicrophoneRecorder: @unchecked Sendable {
           throw ProbeError.capture("microphone activation is obsolete or stopped")
         }
         guard configurationRevision == revision else { return false }
-        try recovery?.activate(token)
         configurationChanged = false
+        if clock != nil, testWindow == nil {
+          let now = controlNow()
+          normalPreparation = NormalPreparation(
+            token: token, format: format,
+            nextProof: now.advanced(by: .milliseconds(100)))
+        } else {
+          try recovery?.activate(token)
+        }
         return true
       }
       if activated { return }
@@ -1336,6 +1363,76 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     engine?.stop()
     engine = nil
+  }
+
+  // Called only with the callback/state lock held.
+  private func admitsPCM(_ token: MicrophoneRecovery.Binding) -> Bool {
+    recovery?.accepts(token) == true
+      || (normalAdmission == token && recovery?.owns(token) == true)
+  }
+
+  /// Serialized control-loop proofs, not sleeps or engine control on Apple's
+  /// notification/audio queue. Delayed startup notifications keep this same
+  /// engine preparing instead of repeatedly reporting a false recovery.
+  private func maintainNormalPreparation() throws {
+    guard let engine, var pending = lock.withLock({ normalPreparation }) else { return }
+    let now = controlNow()
+    // PC-audio initialization may be waiting for the user's OS permission.
+    // Start the bounded proof budget on the first control-loop check, not
+    // before that unrelated prompt, and still re-prove the complete binding.
+    let deadline = pending.deadline ?? now.advanced(by: .seconds(2))
+    pending.deadline = deadline
+    guard now < deadline else {
+      throw ProbeError.capture("microphone configuration did not stabilize during recovery")
+    }
+    guard now >= pending.nextProof else { return }
+    let revision = try lock.withLock {
+      guard mayContinue(), recovery?.owns(pending.token) == true,
+        configurationRevision < UInt64.max
+      else { throw ProbeError.capture("microphone preparation is obsolete or stopped") }
+      try stats.requireWritable(raw: rawSegments?.snapshot())
+      return configurationRevision
+    }
+    try engine.verifyDevice(pending.token)
+    guard MicrophonePCMFormat.matches(pending.format, engine.inputFormat) else {
+      throw RebindError.formatChanged
+    }
+    if !engine.isRunning {
+      guard pending.restarts < 2,
+        lock.withLock({
+          mayContinue() && recovery?.owns(pending.token) == true && configurationChanged
+            && configurationRevision == revision
+        })
+      else { throw ProbeError.capture("microphone engine stopped during recovery") }
+      engine.prepare()
+      guard mayContinue() else { throw ProbeError.capture("microphone stop was requested") }
+      try engine.start()
+      pending.restarts += 1
+      pending.revision = nil
+      pending.stableProofs = 0
+    } else {
+      pending.stableProofs = pending.revision == revision ? pending.stableProofs + 1 : 1
+      pending.revision = revision
+    }
+    pending.nextProof = now.advanced(by: .milliseconds(100))
+    try lock.withLock {
+      guard mayContinue(), recovery?.owns(pending.token) == true else {
+        throw ProbeError.capture("microphone preparation is obsolete or stopped")
+      }
+      guard configurationRevision == revision else {
+        pending.revision = nil
+        pending.stableProofs = 0
+        normalPreparation = pending
+        return
+      }
+      configurationChanged = false
+      if pending.stableProofs >= 3 {
+        normalPreparation = nil
+        normalAdmission = pending.token
+      } else {
+        normalPreparation = pending
+      }
+    }
   }
 
   /// A synchronous start proof cannot fence delayed HAL notifications. Keep
@@ -1434,6 +1531,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
         recovery?.interruptForRetry()
       }
       selectedDeviceID = nil
+      normalPreparation = nil
+      normalAdmission = nil
       stats.inputLevel.invalidate()
     }
     releaseEngine()
@@ -1485,13 +1584,20 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return
     }
     let selected = matches[0]
+    if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
+      do { try maintainNormalPreparation() } catch RebindError.formatChanged {
+        suspend("format_changed", unavailable: true)
+      } catch { suspend("restart_failed", unavailable: true) }
+      return
+    }
     let healthy = lock.withLock {
-      recovery?.status.state == "connected" && !configurationChanged
+      (recovery?.status.state == "connected" || normalAdmission != nil) && !configurationChanged
         && selectedDeviceID == selected.objectID
     }
     if healthy, let engine, engine.isRunning {
       do {
         let binding = try lock.withLock {
+          if let token = normalAdmission, recovery?.owns(token) == true { return token }
           guard let binding = try recovery?.currentBinding() else {
             throw ProbeError.capture("microphone binding is missing")
           }
@@ -1503,8 +1609,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
         // Continue only after invalidating the old engine binding.
       }
     }
-    suspend()
-    let now = ContinuousClock.now
+    // A retired engine is already interrupted. Preserve its diagnosis during
+    // backoff instead of changing unavailable/restart_failed to engine_changed
+    // on every heartbeat without any new acquisition evidence.
+    if engine != nil { suspend() }
+    let now = controlNow()
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now
     do { try configure(selected) } catch RebindError.formatChanged {
@@ -1516,6 +1625,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
     lock.withLock {
       recovery?.stop()
       selectedDeviceID = nil
+      normalPreparation = nil
+      normalAdmission = nil
       stats.inputLevel.invalidate()
     }
     releaseEngine()

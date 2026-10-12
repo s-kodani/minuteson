@@ -37,6 +37,21 @@ private final class StartupClock: @unchecked Sendable {
   }
 }
 
+private final class StartupControlClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var instant = ContinuousClock.now
+  func read() -> ContinuousClock.Instant { lock.withLock { instant } }
+  func advance(_ milliseconds: Int = 100) {
+    lock.withLock { instant = instant.advanced(by: .milliseconds(milliseconds)) }
+  }
+  func settle(_ recorder: MicrophoneRecorder) {
+    for _ in 0..<3 {
+      advance()
+      recorder.maintain()
+    }
+  }
+}
+
 private final class StartupFactory: @unchecked Sendable {
   private let lock = NSLock()
   private let engines: [SilentMicrophoneEngine]
@@ -198,12 +213,14 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     _ directory: URL, _ engine: SilentMicrophoneEngine,
     _ conditions: StartupConditions = StartupConditions(), clock: CaptureClockDomain? = nil,
     testWindow: CaptureTestWindow? = nil, factory: StartupFactory? = nil,
+    control: StartupControlClock? = nil,
     request: (@Sendable () async -> Bool)? = nil,
     devices: (@Sendable () throws -> CaptureInputDevices)? = nil
   ) -> MicrophoneRecorder {
     MicrophoneRecorder(
       outputURL: directory.appendingPathComponent("microphone.caf"), clock: clock,
       microphoneUID: "frozen-mic", testWindow: testWindow, mayContinue: conditions.mayContinue,
+      controlNow: { control?.read() ?? .now },
       makeEngine: { try factory?.make() ?? engine }, devices: devices ?? Self.devices,
       permission: conditions.permission,
       requestPermission: request ?? {
@@ -803,6 +820,212 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  func testNormalDelayedStartupRestartWaitsForStableProofsAndSavedPCM() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let factory = StartupFactory([engine])
+    let recorder = recorder(
+      dir, engine, clock: try StartupClock().domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+    engine.notify(stopped: true)
+    control.advance()
+    recorder.maintain()
+    XCTAssertEqual(engine.startCount, 2)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    for _ in 0..<20 { recorder.maintain() }
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    control.settle(recorder)
+    // Continued heartbeats cannot retire a proven engine just because its
+    // first callback has not arrived yet, or announce an unmeasured recovery.
+    for _ in 0..<5 {
+      control.advance()
+      recorder.maintain()
+    }
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+    XCTAssertEqual(recorder.snapshot().inputEventHistory?.events.count, 0)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertFalse(engine.controlledInNotification)
+  }
+
+  func testNormalRebindDelayedNotificationsDoNotPublishAlternatingFalseRecoveries() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let old = SilentMicrophoneEngine()
+    let current = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let factory = StartupFactory([old, current])
+    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try old.emit(host: 1_000_000_000)
+    old.notify(stopped: true)
+    recorder.maintain()
+    for _ in 0..<5 {
+      current.notify()
+      control.advance()
+      recorder.maintain()
+      try current.emit(host: 1_030_000_000)
+      XCTAssertEqual(recorder.snapshot().frames, 480)
+      XCTAssertEqual(recorder.snapshot().inputEventHistory?.events.map(\.kind), ["interrupted"])
+    }
+    control.settle(recorder)
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(current.startCount, 1)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+    time.set(1_030_000_000)
+    try current.emit(host: 1_030_000_000)
+    let stats = recorder.snapshot()
+    XCTAssertEqual(stats.frames, 960)
+    XCTAssertEqual(stats.inputEventHistory?.events.map(\.kind), ["interrupted", "recovered"])
+    XCTAssertTrue(stats.inputEventHistory!.matches(stats.microphoneRecovery!))
+  }
+
+  func testNormalRepeatedStartupNotificationsAndSameEngineRestartsAreBounded() async throws {
+    for stopped in [false, true] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let control = StartupControlClock()
+      let factory = StartupFactory([engine])
+      let recorder = recorder(
+        dir, engine, clock: try StartupClock().domain(), factory: factory, control: control)
+      defer { recorder.stop() }
+      try await recorder.start()
+      for _ in 0..<21 {
+        engine.notify(stopped: stopped)
+        control.advance()
+        recorder.maintain()
+      }
+      XCTAssertEqual(engine.startCount, stopped ? 3 : 1)
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
+      XCTAssertFalse(
+        recorder.snapshot().inputEventHistory!.events.contains { $0.kind == "recovered" })
+      XCTAssertEqual(recorder.snapshot().frames, 0)
+      XCTAssertFalse(engine.hasTap)
+      XCTAssertFalse(engine.controlledInNotification)
+    }
+  }
+
+  func testNormalPreparationRejectsChangedFormatIdentityAndPermission() async throws {
+    for failure in ["format", "identity", "permission", "disconnected", "unexplained-stop"] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let control = StartupControlClock()
+      let conditions = StartupConditions()
+      let recorder = recorder(
+        dir, engine, conditions, clock: try StartupClock().domain(), control: control,
+        devices: {
+          CaptureInputDevices(
+            microphonePermission: conditions.permission() == .authorized ? "authorized" : "denied",
+            devices: conditions.deviceConnected ? Self.devices().devices : [])
+        })
+      defer { recorder.stop() }
+      try await recorder.start()
+      switch failure {
+      case "format":
+        engine.setFormat(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!)
+      case "identity": engine.setIdentity(uid: "other-default", objectID: 1)
+      case "permission": conditions.setPermission(.denied)
+      case "disconnected": conditions.disconnect()
+      default: engine.setRunning(false)
+      }
+      control.advance()
+      recorder.maintain()
+      XCTAssertNotEqual(recorder.snapshot().microphoneRecovery?.state, "connected", failure)
+      XCTAssertEqual(recorder.snapshot().frames, 0, failure)
+      XCTAssertEqual(engine.startCount, 1, failure)
+      XCTAssertFalse(engine.hasTap, failure)
+      XCTAssertFalse(
+        recorder.snapshot().inputEventHistory!.events.contains { $0.kind == "recovered" })
+    }
+  }
+
+  func testNormalStopDuringStableProofCannotAdmitPCMOrRestart() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let conditions = StartupConditions()
+    let recorder = recorder(
+      dir, engine, conditions, clock: try StartupClock().domain(), control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    engine.onVerify = { _, _ in conditions.requestStop() }
+    control.advance()
+    recorder.maintain()
+    try engine.emit(host: 1_000_000_000)
+    control.settle(recorder)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(engine.startCount, 1)
+    XCTAssertFalse(engine.hasTap)
+    XCTAssertNotEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+  }
+
+  func testNormalFirstPCMWithWrongFormatCannotAnnounceRecovery() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    engine.setFormat(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.reason, "format_changed")
+    XCTAssertFalse(
+      recorder.snapshot().inputEventHistory!.events.contains { $0.kind == "recovered" })
+  }
+
+  func testNormalPreparationBudgetStartsAfterOtherInputPermissionWait() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.advance(30_000)
+    engine.notify(stopped: true)
+    recorder.maintain()
+    control.settle(recorder)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.interruptions, 0)
+    XCTAssertEqual(engine.startCount, 2)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+  }
+
+  func testNormalInvalidFirstClockCannotAnnounceRecovery() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try engine.emit()
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertNotEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable())
+    XCTAssertFalse(
+      recorder.snapshot().inputEventHistory!.events.contains { $0.kind == "recovered" })
+  }
+
   func testNormalRebindPreservesCAFAndRetiresOldPCMAndNotificationEpochs() async throws {
     let dir = try directory()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -810,9 +1033,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let current = SilentMicrophoneEngine()
     let time = StartupClock()
     let factory = StartupFactory([old, current])
-    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory)
+    let control = StartupControlClock()
+    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory, control: control)
     defer { recorder.stop() }
     try await recorder.start()
+    control.settle(recorder)
     try old.emit(host: 1_000_000_000)
     let latePCM = try XCTUnwrap(old.savedTap())
     let lateNotification = try XCTUnwrap(old.savedObserver())
@@ -820,7 +1045,8 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     time.set(1_030_000_000)
     recorder.maintain()
     XCTAssertEqual(factory.calls, 2)
-    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+    control.settle(recorder)
     XCTAssertEqual(current.selectedBinding?.epoch, 2)
     XCTAssertEqual(recorder.snapshot().frames, 480)
     lateNotification()
@@ -830,6 +1056,7 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(recorder.snapshot().frames, 480)
     XCTAssertEqual(recorder.snapshot().appendFailures, 0)
     try current.emit(host: 1_030_000_000)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
     time.set(1_050_000_000)
     recorder.stop()
     XCTAssertEqual(recorder.snapshot().frames, 960)
@@ -854,9 +1081,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let time = StartupClock()
     changed.setFormat(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!)
     let factory = StartupFactory([old, changed])
-    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory)
+    let control = StartupControlClock()
+    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory, control: control)
     defer { recorder.stop() }
     try await recorder.start()
+    control.settle(recorder)
     try old.emit(host: 1_000_000_000)
     old.notify(stopped: true)
     recorder.maintain()
