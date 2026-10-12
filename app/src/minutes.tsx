@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./action-icon";
 import { OptionsModal } from "./options-modal";
-import { IssueNotice } from "./toast";
+import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { registerPendingEdits, type VersionedDraft } from "./draft-save";
 import { withConfirmedEdits } from "./confirmed-action";
@@ -12,6 +12,7 @@ import { minutesConfigured, type MinutesPreferences } from "./minutes-state";
 import { MinutesMarkdownEditor } from "./minutes-markdown-editor";
 import { MarkdownSaveController, markdownStamp, type MarkdownDocument } from "./minutes-markdown-state";
 import { confirmMarkdownLeave } from "./minutes-markdown-leave";
+import { MarkdownExportController, type MarkdownExportRecord, type MarkdownExportStatus } from "./minutes-markdown-export";
 import "./minutes-markdown-editor.css";
 
 type Job = AnalysisJob & { operationId: string };
@@ -25,6 +26,12 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [controller] = useState(() => new MarkdownSaveController(meetingId,
     request => invoke<MarkdownDocument>("save_minutes_markdown", { request })));
   const [documentState, setDocumentState] = useState(() => controller.snapshot());
+  const [exporter] = useState(() => new MarkdownExportController(meetingId,
+    request => invoke<MarkdownExportRecord|null>("export_plain_minutes_markdown", { request }),
+    request => invoke<MarkdownExportStatus>("get_plain_minutes_export_status", { request })));
+  const [exportState, setExportState] = useState(() => exporter.snapshot());
+  const [exportedEvent, setExportedEvent] = useState("");
+  const exportOpener = useRef<HTMLButtonElement|null>(null), returnExportFocus = useRef(false);
   const [source, setSource] = useState<VersionState | null>(null);
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
   const [profile, setProfile] = useState<"standard" | "highAccuracy">("standard");
@@ -40,6 +47,14 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const confirm = useActionConfirmation(false);
   const live = useRef({ meetingTitle, loaded }); live.current = { meetingTitle, loaded };
   const read = () => invoke<MarkdownDocument | null>("get_minutes_markdown", { meetingId });
+  useEffect(() => exporter.subscribe(() => setExportState(exporter.snapshot())), [exporter]);
+  useEffect(() => {
+    if (!returnExportFocus.current || locked || busy || exportState.busy || !visible) return;
+    returnExportFocus.current = false;
+    const target = exportOpener.current, active = document.activeElement;
+    if (target?.isConnected && !target.disabled && !target.closest("[hidden],[inert]")
+      && !document.querySelector("dialog[open]") && (active === document.body || active === target || !active?.isConnected)) target.focus({ preventScroll: true });
+  }, [locked, busy, exportState.busy, visible]);
   useEffect(() => {
     alive.current = true;
     const unsubscribe = controller.subscribe(() => setDocumentState(controller.snapshot()));
@@ -121,6 +136,24 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       onError: cause => { if (alive.current) setError(String(cause)); } });
     else await enqueue();
   }));
+  const exportMarkdown = (opener:HTMLButtonElement) => run(async () => {
+    exportOpener.current = opener;
+    // Recovery is read-only and never prompts to save new input or reopens a
+    // native dialog. It belongs to the original frozen export operation.
+    if (exporter.snapshot().needsCheck) {
+      const result = await exporter.check();
+      if (result?.state === "succeeded") setExportedEvent(result.id);
+      returnExportFocus.current = !exporter.snapshot().needsCheck;
+      return;
+    }
+    await withConfirmedEdits(withSavedEdits, async () => {
+      const saved = await read();
+      if (!saved || !controller.observe(saved)) throw Error("保存済みの議事録を確認してください。編集中の入力は保持しています。");
+      const result = await exporter.begin(saved);
+      if (result?.state === "succeeded") setExportedEvent(result.id);
+      returnExportFocus.current = true;
+    });
+  });
   const jobAction = (command: string, jobId: string) => run(async () => {
     await invoke(command, { jobId }); await refreshRef.current();
   });
@@ -147,6 +180,8 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   return <section className="analysis-card minutes-card plain-minutes-card" aria-label="議事録">
     <div className="card-head"><h2>議事録</h2><div className="plain-minutes-primary-actions">
       <div ref={setActionsHost} className="plain-minutes-editor-actions-host" />
+      <IconButton label={exportState.needsCheck ? "書き出し結果を確認" : exportState.retry ? "議事録の書き出しを再試行" : "議事録をMarkdownで保存"} icon="download"
+        disabled={disabled || exportState.busy || (!documentState.document && !exportState.needsCheck && !exportState.retry)} onClick={event => void exportMarkdown(event.currentTarget)} />
       {!documentState.document && <button type="button" disabled={cannotGenerate} onClick={() => void start()}>議事録を生成</button>}
       <OptionsModal label="議事録の操作" icon="more" hidden={!visible} className="plain-minutes-options">
         <div className="plain-minutes-options-body">
@@ -173,5 +208,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost}
       durationUs={null} />}
     <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} toastMessage="議事録操作を完了できません。入力を保持しています" />
+    <IssueNotice scope={meetingId} type="plain-minutes-export-error" label="議事録の書き出し" message={exportState.error} toastMessage="議事録の書き出し結果を確認してください" />
+    <ToastNotice scope={meetingId} type="plain-minutes-export" eventId={exportedEvent} message={exportedEvent ? "議事録をMarkdownで保存しました" : ""} />
   </section>;
 }

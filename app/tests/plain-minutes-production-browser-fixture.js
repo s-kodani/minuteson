@@ -7,6 +7,7 @@ const op=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 data.plain={m1:{meetingId:"m1",markdown:"# 点検会議\n\n- 点検日を確認する\n\n人間の保存済み追記\n",lockVersion:1,contentHash:"a".repeat(64),operationId:op(1),updatedAt:1}};
 if(new URLSearchParams(location.search).get("empty")==="1")data.plain={};
 data.plainMode="success";data.startMode="success";data.plainCalls=[];data.plainRelease=()=>{};
+data.exportMode="success";data.exportRecords={};data.exportActive=false;data.exportRelease=()=>{};
 const callbacks=new Map(),listeners=new Map();
 const bridge=window.__TAURI_INTERNALS__,originalInvoke=bridge.invoke.bind(bridge),originalTransform=bridge.transformCallback.bind(bridge);
 bridge.transformCallback=fn=>{const id=originalTransform(fn);callbacks.set(id,fn);return id;};
@@ -36,6 +37,31 @@ bridge.invoke=async(cmd,args={})=>{
     }else if(saved.markdown!==r.markdown)throw Error("reused operation with wrong body");
     if(data.plainMode==="lost")throw Error("合成の保存成功応答喪失");
     return copy(data.plain[r.meetingId]);
+  }
+  if(cmd==="get_plain_minutes_export_status"){
+    data.plainCalls.push({cmd,args:copy(args)});
+    if(data.exportStatusFailure)throw Error("合成の結果読込み失敗");
+    return {active:data.exportActive,record:copy(data.exportRecords[args.request.operationId]??null)};
+  }
+  if(cmd==="export_plain_minutes_markdown"){
+    data.plainCalls.push({cmd,args:copy(args)});const r=copy(args.request);
+    if(data.exportRecords[r.operationId])return copy(data.exportRecords[r.operationId]);
+    if(data.exportMode==="cancel")return null;
+    if(data.exportMode==="transport")throw Error("合成の書き出し通信失敗");
+    const saved=copy(data.plain[r.meetingId]);
+    data.exportActive=true;
+    try {
+      if(data.exportMode==="held")await new Promise(resolve=>data.exportRelease=resolve);
+      const current=data.plain[r.meetingId];
+      if(current?.lockVersion!==r.expected.lockVersion||current?.contentHash!==r.expected.contentHash)throw Error("合成の保存先選択中の本文競合");
+      const bytes=new TextEncoder().encode(saved.markdown),hash=await crypto.subtle.digest("SHA-256",bytes);
+      const failed=data.exportMode==="failure";
+      const record={id:r.operationId,meetingId:r.meetingId,minutesRevisionId:null,exportedContentHash:r.expected.contentHash,
+        outputContentHash:Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,"0")).join(""),outputSizeBytes:bytes.length,
+        destinationPath:"/synthetic/議事録.md",state:failed?"failed":"succeeded",errorMessage:failed?"合成の外部書込み失敗":null,createdAt:0,exportedAt:failed?null:1};
+      data.exportRecords[r.operationId]=record;
+      if(data.exportMode==="lost")throw Error("合成の書き出し成功応答喪失");return copy(record);
+    } finally {data.exportActive=false;}
   }
   if(cmd==="start_markdown_minutes_generation"){
     data.plainCalls.push({cmd,args:copy(args)});const r=args.request,saved=data.plain[r.input.meetingId]??null;

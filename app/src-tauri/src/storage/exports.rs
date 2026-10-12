@@ -44,8 +44,8 @@ pub(crate) struct PreparedExport {
     pub content_hash: String,
     pub output_hash: String,
 }
-const COLUMNS: &str = "id,meeting_id,minutes_revision_id,exported_content_hash,output_content_hash,output_size_bytes,destination_path,state,error_message,created_at,exported_at";
-fn record(r: &rusqlite::Row<'_>) -> rusqlite::Result<ExportRecord> {
+pub(super) const COLUMNS: &str = "id,meeting_id,minutes_revision_id,exported_content_hash,output_content_hash,output_size_bytes,destination_path,state,error_message,created_at,exported_at";
+pub(super) fn record(r: &rusqlite::Row<'_>) -> rusqlite::Result<ExportRecord> {
     Ok(ExportRecord {
         id: r.get(0)?,
         meeting_id: r.get(1)?,

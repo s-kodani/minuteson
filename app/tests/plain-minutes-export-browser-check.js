@@ -1,0 +1,66 @@
+async (page,capturePath) => {
+  const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
+  const panel=()=>page.getByRole("region",{name:"議事録",exact:true});
+  const button=label=>panel().getByRole("button",{name:label,exact:true});
+  const calls=cmd=>page.evaluate(cmd=>window.__mon.plainCalls.filter(c=>c.cmd===cmd).length,cmd);
+  const dialog=()=>page.locator("dialog[open]");
+  const normal="議事録をMarkdownで保存",recover="書き出し結果を確認",retry="議事録の書き出しを再試行";
+  const open=async()=>{await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await button(normal).waitFor();};
+  await page.setViewportSize({width:1280,height:820});await open();
+  check(await calls("export_plain_minutes_markdown")===0,"initial mount exported");
+  await page.evaluate(()=>window.__mon.exportMode="cancel");await button(normal).click();await button(normal).waitFor({state:"visible"});
+  await page.waitForFunction(()=>window.__mon.plainCalls.filter(c=>c.cmd==="export_plain_minutes_markdown").length===1&&!document.querySelector('[aria-label="議事録をMarkdownで保存"]').disabled);
+  check(await page.evaluate(()=>Object.keys(window.__mon.exportRecords).length===0),"cancel created receipt");
+  check(await button(normal).evaluate(e=>document.activeElement===e),"known cancellation did not restore enabled icon focus");
+  results.push("initial mount never exports; known native cancellation has no receipt and returns focus to enabled icon");
+  await button("議事録を編集").click();const input=()=>page.getByRole("textbox",{name:"議事録のMarkdown本文",exact:true});await input().fill("# 明示保存して書き出し\n");
+  await page.evaluate(()=>window.__mon.exportMode="success");await button(normal).click();await dialog().getByRole("heading",{name:"議事録の未保存の編集"}).waitFor();
+  await dialog().getByRole("button",{name:"確認をキャンセル",exact:true}).click();check(await calls("export_plain_minutes_markdown")===1,"cancelled unsaved choice exported");
+  await button(normal).click();await dialog().getByRole("button",{name:"保存して続ける",exact:true}).click();
+  await page.waitForFunction(()=>Object.keys(window.__mon.exportRecords).length===1);
+  check(await calls("save_minutes_markdown")===1,"export saved implicitly or multiple times");
+  check(await page.evaluate(()=>{const r=Object.values(window.__mon.exportRecords)[0];return r.exportedContentHash===window.__mon.plain.m1.contentHash&&r.minutesRevisionId===null&&r.state==="succeeded";}),"export used obsolete revision or wrong body");
+  results.push("unsaved export requires explicit save/discard/cancel; accepted save exports the current plain body without structured revisions");
+  await page.evaluate(()=>window.__mon.exportMode="lost");await button(normal).click();await button(recover).waitFor();
+  const lostCount=await calls("export_plain_minutes_markdown");
+  check(await button(recover).evaluate(e=>document.activeElement!==e||!e.disabled),"unknown result focused disabled icon");
+  await button(recover).click();await button(normal).waitFor();
+  check(await calls("export_plain_minutes_markdown")===lostCount&&await calls("get_plain_minutes_export_status")===1,"lost success reopened dialog");
+  check(await page.evaluate(()=>Object.keys(window.__mon.exportRecords).length===2),"lost success wrote duplicate receipt");
+  results.push("lost success switches icon to read-only result confirmation and recovers the same receipt without reopening save dialog");
+  await page.evaluate(()=>window.__mon.exportMode="transport");await button(normal).click();await button(recover).waitFor();
+  await page.evaluate(()=>window.__mon.exportActive=true);await button(recover).click();await button(recover).waitFor();
+  await page.waitForFunction(()=>!document.querySelector('[aria-label="書き出し結果を確認"]').disabled);
+  check(await calls("export_plain_minutes_markdown")===lostCount+1,"active status replayed save");
+  await page.evaluate(()=>{window.__mon.exportActive=false;window.__mon.exportStatusFailure=true;});await button(recover).click();await button(recover).waitFor();
+  await page.waitForFunction(()=>!document.querySelector('[aria-label="書き出し結果を確認"]').disabled);
+  check(await calls("export_plain_minutes_markdown")===lostCount+1,"read failure reopened dialog");
+  await page.evaluate(()=>window.__mon.exportStatusFailure=false);await button(recover).click();await button(retry).waitFor();
+  check(await calls("export_plain_minutes_markdown")===lostCount+1,"unrecorded status automatically retried");
+  await page.evaluate(()=>window.__mon.exportMode="success");await button(retry).click();await button(normal).waitFor();
+  await page.waitForFunction(()=>Object.keys(window.__mon.exportRecords).length===3);
+  check(await page.evaluate(()=>{const c=window.__mon.plainCalls.filter(c=>c.cmd==="export_plain_minutes_markdown");return JSON.stringify(c.at(-1).args)===JSON.stringify(c.at(-2).args);}),"explicit export retry changed operation or frozen source");
+  results.push("active and failed status reads never write; unrecorded result enables only an explicit identical retry");
+  await page.evaluate(()=>window.__mon.exportMode="held");await button(normal).click();await page.waitForFunction(()=>window.__mon.exportActive);
+  check(await button(normal).isDisabled()&&await input().isDisabled(),"native selection did not lock competing UI");
+  await page.evaluate(()=>{window.__mon.plain.m1={...window.__mon.plain.m1,markdown:"# 外部の人間保存\n",lockVersion:3,contentHash:"e".repeat(64),operationId:"00000000-0000-4000-8000-000000000999",updatedAt:4};window.__mon.exportRelease();});
+  await button(recover).waitFor();check(await page.evaluate(()=>Object.keys(window.__mon.exportRecords).length===3),"source change during dialog published stale bytes");
+  check(await page.evaluate(()=>window.__mon.plain.m1.markdown==="# 外部の人間保存\n"),"write conflict displaced saved human input");
+  await button(recover).click();await button(retry).waitFor();await page.evaluate(()=>window.__mon.exportMode="success");await button(retry).click();await button(normal).waitFor();
+  await page.waitForFunction(()=>Object.keys(window.__mon.exportRecords).length===4);
+  check(await page.evaluate(()=>{const c=window.__mon.plainCalls.filter(c=>c.cmd==="export_plain_minutes_markdown");return c.at(-1).args.request.operationId!==c.at(-2).args.request.operationId&&c.at(-1).args.request.expected.lockVersion===3;}),"new stopped-source attempt did not bind a fresh operation to latest saved body");
+  results.push("source change during selection blocks stale publication; verified stopped conflict permits an explicit fresh export of the newer human body");
+  // Fresh mount for independent terminal write-failure case.
+  await page.goto("http://127.0.0.1:1420/");await open();await page.evaluate(()=>window.__mon.exportMode="failure");await button(normal).click();
+  await page.waitForFunction(()=>Object.values(window.__mon.exportRecords).some(r=>r.state==="failed")&&!document.querySelector('[aria-label="議事録をMarkdownで保存"]').disabled);
+  check(await calls("export_plain_minutes_markdown")===1,"failed publication automatically retried");
+  check(await page.evaluate(()=>!Object.values(window.__mon.exportRecords).some(r=>r.state==="succeeded")),"failed publication reported success");
+  results.push("known external write failure keeps a failed receipt and never signals success or automatically retries");
+  for(const width of [1280,360]) {
+    await page.setViewportSize({width,height:820});
+    check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"export header horizontally overflows");
+    check(await panel().locator(".plain-minutes-primary-actions button").evaluateAll(buttons=>buttons.filter(b=>b.getClientRects().length).every(b=>b.getBoundingClientRect().height===32)),"export icon has inconsistent height");
+    await page.screenshot({path:`plain-export-${width}.png`});results.push(`export icon fits adjacent 32px controls and available width: ${width}`);
+  }
+  return results;
+}

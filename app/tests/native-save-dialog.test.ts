@@ -27,10 +27,26 @@ test("shared save panel preserves the selected URL and safe cancellation for bot
 
 test("Markdown panel returns focus only after a known native response and enabled render", () => {
   const panel=readFileSync(new URL("../src/minutes.tsx",import.meta.url),"utf8");
-  assert.doesNotMatch(panel,/export_minutes_markdown|pendingExport/);
-  // Plain-body native output is a separate remaining integration step, not
-  // silently wired to the obsolete structured revision export request.
-  assert.match(panel,/save_minutes_markdown/);
+  assert.doesNotMatch(panel,/"export_minutes_markdown"/);
+  assert.match(panel,/"export_plain_minutes_markdown"/);
+  assert.match(panel,/"get_plain_minutes_export_status"/);
+  assert.match(panel,/!returnExportFocus.current \|\| locked \|\| busy \|\| exportState.busy \|\| !visible/);
+  assert.match(panel,/target\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(panel,/!target\.closest\("\[hidden\],\[inert\]"\)/);
+});
+
+test("plain Markdown native output keeps detached admission and result checks cannot reopen a save panel", () => {
+  const source=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
+  const output=source.slice(source.indexOf("async fn export_plain_minutes_markdown("),source.indexOf("async fn get_plain_minutes_export_status("));
+  assert.match(output,/minutes_app\(&window\)/);
+  assert.match(output,/require_data_writable\(\)/);
+  assert.match(output,/begin_export\(\)/);
+  assert.match(output,/tauri::async_runtime::spawn\(async move[\s\S]*let _admission = admission;[\s\S]*let _lease = lease;/);
+  assert.ok(output.indexOf("existing_markdown_export")<output.indexOf("exports::save_dialog"));
+  const status=source.slice(source.indexOf("async fn get_plain_minutes_export_status("),source.indexOf("async fn get_minutes_export_status("));
+  assert.ok(status.indexOf("let was_active")<status.indexOf("existing_markdown_export"));
+  assert.match(status,/active: was_active \|\| app\.state::<exports::ExportController>\(\)\.active\(\)/);
+  assert.doesNotMatch(status,/save_dialog|write_markdown_export|prepare_markdown_export/);
 });
 
 test("backup selection focus waits for its acknowledged token, terminal state and enabled visible UI", () => {

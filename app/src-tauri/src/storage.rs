@@ -23,6 +23,7 @@ mod draft_splits;
 mod drafts;
 pub(crate) mod edit_recovery;
 mod exports;
+pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
 pub(crate) mod imports;

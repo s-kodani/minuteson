@@ -17,6 +17,7 @@ const port = Number(portText), origin = `http://127.0.0.1:${port}`;
 const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
+  ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
   ["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"],
   ["keyboard-primary", "browser-fixture.js", "keyboard-primary-browser-check.js"],
   ["common", "common-modal-browser-fixture.tsx", "common-modal-browser-check.js"],
