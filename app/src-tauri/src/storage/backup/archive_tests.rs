@@ -148,11 +148,9 @@ fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_withou
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let id = meeting(&storage, "import");
-    let revision = super::super::super::minutes_ui::tests::candidate(&storage, &id);
+    let revision = super::super::super::stored_minutes_fixture::candidate(&storage, &id);
     storage
-        .adopt_minutes(super::super::super::minutes_ui::tests::request(
-            &storage, &id, &revision,
-        ))
+        .seed_stored_minutes_head(&id, &revision)
         .unwrap();
     storage
         .save_analysis_preferences(

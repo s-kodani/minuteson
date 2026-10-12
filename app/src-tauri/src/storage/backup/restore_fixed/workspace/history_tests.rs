@@ -538,7 +538,7 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
         .is_some());
     assert!(existing
         .storage
-        .load_minutes_draft(&meeting, None)
+        .read_stored_minutes_draft(&meeting, None)
         .unwrap()
         .is_some());
     assert!(existing
@@ -554,7 +554,7 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
     assert_eq!(reopened.list_meetings().unwrap().len(), 2);
     assert!(reopened.load_current_analysis(&meeting).unwrap().is_some());
     assert!(reopened
-        .load_minutes_draft(&meeting, None)
+        .read_stored_minutes_draft(&meeting, None)
         .unwrap()
         .is_some());
     assert!(reopened.acquire_local_inference_job().unwrap().is_none());
@@ -716,13 +716,11 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
         .unwrap()
         .unwrap();
     f.storage
-        .adopt_minutes(crate::storage::minutes_ui::tests::request(
-            &f.storage, &f.meeting, &revision,
-        ))
+        .seed_stored_minutes_head(&f.meeting, &revision)
         .unwrap();
     let draft = f
         .storage
-        .create_minutes_draft(&f.meeting, &revision)
+        .seed_stored_minutes_draft(&f.meeting, &revision)
         .unwrap();
     let mut payload = draft.payload;
     payload
@@ -734,12 +732,12 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
             )],
         });
     f.storage
-        .save_minutes_draft(&draft.id, draft.lock_version, payload)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
         .unwrap();
     let outside = tempfile::tempdir().unwrap();
     let path = outside.path().join("保存済み議事録.md");
     let export = || {
-        let state = f.storage.minutes_versions(&f.meeting).unwrap();
+        let state = f.storage.read_stored_minutes_state(&f.meeting).unwrap();
         let content = f
             .storage
             .load_minutes_content(&f.meeting, &revision)
@@ -771,7 +769,7 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
     std::fs::write(&path, b"external edit").unwrap();
     let draft = f
         .storage
-        .load_minutes_draft(&f.meeting, None)
+        .read_stored_minutes_draft(&f.meeting, None)
         .unwrap()
         .unwrap();
     let mut payload = draft.payload;
@@ -782,7 +780,7 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
             content: vec![crate::minutes_document::Inline::text("出力後の追加編集")],
         });
     f.storage
-        .save_minutes_draft(&draft.id, draft.lock_version, payload)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
         .unwrap();
     (f, outside, path)
 }
@@ -793,7 +791,7 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
     let (f, _outside, path) = exported_fixture();
     let output = tempfile::tempdir().unwrap();
     let original = f.storage.exports(&f.meeting).unwrap();
-    let draft = f.storage.load_minutes_draft(&f.meeting, None).unwrap();
+    let draft = f.storage.read_stored_minutes_draft(&f.meeting, None).unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
     let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
@@ -834,7 +832,7 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
     crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
     assert_eq!(
-        f.storage.load_minutes_draft(&f.meeting, None).unwrap(),
+        f.storage.read_stored_minutes_draft(&f.meeting, None).unwrap(),
         draft
     );
     assert_eq!(f.storage.exports(&f.meeting).unwrap().len(), 2);

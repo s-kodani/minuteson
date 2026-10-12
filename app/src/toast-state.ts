@@ -126,6 +126,11 @@ export class ToastController {
     const entry = this.entries.get(key);
     if (entry) { this.stop(entry); this.entries.delete(key); this.publish(); }
   }
+  resolveMatching(key: string, message: string) {
+    // An asynchronous owner may clear its old failure, never a newer problem
+    // reported by another owner using the same operation identity.
+    if (this.entries.get(key)?.toast.message === message) this.resolve(key);
+  }
   markRendered(key:string,id:number,fromList=false){
     const entry=this.entries.get(key);
     if(!entry||entry.toast.id!==id||entry.rendered||[...this.pauses].some(reason=>!fromList||reason!=="modal")||!fromList&&!this.snapshot.some(t=>t.key===key&&t.id===id)||!entry.toast.onRendered)return;

@@ -20,6 +20,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
 }) {
   const [flow, setFlow] = useState<AnalysisFlow | null>(null), [jobs, setJobs] = useState<AnalysisJob[]>([]);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
   const completed = useRef<string | null>(null), running = useRef(false);
   const retryOperations = useRef(new Map<string, string>());
   const regeneration = useRef<RegenerationRequest | null>(null);
@@ -47,7 +48,10 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
             if (disposed) return;
             completed.current = output;
           }
-        } catch (cause) { if (!disposed) setError(String(cause)); }
+          // A recovered read clears only read failures, never an action error.
+          // Otherwise a late failed poll survives a successful new generation.
+          setRefreshError("");
+        } catch (cause) { if (!disposed) setRefreshError(String(cause)); }
       } while (again && !disposed); })().finally(() => { pending = null; });
       return pending;
     };
@@ -119,7 +123,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   </section>;
   return <>
     {pending && <p className="transcript-state" role="status">{flow?.stage === "diarization" ? "話者を整理しています" : "文字起こし中"}{active ? " · " + jobLabel(active.state) : ""}</p>}
-    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || flow?.errorMessage} />
+    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || refreshError || flow?.errorMessage} />
     {renderTools ? renderTools(tools, null) : tools}
   </>;
 }

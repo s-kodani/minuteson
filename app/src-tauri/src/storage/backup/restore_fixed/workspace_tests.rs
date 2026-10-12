@@ -59,7 +59,7 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
     let meeting = fixture(&storage, "workspace");
     let original_draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let original_minutes = storage
-        .minutes_versions(&meeting)
+        .read_stored_minutes_state(&meeting)
         .unwrap()
         .current_id
         .unwrap();
@@ -414,7 +414,7 @@ fn every_meeting_is_reconstructed_without_cross_meeting_audio_or_evidence() {
                 .unwrap();
         assert_eq!(manifest.meeting_id, meeting);
         let current = storage
-            .minutes_versions(original)
+            .read_stored_minutes_state(original)
             .unwrap()
             .current_id
             .unwrap();

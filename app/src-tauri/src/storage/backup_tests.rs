@@ -28,7 +28,7 @@ fn rows(db: &Connection, table: &str) -> Vec<Vec<Value>> {
 fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_vocabulary() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = super::super::minutes_ui::tests::meeting(&storage);
+    let meeting = super::super::stored_minutes_fixture::meeting(&storage);
     // Existing analysis fixture uses a fake path/hash. Materialize real managed
     // bytes without changing revision provenance, then include a second asset.
     let relative = format!("meetings/{meeting}/audio/original.caf");
@@ -40,13 +40,11 @@ fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_
         params![relative, 13, format!("{:x}", Sha256::digest(b"fixture audio"))],
     ).unwrap();
     asset(&storage, &meeting, b"second asset");
-    let first = super::super::minutes_ui::tests::candidate(&storage, &meeting);
+    let first = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(super::super::minutes_ui::tests::request(
-            &storage, &meeting, &first,
-        ))
+        .seed_stored_minutes_head(&meeting, &first)
         .unwrap();
-    let archived_draft = storage.create_minutes_draft(&meeting, &first).unwrap();
+    let archived_draft = storage.seed_stored_minutes_draft(&meeting, &first).unwrap();
     let mut archived_payload = archived_draft.payload;
     archived_payload
         .blocks
@@ -55,26 +53,22 @@ fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_
             content: vec![crate::minutes_document::Inline::text("古い版の未採用編集")],
         });
     storage
-        .save_minutes_draft(
+        .seed_stored_minutes_edit(
             &archived_draft.id,
             archived_draft.lock_version,
             archived_payload,
         )
         .unwrap();
-    let second = super::super::minutes_ui::tests::candidate(&storage, &meeting);
+    let second = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(super::super::minutes_ui::tests::request(
-            &storage, &meeting, &second,
-        ))
+        .seed_stored_minutes_head(&meeting, &second)
         .unwrap();
-    let third = super::super::minutes_ui::tests::candidate(&storage, &meeting);
+    let third = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(super::super::minutes_ui::tests::request(
-            &storage, &meeting, &third,
-        ))
+        .seed_stored_minutes_head(&meeting, &third)
         .unwrap();
-    let candidate = super::super::minutes_ui::tests::candidate(&storage, &meeting);
-    let draft = storage.create_minutes_draft(&meeting, &third).unwrap();
+    let candidate = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
+    let draft = storage.seed_stored_minutes_draft(&meeting, &third).unwrap();
     let mut payload = draft.payload;
     payload
         .blocks
@@ -83,7 +77,7 @@ fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_
             content: vec![crate::minutes_document::Inline::text("保持する追記")],
         });
     storage
-        .save_minutes_draft(&draft.id, draft.lock_version, payload)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
         .unwrap();
     let entry = VocabularyEntry {
         id: Uuid::new_v4().to_string(),

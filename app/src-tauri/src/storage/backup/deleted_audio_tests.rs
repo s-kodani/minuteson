@@ -242,13 +242,11 @@ fn deleted_audio_historical_read_still_requires_ready_manifest_and_saved_source_
 fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_without_source_bodies()
 {
     let (_root, storage, meeting) = fixture();
-    let candidate = crate::storage::minutes_ui::tests::candidate(&storage, &meeting);
+    let candidate = crate::storage::stored_minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(crate::storage::minutes_ui::tests::request(
-            &storage, &meeting, &candidate,
-        ))
+        .seed_stored_minutes_head(&meeting, &candidate)
         .unwrap();
-    storage.create_minutes_draft(&meeting, &candidate).unwrap();
+    storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
     let neighbor = tests::meeting(&storage, "neighbor-audio-import");
     let output = tempfile::tempdir().unwrap();
     let db = storage.connection.lock().unwrap();

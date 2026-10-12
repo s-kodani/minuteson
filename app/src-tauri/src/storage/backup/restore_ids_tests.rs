@@ -44,20 +44,18 @@ pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) ->
     storage
         .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
-    let revision = super::super::super::minutes_ui::tests::candidate(storage, &meeting);
+    let revision = super::super::super::stored_minutes_fixture::candidate(storage, &meeting);
     storage
-        .adopt_minutes(super::super::super::minutes_ui::tests::request(
-            storage, &meeting, &revision,
-        ))
+        .seed_stored_minutes_head(&meeting, &revision)
         .unwrap();
-    let mut minutes = storage.create_minutes_draft(&meeting, &revision).unwrap();
+    let mut minutes = storage.seed_stored_minutes_draft(&meeting, &revision).unwrap();
     for text in ["手動追記1", "手動追記2"] {
         minutes.payload.blocks.push(Block::Paragraph {
             item_id: None,
             content: vec![Inline::text(text)],
         });
         minutes = storage
-            .save_minutes_draft(&minutes.id, minutes.lock_version, minutes.payload)
+            .seed_stored_minutes_edit(&minutes.id, minutes.lock_version, minutes.payload)
             .unwrap();
     }
     meeting

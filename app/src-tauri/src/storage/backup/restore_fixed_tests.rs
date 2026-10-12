@@ -335,7 +335,7 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
     let meeting = fixture(&storage, "fixed");
     let original_draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let minutes_id = storage
-        .minutes_versions(&meeting)
+        .read_stored_minutes_state(&meeting)
         .unwrap()
         .current_id
         .unwrap();

@@ -104,7 +104,7 @@ fn audio_reconfirmation_keeps_original_availability_documents_and_postcompletion
     assert!(!f.storage.data_write_blocked());
     assert!(f
         .storage
-        .minutes_versions(&f.meeting)
+        .read_stored_minutes_state(&f.meeting)
         .unwrap()
         .current_id
         .is_some());

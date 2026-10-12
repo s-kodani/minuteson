@@ -439,7 +439,7 @@ fn legacy(storage: &Storage) -> (String, String) {
         .unwrap()
         .lock_version;
     storage
-        .commit_minutes_candidate(&source.meeting_id, &revision, lock, false)
+        .seed_stored_minutes_head(&source.meeting_id, &revision)
         .unwrap();
     (source.meeting_id, revision)
 }
@@ -738,14 +738,14 @@ fn first_read_imports_current_effective_draft_without_source_ids_and_reopen_keep
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, base) = legacy(&storage);
-    let draft = storage.create_minutes_draft(&meeting, &base).unwrap();
+    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
     let mut payload = draft.payload;
     payload.blocks.push(Block::Paragraph {
         item_id: None,
         content: vec![Inline::text("人間の保存済み追記")],
     });
     storage
-        .save_minutes_draft(&draft.id, draft.lock_version, payload)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
         .unwrap();
     let before = storage
         .load_minutes_content(&meeting, &base)
@@ -795,7 +795,7 @@ fn failed_import_does_not_partially_migrate_or_delete_existing_documents() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, base) = legacy(&storage);
-    let draft = storage.create_minutes_draft(&meeting, &base).unwrap();
+    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
     storage
         .connection
         .lock()

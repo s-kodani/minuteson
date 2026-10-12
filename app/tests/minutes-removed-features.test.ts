@@ -41,3 +41,19 @@ test("plain-window fixture refuses obsolete operations instead of implementing r
     assert.equal(globalThis.window.__mon.drafts,undefined);
   }finally{globalThis.window=previous;}
 });
+test("legacy draft edits, adoption and version restoration are deleted from native storage",()=>{
+  const root=new URL("../src-tauri/src/",import.meta.url);
+  assert.equal(existsSync(new URL("storage/minutes_ui.rs",root)),false);
+  assert.equal(existsSync(new URL("storage/minutes_ui_tests.rs",root)),false);
+  const drafts=readFileSync(new URL("storage/minutes_drafts.rs",root),"utf8");
+  const revisions=readFileSync(new URL("storage/revisions.rs",root),"utf8");
+  assert.doesNotMatch(drafts,/fn (?:create_minutes_draft|save_minutes_draft|undo_minutes_edit|switch|persist)\b|\.execute\(/);
+  assert.doesNotMatch(revisions,/fn (?:commit_minutes_candidate|commit_minutes_inner|restore_previous_minutes|restore_minutes_inner)\b|struct CommittedMinutes\b/);
+  // ASR revision publication is a separate, still required operation.
+  assert.match(revisions,/fn commit_analysis_inner\(/);
+  const modules=readFileSync(new URL("storage.rs",root),"utf8");
+  assert.match(modules,/#\[cfg\(test\)\]\nmod stored_minutes_fixture;/);
+  assert.doesNotMatch(modules,/mod minutes_ui;|MinutesAdoptRequest|MinutesVersionState|CommittedMinutes/);
+  const fixture=readFileSync(new URL("storage/stored_minutes_fixture.rs",root),"utf8");
+  assert.doesNotMatch(fixture,/fn (?:undo|restore|adopt|save_minutes|create_minutes)/);
+});

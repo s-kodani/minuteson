@@ -15,6 +15,18 @@ function setup() {
 }
 const notice = (key = "one", props: Partial<ToastInput> = {}): ToastInput => ({ key, level: "success", message: "保存しました", ...props });
 
+test("verified asynchronous recovery clears only its own matching problem", () => {
+  const { c } = setup();
+  c.show(notice("shared", { level: "error", message: "old publication failed" }));
+  c.resolveMatching("shared", "old publication failed");
+  assert.equal(c.getSnapshot().length, 0);
+  assert.equal(c.getHistorySnapshot().length, 1);
+  c.show(notice("shared", { level: "error", message: "new action failed" }));
+  const identity = c.getSnapshot()[0].id;
+  c.resolveMatching("shared", "old publication failed");
+  assert.equal(c.getSnapshot()[0].id, identity);
+});
+
 test("ordinary notices expire after four visible seconds and acknowledge only their own event", () => {
   const { c, advance } = setup(); let closed = 0;
   c.show(notice("one", { onClose: () => closed++ })); advance(3999); assert.equal(c.getSnapshot().length, 1);

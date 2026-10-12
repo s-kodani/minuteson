@@ -1,5 +1,5 @@
 use super::database::*;
-use crate::storage::{minutes_ui::tests as minutes_fixture, Storage};
+use crate::storage::{stored_minutes_fixture as minutes_fixture, Storage};
 use rusqlite::{config::DbConfig, params, Connection};
 use std::cell::Cell;
 
@@ -202,9 +202,9 @@ impl Fixture {
             let candidate = minutes_fixture::candidate(&storage, &meeting);
             if i < 2 {
                 storage
-                    .adopt_minutes(minutes_fixture::request(&storage, &meeting, &candidate))
+                    .seed_stored_minutes_head(&meeting, &candidate)
                     .unwrap();
-                let draft = storage.create_minutes_draft(&meeting, &candidate).unwrap();
+                let draft = storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
                 let mut payload = draft.payload.clone();
                 payload
                     .blocks
@@ -215,7 +215,7 @@ impl Fixture {
                         )],
                     });
                 storage
-                    .save_minutes_draft(&draft.id, draft.lock_version, payload)
+                    .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
                     .unwrap();
             }
         }

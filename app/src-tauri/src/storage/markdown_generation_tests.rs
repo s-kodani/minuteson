@@ -163,6 +163,99 @@ fn markdown_worker_publishes_exact_model_text_directly_and_reopen_keeps_it_witho
     );
 }
 #[test]
+fn markdown_regeneration_replaces_one_body_without_structured_versions_or_edit_history() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let mut req = request(&storage, false);
+    let first = markdown_job::enqueue(
+        &storage,
+        req.clone(),
+        engine(root.path(), "normal"),
+        "standard",
+        2400,
+        None,
+    )
+    .unwrap();
+    claim(&storage, &first);
+    process(&storage, &first.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let original = storage
+        .get_minutes_markdown(&req.meeting_id)
+        .unwrap()
+        .unwrap();
+    let human = save(
+        &storage,
+        &req.meeting_id,
+        Some(original.stamp()),
+        "上書きを明示確認する人間の本文",
+    );
+    req.operation_id = Uuid::new_v4().to_string();
+    req.expected_meeting_lock_version = storage
+        .get_meeting(&req.meeting_id)
+        .unwrap()
+        .unwrap()
+        .lock_version;
+    let second = markdown_job::enqueue(
+        &storage,
+        req.clone(),
+        engine(root.path(), "normal"),
+        "standard",
+        2400,
+        Some(human.stamp()),
+    )
+    .unwrap();
+    claim(&storage, &second);
+    process(&storage, &second.id, &|| false, &|_| {})
+        .unwrap()
+        .unwrap();
+    let regenerated = storage
+        .get_minutes_markdown(&req.meeting_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(regenerated.markdown, original.markdown);
+    assert!(regenerated.lock_version > human.lock_version);
+    let db = storage.connection.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM minutes_markdown WHERE meeting_id=?1",
+            [&req.meeting_id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
+        assert_eq!(
+            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM working_drafts WHERE target_kind='minutes'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM edit_operations WHERE operation_kind IN ('replace_minutes','undo_minutes') OR operation_kind LIKE 'undo_minutes:%'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    assert_eq!(db.query_row("SELECT current_minutes_id IS NULL AND previous_minutes_id IS NULL FROM meetings WHERE id=?1", [&req.meeting_id], |r| r.get::<_,bool>(0)).unwrap(), true);
+    drop(db);
+    drop(storage);
+    assert_eq!(
+        Storage::open(root.path().into())
+            .unwrap()
+            .get_minutes_markdown(&req.meeting_id)
+            .unwrap(),
+        Some(regenerated)
+    );
+}
+
+#[test]
 fn markdown_worker_preserves_human_save_after_start_and_rejects_initial_result_conflict() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();

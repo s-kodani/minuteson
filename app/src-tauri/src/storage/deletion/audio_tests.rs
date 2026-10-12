@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::{analysis::tests as analysis_fixture, minutes_ui::tests as minutes_fixture};
+use crate::storage::{analysis::tests as analysis_fixture, stored_minutes_fixture as minutes_fixture};
 use std::{cell::Cell, path::PathBuf};
 
 pub(crate) struct Fixture {
@@ -197,14 +197,10 @@ impl Fixture {
         for _ in 0..2 {
             let candidate = minutes_fixture::candidate(&self.storage, &self.meeting);
             self.storage
-                .adopt_minutes(minutes_fixture::request(
-                    &self.storage,
-                    &self.meeting,
-                    &candidate,
-                ))
+                .seed_stored_minutes_head(&self.meeting, &candidate)
                 .unwrap();
             self.storage
-                .create_minutes_draft(&self.meeting, &candidate)
+                .seed_stored_minutes_draft(&self.meeting, &candidate)
                 .unwrap();
         }
     }
@@ -277,7 +273,7 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
     assert_eq!(f.storage.list_meetings().unwrap().len(), 2);
     assert_eq!(
         f.storage
-            .minutes_versions(&f.meeting)
+            .read_stored_minutes_state(&f.meeting)
             .unwrap()
             .current_id
             .is_some(),

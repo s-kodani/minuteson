@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::minutes_ui::tests as minutes_fixture;
+use crate::storage::stored_minutes_fixture as minutes_fixture;
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
@@ -182,9 +182,9 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
     storage.connection.lock().unwrap().execute("UPDATE file_assets SET relative_path=?1,size_bytes=13,content_hash=?2 WHERE id='asset'", params![relative, digest(b"fixture audio")]).unwrap();
     let minutes = minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(minutes_fixture::request(&storage, &meeting, &minutes))
+        .seed_stored_minutes_head(&meeting, &minutes)
         .unwrap();
-    let draft = storage.create_minutes_draft(&meeting, &minutes).unwrap();
+    let draft = storage.seed_stored_minutes_draft(&meeting, &minutes).unwrap();
     let mut payload = draft.payload;
     payload
         .blocks
@@ -195,11 +195,11 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
             )],
         });
     storage
-        .save_minutes_draft(&draft.id, draft.lock_version, payload)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
         .unwrap();
     let next = minutes_fixture::candidate(&storage, &meeting);
     storage
-        .adopt_minutes(minutes_fixture::request(&storage, &meeting, &next))
+        .seed_stored_minutes_head(&meeting, &next)
         .unwrap();
     let saved = storage.prepare_relocation_snapshot(&|| false).unwrap();
     assert_eq!(

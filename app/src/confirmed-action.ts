@@ -5,7 +5,10 @@ export async function withConfirmedEdits(saveThenAct: (action: () => Promise<voi
   await saveThenAct(async () => {
     if (called) throw Error("同じ確認の処理は既に開始しています。");
     called = true;
-    try { await action(); } catch (cause) { failed = true; failure = cause; throw cause; }
+    // The caller owns operation errors. Return through the save barrier first so
+    // navigation does not also report the same failure as an edit-save error.
+    // Save failures still propagate from saveThenAct and never run the action.
+    try { await action(); } catch (cause) { failed = true; failure = cause; }
   });
   if (failed) throw failure;
   if (!called) throw Error("編集の保存を完了できませんでした。変更処理は開始していません。元の画面で入力を確認してください。");

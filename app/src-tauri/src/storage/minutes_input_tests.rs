@@ -896,7 +896,7 @@ fn minutes_evidence_can_reference_hidden_fixed_input_after_source_reanalysis() {
         .unwrap()
         .lock_version;
     storage
-        .commit_minutes_candidate(&request.meeting_id, "minutes", lock, false)
+        .seed_stored_minutes_head(&request.meeting_id, "minutes")
         .unwrap();
     assert!(storage.verify_minutes_content_hash("minutes").unwrap());
     let mut next_input = input();

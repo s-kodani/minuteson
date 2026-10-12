@@ -77,11 +77,9 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .unwrap()
         .unwrap();
     storage
-        .adopt_minutes(crate::storage::minutes_ui::tests::request(
-            &storage, &meeting, &candidate,
-        ))
+        .seed_stored_minutes_head(&meeting, &candidate)
         .unwrap();
-    storage.create_minutes_draft(&meeting, &candidate).unwrap();
+    storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
     let segmentation = root.path().join("segmentation.onnx");
     let embedding = root.path().join("embedding.onnx");
     std::fs::write(&segmentation, b"owned segmentation").unwrap();
@@ -132,7 +130,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .unwrap();
     let neighbor = tests::meeting(&storage, "available-workspace-neighbor");
     let old_minutes = storage
-        .minutes_versions(&meeting)
+        .read_stored_minutes_state(&meeting)
         .unwrap()
         .current_id
         .unwrap();
@@ -216,7 +214,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .unwrap()
         .is_some());
     assert!(target
-        .load_minutes_draft(&new_meeting, Some(&new_minutes))
+        .read_stored_minutes_draft(&new_meeting, Some(&new_minutes))
         .unwrap()
         .is_some());
     let mut db = target.connection.lock().unwrap();

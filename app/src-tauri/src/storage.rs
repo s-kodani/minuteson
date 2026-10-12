@@ -38,7 +38,8 @@ mod minutes_drafts;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
-mod minutes_ui;
+#[cfg(test)]
+mod stored_minutes_fixture;
 mod model_checks;
 mod model_metadata;
 mod model_placements;
@@ -74,14 +75,14 @@ pub(crate) use jobs::{
 };
 pub(crate) use meeting_playback::{MeetingPlaybackRequest, MeetingIntervalRequest, MeetingAudioSummary};
 pub(crate) use minutes::MinutesView;
+#[cfg(test)]
 pub(crate) use minutes_drafts::MinutesDraft;
 pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
-pub(crate) use minutes_ui::{MinutesAdoptRequest, MinutesVersionState};
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub(crate) use recordings::valid_microphone_uid;
 pub use recordings::RecordingConfig;
-pub(crate) use revisions::{CommittedAnalysis, CommittedMinutes};
+pub(crate) use revisions::CommittedAnalysis;
 pub(crate) use speaker_review::{SpeakerReviewRequest, SpeakerReviewResponse};
 pub(crate) use transcription::RecordedAudioPlan;
 pub(crate) use ui_preferences::{UiPreferences, UiPreferencesSnapshot};

@@ -11,6 +11,14 @@ test("swallowed confirmed action failure remains a failure without retry", async
   await assert.rejects(withConfirmedEdits(async action => { try { await action(); } catch {} }, async () => { calls++; throw Error("応答喪失"); }), /応答喪失/u);
   assert.equal(calls, 1);
 });
+test("operation failure is reported only by the confirmed caller, not the save barrier", async () => {
+  const cause = Error("operation failed"); let saveReports = 0, calls = 0;
+  await assert.rejects(withConfirmedEdits(async action => {
+    try { await action(); } catch { saveReports++; }
+  }, async () => { calls++; throw cause; }), e => e === cause);
+  assert.equal(saveReports, 0);
+  assert.equal(calls, 1);
+});
 test("save failure which skips action is not reported as completion", async () => {
   let calls = 0;
   await assert.rejects(withConfirmedEdits(async () => {}, async () => { calls++; }), /変更処理は開始していません/u);

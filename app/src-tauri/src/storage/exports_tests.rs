@@ -2,14 +2,13 @@ use super::*;
 use crate::minutes_document::{Block, Inline};
 
 fn fixture(storage: &Storage) -> (String, String) {
-    let m = super::super::minutes_ui::tests::meeting(storage);
-    let id = super::super::minutes_ui::tests::candidate(storage, &m);
-    let req = super::super::minutes_ui::tests::request(storage, &m, &id);
-    storage.adopt_minutes(req).unwrap();
+    let m = super::super::stored_minutes_fixture::meeting(storage);
+    let id = super::super::stored_minutes_fixture::candidate(storage, &m);
+    storage.seed_stored_minutes_head(&m, &id).unwrap();
     (m, id)
 }
 fn request(storage: &Storage, m: &str, id: &str) -> ExportRequest {
-    let state = storage.minutes_versions(m).unwrap();
+    let state = storage.read_stored_minutes_state(m).unwrap();
     let view = storage.load_minutes_content(m, id).unwrap().unwrap();
     ExportRequest {
         operation_id: Uuid::new_v4().to_string(),
@@ -26,13 +25,13 @@ fn edited_export_is_derived_from_validated_json_and_replay_never_rewrites_the_fi
     let outside = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (m, id) = fixture(&s);
-    let initial = s.create_minutes_draft(&m, &id).unwrap();
+    let initial = s.seed_stored_minutes_draft(&m, &id).unwrap();
     let mut payload = initial.payload.clone();
     payload.blocks.push(Block::Paragraph {
         item_id: None,
         content: vec![Inline::text("手動追記 <script> | 改行\n確認")],
     });
-    let edited = s.save_minutes_draft(&initial.id, 0, payload).unwrap();
+    let edited = s.seed_stored_minutes_edit(&initial.id, 0, payload).unwrap();
     let r = request(&s, &m, &id);
     let prepared = s.prepare_export(r.clone()).unwrap();
     assert!(prepared.markdown.contains("手動追記"));
@@ -48,8 +47,8 @@ fn edited_export_is_derived_from_validated_json_and_replay_never_rewrites_the_fi
         result.output_content_hash,
         format!("{:x}", Sha256::digest(&bytes))
     );
-    assert_eq!(s.load_minutes_draft(&m, None).unwrap(), Some(edited));
-    assert_eq!(s.minutes_versions(&m).unwrap().current_id, Some(id));
+    assert_eq!(s.read_stored_minutes_draft(&m, None).unwrap(), Some(edited));
+    assert_eq!(s.read_stored_minutes_state(&m).unwrap().current_id, Some(id));
     std::fs::write(&path, b"external edits").unwrap();
     assert_eq!(s.existing_export(&r).unwrap().unwrap().id, result.id);
     let prepared = s.prepare_export(r.clone()).unwrap();
@@ -66,13 +65,13 @@ fn cancel_and_stale_dialog_input_do_not_change_drafts_heads_or_external_files() 
     let outside = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (m, id) = fixture(&s);
-    let initial = s.create_minutes_draft(&m, &id).unwrap();
+    let initial = s.seed_stored_minutes_draft(&m, &id).unwrap();
     let r = request(&s, &m, &id);
     let cancelled = s.prepare_export(r.clone()).unwrap();
     drop(cancelled);
     assert!(s.exports(&m).unwrap().is_empty());
     assert_eq!(
-        s.load_minutes_draft(&m, None).unwrap(),
+        s.read_stored_minutes_draft(&m, None).unwrap(),
         Some(initial.clone())
     );
     let prepared = s.prepare_export(r.clone()).unwrap();
@@ -81,7 +80,7 @@ fn cancel_and_stale_dialog_input_do_not_change_drafts_heads_or_external_files() 
         item_id: None,
         content: vec![Inline::text("保存ダイアログ中の追加編集")],
     });
-    s.save_minutes_draft(&initial.id, 0, changed).unwrap();
+    s.seed_stored_minutes_edit(&initial.id, 0, changed).unwrap();
     let path = outside.path().join("existing.md");
     std::fs::write(&path, b"preserved").unwrap();
     assert!(s.write_export(prepared, &path).is_err());
@@ -157,7 +156,7 @@ fn failed_publication_and_result_commit_keep_edits_and_do_not_retry_writes() {
     let outside = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (m, id) = fixture(&s);
-    let draft = s.create_minutes_draft(&m, &id).unwrap();
+    let draft = s.seed_stored_minutes_draft(&m, &id).unwrap();
     let r = request(&s, &m, &id);
     let p = s.prepare_export(r.clone()).unwrap();
     let path = outside.path().join("a.md");
@@ -172,7 +171,7 @@ fn failed_publication_and_result_commit_keep_edits_and_do_not_retry_writes() {
         .unwrap();
     assert_eq!(record.state, "failed");
     assert_eq!(std::fs::read(&path).unwrap(), b"original");
-    assert_eq!(s.load_minutes_draft(&m, None).unwrap(), Some(draft));
+    assert_eq!(s.read_stored_minutes_draft(&m, None).unwrap(), Some(draft));
     let r = request(&s, &m, &id);
     let mut p = s.prepare_export(r.clone()).unwrap();
     p.markdown.push_str("不正な派生物");
@@ -194,7 +193,7 @@ fn rejected_confirmed_destination_records_failure_without_publishing() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (m, id) = fixture(&s);
-    let draft = s.create_minutes_draft(&m, &id).unwrap();
+    let draft = s.seed_stored_minutes_draft(&m, &id).unwrap();
     let r = request(&s, &m, &id);
     let p = s.prepare_export(r.clone()).unwrap();
     let path = root.path().join("protected.md");
@@ -208,7 +207,7 @@ fn rejected_confirmed_destination_records_failure_without_publishing() {
     assert!(record.error_message.is_some());
     assert!(record.exported_at.is_none());
     assert_eq!(std::fs::read(&path).unwrap(), b"managed data");
-    assert_eq!(s.load_minutes_draft(&m, None).unwrap(), Some(draft));
+    assert_eq!(s.read_stored_minutes_draft(&m, None).unwrap(), Some(draft));
     assert_eq!(s.existing_export(&r).unwrap().unwrap().id, record.id);
 }
 
@@ -217,7 +216,7 @@ fn v14_database_migrates_without_changing_minutes_drafts_or_heads() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (m, id) = fixture(&s);
-    let draft = s.create_minutes_draft(&m, &id).unwrap();
+    let draft = s.seed_stored_minutes_draft(&m, &id).unwrap();
     let view = s.load_minutes_content(&m, &id).unwrap();
     {
         let db = s.connection.lock().unwrap();
@@ -226,9 +225,9 @@ fn v14_database_migrates_without_changing_minutes_drafts_or_heads() {
     }
     drop(s);
     let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.load_minutes_draft(&m, None).unwrap(), Some(draft));
+    assert_eq!(s.read_stored_minutes_draft(&m, None).unwrap(), Some(draft));
     assert_eq!(s.load_minutes_content(&m, &id).unwrap(), view);
-    assert_eq!(s.minutes_versions(&m).unwrap().current_id, Some(id));
+    assert_eq!(s.read_stored_minutes_state(&m).unwrap().current_id, Some(id));
     assert!(s.exports(&m).unwrap().is_empty());
     assert_eq!(
         s.connection

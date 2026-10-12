@@ -127,7 +127,7 @@ fn minutes_result_and_job_success_are_atomic_without_adopting_or_replacing_edits
         .unwrap()
         .lock_version;
     storage
-        .commit_minutes_candidate(&request.meeting_id, &id, lock, false)
+        .seed_stored_minutes_head(&request.meeting_id, &id)
         .unwrap();
     assert!(storage.verify_minutes_content_hash(&id).unwrap());
     assert_eq!(
@@ -265,7 +265,7 @@ fn regenerated_candidate_keeps_current_minutes_draft_and_fixed_evidence() {
         .unwrap()
         .lock_version;
     storage
-        .commit_minutes_candidate(&request.meeting_id, &first, lock, false)
+        .seed_stored_minutes_head(&request.meeting_id, &first)
         .unwrap();
     let original = storage
         .load_minutes_content(&request.meeting_id, &first)

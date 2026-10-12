@@ -87,16 +87,12 @@ fn adaptive_merge_resumes_durable_subunits_after_reopen_and_preserves_every_item
     let root = tempfile::tempdir().unwrap();
     let mut storage = Storage::open(root.path().into()).unwrap();
     let mut req = request(&storage, true);
-    let baseline = minutes_ui::tests::candidate(&storage, &req.meeting_id);
+    let baseline = stored_minutes_fixture::candidate(&storage, &req.meeting_id);
     storage
-        .adopt_minutes(minutes_ui::tests::request(
-            &storage,
-            &req.meeting_id,
-            &baseline,
-        ))
+        .seed_stored_minutes_head(&req.meeting_id, &baseline)
         .unwrap();
     let draft = storage
-        .create_minutes_draft(&req.meeting_id, &baseline)
+        .seed_stored_minutes_draft(&req.meeting_id, &baseline)
         .unwrap();
     let mut content = draft.payload;
     content
@@ -106,7 +102,7 @@ fn adaptive_merge_resumes_durable_subunits_after_reopen_and_preserves_every_item
             content: vec![crate::minutes_document::Inline::text("保持する手動追記")],
         });
     let edit = storage
-        .save_minutes_draft(&draft.id, draft.lock_version, content)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, content)
         .unwrap();
     req.expected_meeting_lock_version = storage
         .get_meeting(&req.meeting_id)
@@ -179,7 +175,7 @@ fn adaptive_merge_resumes_durable_subunits_after_reopen_and_preserves_every_item
         .all(|e| e.analysis_revision_id == fixed.analysis.id
             && e.quote_text == fixed.analysis.utterances[0].effective_text));
     assert_eq!(
-        storage.load_minutes_draft(&req.meeting_id, None).unwrap(),
+        storage.read_stored_minutes_draft(&req.meeting_id, None).unwrap(),
         Some(edit)
     );
     assert_eq!(current_minutes(&storage, &req.meeting_id), Some(baseline));
@@ -648,16 +644,12 @@ fn minutes_retry_chain_preserves_fixed_inputs_edits_and_durable_units_across_reo
     let storage = Storage::open(root.path().into()).unwrap();
     let engine = normal_engine(root.path());
     let mut request = request(&storage, true);
-    let baseline = minutes_ui::tests::candidate(&storage, &request.meeting_id);
+    let baseline = stored_minutes_fixture::candidate(&storage, &request.meeting_id);
     storage
-        .adopt_minutes(minutes_ui::tests::request(
-            &storage,
-            &request.meeting_id,
-            &baseline,
-        ))
+        .seed_stored_minutes_head(&request.meeting_id, &baseline)
         .unwrap();
     let draft = storage
-        .create_minutes_draft(&request.meeting_id, &baseline)
+        .seed_stored_minutes_draft(&request.meeting_id, &baseline)
         .unwrap();
     let mut content = draft.payload;
     content
@@ -667,7 +659,7 @@ fn minutes_retry_chain_preserves_fixed_inputs_edits_and_durable_units_across_reo
             content: vec![crate::minutes_document::Inline::text("保持する手動編集")],
         });
     let minutes_edit = storage
-        .save_minutes_draft(&draft.id, draft.lock_version, content)
+        .seed_stored_minutes_edit(&draft.id, draft.lock_version, content)
         .unwrap();
     request.expected_meeting_lock_version = storage
         .get_meeting(&request.meeting_id)
@@ -756,7 +748,7 @@ fn minutes_retry_chain_preserves_fixed_inputs_edits_and_durable_units_across_reo
     );
     assert_eq!(
         storage
-            .load_minutes_draft(&request.meeting_id, Some(&baseline))
+            .read_stored_minutes_draft(&request.meeting_id, Some(&baseline))
             .unwrap()
             .unwrap(),
         minutes_edit
@@ -766,7 +758,7 @@ fn minutes_retry_chain_preserves_fixed_inputs_edits_and_durable_units_across_reo
         Some(baseline)
     );
     assert!(storage
-        .minutes_versions(&request.meeting_id)
+        .read_stored_minutes_state(&request.meeting_id)
         .unwrap()
         .versions
         .iter()

@@ -39,7 +39,7 @@ fn restore_ledger_migrates_v20_without_changing_meetings_audio_edits_or_vocabula
     let original = storage.get_meeting(&meeting).unwrap();
     let draft = storage.load_transcript_draft(&meeting).unwrap();
     let minutes = storage
-        .minutes_versions(&meeting)
+        .read_stored_minutes_state(&meeting)
         .unwrap()
         .current_id
         .unwrap();
