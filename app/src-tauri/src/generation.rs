@@ -2,6 +2,8 @@
 mod adaptive;
 pub(crate) mod llama;
 pub(crate) mod markdown;
+pub(crate) mod markdown_job;
+mod markdown_plan;
 mod merge;
 mod plan;
 pub(crate) mod restore;
@@ -28,6 +30,30 @@ pub(crate) struct StartRequest {
     pub prompt_budget: usize,
 }
 impl StartRequest {
+    pub(crate) fn enqueue_markdown(
+        self,
+        storage: &Storage,
+        expected: Option<crate::storage::minutes_markdown::MarkdownStamp>,
+    ) -> Result<JobSnapshot, String> {
+        use crate::local_engine::Fingerprint;
+        let engine = llama::LlamaConfig {
+            executable: Fingerprint::capture(&self.executable_path, &|| false)?,
+            model: Fingerprint::capture(&self.model_path, &|| false)?,
+            threads: self.threads,
+            context_tokens: self.context_tokens,
+            prediction_tokens: self.prediction_tokens,
+            gpu_layers: self.gpu_layers,
+            seed: self.seed,
+        };
+        markdown_job::enqueue(
+            storage,
+            self.input,
+            engine,
+            &self.profile,
+            self.prompt_budget,
+            expected,
+        )
+    }
     #[allow(dead_code)]
     pub(crate) fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
         use crate::local_engine::Fingerprint;
@@ -84,6 +110,9 @@ pub(crate) fn retry_preflight(
     checkpoint: Option<&Value>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    if markdown_job::is_markdown(spec) {
+        return markdown_job::retry_preflight(storage, original, spec, checkpoint, cancelled);
+    }
     let input = storage.load_minutes_input(&original.id)?;
     let initial_operation = storage.fixed_job_initial_operation(&original.id)?;
     let p = checked_parameters(spec, &input, &initial_operation)?;
@@ -882,6 +911,9 @@ pub(crate) fn process(
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
     let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
+    if markdown_job::is_markdown(&spec) {
+        return markdown_job::process(storage, job_id, stopping, progress);
+    }
     let input = storage.load_minutes_input(job_id)?;
     let p = checked_parameters(&spec, &input, &storage.fixed_job_initial_operation(job_id)?)?;
     let job = storage.get_job(job_id)?;

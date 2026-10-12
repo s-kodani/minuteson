@@ -91,7 +91,57 @@ impl Storage {
         if job.state != "succeeded" {
             return Err("通知対象の処理は成功していません".into());
         }
-        read_fixed_input(&tx, job_id)?;
+        let (spec, checkpoint) = read_fixed_input(&tx, job_id)?;
+        if job.kind == "minutes_generation" && crate::generation::markdown_job::is_markdown(&spec) {
+            verify_latest_checkpoint(&tx, job_id)?;
+            if job.output_minutes_id.is_some()
+                || job.output_analysis_id.is_some()
+                || job.total_units != Some(job.completed_units)
+                || job.completed_units < 1
+            {
+                return Err("議事録Markdownの完了状態が不正です".into());
+            }
+            let hash = checkpoint
+                .as_ref()
+                .and_then(|c| c["markdownHash"].as_str())
+                .filter(|h| valid_hash(h))
+                .ok_or("議事録の生成結果ハッシュがありません")?
+                .to_string();
+            let target: super::minutes_markdown::GenerationTarget =
+                serde_json::from_value(spec.parameters["generation"]["markdownTarget"].clone())
+                    .map_err(|e| e.to_string())?;
+            let base = target.expected.as_ref().map_or(0, |s| s.lock_version);
+            if target.schema_version != 1
+                || base < 0
+                || target
+                    .expected
+                    .as_ref()
+                    .is_some_and(|s| s.lock_version < 1 || !valid_hash(&s.content_hash))
+            {
+                return Err("議事録の固定保存条件が不正です".into());
+            }
+            let saved_lock = base.checked_add(1).ok_or("議事録の保存状態が不正です")?;
+            let current = super::minutes_markdown::read(&tx, &job.meeting_id)?
+                .ok_or("保存した議事録がありません")?;
+            if current.lock_version < saved_lock
+                || current.operation_id != job.operation_id && current.lock_version == saved_lock
+                || current.operation_id == job.operation_id
+                    && (current.lock_version != saved_lock || current.content_hash != hash)
+            {
+                return Err("議事録の保存結果が一致しません。成功通知を保留します".into());
+            }
+            let publication_state = if current.operation_id == job.operation_id {
+                "markdown"
+            } else {
+                "superseded"
+            }
+            .to_string();
+            return Ok(NotificationOutput {
+                job,
+                content_hash: hash,
+                publication_state,
+            });
+        }
         let (id, table, computed) = match job.kind.as_str() {
             "transcription" | "diarization" => {
                 let id = job
@@ -549,6 +599,11 @@ impl Storage {
     ) -> Result<JobSnapshot, String> {
         if operation_id.trim().is_empty() || operation_id.len() > 128 {
             return Err("再試行の操作IDが不正です".into());
+        }
+        if crate::generation::markdown_job::is_markdown(verified_spec)
+            && !super::minutes_markdown::uuid(operation_id)
+        {
+            return Err("議事録Markdown再試行の操作IDが不正です".into());
         }
         let mut connection = self
             .connection

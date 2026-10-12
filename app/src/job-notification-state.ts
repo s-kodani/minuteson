@@ -21,15 +21,19 @@ const notice = (job: NotificationJob, message: string, level: ToastLevel = "info
   job, message: `「${job.meetingTitle}」の${jobName(job.kind)}${message}`, level, topic,
   important: topic === "issue", eventId: JSON.stringify([job.id, job.updatedAt, transition(job)]),
 });
-export function verifiedJobOutput(job: NotificationJob, value: unknown): "candidate" | "committed" {
+export type VerifiedJobPublication = "candidate" | "committed" | "markdown" | "superseded";
+export function verifiedJobOutput(job: NotificationJob, value: unknown): VerifiedJobPublication {
   const proof = value as { job?: NotificationJob; contentHash?: string; publicationState?: string } | null;
   const receipt = proof?.job && { ...proof.job, meetingTitle: job.meetingTitle };
   assertNotificationJobs(receipt ? [receipt] : null);
   if (!receipt || job.state !== "succeeded" || receipt.id !== job.id || identity(receipt) !== identity(job)
-    || transition(receipt) !== transition(job) || !output(job)
+    || transition(receipt) !== transition(job)
     || !proof || typeof proof.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(proof.contentHash)
-    || !["candidate", "committed"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
-  return proof.publicationState as "candidate" | "committed";
+    || !["candidate", "committed", "markdown", "superseded"].includes(proof.publicationState ?? "")) throw Error("ジョブと保存結果を照合できません。成功通知を保留しています。");
+  const plain=proof.publicationState === "markdown" || proof.publicationState === "superseded";
+  if (plain ? job.kind !== "minutes_generation" || job.outputMinutesId !== null || job.outputAnalysisId !== null
+    || job.completedUnits < 1 || job.totalUnits !== job.completedUnits : !output(job)) throw Error("ジョブと保存結果の形式が一致しません。成功通知を保留しています。");
+  return proof.publicationState as VerifiedJobPublication;
 }
 export function assertNotificationJobs(value: unknown): asserts value is NotificationJob[] {
   if (!Array.isArray(value)) throw Error("解析通知の状態を照合できません。");
@@ -94,11 +98,14 @@ export class JobNotificationTracker {
     const issueGroups = new Set(issues.map(jobGroup));
     return { events, issues, pending: [...this.pending.values()], healthyGroups: [...latest.keys()].filter(group => !issueGroups.has(group)) };
   }
-  confirmOutput(job: NotificationJob, publication: "candidate" | "committed") {
+  confirmOutput(job: NotificationJob, publication: VerifiedJobPublication) {
     const pending = this.pending.get(job.id), current = this.seen.get(job.id);
     if (!pending || !current || transition(current) !== transition(job) || identity(current) !== identity(job)) return null;
-    if (!output(job)) throw Error("保存結果の版がありません。成功通知を保留しています。");
+    const plain=publication==="markdown"||publication==="superseded";
+    if (plain ? job.kind!=="minutes_generation"||job.outputMinutesId!==null||job.outputAnalysisId!==null||job.completedUnits<1||job.totalUnits!==job.completedUnits : !output(job)) throw Error("保存結果の版・形式が不正です。成功通知を保留しています。");
     this.pending.delete(job.id);
+    if(publication==="superseded")return null; // Later human edits are current.
+    if(publication==="markdown")return {...notice(job,"が完了しました","success"),message:`「${job.meetingTitle}」の議事録を保存しました`};
     return notice(job, publication === "candidate" ? "の候補を保存しました。採用は内容確認後に行ってください" : "の結果を保存しました。現在版を確認してください", "success");
   }
 }

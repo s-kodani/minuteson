@@ -1060,6 +1060,22 @@ async fn start_minutes_generation(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn start_markdown_minutes_generation(
+    window: WebviewWindow,
+    request: generation::StartRequest,
+    expected: Option<storage::minutes_markdown::MarkdownStamp>,
+) -> Result<storage::JobSnapshot, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let job = request.enqueue_markdown(&app.state::<Storage>(), expected)?;
+        AnalysisController::kick(&app)?;
+        Ok(job)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
     if window.label() != "main" {
         return Err("Only the main window can read or edit minutes".into());
@@ -2758,6 +2774,7 @@ pub fn run() {
                 retry_diarization,
                 get_diarization_tracks,
                 start_minutes_generation,
+                start_markdown_minutes_generation,
                 get_minutes_versions,
                 get_minutes_markdown,
                 save_minutes_markdown,

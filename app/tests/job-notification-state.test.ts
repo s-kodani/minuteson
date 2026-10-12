@@ -2,6 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JobNotificationTracker, assertNotificationJobs, verifiedJobOutput, type NotificationJob } from "../src/job-notification-state.ts";
 const job = (patch: Partial<NotificationJob> = {}): NotificationJob => ({ id: "job", kind: "transcription", meetingId: "meeting", meetingTitle: "会議A", operationId: "operation", inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: 100, updatedAt: 100, attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
+test("direct Markdown success needs an exact receipt and never announces a candidate",()=>{
+  const tracker=new JobNotificationTracker(50);tracker.ingest([job({kind:"minutes_generation"})]);
+  const done=job({kind:"minutes_generation",state:"succeeded",completedUnits:2,updatedAt:102});tracker.ingest([done]);
+  const receipt={job:done,contentHash:"c".repeat(64),publicationState:"markdown"};
+  const verified=verifiedJobOutput(done,receipt);assert.equal(verified,"markdown");
+  const notice=tracker.confirmOutput(done,verified);assert.match(notice!.message,/議事録を保存/);assert.doesNotMatch(notice!.message,/候補|採用/);
+});
+test("superseded Markdown generation is acknowledged silently without replacing current human editing",()=>{
+  const tracker=new JobNotificationTracker(50);tracker.ingest([job({kind:"minutes_generation"})]);
+  const done=job({kind:"minutes_generation",state:"succeeded",completedUnits:2,updatedAt:102});tracker.ingest([done]);
+  assert.equal(tracker.confirmOutput(done,verifiedJobOutput(done,{job:done,contentHash:"c".repeat(64),publicationState:"superseded"})),null);
+  assert.equal(tracker.ingest([done]).pending.length,0);
+});
+test("Markdown receipt cannot pass for another kind, incomplete units or a revision candidate",()=>{
+  for(const done of [job({state:"succeeded",completedUnits:2}),job({kind:"minutes_generation",state:"succeeded",completedUnits:1}),job({kind:"minutes_generation",state:"succeeded",completedUnits:2,outputMinutesId:"candidate"})]) {
+    assert.throws(()=>verifiedJobOutput(done,{job:done,contentHash:"c".repeat(64),publicationState:"markdown"}));
+  }
+});
 test("startup and restored historical success are silent, with retained latest failed state", () => {
   const tracker = new JobNotificationTracker(200);
   const state = tracker.ingest([job({ state: "failed", errorCode: "engine_failed" })]);
