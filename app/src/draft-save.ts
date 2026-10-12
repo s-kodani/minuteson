@@ -20,20 +20,23 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   private inFlight: Promise<void> | null = null;
   private saving = false;
   private error: string | null = null;
+  private uncertain: { draft: D; payload: P } | null = null;
   private listeners = new Set<() => void>();
   private persist: (id: string, version: number, payload: P) => Promise<D>;
   private normalize: (payload: P) => P;
+  private readSaved?: (draft: D) => Promise<D | null>;
 
-  constructor(persist: (id: string, version: number, payload: P) => Promise<D>, normalize: (payload: P) => P) {
+  constructor(persist: (id: string, version: number, payload: P) => Promise<D>, normalize: (payload: P) => P, readSaved?: (draft: D) => Promise<D | null>) {
     this.persist = persist;
     this.normalize = normalize;
+    this.readSaved = readSaved;
   }
 
   snapshot(): SaveSnapshot<P, D> {
     return {
       draft: this.draft,
       payload: this.payload,
-      dirty: this.draft !== null && this.payload !== null && JSON.stringify(this.payload) !== JSON.stringify(this.normalize(this.draft.payload)),
+      dirty: this.uncertain !== null || (this.draft !== null && this.payload !== null && JSON.stringify(this.payload) !== JSON.stringify(this.normalize(this.draft.payload))),
       saving: this.saving,
       error: this.error,
     };
@@ -51,6 +54,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
     this.draft = draft;
     this.payload = draft ? this.normalize(draft.payload) : null;
     this.error = null;
+    this.uncertain = null;
     this.notify();
   }
 
@@ -79,13 +83,35 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   }
 
   retry(): Promise<void> {
+    if (this.inFlight) return this.inFlight;
     this.error = null;
     return this.flush();
   }
 
   private async drain() {
+    if (this.uncertain) {
+      // Only an explicit retry reaches this read. A failed response is not
+      // evidence that the write failed, even if local text was reverted.
+      const attempt = this.uncertain;
+      const current = await this.readSaved!(attempt.draft);
+      const same = (a: P, b: P) => JSON.stringify(this.normalize(a)) === JSON.stringify(this.normalize(b));
+      const unchanged = current?.lockVersion === attempt.draft.lockVersion && same(current.payload, attempt.draft.payload);
+      const committed = current?.lockVersion === attempt.draft.lockVersion + 1 && same(current.payload, attempt.payload);
+      if (!current || current.id !== attempt.draft.id || !Number.isSafeInteger(current.lockVersion) || (!unchanged && !committed)) {
+        throw new Error("保存済みの議事録が別の内容に更新されています。入力を保持しています。再読込する前に内容を確認してください。");
+      }
+      this.draft = current;
+      this.uncertain = null;
+      this.notify();
+    }
     while (this.snapshot().dirty && this.draft && this.payload) {
-      const saved = await this.persist(this.draft.id, this.draft.lockVersion, this.payload);
+      const attempt = { draft: this.draft, payload: this.normalize(this.payload) };
+      let saved: D;
+      try { saved = await this.persist(attempt.draft.id, attempt.draft.lockVersion, attempt.payload); }
+      catch (cause) {
+        if (this.readSaved) this.uncertain = attempt;
+        throw cause;
+      }
       this.draft = saved;
       this.notify();
     }

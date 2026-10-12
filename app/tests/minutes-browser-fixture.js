@@ -221,7 +221,9 @@ export async function installMinutesFixture(page) {
           const payload=copy(args.payload);
           if(data.minutesSaveDelay) await new Promise(resolve=>setTimeout(resolve,data.minutesSaveDelay));
           const d=data.drafts[data.current];if(!d||d.id!==args.draftId||d.lockVersion!==args.expectedLockVersion) throw Error("stale minutes save");
-          (data.history[data.current]??=[]).push(copy(d.payload));d.payload=payload;d.lockVersion++;d.contentHash=`draft-${d.lockVersion}`;return copy(d);
+          (data.history[data.current]??=[]).push(copy(d.payload));d.payload=payload;d.lockVersion++;d.contentHash=`draft-${d.lockVersion}`;
+          if(data.lostMinutesSaveResponse){data.lostMinutesSaveResponse=false;throw Error("模擬保存完了後の応答喪失");}
+          return copy(d);
         }
         if (cmd === "undo_minutes_edit") {
           const d=data.drafts[data.current];if(!d||d.id!==args.draftId||d.lockVersion!==args.expectedLockVersion) throw Error("stale minutes undo");

@@ -5,7 +5,8 @@ import { OptionsModal } from "./options-modal";
 import { IconButton, type ActionIconName } from "./action-icon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
+import { registerPendingEdits } from "./draft-save";
+import { createMinutesSaveQueue } from "./minutes-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
 import { MinutesDocument, type MinutesDocumentHandle } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
@@ -24,10 +25,7 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   view: MinutesView; meetingTitle?: string; initialDraft: MinutesDraft | null; locked: boolean; registerGuard: (guard: EditorGuard | null) => void; visible?: boolean; actionsHost?: HTMLElement | null; optionsHost?:HTMLElement | null;
 }) {
   const confirm = useActionConfirmation(locked);
-  const [queue] = useState(() => new DraftSaveQueue<MinutesContent, MinutesDraft>(
-    (draftId, expectedLockVersion, payload) => invoke("save_minutes_draft", { draftId, expectedLockVersion, payload }),
-    (value) => structuredClone(value),
-  ));
+  const [queue] = useState(() => createMinutesSaveQueue(invoke));
   const [saved, setSaved] = useState(() => queue.snapshot());
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
