@@ -513,7 +513,7 @@ button:disabled { opacity:.5; }
 .playback-follow-status { max-height:none; overflow:visible; padding-block:8px; }
 .playback-follow-status>span { min-width:0; overflow-wrap:anywhere; }
 /* Import is a settings form too: one scroll boundary, clearly spaced groups. */
-.common-modal.import-dialog { width:min(720px,calc(100vw - 32px)); max-width:720px; }
+.common-modal.import-dialog { width:min(720px,calc(100% - 48px)); max-width:720px; }
 .import-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
 .import-dialog>.common-modal-body>:is(h2,p,dl,fieldset,.analysis-actions) { margin-block:0; }
 .import-dialog>.common-modal-body>h2 { font-size:19px; }
@@ -721,3 +721,12 @@ button:disabled { opacity:.5; }
 .model-setup-steps label:has(input[type=checkbox]) {display:flex; align-items:flex-start; gap:8px;}
 .model-setup-steps select {width:100%; min-width:0; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit;}
 @media(max-width:700px) {.model-inventory li {align-items:flex-start; flex-direction:column; gap:8px;}.model-inventory-state {flex-shrink:1;}}
+.model-selection-list { display:grid; gap:16px; margin-block:20px; }
+.model-selection-row { display:flex; align-items:flex-end; gap:12px; }
+.model-selection-row>label { display:grid; gap:8px; flex:1; min-width:0; }
+.model-selection-row select { width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); }
+.model-selection-row>button,.model-selection-row select { min-height:40px; font-family:inherit; font-size:13px; line-height:20px; }
+.model-selection-row>button { flex:none; }
+.transcript-main>.transcript-actions:first-child>h2 { margin-right:auto; }
+.import-dialog fieldset { grid-template-columns:minmax(0,1fr); }
+@media(max-width:600px) { .model-selection-row { flex-wrap:wrap; } .model-selection-row>label { flex-basis:100%; } }

@@ -68,7 +68,7 @@ fn root_operations(db: &Connection, flow: &AnalysisFlow) {
 }
 
 #[test]
-fn processing_history_restores_completed_flow_operation_plan_hash_and_unadopted_candidate_chain() {
+fn processing_history_restores_completed_flow_operation_plan_hash_and_published_utterances() {
     let f = fixture(true);
     let output = tempfile::tempdir().unwrap();
     let source = read(&f, output.path());
@@ -123,11 +123,12 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_unadopted_
     .unwrap());
     tx.commit().unwrap();
     crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
-    assert!(f
+    assert_eq!(f
         .storage
         .load_current_analysis(&f.meeting)
         .unwrap()
-        .is_none());
+        .unwrap().id, f.flow.diarization_job.as_ref().unwrap().output_analysis_id.as_deref().unwrap());
+    assert_eq!(work.database.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1", params![meeting], |r| r.get::<_, String>(0)).unwrap(), *candidate);
     assert_eq!(
         f.storage.analysis_flow(&f.meeting).unwrap().unwrap().plan,
         f.flow.plan
@@ -633,22 +634,7 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
         .output_analysis_id
         .as_ref()
         .unwrap();
-    let view = f
-        .storage
-        .load_visible_analysis(&f.meeting, candidate)
-        .unwrap()
-        .unwrap();
-    let state = f.storage.analysis_versions(&f.meeting).unwrap();
-    f.storage
-        .adopt_analysis(crate::storage::AdoptRequest {
-            meeting_id: f.meeting.clone(),
-            revision_id: candidate.clone(),
-            expected_content_hash: view.content_hash,
-            expected_meeting_lock_version: state.meeting_lock_version,
-            expected_draft: None,
-            confirm_replacing_previous: false,
-        })
-        .unwrap();
+    assert_eq!(f.storage.load_current_analysis(&f.meeting).unwrap().unwrap().id, *candidate);
     let draft = f
         .storage
         .create_transcript_draft(&f.meeting, candidate)

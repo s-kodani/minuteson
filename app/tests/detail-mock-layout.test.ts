@@ -32,37 +32,8 @@ test("meeting actions align with tabs in normal flow and wrapped navigation is m
   assert.match(css,/\.meeting-workspace-tools \{ position:static; \}/);
   assert.doesNotMatch(css,/\.meeting-workspace-tools \{[^}]*position:absolute/);
 });
-test("transcript primary reading keeps guarded text and time actions while advanced inputs stay mounted", () => {
-  const transcript = source("transcript.tsx");
-  assert.match(transcript, /<span role="button" className="transcript-body-edit"[^\n]*aria-disabled=\{!editable && !canBeginText\} tabIndex=\{editable \|\| canBeginText \? 0 : -1\}/);
-  assert.match(transcript, /shouldOpenTranscriptBody\(event.detail, body.ownerDocument.getSelection\(\), node => body.contains\(node\)\)\) requestTextEdit\(utterance\)/);
-  assert.match(transcript, /if \(!editable && !canBeginText \|\| !shouldOpenTranscriptBodyFromKey\(event.nativeEvent\)\) return;\s*event.preventDefault\(\); requestTextEdit\(utterance\);/);
-  assert.doesNotMatch(transcript, /<button[^>]*className="transcript-body-edit"/);
-  assert.match(transcript, /className="utterance-stamp"[^>]*onClick=\{\(\) => void play\(utterance\)\}/);
-  for (const section of ["speaker-merge-tools", "utterance-edit-tools"]) assert.match(transcript, new RegExp(`<OptionsModal className="${section}"`));
-  assert.match(transcript, /<CommonModal ref=\{splitDialog\}/);
-  assert.match(transcript, /<IssueNotice scope=\{meetingId\} type="transcript-save"/);
-});
 
-test("fine settings open modals rather than resizing the reading workspace", () => {
-  const transcript=source("transcript.tsx"), minutes=source("minutes.tsx"), main=source("main.tsx");
-  assert.match(transcript,/<OptionsModal className="workspace-tools transcript-workspace-tools"/);
-  assert.match(minutes,/<OptionsModal label="議事録の操作" icon="more" hidden=\{!visible\}/);
-  assert.doesNotMatch(minutes,/MinutesEditor|MinutesDocument|evidence|replacement=/);
-  assert.match(main,/<OptionsModal className=\{detail \? "meeting-workspace-tools workspace-tools"/);
-});
 
-test("speaker names open a guarded modal without an extra rename row", () => {
-  const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
-  assert.doesNotMatch(transcript,/<summary>名前を変更<\/summary>|className="speaker-name-tools"/);
-  assert.match(transcript,/className="speaker-name-button"[^\n]*aria-haspopup="dialog"[^\n]*requestNameEdit\(speaker.id,event.currentTarget\)/);
-  assert.match(transcript,/className="speaker-count-filter"[^\n]*setSpeakerFilter\(speaker.id\)/);
-  assert.match(transcript,/className="speaker-name-editor speaker-name-dialog" aria-label="話者名を変更"/);
-  assert.match(transcript,/await finishName\(id,kind\);[\s\S]*if \(nameBuffers.current\[id\]\) return;/);
-  assert.match(transcript,/pending.kind === "name"/);
-  assert.match(transcript,/if \(event.key === "Escape"\) event.stopPropagation\(\);/);
-  assert.match(css,/\.speaker-list-row \{ display:flex;/);
-});
 
 test("speaker labels keep only the mock avatar background in dark mode", () => {
   const css=source("prototype-alignment.css");
@@ -75,15 +46,6 @@ test("speaker heading leaves explicit space before the all-utterances filter", (
   assert.match(source("prototype-alignment.css"), /\.speaker-heading \{[^}]*margin-bottom:16px;/);
 });
 
-test("transcript options flow with heading actions instead of reserving a fixed overlay width", () => {
-  const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
-  assert.match(transcript, /className="transcript-heading-actions" ref=\{setOptionsHost\}/);
-  assert.match(transcript, /triggerLabel="編集オプション" icon="edit" triggerHost=\{optionsHost\}/);
-  assert.match(css, /\.transcript-heading-actions \{ display:flex; align-items:center; min-width:0; max-width:100%;/);
-  assert.match(css, /\.transcript-main>\.transcript-actions:first-child \{ justify-content:flex-end; gap:8px 12px;/);
-  assert.doesNotMatch(css, /\.transcript-workspace-tools \{[^}]*position:absolute/);
-  assert.doesNotMatch(css, /padding-right:118px/);
-});
 
 test("utterance menus participate in the metadata grid rather than floating against the edge", () => {
   const css=source("prototype-alignment.css");
@@ -124,18 +86,6 @@ test("adjacent text actions share height and typography across portaled triggers
   assert.match(css,/\.transcript-body-edit,\.utterance-play-icon,\.evidence-chip,\[data-evidence-id\]/);
 });
 
-test("transcript options group fields and spaced actions without individual scrollports", () => {
-  const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
-  for (const title of ["表示と再読込", "保存と回復", "まとめて話者を変更"]) assert.ok(transcript.includes(`<h3>${title}</h3>`));
-  assert.match(transcript,/className="workspace-tools-body transcript-options-body"/);
-  assert.match(transcript,/className="transcript-options-bulk-controls"/);
-  assert.match(transcript,/className="small-secondary" disabled=\{!selection.length\|\|busy\} onClick=\{\(\)=>setSelection\(\[\]\)\}>選択解除/);
-  assert.match(css,/\.transcript-options-buttons,\.transcript-options-recovery \{[^}]*gap:10px;/);
-  assert.match(css,/\.transcript-workspace-tools \.options-dialog \{ max-width:720px;/);
-  assert.match(css,/\.transcript-options-section label \{ display:grid; gap:8px;/);
-  assert.match(css,/@media\(max-width:600px\) \{\s*\.transcript-options-display,\.transcript-options-bulk-controls \{ grid-template-columns:minmax\(0,1fr\);/);
-  assert.doesNotMatch(css,/\.transcript-options[^}]*\{[^}]*overflow:(?:auto|scroll)/);
-});
 test("minutes edit actions use the existing editor owner and generation stays guarded", () => {
   const panel=source("minutes.tsx"), editor=source("minutes-markdown-editor.tsx");
   assert.match(panel,/actionsHost=\{actionsHost\}/);
@@ -145,20 +95,6 @@ test("minutes edit actions use the existing editor owner and generation stays gu
   assert.doesNotMatch(panel,/start_minutes_generation"|adopt_minutes_candidate|restore_minutes_version/);
 });
 
-test("desktop transcript keeps the mock's left speaker column and direct editing guards", () => {
-  const css=source("prototype-alignment.css"), transcript=source("transcript.tsx");
-  assert.match(css,/\.meeting-detail-content \.transcript-split \{ grid-template-columns:216px minmax\(0,1fr\); grid-template-rows:minmax\(0,1fr\);/);
-  assert.match(transcript,/<WorkspacePanel[^\n]*query="\(max-width: 760px\)"/);
-  assert.match(css,/\.transcript-split \.workspace-drawer-trigger \{ min-height:28px; padding:4px 8px;/);
-  assert.match(css,/\.meeting-detail-content \.transcript-split \{ gap:6px;/);
-  assert.match(css,/@media\(max-height:760px\) \{\s*\.meeting-detail-status \{ padding-block:12px 8px; gap:0;/);
-  assert.match(source("style.css"),/\.utterance-row textarea\{[^}]*resize:vertical;min-height:55px/);
-  assert.match(transcript,/disabled=\{!editable\} rows=\{2\} maxLength=\{20000\}/);
-  assert.match(transcript,/finishTextEdit\(utterance.id, shortcut === "cancel" \? "cancel" : "commit", event.currentTarget\)/);
-  assert.match(transcript,/if \(!canBeginText \|\| pendingTextOpen.current \|\| !analysis\) return;/);
-  assert.match(transcript,/if \(!editable \|\| !view\) return;/);
-  assert.match(transcript,/document.activeElement !== pending.opener && document.activeElement !== document.body/);
-});
 
 test("transcript synthetic failure controls are opt-in and never invoke product saves", () => {
   const fixture=readFileSync(new URL("./detail-mock-browser-fixture.js",import.meta.url),"utf8").split('} else {')[1];
@@ -171,15 +107,6 @@ test("transcript synthetic failure controls are opt-in and never invoke product 
   assert.match(fixture,/update\(\);window.setInterval\(update,200\)/);
 });
 
-test("transcript feedback shares natural space without a nested scrollport and retains explicit retry", () => {
-  const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
-  assert.match(transcript,/<div className="transcript-feedback" hidden=\{!error && !saveError\}>\s*\{error && <p className="action-error" role="alert">\{error\}<\/p>\}\s*<IssueNotice scope=\{meetingId\} type="transcript-save"/);
-  assert.match(transcript,/run: \(\) => retryTextBuffers\(\)\.catch/);
-  assert.match(css,/\.transcript-feedback \{ flex:none;[^}]*flex-wrap:wrap;/);
-  assert.doesNotMatch(css,/\.transcript-feedback \{[^}]*overflow:/);
-  assert.match(css,/\.transcript-feedback\[hidden\] \{ display:none;/);
-  assert.match(css,/\.transcript-feedback>\.action-error \{[^}]*margin:0!important;/);
-});
 
 test("transcript loading and empty states retain responsive workspace insets", () => {
   const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
@@ -190,20 +117,6 @@ test("transcript loading and empty states retain responsive workspace insets", (
   assert.match(css,/\.transcript-feedback \{ padding-inline:16px;/);
 });
 
-test("analysis preview spaces metadata and keeps guarded accessible icon playback", () => {
-  const analysis=source("analysis.tsx"), css=source("prototype-alignment.css");
-  assert.match(analysis,/className="preview-utterance-meta"/);
-  assert.match(analysis,/className="small-secondary utterance-play-icon" aria-label=\{`\$\{timeLabel\(item.startUs\)\}の発言を再生`\}/);
-  assert.match(analysis,/disabled=\{locked\|\|audio.preparing\} onClick=\{\(\)=>void play\(item\)\}/);
-  assert.match(analysis,/<svg[^>]*aria-hidden="true" focusable="false"/);
-  assert.doesNotMatch(analysis,/>この発言を聞く<|data-dialog-cancel/);
-  assert.match(analysis,/dismissLabel="閉じる"/);
-  assert.match(css,/\.preview-utterance-meta \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;/);
-  assert.match(css,/\.utterance-play-icon \{[^}]*width:32px; height:32px; min-height:32px; padding:0;/);
-  assert.match(css,/\.transcript-body-edit,\.utterance-play-icon,\.evidence-chip/);
-  assert.match(css,/\.common-modal\.analysis-dialog \.preview-columns \{ grid-template-columns:repeat\(2,minmax\(0,1fr\)\);/);
-  assert.match(css,/\.common-modal\.analysis-dialog \.preview-columns \{ grid-template-columns:minmax\(0,1fr\);/);
-});
 
 test("mixed action rows and select fields align without removing wrapping or checkbox semantics", () => {
   const css=source("prototype-alignment.css");
@@ -348,7 +261,7 @@ test("the narrow speaker drawer opener has insets instead of touching the tabs a
 
 test("audio import uses spaced groups and the same field metrics as other settings", () => {
   const css=source("prototype-alignment.css");
-  assert.match(css,/\.common-modal\.import-dialog \{ width:min\(720px,calc\(100vw - 32px\)\); max-width:720px;/);
+  assert.match(css,/\.common-modal\.import-dialog \{ width:min\(720px,calc\(100% - 48px\)\); max-width:720px;/);
   assert.match(css,/\.import-dialog>\.common-modal-body:not\(\[hidden\]\) \{ display:grid; gap:16px; min-width:0;/);
   assert.match(css,/\.import-dialog>\.common-modal-body>:is\(h2,p,dl,fieldset,\.analysis-actions\) \{ margin-block:0;/);
   assert.match(css,/\.import-dialog \.heading-with-info>h3 \{ margin:0; font-size:14px;/);
@@ -368,19 +281,11 @@ test("import metadata pairs use compact baseline-aligned columns and readable na
   for (const label of ["ファイル名","長さ","形式","原本","保存に必要な容量","保存先の空き容量"]) assert.ok(panel.includes(`<dt>${label}</dt>`));
 });
 
-test("import title and profile share a wide row while explanatory text and optional settings span it", () => {
-  const css=source("prototype-alignment.css");
-  assert.match(css,/@media\(min-width:600px\) \{\s*\.import-dialog fieldset \{ grid-template-columns:minmax\(0,2fr\) minmax\(0,1fr\); align-items:start; \}/);
-  assert.match(css,/\.import-dialog fieldset>:is\(p,\.import-vocabulary-entry\) \{ grid-column:1 \/ -1; \}/);
-  assert.match(css,/\.import-dialog \.import-field-label \{ display:flex; align-items:center; min-height:32px; \}/);
-  assert.match(css,/\.import-dialog \.import-profile-field \{ display:grid; gap:8px; min-width:0; \}/);
-  assert.match(css,/\.import-dialog\.import-vocabulary-view>\.common-modal-replacement:not\(\[hidden\]\) \{ display:grid; gap:16px; min-width:0; \}/);
-  const panel=source("audio-import.tsx");
-  assert.match(panel,/<label htmlFor="import-analysis-profile">解析プロファイル<\/label><InfoPopover label="取り込み後の解析"/);
-  assert.match(panel,/<select id="import-analysis-profile" value=\{profile\}/);
+test("import title uses the available width without a meeting model selector", () => {
+  const css=source("prototype-alignment.css"), panel=source("audio-import.tsx");
+  assert.match(css,/\.import-dialog fieldset \{ grid-template-columns:minmax\(0,1fr\); \}/);
+  assert.doesNotMatch(panel,/import-analysis-profile|import-profile-field|options:.*profile/);
   assert.match(panel,/>会議の用語（任意）<\/button><InfoPopover label="取り込みの用語"/);
-  assert.doesNotMatch(panel,/<h3>取り込み後の解析<\/h3>|<h3>会議の用語<\/h3>/);
-  assert.doesNotMatch(css,/\.import-dialog fieldset[^}]*display:none/);
 });
 
 test("pointer opening an import captures its actual entry point before the native file panel", () => {

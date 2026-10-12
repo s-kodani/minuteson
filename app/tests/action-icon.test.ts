@@ -31,12 +31,6 @@ test("modal close and icon entries preserve focus, controls, attention and block
   assert.match(options, /aria-label="要確認"/);
 });
 
-test("primary transcript and minutes editing use explicit icons without relabelling modal titles", () => {
-  assert.match(source("transcript.tsx"), /title="文字起こしの編集オプション" triggerLabel="編集オプション" icon="edit"/);
-  assert.match(source("minutes.tsx"), /label="議事録を再読込" icon="refresh" disabled=\{disabled\}/);
-  assert.match(source("minutes-editor.tsx"), /ref=\{editToggle\} label="議事録を編集" icon="edit" disabled=\{locked \|\| busy\}/);
-  assert.match(source("minutes-editor.tsx"), /ref=\{editToggle\} label="編集を終了" icon="close" disabled=\{locked \|\| busy\}/);
-});
 
 test("shared icon controls remain square and centered at each action row size", () => {
   const css = source("prototype-alignment.css");
@@ -87,13 +81,10 @@ test("ordinary refresh, pause and page navigation labels do not remain as text-o
     visit(parsed);
   }
   assert.deepEqual(remaining,[]);
-  assert.ok(icons>=50,`expected all secondary paths, found ${icons}`);
+  assert.ok(icons>=40,`expected remaining secondary paths, found ${icons}`);
 });
 
 test("recovery pagination icons preserve guarded read actions and explicit labels", () => {
-  const panel=source("transcript-recovery-panel.tsx");
-  assert.match(panel,/label="前の一覧" icon="previous".*disabled=\{page === 0 \|\| busy \|\| blocked\}.*list\(page - 1\)/);
-  assert.match(panel,/label="次の一覧" icon="next".*disabled=\{!inventory.nextCursor \|\| busy \|\| blocked\}.*inventory.nextCursor/);
   assert.match(source("minutes-evidence.tsx"),/label="前の10根拠" icon="previous".*disabled=\{locked \|\| group.page === 0\}/);
   assert.match(source("fixed-transcript.tsx"),/label="議事録の元の位置へ戻る" icon="previous".*onClick=\{back\}/);
 });

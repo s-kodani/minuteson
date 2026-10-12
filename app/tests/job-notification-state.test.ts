@@ -26,14 +26,14 @@ test("startup and restored historical success are silent, with retained latest f
   assert.equal(state.events.length, 0); assert.equal(state.issues.length, 1);
   assert.equal(tracker.ingest([job({ id: "restored", state: "succeeded", outputAnalysisId: "saved", createdAt: 150, updatedAt: 300 })]).pending.length, 0);
 });
-test("receipt admission, progress and candidate publication are separate", () => {
+test("receipt admission, progress and internal handoff are separate", () => {
   const tracker = new JobNotificationTracker(50); tracker.ingest([]);
   assert.match(tracker.ingest([job()]).events[0].message, /受け付け.*完了は後/);
   assert.equal(tracker.ingest([job({ state: "running", updatedAt: 101 })]).events.length, 0);
   const completed = job({ state: "succeeded", completedUnits: 2, updatedAt: 102, outputAnalysisId: "candidate" });
   const state = tracker.ingest([completed]); assert.equal(state.events.length, 0); assert.equal(state.pending.length, 1);
   assert.deepEqual(tracker.watchedIds(), [completed.id]);
-  assert.match(tracker.confirmOutput(completed, "candidate")!.message, /候補を保存.*内容確認後/);
+  assert.match(tracker.confirmOutput(completed, "candidate")!.message, /処理が完了/);
   assert.equal(tracker.confirmOutput(completed, "candidate"), null);
   assert.equal(tracker.ingest([completed]).pending.length, 0);
 });

@@ -38,7 +38,7 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
     let Some((id, stage, lock_version, trans, diar, error_message, text, hash)) = row else {
         return Ok(None);
     };
-    let plan = match (text, hash) {
+    let plan: Option<Value> = match (text, hash) {
         (Some(text), Some(hash))
             if text.len() <= 65536 && format!("{:x}", Sha256::digest(text.as_bytes())) == hash =>
         {
@@ -54,7 +54,9 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
     Ok(Some(AnalysisFlow {
         id,
         meeting_id: meeting.into(),
-        profile: super::imports::flow_profile(db, meeting)?,
+        // New work always uses the global model selection. A frozen plan is
+        // execution evidence for this job, not a per-meeting preference.
+        profile: plan.as_ref().and_then(|p| p.get("profile")).and_then(Value::as_str).unwrap_or("standard").into(),
         stage,
         lock_version,
         transcription_job: load(trans)?,
@@ -65,6 +67,53 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
 }
 
 impl Storage {
+    /// Finish the initial flow and publish its utterances atomically. The
+    /// staging ASR output is private to the handoff: no user adoption step.
+    /// Existing public text/edit drafts are never replaced by background work.
+    pub(crate) fn complete_analysis_flow(&self, old: &AnalysisFlow) -> Result<AnalysisFlow, String> {
+        let mut db = self.connection.lock().map_err(|_| "DBロックを取得できません")?;
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let current = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
+        if current.id != old.id || current.lock_version != old.lock_version || current.stage != "diarization" {
+            return Err("文字起こしの完了対象が変更されています".into());
+        }
+        let trans = current.transcription_job.as_ref().ok_or("文字起こしがありません")?;
+        let diar = current.diarization_job.as_ref().ok_or("話者分離がありません")?;
+        for (job, kind) in [(trans, "transcription"), (diar, "diarization")] {
+            if job.meeting_id != old.meeting_id || job.kind != kind || job.state != "succeeded" {
+                return Err("解析の完了を確認できません".into());
+            }
+            let (spec, _) = super::jobs::read_fixed_input(&tx, &job.id)?;
+            let initial = super::jobs::initial_operation(job.clone(), &spec, |parent_id| {
+                let parent = super::jobs::load_job(&tx, parent_id)?.ok_or("再試行元がありません")?;
+                let (spec, _) = super::jobs::read_fixed_input(&tx, parent_id)?;
+                Ok((parent, spec))
+            })?;
+            if initial != format!("flow:{}:{kind}", old.id) {
+                return Err("文字起こしの実行対象が一致しません".into());
+            }
+        }
+        let output = diar.output_analysis_id.as_deref().ok_or("発言一覧がありません")?;
+        let head: Option<String> = tx.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1", params![old.meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if head.is_some() || super::drafts::load_draft(&tx, &old.meeting_id)?.is_some() {
+            return Err("既存の文字起こしと編集を保持しています。自動処理で上書きしません。".into());
+        }
+        // The reviewed stage is an internal terminal state. It and the public
+        // head commit together; there is no observable candidate/adoption UI.
+        tx.execute("UPDATE analysis_flows SET stage='review',error_message=NULL,lock_version=lock_version+1,updated_at=?1 WHERE id=?2 AND lock_version=?3", params![now_ms()?,old.id,old.lock_version]).map_err(|e| e.to_string())?;
+        if !adoption_parent_matches(&tx, &old.meeting_id, output, None)? {
+            return Err("文字起こしの入力と保存先が一致しません".into());
+        }
+        let hash: String = tx.query_row("SELECT content_hash FROM analysis_revisions WHERE id=?1 AND meeting_id=?2 AND publication_state='candidate'", params![output,old.meeting_id], |r|r.get(0)).map_err(|e|e.to_string())?;
+        if super::revisions::analysis_content_hash(&tx, output)? != hash {
+            return Err("文字起こし結果の内容が変更されています".into());
+        }
+        tx.execute("UPDATE analysis_revisions SET publication_state='committed' WHERE id=?1", params![output]).map_err(|e|e.to_string())?;
+        tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=NULL,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND current_analysis_id IS NULL", params![output,now_ms()?,old.meeting_id]).map_err(|e|e.to_string())?;
+        let flow = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
+        tx.commit().map_err(|e|e.to_string())?;
+        Ok(flow)
+    }
     pub(crate) fn analysis_flow(&self, meeting: &str) -> Result<Option<AnalysisFlow>, String> {
         let db = self
             .connection
@@ -212,7 +261,13 @@ pub(super) fn adoption_parent_matches(
     }
     super::jobs::read_fixed_input(tx, &trans.id)?;
     let (spec, _) = super::jobs::read_fixed_input(tx, &diar)?;
-    if spec.parameters["request"]["operationId"] != format!("flow:{}:diarization", flow.id) {
+    let job = super::jobs::load_job(tx, &diar)?.ok_or("話者分離ジョブがありません")?;
+    let initial = super::jobs::initial_operation(job, &spec, |parent_id| {
+        let parent = super::jobs::load_job(tx, parent_id)?.ok_or("再試行元がありません")?;
+        let (spec, _) = super::jobs::read_fixed_input(tx, parent_id)?;
+        Ok((parent, spec))
+    })?;
+    if initial != format!("flow:{}:diarization", flow.id) {
         return Err("工程の話者分離操作が一致しません".into());
     }
     let fixed = super::diarization::read_input(tx, &spec)?;

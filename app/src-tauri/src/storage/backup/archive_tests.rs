@@ -19,7 +19,6 @@ pub(in crate::storage::backup) fn migration_database(db: Connection, version: us
 
 pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
     let options = ImportOptions {
-        profile: "high_accuracy".into(),
         meeting_vocabulary: vec![VocabularyEntry {
             id: Uuid::new_v4().to_string(),
             term: "点検日".into(),
@@ -197,12 +196,8 @@ fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_withou
             r.get(0)
         })
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<ImportOptions>(&config)
-            .unwrap()
-            .profile,
-        "high_accuracy"
-    );
+    assert_eq!(serde_json::from_str::<ImportOptions>(&config).unwrap().expected_global_version, None);
+    assert!(!config.contains("profile"));
     assert_eq!(
         archive
             .database

@@ -14,14 +14,12 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ImportOptions {
-    pub profile: String,
     pub meeting_vocabulary: Vec<crate::storage::VocabularyEntry>,
     pub expected_global_version: Option<i64>,
 }
 impl Default for ImportOptions {
     fn default() -> Self {
         Self {
-            profile: "standard".into(),
             meeting_vocabulary: vec![],
             expected_global_version: None,
         }
@@ -29,10 +27,8 @@ impl Default for ImportOptions {
 }
 impl ImportOptions {
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if !matches!(self.profile.as_str(), "standard" | "high_accuracy")
-            || self.expected_global_version.is_some_and(|v| v < 0)
-        {
-            return Err("取り込みのプロファイル・用語版が不正です".into());
+        if self.expected_global_version.is_some_and(|v| v < 0) {
+            return Err("取り込みの用語版が不正です".into());
         }
         crate::storage::vocabulary::validate(&self.meeting_vocabulary)
     }

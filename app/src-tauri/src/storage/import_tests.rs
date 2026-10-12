@@ -131,7 +131,6 @@ fn count(s: &Storage, table: &str, meeting: &str) -> i64 {
 
 fn options() -> audio_import::ImportOptions {
     audio_import::ImportOptions {
-        profile: "high_accuracy".into(),
         meeting_vocabulary: vec![VocabularyEntry {
             id: Uuid::new_v4().to_string(),
             term: "点検日".into(),
@@ -200,7 +199,7 @@ fn import_options_and_initial_vocabulary_are_atomic_checked_and_idempotent() {
     assert_eq!(book.payload, chosen.meeting_vocabulary);
     assert_eq!(book.lock_version, 1);
     let mut changed = chosen.clone();
-    changed.profile = "standard".into();
+    changed.meeting_vocabulary[0].term = "変更した用語".into();
     assert!(s
         .begin_audio_import_configured("会議", "op", "source.wav", &source, &info(), &changed)
         .is_err());
@@ -247,7 +246,7 @@ fn import_finalization_and_recovery_cancel_keep_complete_evidence_for_retry() {
 }
 
 #[test]
-fn migration_20_backfills_existing_import_profile_without_changing_audio_or_terms() {
+fn migration_20_preserves_historical_import_metadata_without_selecting_meeting_models() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
     let (import, base, manifest) = pending(&s, "v19");
@@ -290,8 +289,8 @@ fn migration_20_backfills_existing_import_profile_without_changing_audio_or_term
         .unwrap();
     assert_eq!(format!("{:x}", Sha256::digest(json.as_bytes())), hash);
     assert_eq!(
-        serde_json::from_str::<audio_import::ImportOptions>(&json).unwrap(),
-        audio_import::ImportOptions::default()
+        serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+        serde_json::json!({"profile":"standard","meetingVocabulary":[],"expectedGlobalVersion":null})
     );
 }
 

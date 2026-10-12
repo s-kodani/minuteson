@@ -1,4 +1,4 @@
-//! Durable automatic handoffs, not automatic adoption. The shared inference
+//! Durable automatic transcription and speaker processing. The shared inference
 //! worker owns this coordinator so recording priority and a single CLI remain.
 use crate::diarization::sherpa::SherpaConfig;
 use crate::local_engine::Fingerprint;
@@ -197,12 +197,7 @@ fn step(
                     }
                 }
                 if job.state == "succeeded" {
-                    return save(
-                        "review",
-                        flow.plan.clone(),
-                        flow.transcription_job.as_ref(),
-                        Some(job),
-                    );
+                    return storage.complete_analysis_flow(flow).map(Some);
                 }
             } else {
                 let trans = flow

@@ -127,6 +127,9 @@ impl AnalysisController {
             }
             if let Err(error) =
                 crate::analysis_flow::advance(&app.state::<Storage>(), &stopping, &|flow| {
+                    if flow.stage == "review" {
+                        let _ = app.emit("analysis-version-changed", &flow.meeting_id);
+                    }
                     let _ = app.emit("analysis-flow-changed", flow);
                 })
             {

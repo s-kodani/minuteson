@@ -98,7 +98,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
       const unchanged = current?.lockVersion === attempt.draft.lockVersion && same(current.payload, attempt.draft.payload);
       const committed = current?.lockVersion === attempt.draft.lockVersion + 1 && same(current.payload, attempt.payload);
       if (!current || current.id !== attempt.draft.id || !Number.isSafeInteger(current.lockVersion) || (!unchanged && !committed)) {
-        throw new Error("保存済みの議事録が別の内容に更新されています。入力を保持しています。再読込する前に内容を確認してください。");
+        throw new Error("保存済みの内容が別の内容に更新されています。入力を保持しています。再読込する前に内容を確認してください。");
       }
       this.draft = current;
       this.uncertain = null;

@@ -13,11 +13,11 @@ test("native model selection captures and restores focus only inside the still a
   assert.match(guide, /mounted\.current && request === sequence\.current && !current\.current\.disabled && element\.isConnected && !element\.disabled && topOpenModal\(\)\?\.contains\(element\)/);
   assert.match(guide, /select\(item\.role, event\.currentTarget\)/);
 });
-test("guided inspection and copy use the same reviewed declaration with no automatic execute or apply", () => {
-  assert.match(owner, /assertGuidedInspection\(result, source\)/);
-  assert.match(owner, /reviewSource\.current = structuredClone\(source\)/);
-  assert.match(owner, /reviewSource\.current !== source\) throw Error/);
-  assert.match(owner, /"place_model_package", \{ token, \.\.\.source, expectedReviewHash: reviewHash \}/);
+test("guided inspection preserves source identity before the trusted import action", () => {
+  assert.match(owner, /assertGuidedInspection\(result, chosen\)/);
+  assert.match(owner, /setSource\(chosen\); setReport\(value\); setTrusted\(false\)/);
+  assert.match(owner, /const chosen = source, checked = report/);
+  assert.match(owner, /"place_model_package", \{ token, \.\.\.chosen, expectedReviewHash: checked.reviewHash \}/);
   assert.doesNotMatch(guide, /check_model_compatibility|apply_model_profile_application|place_model_package/);
   assert.match(guide, /result === null\) return/);
   assert.match(guide, /current\.current\.engine !== selectedEngine/);

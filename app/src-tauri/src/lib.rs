@@ -920,19 +920,6 @@ fn save_diarization_preferences(
         .state::<Storage>()
         .save_diarization_preferences(expected_lock_version, payload)
 }
-#[tauri::command]
-async fn get_speaker_reviews(
-    window: WebviewWindow,
-    request: storage::SpeakerReviewRequest,
-) -> Result<storage::SpeakerReviewResponse, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read speaker intervals".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().speaker_reviews(request))
-        .await
-        .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 fn save_analysis_preferences(
@@ -959,88 +946,9 @@ fn get_analysis_versions(
     window.state::<Storage>().analysis_versions(&meeting_id)
 }
 
-#[tauri::command]
-async fn get_analysis_preview(
-    window: WebviewWindow,
-    meeting_id: String,
-    analysis_id: String,
-) -> Result<Option<AnalysisView>, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read analysis candidates".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .load_visible_analysis(&meeting_id, &analysis_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-fn get_analysis_version_draft(
-    window: WebviewWindow,
-    meeting_id: String,
-    analysis_id: String,
-) -> Result<Option<TranscriptDraft>, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read version drafts".into());
-    }
-    window
-        .state::<Storage>()
-        .visible_analysis_draft(&meeting_id, &analysis_id)
-}
 
-#[tauri::command]
-async fn adopt_analysis_candidate(
-    window: WebviewWindow,
-    request: storage::AdoptRequest,
-) -> Result<storage::CommittedAnalysis, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can adopt analysis candidates".into());
-    }
-    let app = window.app_handle().clone();
-    let meeting_id = request.meeting_id.clone();
-    let worker_app = app.clone();
-    let adopted = tauri::async_runtime::spawn_blocking(move || {
-        worker_app.state::<Storage>().adopt_analysis(request)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    // The notification is an invalidation, never a substitute for a DB commit.
-    let _ = app.emit("analysis-version-changed", meeting_id);
-    Ok(adopted)
-}
 
-#[tauri::command]
-async fn restore_analysis_version(
-    window: WebviewWindow,
-    meeting_id: String,
-    expected_meeting_lock_version: i64,
-    expected_previous_id: String,
-    expected_content_hash: String,
-    expected_draft: Option<storage::DraftStamp>,
-) -> Result<storage::CommittedAnalysis, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can restore analysis".into());
-    }
-    let app = window.app_handle().clone();
-    let changed_meeting = meeting_id.clone();
-    let worker_app = app.clone();
-    let restored = tauri::async_runtime::spawn_blocking(move || {
-        worker_app.state::<Storage>().restore_analysis_checked(
-            &meeting_id,
-            expected_meeting_lock_version,
-            &expected_previous_id,
-            &expected_content_hash,
-            expected_draft,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let _ = app.emit("analysis-version-changed", changed_meeting);
-    Ok(restored)
-}
 
 #[tauri::command]
 async fn start_minutes_generation(
@@ -1408,23 +1316,6 @@ async fn restore_minutes_version(
     Ok(result)
 }
 
-#[tauri::command]
-async fn start_transcription(
-    window: WebviewWindow,
-    request: transcription::StartRequest,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can start analysis".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 fn get_analysis_flow(
@@ -1479,23 +1370,6 @@ fn continue_analysis_flow(
     Ok(flow)
 }
 
-#[tauri::command]
-async fn start_diarization(
-    window: WebviewWindow,
-    request: diarization::StartRequest,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can start diarization".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 async fn retry_diarization(
@@ -2519,56 +2393,9 @@ fn begin_transcript_draft(
     storage.create_transcript_draft(&meeting_id, &analysis_id)
 }
 
-#[tauri::command]
-fn get_transcript_edit_recovery(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    meeting_id: String,
-    draft_id: String,
-    base_analysis_id: String,
-) -> Result<Option<storage::edit_recovery::Recovery>, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read transcript recovery".into());
-    }
-    storage.transcript_edit_recovery(&meeting_id, &draft_id, &base_analysis_id)
-}
 
-#[tauri::command]
-fn list_transcript_edit_recoveries(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    meeting_id: String,
-    after: Option<String>,
-) -> Result<storage::edit_recovery::review::Page, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can list transcript recovery".into());
-    }
-    storage.list_transcript_edit_recoveries(&meeting_id, after.as_deref())
-}
 
-#[tauri::command]
-fn discard_transcript_edit_recovery(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    request: storage::edit_recovery::review::DiscardRequest,
-) -> Result<storage::edit_recovery::Recovery, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can discard transcript recovery".into());
-    }
-    storage.discard_transcript_edit_recovery(request)
-}
 
-#[tauri::command]
-fn save_transcript_edit_recovery(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    request: storage::edit_recovery::SaveRequest,
-) -> Result<storage::edit_recovery::Recovery, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can save transcript recovery".into());
-    }
-    storage.save_transcript_edit_recovery(request)
-}
 
 #[tauri::command]
 fn save_transcript_draft(
@@ -2584,18 +2411,6 @@ fn save_transcript_draft(
     storage.save_transcript_draft(&draft_id, expected_lock_version, payload)
 }
 
-#[tauri::command]
-fn undo_transcript_edit(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    draft_id: String,
-    expected_lock_version: i64,
-) -> Result<TranscriptDraft, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can edit transcripts".into());
-    }
-    storage.undo_last_transcript_edit(&draft_id, expected_lock_version)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2812,12 +2627,7 @@ pub fn run() {
                 get_current_analysis,
                 get_transcript_draft,
                 begin_transcript_draft,
-                get_transcript_edit_recovery,
-                list_transcript_edit_recoveries,
-                discard_transcript_edit_recovery,
-                save_transcript_edit_recovery,
                 save_transcript_draft,
-                undo_transcript_edit,
                 prepare_utterance_playback,
                 register_playback_preparation,
                 cancel_playback_preparation,
@@ -2831,11 +2641,9 @@ pub fn run() {
                 read_playback_chunk,
                 close_playback,
                 finish_main_close,
-                start_transcription,
                 get_analysis_flow,
                 start_analysis_flow,
                 continue_analysis_flow,
-                start_diarization,
                 retry_diarization,
                 get_diarization_tracks,
                 start_minutes_generation,
@@ -2870,16 +2678,11 @@ pub fn run() {
                 save_ui_preferences,
                 get_diarization_preferences,
                 save_diarization_preferences,
-                get_speaker_reviews,
                 get_vocabulary_book,
                 get_meeting_vocabulary,
                 save_vocabulary_book,
                 save_analysis_preferences,
                 get_analysis_versions,
-                get_analysis_preview,
-                get_analysis_version_draft,
-                adopt_analysis_candidate,
-                restore_analysis_version
             ];
             handler(invoke)
         })

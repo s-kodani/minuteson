@@ -106,6 +106,6 @@ export class JobNotificationTracker {
     this.pending.delete(job.id);
     if(publication==="superseded")return null; // Later human edits are current.
     if(publication==="markdown")return {...notice(job,"が完了しました","success"),message:`「${job.meetingTitle}」の議事録を保存しました`};
-    return notice(job, publication === "candidate" ? "の候補を保存しました。採用は内容確認後に行ってください" : "の結果を保存しました。現在版を確認してください", "success");
+    return notice(job, publication === "candidate" ? "の処理が完了しました" : "の結果を保存しました", "success");
   }
 }

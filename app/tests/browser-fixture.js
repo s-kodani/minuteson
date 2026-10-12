@@ -111,6 +111,8 @@ mockIPC(async (command, args) => {
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
+    case "get_minutes_markdown": return null;
+    case "get_official_model_options": return [];
     case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
     case "capture_available": return false;
     case "save_ui_preferences": {
@@ -283,7 +285,6 @@ mockIPC(async (command, args) => {
     case "get_current_minutes": return null;
     case "get_minutes_draft": return null;
     case "get_minutes_exports": return [];
-    case "get_minutes_markdown": return null;
     default: throw new Error(`Unexpected fixture command: ${command}`);
   }
 }, { shouldMockEvents: true });

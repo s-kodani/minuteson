@@ -49,27 +49,6 @@ fn read_options(db: &Connection, id: &str) -> Result<ImportOptions, String> {
     options.validate()?;
     Ok(options)
 }
-pub(super) fn flow_profile(db: &Connection, meeting: &str) -> Result<String, String> {
-    let source: Option<String> = db
-        .query_row(
-            "SELECT source_type FROM meetings WHERE id=?1",
-            params![meeting],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if source.as_deref() != Some("audio_import") {
-        return Ok("standard".into());
-    }
-    let id: String = db
-        .query_row(
-            "SELECT id FROM audio_imports WHERE meeting_id=?1 AND state='ready'",
-            params![meeting],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(read_options(db, &id)?.profile)
-}
-
 impl Storage {
     pub(crate) fn import_scratch(&self) -> Result<&Path, String> {
         if self.root.canonicalize().map_err(|e| e.to_string())? != self.root {

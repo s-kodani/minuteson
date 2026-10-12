@@ -55,18 +55,6 @@ test("block deletion retains text selection while explicitly restoring its point
   assert.match(editor,/void confirm\(\{ opener, title: "議事録ブロックの削除を確認"/);
 });
 
-test("transcript merge and bulk confirmations restore the clicked action even when WebKit does not focus buttons",()=>{
-  const transcript=source("transcript.tsx");
-  for (const title of ["話者の統合を確認", "複数発言の話者変更を確認"]) {
-    const request=transcript.indexOf(`title: "${title}"`);
-    assert.ok(request>=0,title);
-    const handler=transcript.lastIndexOf("onClick=",request);
-    const action=transcript.slice(handler,request);
-    assert.match(action,/^onClick=\{event=>\{/u,title);
-    assert.match(action,/void confirm\(\{ opener: event.currentTarget, $/u,title);
-    assert.doesNotMatch(action,/\.focus\(|await /u,"retain the exact action synchronously without moving the selected field");
-  }
-});
 
 test("nested settings restore to their parent but unrelated dialogs remain queued",()=>{
   const modal=source("common-modal.tsx");

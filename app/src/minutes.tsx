@@ -119,7 +119,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       if (!engine || !minutesConfigured(engine)) throw Error("設定のローカルAIで議事録用モデルを導入してください。");
       const analysis = await invoke<VersionState>("get_analysis_versions", { meetingId });
       const version = analysis.versions.find(v => v.id === analysis.currentId);
-      if (!version) throw Error("先に文字起こしを確認・採用してください。");
+      if (!version) throw Error("先に文字起こしを完了してください。");
       const base = { input: { meetingId, expectedAnalysisId: version.id, expectedContentHash: version.contentHash,
         expectedMeetingLockVersion: analysis.meetingLockVersion, expectedDraft: analysis.draft },
         ...engine, profile: profile === "highAccuracy" ? "high_accuracy" : "standard" };

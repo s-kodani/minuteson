@@ -61,14 +61,11 @@ impl FixedWorkspace {
             if flow_row(&self.database, &new)? != expected || old.error.is_some() {
                 return Err("構築済み解析工程の参照・固定条件・履歴が変更されています".into());
             }
-            let profile = crate::storage::imports::flow_profile(source, &old.meeting)?;
-            if crate::storage::imports::flow_profile(&self.database, &meeting)? != profile {
-                return Err("復元前後の工程プロファイルが一致しません".into());
-            }
             let plan = match (&old.plan, &old.hash) {
                 (None, None) => None,
                 (Some(text), Some(hash)) if text.len() <= 65_536 && portable::valid_hash(hash) => {
                     let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+                    let profile = value.get("profile").and_then(Value::as_str).ok_or("固定された実行条件がありません")?.to_owned();
                     let plan = crate::analysis_flow::saved_plan(value, &profile)?;
                     self.flow_files(fixed, &plan)?;
                     Some(plan)

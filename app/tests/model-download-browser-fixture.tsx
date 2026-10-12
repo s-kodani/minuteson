@@ -3,7 +3,6 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "./startup-ready-mocks";
 import { emit } from "@tauri-apps/api/event";
-import { ModelDownloadPanel } from "../src/model-download";
 import { ModelInspectionPanel } from "../src/model-inspection";
 import { ToastHost } from "../src/toast";
 import { parseDownloadDefinition, downloadDigest, downloadByteTotals, downloadTransferBytes, type DownloadReview } from "../src/model-download-state";
@@ -23,6 +22,9 @@ const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし",
   sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources],
 } };
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
+f.profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+f.entries = [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
+f.settings = { executablePath: "", modelPath: "", vadModelPath: null, threads: 2, useGpu: false };
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
@@ -44,8 +46,27 @@ mockIPC(async (command, args) => {
     }));
     return [{ id: "synthetic-catalog", label: "文字起こし（合成）", description: "画面検証のみ・実ファイルなし", definition: f.definition, review: await reviewed(f.definition) }];
   }
-  if (command === "get_model_placements") return [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
-  if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+  if (command === "get_model_placements") return structuredClone(f.entries);
+  if (command === "get_model_profiles") return structuredClone(f.profiles);
+  if (command === "check_model_compatibility") {
+    const entry = f.entries.find((item: any) => item.packageId === args.packageId);
+    if (!entry || entry.reviewHash !== args.expectedReviewHash) throw Error("模擬モデル不一致");
+    entry.compatibility = { operationId: args.token, packageId: entry.packageId, reviewHash: entry.reviewHash, adapterRevision: 1, state: "succeeded", errorMessage: null };
+    return structuredClone(entry.compatibility);
+  }
+  if (command === "preview_model_profile_application") {
+    const entry = f.entries.find((item: any) => item.packageId === args.packageId), profile = f.profiles.find((item: any) => item.name === args.profile);
+    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: 0, before: { engine: entry.engine, settings: structuredClone(f.settings) }, after: { engine: entry.engine, settings: { ...f.settings, executablePath: "/synthetic/cli", modelPath: "/synthetic/model" } }, reviewDigest: "b".repeat(64) };
+  }
+  if (command === "apply_model_profile_application") {
+    const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);
+    if (profile.profileVersion !== preview.expectedProfileVersion || profile.id !== preview.expectedProfileId) throw Error("模擬設定競合");
+    profile.id = args.token; profile.profileVersion++;
+    profile.components = [{ roles: ["asr"], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
+    f.settings = structuredClone(preview.after.settings);
+    if (f.mode === "applyLost") throw Error("模擬選択保存応答喪失");
+    return structuredClone(profile);
+  }
   if (command === "review_model_download") {
     const result = await reviewed(args.definition);
     return f.mode === "forgedReview" ? { ...result, recipeHash: "a".repeat(64) } : result;
@@ -81,7 +102,7 @@ mockIPC(async (command, args) => {
     if (!item || item.state !== "complete" || item.review.recipeHash !== args.expectedRecipeHash || item.receipt.report.reviewHash !== args.expectedReviewHash) throw Error("模擬コピー対象の不一致");
     f.active.add(args.token);
     const result = { packageId: args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
-    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); return result; };
+    const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };
     if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
     const complete = finish(); if (f.mode === "lost") throw Error("模擬コピー完了応答喪失"); return complete;
   }
@@ -97,6 +118,6 @@ function Fixture() {
     {compact && <><button onClick={() => { f.failCatalog = true; }}>合成の取得記録読込失敗</button><button onClick={() => { f.failCatalog = false; }}>合成の取得記録読込復帰</button>
       <button onClick={() => { f.readMissing = true; }}>合成の実体照合失敗</button><button onClick={() => { f.readMissing = false; }}>合成の実体照合復帰</button>
       <button onClick={() => { for (const item of f.operations.values()) item.state = "incomplete"; }}>合成の記録を未完了にする</button></>}
-    {visible && (parent ? <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} /> : <ModelDownloadPanel compact={compact} locked={locked} onBusyChange={setBusy} onChanged={async () => { f.changed++; }} />)}<ToastHost /></main>;
+    {visible && <ModelInspectionPanel compact={compact} locked={locked} recordingActive={false} />}<ToastHost /></main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);
