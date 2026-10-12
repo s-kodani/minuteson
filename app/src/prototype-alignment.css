@@ -560,8 +560,10 @@ button:disabled { opacity:.5; }
 /* Settings fields use the same 40px metrics as their neighboring actions.
    Do not resize checkboxes, sliders, file pickers, or multiline editors. */
 .common-modal input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=hidden]):not([type=button]):not([type=submit]) {
-  min-width:0; max-width:100%; min-height:40px;
+  box-sizing:border-box; min-width:0; max-width:100%; min-height:40px;
   padding:9px 12px; font-size:13px; line-height:20px;
+  border:1px solid var(--input-border); border-radius:8px;
+  background:var(--surface); color:var(--text);
 }
 .options-dialog-content>fieldset {
   display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0;

@@ -7,6 +7,21 @@ async (page,capturePath)=>{
   const gear=page.locator(".settings-nav-glyph svg");check(await gear.evaluate(e=>{const r=e.getBoundingClientRect();return r.width===28&&r.height===28;}),"settings gear is not 28px");
   results.push("settings gear has consistent 28px geometry");
   await edit.click();const dialog=page.getByRole("dialog",{name:"会議名を変更",exact:true}),input=dialog.getByRole("textbox",{name:"会議名",exact:true});
+  await input.waitFor();
+  for(const theme of ["light","dark"]){
+    await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+    for(const width of [1200,390]){
+      await page.setViewportSize({width,height:800});
+      const metrics=await input.evaluate(e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect(),d=e.closest('dialog').getBoundingClientRect(),p=e.closest('label').getBoundingClientRect(),save=e.closest('form').querySelector('button[type=submit]'),b=save.getBoundingClientRect();return {height:r.height,buttonHeight:b.height,border:s.borderTopStyle,borderWidth:s.borderTopWidth,radius:s.borderTopLeftRadius,font:s.fontSize,padding:s.paddingLeft,background:s.backgroundColor,surface:getComputedStyle(e.closest('dialog')).backgroundColor,width:r.width,labelWidth:p.width,left:r.left,right:r.right,dialogLeft:d.left,dialogRight:d.right};});
+      check(metrics.height===40&&metrics.buttonHeight===40,"rename field and buttons must share 40px height");
+      check(metrics.border==="solid"&&metrics.borderWidth==="1px"&&metrics.radius==="8px","rename field uses native inset/square borders");
+      check(metrics.font==="13px"&&metrics.padding==="12px"&&metrics.background===metrics.surface,"rename field typography or surface differs");
+      check(Math.abs(metrics.width-metrics.labelWidth)<1&&metrics.left>metrics.dialogLeft&&metrics.right<metrics.dialogRight,"rename field lacks dialog gutters or overflows");
+      await page.screenshot({path:capturePath(`rename-input-${theme}-${width}.png`)});
+    }
+  }
+  await page.setViewportSize({width:1200,height:800});
+  results.push("rename field has consistent flat rounded styling, typography, height and gutters in both themes and widths");
   await input.fill("取り消す会議名");await dialog.getByRole("button",{name:"キャンセル",exact:true}).click();
   await dialog.waitFor({state:"hidden"});check(await title.innerText()==="会議A","cancel renamed meeting");
   await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="会議名を変更");

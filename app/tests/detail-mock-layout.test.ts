@@ -209,7 +209,7 @@ test("settings title margins cannot offset adjacent info controls and fields sha
   const css=source("prototype-alignment.css");
   assert.match(css,/\.options-dialog \.heading-with-info>:is\(h2,h3\),\s*\.heading-with-info>label \{ margin:0; min-width:0; \}/);
   assert.match(css,/\.heading-with-info \{ gap:8px; \}/);
-  assert.match(css,/\.common-modal input:not\(\[type=checkbox\]\):not\(\[type=radio\]\):not\(\[type=range\]\):not\(\[type=file\]\)[^{]*\{\s*min-width:0; max-width:100%; min-height:40px;\s*padding:9px 12px; font-size:13px; line-height:20px;/);
+  assert.match(css,/\.common-modal input:not\(\[type=checkbox\]\):not\(\[type=radio\]\):not\(\[type=range\]\):not\(\[type=file\]\)[^{]*\{\s*box-sizing:border-box; min-width:0; max-width:100%; min-height:40px;\s*padding:9px 12px; font-size:13px; line-height:20px;/);
   assert.match(css,/\.options-dialog-content>fieldset \{\s*display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0;/);
   assert.match(css,/\.options-dialog-content>fieldset>label \{\s*min-width:0; margin:0; gap:8px;/);
   assert.match(css,/\.options-dialog-content>\.info-field \{ display:grid; gap:8px; margin:0; \}/);

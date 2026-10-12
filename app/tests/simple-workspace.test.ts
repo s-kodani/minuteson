@@ -19,3 +19,7 @@ test("navigation has no routine progress toast and settings gear is 28px",()=>{
   const theme=readFileSync(new URL("../src/theme.tsx",import.meta.url),"utf8");
   assert.doesNotMatch(theme,/本文と再生の表示設定|保存済み表示設定を再読込/);
 });
+test("rename input inherits flat rounded modal fields without resizing non-text controls",()=>{
+  const css=readFileSync(new URL("../src/prototype-alignment.css",import.meta.url),"utf8");
+  assert.match(css,/\.common-modal input:not\(\[type=checkbox\]\):not\(\[type=radio\]\):not\(\[type=range\]\):not\(\[type=file\]\):not\(\[type=hidden\]\):not\(\[type=button\]\):not\(\[type=submit\]\) \{[^}]*box-sizing:border-box[^}]*min-height:40px[^}]*border:1px solid var\(--input-border\); border-radius:8px;[^}]*background:var\(--surface\); color:var\(--text\)/);
+});
