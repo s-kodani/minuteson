@@ -398,6 +398,7 @@ final class CaptureTestWindowTests: XCTestCase, @unchecked Sendable {
       window, microphone: false, to: directory.appendingPathComponent("system.caf"))
     XCTAssertEqual(microphone.frames, 40000)
     XCTAssertEqual(system.frames, 31200)
+    let startingMetadata = window.metadata()
     window.finish(at: origin + CaptureTestWindow.durationNs)
     let reference = CaptureClockReading(
       hostBeforeNs: 1_000_000_000, continuousNs: 1_000_000_010, utcMs: 1_700_000_000_000,
@@ -417,8 +418,11 @@ final class CaptureTestWindowTests: XCTestCase, @unchecked Sendable {
       requestedDurationSeconds: 5, osVersion: "synthetic", architecture: "arm64", state: "saved",
       microphone: microphone, system: system, errors: [])
     manifest.microphoneDeviceUID = "fixture-microphone"
+    manifest.captureTest = startingMetadata
+    XCTAssertFalse(manifest.captureTest!.completed)
+    try manifest.finalizeTestClock(clock, window: window)
+    XCTAssertTrue(manifest.captureTest!.completed)
     manifest.captureTest = window.metadata(firstSavedCaptureNanoseconds: origin)
-    try manifest.finalizeClock(clock)
     XCTAssertEqual(manifest.microphone.clockSegments?.first?.timelineStartUs, 0)
     XCTAssertEqual(manifest.microphone.clockSegments?.last?.timelineEndUs, 5_000_000)
     XCTAssertEqual(manifest.system.clockSegments?.first?.timelineStartUs, 100_000)

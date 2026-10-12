@@ -375,10 +375,19 @@ struct Manifest: Encodable {
     captureClock = try clock.metadata(originNanoseconds: origin)
   }
 
-  mutating func finalizeTestClock(_ clock: CaptureClockDomain) throws {
-    guard schemaVersion == 2, captureTest?.completed == true,
+  mutating func finalizeTestClock(_ clock: CaptureClockDomain, window: CaptureTestWindow) throws {
+    // The manifest still contains the snapshot published when the window
+    // opened. Finalize against this same owned window's completion snapshot,
+    // not its deliberately incomplete starting snapshot.
+    let completed = window.metadata()
+    guard let previous = captureTest, previous.ownerId == completed.ownerId,
+      previous.windowStartNs == completed.windowStartNs,
+      previous.windowEndNs == completed.windowEndNs
+    else { throw ProbeError.capture("capture test completion does not match its starting window") }
+    guard schemaVersion == 2, completed.completed == true,
       let micStart = microphone.firstCaptureNanoseconds
     else { throw ProbeError.capture("completed test and microphone capture clock are required") }
+    captureTest = completed
     if system.frames > 0 {
       try finalizeClock(clock)
       return
@@ -1940,8 +1949,8 @@ public enum CaptureCommand {
           if options.publishesInputStatus {
             try manifest.finalizeStoppedClock(
               clock, microphoneClosure: mic.captureClosure, systemClosure: systemClosure)
-          } else if testWindow != nil {
-            try manifest.finalizeTestClock(clock)
+          } else if let testWindow {
+            try manifest.finalizeTestClock(clock, window: testWindow)
           } else {
             try manifest.finalizeClock(clock)
           }
