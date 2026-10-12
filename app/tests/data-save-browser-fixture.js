@@ -6,7 +6,7 @@ const idle = dataIdleRead("get_data_operation");
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const f = window.dataFixture = {
   snapshot: idle, calls: [], mode: "success", replacesExisting: false, blocker: null,
-  failRead: false, failSave: false, failCancel: false, cancelLost: false, failClose: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
+  failRead: false, operationReadFailure: false, failSave: false, failCancel: false, cancelLost: false, failClose: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
   restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0,
@@ -20,7 +20,7 @@ export const dataSaveIPC = async (command, args) => {
   // Read-only help starts hidden in fixtures that do not own its native window.
   // Showing/closing still requires a dedicated mock, not a catch-all success.
   if (command === "get_recorder_info") return false;
-  if (command === "get_recorder_operation_notices") return { schemaVersion: 1, entries: structuredClone(operationEntries) };
+  if (command === "get_recorder_operation_notices") { if (f.operationReadFailure) throw Error("合成操作通知の読込失敗"); return { schemaVersion: 1, entries: structuredClone(operationEntries) }; }
   if (["publish_recorder_operation_notice", "dismiss_recorder_operation_notice"].includes(command)) {
     const e = operationEntries.find(e => e.source === args.source);
     if (!e || e.revision !== args.expectedRevision) throw Error("合成操作通知が変更されています");
