@@ -9,11 +9,12 @@ test("meeting title editing has its own guarded modal instead of management sect
   assert.match(main,/expectedLockVersion: selectedMeeting.lockVersion/);
   assert.match(main,/!renameOpen \|\| meetingBusy \|\| writeLocked \|\| !renameTitle.trim\(\)/);
 });
-test("navigation progress is a uniquely owned toast and settings gear is 24px",()=>{
+test("navigation progress is a uniquely owned toast and settings gear is 28px",()=>{
   assert.match(main,/type="navigation-progress" level="info"/);
   assert.match(main,/setNavigationEvent\(crypto.randomUUID\(\)\)/);
   assert.doesNotMatch(main,/navigationBusy && <(?:p|span) role="status"/);
   assert.match(main,/settings-nav-glyph.*ActionIcon name="gear"/);
   const css=readFileSync(new URL("../src/prototype-alignment.css",import.meta.url),"utf8");
-  assert.match(css,/\.settings-nav-glyph \.action-icon \{ width: 24px; height: 24px;/);
+  assert.match(css,/\.settings-nav-glyph \{[^}]*align-items: center; justify-content: center; flex: 0 0 28px; height: 28px;/);
+  assert.match(css,/\.settings-nav-glyph \.action-icon \{ width: 28px; height: 28px;/);
 });

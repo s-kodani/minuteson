@@ -737,5 +737,5 @@ button:disabled { opacity:.5; }
 .meeting-rename-dialog label { display: grid; gap: 8px; }
 .meeting-rename-dialog input { width: 100%; min-width: 0; }
 .meeting-rename-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }
-.settings-nav-glyph { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; height: 24px; }
-.settings-nav-glyph .action-icon { width: 24px; height: 24px; }
+.settings-nav-glyph { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; height: 28px; }
+.settings-nav-glyph .action-icon { width: 28px; height: 28px; }

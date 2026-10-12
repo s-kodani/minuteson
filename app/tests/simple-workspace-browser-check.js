@@ -4,8 +4,8 @@ async (page,capturePath)=>{
   await page.getByRole("button",{name:"会議A",exact:true}).click();
   const title=page.locator(".meeting-title-row h1"),edit=page.getByRole("button",{name:"会議名を変更",exact:true});
   await edit.waitFor();
-  const gear=page.locator(".settings-nav-glyph svg");check(await gear.evaluate(e=>{const r=e.getBoundingClientRect();return r.width===24&&r.height===24;}),"settings gear is not 24px");
-  results.push("settings gear has consistent 24px geometry");
+  const gear=page.locator(".settings-nav-glyph svg");check(await gear.evaluate(e=>{const r=e.getBoundingClientRect();return r.width===28&&r.height===28;}),"settings gear is not 28px");
+  results.push("settings gear has consistent 28px geometry");
   await edit.click();const dialog=page.getByRole("dialog",{name:"会議名を変更",exact:true}),input=dialog.getByRole("textbox",{name:"会議名",exact:true});
   await input.fill("取り消す会議名");await dialog.getByRole("button",{name:"キャンセル",exact:true}).click();
   await dialog.waitFor({state:"hidden"});check(await title.innerText()==="会議A","cancel renamed meeting");
