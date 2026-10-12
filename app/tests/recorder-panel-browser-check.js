@@ -1,5 +1,5 @@
 // Production mini component with synthetic IPC. No native windows or capture.
-async (page, directory = "output/playwright/tap-panel-20261012") => {
+async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}`) => {
   const check = (ok, message) => { if (!ok) throw Error(message); };
   let readFailure = false, heldMain = false, releaseMain;
   let snapshot = { revision: 1, phase: "idle", elapsedMs: 45_000, microphoneConnected: true, systemAudioConnected: true, sessionId: null, meetingId: null, errorMessage: null };
@@ -45,7 +45,7 @@ async (page, directory = "output/playwright/tap-panel-20261012") => {
     check(!bounds.overflow, `${phase} mini overflowed native geometry`);
     const buttons = await page.locator(".mini-bottom button").evaluateAll(list => list.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
     check(buttons.every(r => r.x >= 0 && r.x + r.width <= 360 && r.y >= 0 && r.y + r.height <= 116 && Math.abs(r.y - buttons[0].y) < 1 && r.height === 32), `${phase} controls clipped or misaligned`);
-    if (["recording", "error"].includes(phase)) await page.screenshot({ path: `${directory}/mini-${phase}.png` });
+    if (["recording", "error"].includes(phase)) await page.screenshot({ path: capturePath(`mini-${phase}.png`) });
     await checkClose();
   }
   readFailure = true; await boot(); await checkClose();

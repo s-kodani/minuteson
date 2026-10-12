@@ -15,6 +15,7 @@ async (page, capturePath = path => path)=>{
   if(name==="get_recording_snapshot")return s.recording;
   if(name==="get_recording_confirmation"){if(s.failRead)throw Error("模擬確認読戻し失敗");return d;}
   s.calls.push({command:name,args,label});
+  if(name==="hide_recorder_panel"||name==="open_main_window"){check(label==="recorder","invalid mini window action");return null;}
   if(name==="request_recording_confirmation"){if(["confirming","stopping","failed"].includes(d.phase))return d;check(["main","recorder"].includes(label)&&["preparing","recording"].includes(s.recording.phase)&&(!args.quit||label==="main"),"invalid recording request");s.decision={...empty(),revision:d.revision+1,id:id(),phase:"confirming",sessionId:s.recording.sessionId,meetingId:s.recording.meetingId,meetingTitle:"合成会議",origin:label,preparing:s.recording.phase==="preparing",quitAfterSave:!!args.quit};s.presentations++;return s.decision;}
   if(name==="decide_recording_confirmation"){
    check(label==="recording-confirmation"&&args.id===d.id&&["confirming","failed"].includes(d.phase),"確認は既に確定しています");if(!args.stop){d.phase="cancelled";d.revision++;return d;}
@@ -41,14 +42,17 @@ async (page, capturePath = path => path)=>{
  const mini=await context.newPage(), modal=await context.newPage();
  let stage="setup";
  try{
-  await mini.setViewportSize({width:360,height:132});await mini.goto("http://127.0.0.1:1420/?window=recorder");
+  await mini.setViewportSize({width:360,height:116});await mini.goto("http://127.0.0.1:1420/?window=recorder");
   await modal.setViewportSize({width:560,height:460});await modal.goto("http://127.0.0.1:1420/?window=recording-confirmation");
-  const state=()=>page.evaluate(()=>window.recordingFixture.read()), reset=async()=>{await page.evaluate(()=>window.recordingFixture.reset());await page.getByRole("button",{name:"録音を停止",exact:true}).waitFor();await page.waitForFunction(()=>document.querySelector('[aria-label="録音状態"] .stop-button')?.disabled===false);};
+  // Use the always-visible production header. The maintenance modal's stop
+  // button is intentionally hidden until a user opens that modal.
+  const mainStop=()=>page.getByRole("button",{name:"録音を終了",exact:true});
+  const state=()=>page.evaluate(()=>window.recordingFixture.read()), reset=async()=>{await page.evaluate(()=>window.recordingFixture.reset());await mainStop().waitFor();await page.waitForFunction(()=>document.querySelector('[aria-label="共通録音状態"] .stop-button')?.disabled===false);};
   const dialog=()=>modal.getByRole("dialog"), end=()=>modal.getByRole("button",{name:"録音を終了する",exact:true}), continued=()=>modal.getByRole("button",{name:"録音を続ける",exact:true});
   stage="decline";await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();
   const original=(await state()).recording.sessionId;
   check(await mini.getByRole("dialog").count()===0&&await page.getByRole("dialog").count()===0,"confirmation was embedded in a recording window");
-  await page.waitForFunction(()=>document.querySelector('[aria-label="録音状態"] .stop-button')?.disabled===true);check(await mini.getByRole("button",{name:"停止",exact:true}).isDisabled(),"mini stop remained enabled");
+  await page.waitForFunction(()=>document.querySelector('[aria-label="共通録音状態"] .stop-button')?.disabled===true);check(await mini.getByRole("button",{name:"停止",exact:true}).isDisabled(),"mini stop remained enabled");
   check(await continued().evaluate(e=>e===document.activeElement)&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"unsafe initial focus or stopped before consent");
   await modal.keyboard.press("Enter");await dialog().waitFor({state:"hidden"});
   await mini.waitForFunction(()=>document.activeElement?.textContent==="停止");check((await state()).recording.sessionId===original&&(await state()).recording.phase==="recording","decline changed recording identity");
@@ -61,27 +65,27 @@ async (page, capturePath = path => path)=>{
   check(await dialog().isVisible()&&(await state()).calls.filter(c=>c.command==="synthetic-stop").length===1,"accepted stop repeated or closed before saved");
   await page.evaluate(()=>window.recordingFixture.phase("saving"));check(await dialog().isVisible(),"saving was mistaken for complete");
   await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
-  await page.waitForFunction(()=>document.querySelector('.state-pill')?.textContent==="待機中");
+  await page.getByLabel("共通録音状態",{exact:true}).getByText("待機中",{exact:true}).waitFor();
   results.push("simultaneous requests share one decision; double-click stops once and repeated Escape waits for actual saving completion");
 
-  await reset();await page.evaluate(()=>window.recordingFixture.configure({lostStop:true}));await page.getByRole("button",{name:"録音を停止",exact:true}).click();await end().click();
+  await reset();await page.evaluate(()=>window.recordingFixture.configure({lostStop:true}));await mainStop().click();await end().click();
   await dialog().getByRole("alert").waitFor();check((await state()).calls.filter(c=>c.command==="synthetic-stop").length===1&&await end().isDisabled(),"lost response repeated stop");
   await modal.keyboard.press("Escape");check(await dialog().isVisible(),"uncertain stop dismissed");await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
   results.push("lost accepted-stop acknowledgement retains same decision and never replays stopping");
 
-  await reset();await page.getByRole("button",{name:"録音を停止",exact:true}).click();await end().click();await page.evaluate(()=>window.recordingFixture.finish(true));await dialog().getByRole("alert").filter({hasText:"保存失敗"}).waitFor();
+  await reset();await mainStop().click();await end().click();await page.evaluate(()=>window.recordingFixture.finish(true));await dialog().getByRole("alert").filter({hasText:"保存失敗"}).waitFor();
   check(await modal.getByRole("heading",{name:"録音の保存状態を確認",exact:true}).isVisible()&&await end().isDisabled(),"save failure became successful completion");
   await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});check((await state()).recording.phase==="error","dismiss erased failed recording");
   results.push("failed saving remains failed with retained native state and no replay after dismissal");
 
-  await reset();await page.evaluate(()=>window.recordingFixture.configure({suppressEvents:true}));await page.getByRole("button",{name:"録音を停止",exact:true}).click();await dialog().waitFor();await end().click();await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});await page.waitForFunction(()=>document.querySelector('.state-pill')?.textContent==="待機中");
+  await reset();await page.evaluate(()=>window.recordingFixture.configure({suppressEvents:true}));await mainStop().click();await dialog().waitFor();await end().click();await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});await page.getByLabel("共通録音状態",{exact:true}).getByText("待機中",{exact:true}).waitFor();
   results.push("missed confirmation and session events recover by canonical periodic reads, not fabricated completion");
 
   await reset();await page.evaluate(()=>window.recordingFixture.phase("preparing"));await mini.getByRole("button",{name:"中止",exact:true}).click();await modal.getByRole("heading",{name:"録音準備を中止しますか？",exact:true}).waitFor();await page.evaluate(()=>window.recordingFixture.configure({transitionAtStop:true}));await modal.getByRole("button",{name:"録音準備を中止する",exact:true}).click();await dialog().getByRole("alert").waitFor();
   check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"outdated preparation consent stopped recording");await modal.getByRole("heading",{name:"録音を終了しますか？",exact:true}).waitFor();await end().click();check((await state()).calls.filter(c=>c.command==="synthetic-stop").length===1,"updated explicit consent repeated or failed stop");await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
   results.push("preparation becoming recording invalidates old consent and requires a fresh explicit decision with updated loss warning");
 
-  await reset();await page.getByRole("button",{name:"録音を停止",exact:true}).click();await dialog().waitFor();await page.evaluate(()=>window.recordingFixture.configure({failRead:true,suppressEvents:true}));await dialog().getByRole("alert").filter({hasText:"読戻し失敗"}).waitFor();check(await end().isDisabled(),"failed canonical read allowed stopping");await modal.keyboard.press("Escape");check(await dialog().isVisible(),"unknown read dismissed pending confirmation");await page.evaluate(()=>window.recordingFixture.configure({failRead:false}));await modal.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).find(e=>e.textContent==="録音を終了する")?.disabled);await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"read recovery sent stop");
+  await reset();await mainStop().click();await dialog().waitFor();await page.evaluate(()=>window.recordingFixture.configure({failRead:true,suppressEvents:true}));await dialog().getByRole("alert").filter({hasText:"読戻し失敗"}).waitFor();check(await end().isDisabled(),"failed canonical read allowed stopping");await modal.keyboard.press("Escape");check(await dialog().isVisible(),"unknown read dismissed pending confirmation");await page.evaluate(()=>window.recordingFixture.configure({failRead:false}));await modal.waitForFunction(()=>document.querySelector('.analysis-actions .stop-button')?.disabled===false);await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"read recovery sent stop");
   results.push("lost canonical reads protect decisions; verified recovery clears read errors and declining never stops");
 
   await reset();await page.evaluate(()=>window.recordingFixture.configure({failStop:true}));await mini.getByRole("button",{name:"停止",exact:true}).click();await end().click();await dialog().getByRole("alert").filter({hasText:"模擬停止失敗"}).waitFor();const failedId=(await state()).decision.id;check(!(await state()).calls.some(c=>c.command==="synthetic-stop")&&await end().isDisabled(),"failed stop was replayed");await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});await page.evaluate(()=>window.recordingFixture.configure({failStop:false}));await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();check((await state()).decision.id!==failedId&&await dialog().getByRole("alert").count()===0,"new explicit confirmation reused failed identity or stale error");await end().click();await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
@@ -124,6 +128,50 @@ async (page, capturePath = path => path)=>{
   await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor({state:"hidden"});await mini.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor({state:"hidden"});await mini.waitForFunction(()=>document.querySelector(".recorder-info-trigger button")?.dataset.helpError==="false");check(await mini.getByRole("button",{name:"録音パネルの説明を開く",exact:true}).getAttribute("data-help-error")==="false","new explicit confirmation retained stale request error");
   await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});
   results.push("native close request failure preserves canonical recording and reaches both recording UIs; a new explicit decision clears stale request error without stopping");
+
+  // Hiding a panel is independent of a shared stop decision. Exercise the
+  // real close button while the other renderer owns the confirmation.
+  const hideWithoutMutation=async()=>{
+   const before=await state(), close=mini.getByRole("button",{name:"ミニパネルを閉じる",exact:true});
+   check(await close.isEnabled(),"pending confirmation disabled mini close");
+   await close.click();
+   await mini.waitForFunction(()=>document.querySelector('[aria-label="ミニパネルを閉じる"]')?.disabled===false);
+   const after=await state(), added=after.calls.slice(before.calls.length);
+   check(JSON.stringify(after.recording)===JSON.stringify(before.recording)&&JSON.stringify(after.decision)===JSON.stringify(before.decision),"mini close changed canonical recording or decision");
+   check(added.length===1&&added[0].command==="hide_recorder_panel"&&added[0].label==="recorder","mini close requested stop or application exit");
+  };
+  stage="hide-confirming";await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();
+  await hideWithoutMutation();check(await dialog().isVisible(),"hiding mini dismissed separate confirmation");
+  await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});
+  check((await state()).recording.phase==="recording"&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"decline after hiding stopped recording");
+  results.push("mini close stays enabled during confirmation, hides exactly once and declining still preserves recording");
+
+  stage="hide-stopping-saving";await reset();await mainStop().click();await end().click();
+  await modal.getByRole("status").filter({hasText:"停止・保存"}).waitFor();await hideWithoutMutation();
+  await mini.reload();await mini.getByRole("button",{name:"ミニパネルを閉じる",exact:true}).waitFor();
+  check(await mini.getByRole("button",{name:"ミニパネルを閉じる",exact:true}).isEnabled()&&await dialog().isVisible(),"remount lost independent close or pending decision");
+  await page.evaluate(()=>window.recordingFixture.phase("saving"));await hideWithoutMutation();
+  check(await dialog().isVisible()&&(await state()).calls.filter(c=>c.command==="synthetic-stop").length===1,"hide/remount replayed stop or completed saving");
+  await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
+  results.push("mini hide and remount during stopping/saving preserve one accepted stop and wait for canonical completion");
+
+  stage="hide-unreadable-decision";await reset();await mainStop().click();await dialog().waitFor();
+  await page.evaluate(()=>window.recordingFixture.configure({failRead:true,suppressEvents:true}));
+  await dialog().getByRole("alert").filter({hasText:"読戻し失敗"}).waitFor();
+  await mini.waitForFunction(()=>document.querySelector('.mini-bottom .stop-button')?.disabled===true);
+  await hideWithoutMutation();check(await dialog().isVisible()&&await end().isDisabled(),"mini hide relaxed unreadable stop guard");
+  await page.evaluate(()=>window.recordingFixture.configure({failRead:false}));
+  await modal.waitForFunction(()=>document.querySelector('.analysis-actions .stop-button')?.disabled===false);
+  await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});
+  check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"read recovery or hide stopped recording");
+  results.push("canonical decision read failure blocks stopping but not mini close; recovery and decline do not send stop");
+
+  stage="hide-failed-save";await reset();await mainStop().click();await end().click();
+  await page.evaluate(()=>window.recordingFixture.finish(true));await dialog().getByRole("alert").filter({hasText:"保存失敗"}).waitFor();
+  await hideWithoutMutation();check(await dialog().isVisible()&&(await state()).decision.phase==="failed","mini hide erased save failure");
+  await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});
+  check((await state()).recording.phase==="error"&&(await state()).calls.filter(c=>c.command==="synthetic-stop").length===1,"failed save dismissal retried or declared success");
+  results.push("mini close remains independent after failed saving and preserves error without replaying stop");
   return {passed:results.length,results};
  }catch(cause){throw Error(`${stage}: ${String(cause)}; mini=${await mini.locator("body").innerText()}; modal=${await modal.locator("body").innerText()}; decision=${JSON.stringify((await page.evaluate(()=>window.recordingFixture.read())).decision)}`);}
  finally{await mini.close();await modal.close();await page.goto("about:blank");await context.unrouteAll();}
