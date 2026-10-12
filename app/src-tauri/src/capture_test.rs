@@ -526,7 +526,7 @@ impl CaptureTests {
                     Ok(ready) if !cancelled() => {
                         run.snapshot.phase = "ready".into();
                         run.snapshot.microphone = Some(ready.microphone.info.clone());
-                        run.snapshot.system = Some(ready.system.info.clone());
+                        run.snapshot.system = ready.system.as_ref().map(|track| track.info.clone());
                         run.ready = Some(ready);
                     }
                     other => {
@@ -645,7 +645,10 @@ impl CaptureTests {
         let ready = run.ready.as_ref().ok_or("検証済み音声がありません")?;
         let track = match kind {
             "mic" => &ready.microphone,
-            "system" => &ready.system,
+            "system" => ready
+                .system
+                .as_ref()
+                .ok_or("PC音声は未受信のため再生できません。音声を再生して再テストしてください")?,
             _ => return Err("テストの再生トラックが不正です".into()),
         };
         let audio = track.playback(

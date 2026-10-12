@@ -401,7 +401,8 @@ final class CoreAudioCaptureTests: XCTestCase, @unchecked Sendable {
       try await recorder.stop()
       XCTFail("empty input must not become saved")
     } catch {
-      XCTAssertTrue(String(describing: error).contains("no system audio samples were received"))
+      XCTAssertTrue(String(describing: error).contains(reason))
+      XCTAssertFalse(String(describing: error).contains("no system audio samples were received"))
     }
     XCTAssertEqual(recorder.snapshot().captureFailureDetail, reason)
     XCTAssertFalse(

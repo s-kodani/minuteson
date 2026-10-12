@@ -118,7 +118,7 @@ final class SystemPCMWriter: @unchecked Sendable {
     accepted = true
   }
 
-  func finish() async throws {
+  func finish(allowUnreceivedTestAudio: Bool = false) async throws {
     let pending = try lock.withLock { () -> AVAssetWriter? in
       if closed {
         if let finishFailure { throw ProbeError.capture(finishFailure) }
@@ -126,6 +126,18 @@ final class SystemPCMWriter: @unchecked Sendable {
       }
       closed = true
       guard let writer, let input, let rate = savedStats.sampleRate else {
+        // Only a completed, successfully stopped five-second acquisition may
+        // have no PC payload. Never create a CAF or invent silent frames.
+        do { try savedStats.requireWritable(raw: rawSegments?.snapshot()) } catch {
+          finishFailure = String(describing: error)
+          throw error
+        }
+        if allowUnreceivedTestAudio, rawSegments == nil, savedStats.frames == 0,
+          savedStats.callbackCount == 0, savedStats.sampleRate == nil,
+          savedStats.channels == nil, savedStats.captureFailureDetail == nil
+        {
+          return nil
+        }
         finishFailure = "no system audio samples were received"
         throw ProbeError.capture(finishFailure!)
       }

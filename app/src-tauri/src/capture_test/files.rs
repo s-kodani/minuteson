@@ -295,11 +295,13 @@ struct CaptureClock {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Track {
+    callback_count: Option<u64>,
     frames: u64,
     sample_rate: Option<f64>,
     channels: Option<u32>,
     append_failures: u64,
     clock_segments: Option<Vec<ClockSegment>>,
+    clock_failure: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -314,6 +316,8 @@ pub(super) struct Manifest {
     target_application_identity: Option<ApplicationIdentity>,
     pub(super) state: String,
     errors: Vec<String>,
+    #[serde(default)]
+    system_audio_unreceived: bool,
     capture_test: Window,
     capture_clock: Option<CaptureClock>,
     microphone: Track,
@@ -428,7 +432,7 @@ pub(super) struct TrackProof {
 }
 pub(super) struct Ready {
     pub(super) microphone: TrackProof,
-    pub(super) system: TrackProof,
+    pub(super) system: Option<TrackProof>,
 }
 impl TrackProof {
     pub(super) fn playback(
@@ -558,6 +562,28 @@ pub(super) fn verify(
             info,
         })
     };
+    let system_unreceived = manifest.system_audio_unreceived;
+    if system_unreceived {
+        let t = &manifest.system;
+        if t.frames != 0
+            || t.callback_count != Some(0)
+            || t.sample_rate.is_some()
+            || t.channels.is_some()
+            || t.append_failures != 0
+            || t.clock_failure.is_some()
+            || t.clock_segments
+                .as_ref()
+                .is_none_or(|segments| !segments.is_empty())
+        {
+            return Err("PC音声の未受信記録に書込み・形式・取得時刻の矛盾があります".into());
+        }
+        // Absence is not an empty/corrupt saved CAF. Reject even a dangling
+        // link; never discard a payload or pass it off as unreceived audio.
+        match std::fs::symlink_metadata(directory.path.join("system.caf")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err("PC音声の未受信記録に音声ファイルが存在します".into()),
+        }
+    }
     if manifest
         .microphone
         .clock_segments
@@ -565,21 +591,27 @@ pub(super) fn verify(
         .and_then(|s| s.first())
         .map(|s| s.timeline_start_us)
         .unwrap_or(-1)
-        .min(
+        .min(if system_unreceived {
+            i64::MAX
+        } else {
             manifest
                 .system
                 .clock_segments
                 .as_ref()
                 .and_then(|s| s.first())
                 .map(|s| s.timeline_start_us)
-                .unwrap_or(-1),
-        )
+                .unwrap_or(-1)
+        })
         != 0
     {
         return Err("テストの共通原点が最初の保存音声と一致しません".into());
     }
     Ok(Ready {
         microphone: track("microphone.caf", manifest.microphone)?,
-        system: track("system.caf", manifest.system)?,
+        system: if system_unreceived {
+            None
+        } else {
+            Some(track("system.caf", manifest.system)?)
+        },
     })
 }

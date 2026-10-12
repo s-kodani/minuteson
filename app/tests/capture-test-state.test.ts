@@ -58,3 +58,14 @@ test("terminal failure and pending cleanup remain explicit rather than ready",()
   const cancellation={...error,phase:"cancelled" as const,cleanupPending:false,errorMessage:null};
   assert.deepEqual(checkedCaptureTest(cancellation),cancellation);
 });
+
+test("completed microphone preview remains available when PC audio is explicitly absent",()=>{
+  const partial={...ready(),system:null};
+  assert.deepEqual(checkedCaptureTest(partial),partial);
+  assert.equal(reconcileCaptureTest(snapshot(),partial,snapshot()).phase,"ready");
+  assert.throws(()=>checkedCaptureTest({...partial,microphone:null}));
+  assert.throws(()=>checkedCaptureTest({...partial,errorMessage:"writer failed"}));
+  assert.throws(()=>checkedCaptureTest({...partial,cleanupPending:true}));
+  assert.throws(()=>checkedCaptureTest({...partial,system:{...ready().system!,frames:0,durationMs:0}}));
+  assert.throws(()=>reconcileCaptureTest(partial,{...ready(),revision:6},snapshot()));
+});

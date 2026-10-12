@@ -30,10 +30,10 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
   const labels={preparing:"テストの入力を初期化しています",recording:"5秒のテスト音声を保存しています",checking:"停止後のテスト音声を検証しています",cancelling:"テストの停止完了を待っています",ready:"停止と音声の検証が完了しました",cancelled:"テストを取り消しました",error:"テストの状態を確認してください"};
   return <section className="capture-test-panel" aria-label="録音前の5秒テスト">
     <h3>録音前の入力確認</h3>
-    <p>5秒テスト中にマイクへ話し、PCで音声を再生してください。停止後に別々に聴けます。会議や解析結果は作りません。毎回のテストは必須ではありません。</p>
+    <p>5秒テスト中にマイクへ話してください。PC音声も確認する場合はPCで音声を再生してください。停止後に取得できた音声を別々に聴けます。会議や解析結果は作りません。毎回のテストは必須ではありません。</p>
     <button type="button" className="secondary" disabled={!canStart||locked} onClick={onStart}>5秒録音して確認</button>
     {run&&<>
-      <p role="status">{labels[run.phase]}</p>
+      <p role="status">{run.phase==="ready"&&!run.system?"マイク音声の検証が完了しました（PC音声は未受信）":labels[run.phase]}</p>
       <p>テスト時のマイク: {run.microphoneName??"選択したマイク（確認中）"} ／PC音声: {run.captureScope.mode==="system"?"PCの再生音全体":run.applicationName??"選択したアプリ（確認中）"}</p>
       {!matches&&<p role="alert">現在の入力選択とは異なるテスト結果です。現在の入力の確認済み結果としては使いません。</p>}
       {run.busy&&<>

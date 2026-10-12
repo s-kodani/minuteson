@@ -355,6 +355,7 @@ struct Manifest: Encodable {
   var microphoneDeviceUID: String?
   var targetApplicationIdentity: CaptureApplicationIdentity?
   var captureTest: CaptureTestMetadata? = nil
+  var systemAudioUnreceived: Bool? = nil
   var recordingOwnerId: String? = nil
   var captureEnd: CaptureEndMetadata? = nil
   // Notification retention failure is separate from saved PCM/clock failure.
@@ -372,6 +373,24 @@ struct Manifest: Encodable {
     try microphone.finishClock(originNanoseconds: origin)
     try system.finishClock(originNanoseconds: origin)
     captureClock = try clock.metadata(originNanoseconds: origin)
+  }
+
+  mutating func finalizeTestClock(_ clock: CaptureClockDomain) throws {
+    guard schemaVersion == 2, captureTest?.completed == true,
+      let micStart = microphone.firstCaptureNanoseconds
+    else { throw ProbeError.capture("completed test and microphone capture clock are required") }
+    if system.frames > 0 {
+      try finalizeClock(clock)
+      return
+    }
+    try system.requireWritable()
+    guard system.callbackCount == 0, system.sampleRate == nil, system.channels == nil,
+      system.firstCaptureNanoseconds == nil, system.captureFailureDetail == nil
+    else { throw ProbeError.capture("empty system test track has inconsistent capture evidence") }
+    try microphone.finishClock(originNanoseconds: micStart)
+    system.clockSegments = []
+    captureClock = try clock.metadata(originNanoseconds: micStart)
+    systemAudioUnreceived = true
   }
 
   mutating func finalizeStoppedClock(
@@ -896,7 +915,10 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       captureStarted = false
       pcm.invalidateLevels()
     }
-    do { try await pcm.finish() } catch {
+    let allowUnreceivedTestAudio =
+      !proveEnding && testWindow?.metadata().completed == true
+      && streamStopError == nil && previous?.state == "connected"
+    do { try await pcm.finish(allowUnreceivedTestAudio: allowUnreceivedTestAudio) } catch {
       lock.withLock { stopFailure = String(describing: error) }
       throw error
     }
@@ -1790,21 +1812,25 @@ public enum CaptureCommand {
         if let testWindow, !testWindow.metadata().completed {
           throw ProbeError.capture("five-second test stopped before its window completed")
         }
-        guard micStats.frames > 0, systemStats.frames > 0,
+        guard micStats.frames > 0, systemStats.frames > 0 || testWindow != nil,
           micStats.appendFailures == 0, systemStats.appendFailures == 0
         else {
           throw ProbeError.capture("audio track is empty or contains failed writes")
         }
         try verifyRecordedCAF(
           options.output.appendingPathComponent("microphone.caf"), expected: micStats)
-        try verifyRecordedCAF(
-          options.output.appendingPathComponent("system.caf"), expected: systemStats)
+        if systemStats.frames > 0 {
+          try verifyRecordedCAF(
+            options.output.appendingPathComponent("system.caf"), expected: systemStats)
+        }
         manifest.microphone = micStats
         manifest.system = systemStats
         if let clock {
           if options.publishesInputStatus {
             try manifest.finalizeStoppedClock(
               clock, microphoneClosure: mic.captureClosure, systemClosure: systemClosure)
+          } else if testWindow != nil {
+            try manifest.finalizeTestClock(clock)
           } else {
             try manifest.finalizeClock(clock)
           }
@@ -1837,9 +1863,8 @@ public enum CaptureCommand {
       if manifest.state != "saved" {
         manifest.microphone = mic.snapshot()
         manifest.system = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
-      } else if let testWindow, let micStart = manifest.microphone.firstCaptureNanoseconds,
-        let systemStart = manifest.system.firstCaptureNanoseconds
-      {
+      } else if let testWindow, let micStart = manifest.microphone.firstCaptureNanoseconds {
+        let systemStart = manifest.system.firstCaptureNanoseconds ?? micStart
         manifest.captureTest = testWindow.metadata(
           firstSavedCaptureNanoseconds: min(micStart, systemStart))
       }

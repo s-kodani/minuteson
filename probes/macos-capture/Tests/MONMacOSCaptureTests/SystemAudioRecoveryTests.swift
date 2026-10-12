@@ -138,6 +138,55 @@ private final class SilentSystemFactory: @unchecked Sendable {
 }
 
 final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
+  func testCompletedSilentTestStopsAndDetachesWithoutCreatingPCSound() async throws {
+    let output = try directory()
+    defer { try? FileManager.default.removeItem(at: output) }
+    let source = SilentSystemSource()
+    let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+    try window.open(at: 1_000_000_000)
+    let recorder = SystemAudioRecorder(
+      outputURL: output.appendingPathComponent("system.caf"), testWindow: window,
+      factory: { _, _ in source }, requireIdentity: { _ in })
+    try await recorder.start(targetPID: nil)
+    window.finish(at: 6_000_000_000)
+    try await recorder.stop()
+    try await recorder.stop()
+    XCTAssertEqual(source.counts.0, 1)
+    XCTAssertEqual(source.counts.1, 1)
+    XCTAssertEqual(source.counts.2, 1)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: output.appendingPathComponent("system.caf").path))
+  }
+
+  func testUnreceivedTestNeverHidesCancellationStartFailureOrStopFailure() async throws {
+    for failure in ["cancel", "start", "stop", "detach", "ordinary"] {
+      let output = try directory()
+      defer { try? FileManager.default.removeItem(at: output) }
+      let source = SilentSystemSource(
+        startFailure: failure == "start", stopFailure: failure == "stop",
+        detachFailure: failure == "detach")
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      try window.open(at: 1_000_000_000)
+      let recorder = SystemAudioRecorder(
+        outputURL: output.appendingPathComponent("system.caf"),
+        testWindow: failure == "ordinary" ? nil : window,
+        factory: { _, _ in source }, requireIdentity: { _ in })
+      do {
+        try await recorder.start(targetPID: nil)
+        XCTAssertNotEqual(failure, "start")
+      } catch { XCTAssertEqual(failure, "start") }
+      window.finish(at: failure == "cancel" ? 2_000_000_000 : 6_000_000_000)
+      do {
+        try await recorder.stop()
+        XCTFail("unreceived PC must not hide \(failure)")
+      } catch {}
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: output.appendingPathComponent("system.caf").path))
+    }
+  }
+
   private func sleepReading(_ host: Int64, offset: Int64 = 500) -> CaptureClockReading {
     CaptureClockReading(
       hostBeforeNs: host, continuousNs: host + offset + 10,

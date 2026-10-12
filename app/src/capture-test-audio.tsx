@@ -64,7 +64,7 @@ export function CaptureTestAudio({run,locked}:{run:CaptureTestSnapshot;locked:bo
     <div className="card-actions">{(["mic","system"] as const).map(kind=>{
       const track=kind==="mic"?run.microphone:run.system,label=kind==="mic"?"マイク":"PC";
       return <div key={kind}><button type="button" className="small-secondary" disabled={locked||!track} onClick={()=>start(kind)}>{label}のテスト音声を再生</button>
-        {track&&<p>受信して保存した音声: {(track.durationMs/1000).toFixed(3)}秒{track.hasGaps?"（取得の遅れ・欠損あり）":""}</p>}</div>;
+        {track?<p>受信して保存した音声: {(track.durationMs/1000).toFixed(3)}秒{track.hasGaps?"（取得の遅れ・欠損あり）":""}</p>:<p role="status">PC音声は未受信です。確認する場合はPCで音声を再生して再テストしてください。</p>}</div>;
     })}</div>
     <p>取得できた音声だけを別々に聴きます。受信していない時間を無音で埋めず、同期精度・エコー除去の確認済み結果とは扱いません。</p>
     {selected&&<div className="audio-player">

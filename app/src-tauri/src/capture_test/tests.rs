@@ -499,8 +499,8 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
     let ready = files::verify(&directory, &request, &|| false).unwrap();
     assert_eq!(ready.microphone.info.duration_ms, 5000);
     assert!(!ready.microphone.info.has_gaps);
-    assert_eq!(ready.system.info.duration_ms, 1000);
-    assert!(ready.system.info.has_gaps);
+    assert_eq!(ready.system.as_ref().unwrap().info.duration_ms, 1000);
+    assert!(ready.system.as_ref().unwrap().info.has_gaps);
     read_all(
         ready
             .microphone
@@ -512,6 +512,8 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
     read_all(
         ready
             .system
+            .as_ref()
+            .unwrap()
             .playback(&directory, "system", &|| false)
             .unwrap(),
         8000,
@@ -521,6 +523,75 @@ fn test_private_verification_and_individual_preview_preserve_pcm_and_gaps() {
         std::fs::read(directory.path.join("manifest.json")).unwrap(),
         before
     );
+}
+
+#[test]
+fn completed_microphone_test_accepts_explicitly_unreceived_pc_without_inventing_audio() {
+    let (directory, request, mut manifest) = saved_fixture();
+    // This is a private synthetic file, not any saved user recording.
+    std::fs::remove_file(directory.path.join("system.caf")).unwrap();
+    manifest["systemAudioUnreceived"] = serde_json::json!(true);
+    manifest["system"] = serde_json::json!({"frames":0,"callbackCount":0,"appendFailures":0,
+        "sampleRate":null,"channels":null,"clockFailure":null,"clockSegments":[]});
+    write_manifest(&directory, &manifest);
+    assert!(files::verify(&directory, &request, &|| true).is_err());
+    let ready = files::verify(&directory, &request, &|| false).unwrap();
+    assert!(ready.system.is_none());
+    assert_eq!(ready.microphone.info.duration_ms, 5000);
+    read_all(
+        ready
+            .microphone
+            .playback(&directory, "mic", &|| false)
+            .unwrap(),
+        40000,
+        0.125,
+    );
+    assert!(!directory.path.join("system.caf").exists());
+    for (pointer, value) in [
+        ("/systemAudioUnreceived", serde_json::json!(false)),
+        ("/system/frames", serde_json::json!(1)),
+        ("/system/callbackCount", serde_json::json!(1)),
+        ("/system/callbackCount", serde_json::Value::Null),
+        ("/system/sampleRate", serde_json::json!(8000)),
+        ("/system/channels", serde_json::json!(2)),
+        ("/system/appendFailures", serde_json::json!(1)),
+        ("/system/clockFailure", serde_json::json!("clock failed")),
+        ("/system/clockSegments", serde_json::Value::Null),
+        (
+            "/system/clockSegments",
+            serde_json::json!([segment(0, 1, 0, 125)]),
+        ),
+        ("/captureTest/completed", serde_json::json!(false)),
+        (
+            "/microphoneDeviceUID",
+            serde_json::json!("other microphone"),
+        ),
+        (
+            "/captureTest/ownerId",
+            serde_json::json!(uuid::Uuid::new_v4().to_string()),
+        ),
+        ("/errors", serde_json::json!(["permission denied"])),
+    ] {
+        let mut changed = manifest.clone();
+        *changed
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("missing {pointer}")) = value;
+        write_manifest(&directory, &changed);
+        assert!(
+            files::verify(&directory, &request, &|| false).is_err(),
+            "{pointer}"
+        );
+    }
+    write_manifest(&directory, &manifest);
+    std::fs::write(directory.path.join("system.caf"), b"corrupt or empty CAF").unwrap();
+    assert!(files::verify(&directory, &request, &|| false).is_err());
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(directory.path.join("system.caf")).unwrap();
+        std::os::unix::fs::symlink("missing-system.caf", directory.path.join("system.caf"))
+            .unwrap();
+        assert!(files::verify(&directory, &request, &|| false).is_err());
+    }
 }
 
 #[test]
@@ -648,6 +719,8 @@ fn test_private_verification_and_preview_cancel_and_refuse_modified_same_format_
         .is_err());
     assert!(ready
         .system
+        .as_ref()
+        .unwrap()
         .playback(&directory, "system", &|| false)
         .is_ok());
     // A fresh proof may inspect a different file, but an existing result never
@@ -736,9 +809,9 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
     request.microphone_uid = "fixture-microphone".into();
     let ready = files::verify(&directory, &request, &|| false).unwrap();
     assert!(!ready.microphone.info.has_gaps);
-    assert!(ready.system.info.has_gaps);
+    assert!(ready.system.as_ref().unwrap().info.has_gaps);
     assert_eq!(ready.microphone.info.duration_ms, 5000);
-    assert_eq!(ready.system.info.duration_ms, 3900);
+    assert_eq!(ready.system.as_ref().unwrap().info.duration_ms, 3900);
     read_all(
         ready
             .microphone
@@ -750,6 +823,8 @@ fn swift_generated_five_second_test_is_verified_for_private_individual_preview()
     read_all(
         ready
             .system
+            .as_ref()
+            .unwrap()
             .playback(&directory, "system", &|| false)
             .unwrap(),
         31200,
