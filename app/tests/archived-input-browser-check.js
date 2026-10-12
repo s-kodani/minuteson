@@ -11,6 +11,7 @@ async page=>{
   const reload=async()=>{await page.evaluate(()=>window.closeFixture.persistArchivedFixture());await page.reload();await page.waitForFunction(()=>!!window.closeFixture);};
   const seed=options=>page.evaluate(options=>{const f=window.closeFixture;f.archived.rows=[f.newArchivedRow(options)];return f.recordChanged({phase:"idle"});},options);
   try{
+    await page.setViewportSize({width:1280,height:900});
     await page.goto("http://127.0.0.1:1420/");await page.waitForFunction(()=>!!window.closeFixture);
     await page.evaluate(()=>{const f=window.closeFixture;f.archived.hold.receive=true;const d=document.createElement("dialog");d.id="archive-cover";d.textContent="合成表示遮蔽";document.body.append(d);d.showModal();});
     await seed({both:true,loss:2,issue:"missing",title:"終了した点検会議"});
@@ -40,7 +41,7 @@ async page=>{
     check(await page.locator(".topbar").innerText().then(text=>text.includes("会議詳細")),"archive action did not open meeting detail");
     const details=page.locator(".archived-input-notices details");await details.locator("summary").click();
     check((await details.innerText()).includes("保持不足 2件")&&(await details.innerText()).includes("取得履歴がありません"),"retained diagnostics lost after navigation/dismissal");
-    check(await page.locator(".archived-input-notices").evaluate(e=>e.getBoundingClientRect().height<=innerHeight*.16+1),"historical diagnostics consumed the editor's workspace");
+    check(await page.locator(".archived-input-notices").evaluate(e=>getComputedStyle(e).overflowY==="visible"&&getComputedStyle(e).maxHeight==="none"&&e.scrollHeight<=e.clientHeight+1),"historical diagnostics retained a nested scrollbox");
     results.push("meeting action navigates through production UI without playback; missing history and loss remain after dismissal");
     for(const input of ["マイク","PC音声"]){const n=card(input);if(await n.count())await n.getByRole("button",{name:input==="マイク"?"情報通知を閉じる":"注意通知を閉じる",exact:true}).click();}
     await card("PC音声").filter({hasText:"復帰していました"}).waitFor();await page.waitForFunction(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.rendered);
@@ -87,7 +88,7 @@ async page=>{
     // The previous source can remain until the bounded cursor traversal wraps
     // and completes an authoritative new cycle. Wait for its normal removal;
     // never dismiss a card or delete a receipt to make this check pass.
-    await card().waitFor({state:"hidden"});await card("PC音声").waitFor({state:"hidden"});
+    await page.waitForFunction(()=>[...document.querySelectorAll(".toast-card")].every(e=>! /終了した録音.*(?:マイク|PC音声)/u.test(e.textContent??"")));
     const imported=page.locator(".archived-input-notices details");
     if(!await imported.evaluate(e=>e.open))await imported.locator(":scope > summary").click();
     let importedText=await imported.innerText();
@@ -104,7 +105,7 @@ async page=>{
     for(const theme of ["light","dark"]){await page.emulateMedia({colorScheme:theme});for(const width of [960,360]){
       await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
       check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`imported diagnosis UI overflows ${width} ${theme}`);
-      await page.screenshot({path:`imported-${theme}-${width}.png`});
+      await page.screenshot({path:`output/playwright/archive-expanded-imported-${theme}-${width}-20261012.png`});
     }}
     results.push("readable imported diagnostics retain bounded 960/360px light/dark layouts");
     await page.setViewportSize({width:1200,height:900});
@@ -117,7 +118,7 @@ async page=>{
       await page.setViewportSize({width,height:900});await page.waitForTimeout(200);
       check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`archive UI overflows ${width} ${theme}`);
       check(await card().evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}),"archive card outside viewport");
-      await page.screenshot({path:`archive-${theme}-${width}.png`});
+      await page.screenshot({path:`output/playwright/archive-expanded-${theme}-${width}-20261012.png`});
     }}
     check((await page.locator(".archived-input-notices details").innerText()).includes("現在の機器接続・取得・保存の状態ではありません"),"diagnostics imply present capture");
     results.push("960/360px light/dark layouts retain historical warnings and distinguish them from present acquisition");

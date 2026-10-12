@@ -278,6 +278,10 @@ button:disabled { opacity:.5; }
 .meeting-audio-settings-fields p { color:var(--muted); margin:0; }
 /* The same two-column reading surface as the mock, even at 960px. */
 .content.meeting-detail-content { position:relative; padding:0; gap:0; overflow:visible; }
+/* Historical warnings expand in the workspace, never in a tiny scrollbox.
+   Keep a usable editor viewport below them, reachable through workspace scroll. */
+.content.meeting-detail-content:has(>.archived-input-notices:not([hidden])) { overflow-y:auto; }
+.meeting-detail-content:has(>.archived-input-notices details[open])>.workspace-tab-panel { flex:1 0 min(480px,60dvh); }
 .meeting-detail-content .transcript-card { padding:0; gap:0; }
 .meeting-detail-content .transcript-split { gap:0; }
 .speaker-panel-body { padding:24px 20px; border-right:1px solid var(--border); background:var(--surface); }
