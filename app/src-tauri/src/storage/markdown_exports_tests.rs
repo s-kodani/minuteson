@@ -222,6 +222,47 @@ fn cold_open_marks_incomplete_write_uncertain_and_receipt_still_matches_original
     assert_eq!(s.get_minutes_markdown(&r.meeting_id).unwrap(), Some(before));
 }
 #[test]
+fn result_commit_failure_never_republishes_and_cold_open_keeps_the_human_body() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (r, before) = fixture(&s, "current human Markdown");
+    let first = s.prepare_markdown_export(r.clone()).unwrap();
+    let duplicate = s.prepare_markdown_export(r.clone()).unwrap();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER fail_plain_export_result BEFORE UPDATE ON export_records WHEN NEW.state='succeeded' BEGIN SELECT RAISE(ABORT,'simulated result commit failure');END;").unwrap();
+    let path = outside.path().join("existing.md");
+    assert!(s.write_markdown_export(first, &path).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before.markdown);
+    assert_eq!(
+        s.existing_markdown_export(&r).unwrap().unwrap().state,
+        "writing"
+    );
+    std::fs::write(&path, "external human change").unwrap();
+    assert_eq!(
+        s.write_markdown_export(duplicate, &path).unwrap().state,
+        "writing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "external human change"
+    );
+    assert_eq!(
+        s.get_minutes_markdown(&r.meeting_id).unwrap(),
+        Some(before.clone())
+    );
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    let receipt = s.existing_markdown_export(&r).unwrap().unwrap();
+    assert_eq!(receipt.state, "interrupted");
+    assert!(receipt.exported_at.is_none());
+    assert_eq!(s.get_minutes_markdown(&r.meeting_id).unwrap(), Some(before));
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "external human change"
+    );
+}
+
+#[test]
 fn invalid_requests_and_missing_documents_are_rejected_before_a_dialog() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();

@@ -736,32 +736,32 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
         .unwrap();
     let outside = tempfile::tempdir().unwrap();
     let path = outside.path().join("保存済み議事録.md");
-    let export = || {
-        let state = f.storage.read_stored_minutes_state(&f.meeting).unwrap();
-        let content = f
-            .storage
-            .load_minutes_content(&f.meeting, &revision)
-            .unwrap()
-            .unwrap();
-        f.storage
-            .prepare_export(crate::storage::exports::ExportRequest {
-                operation_id: Uuid::new_v4().to_string(),
-                meeting_id: f.meeting.clone(),
-                expected_minutes_id: revision.clone(),
-                expected_content_hash: content.content_hash,
-                expected_meeting_lock_version: state.meeting_lock_version,
-                expected_draft: state.draft,
-            })
-            .unwrap()
-    };
-    assert_eq!(
-        f.storage.write_export(export(), &path).unwrap().state,
-        "succeeded"
-    );
-    let failure = f
+    // Seed past receipts as data; the removed structured writer must not be
+    // restored just to generate a backup fixture. Current export IO is covered
+    // separately by plain-Markdown production tests.
+    let stored = f
         .storage
-        .write_export(export(), &f.root.path().join("blocked.md"))
+        .read_stored_minutes_draft(&f.meeting, None)
+        .unwrap()
         .unwrap();
+    let output = b"historical externally saved Markdown\n";
+    std::fs::write(&path, output).unwrap();
+    f.storage.seed_stored_export_receipt(
+        &f.meeting,
+        &revision,
+        &stored,
+        &path,
+        "succeeded",
+        output,
+    );
+    let failure = f.storage.seed_stored_export_receipt(
+        &f.meeting,
+        &revision,
+        &stored,
+        &f.root.path().join("blocked.md"),
+        "failed",
+        output,
+    );
     assert_eq!(failure.state, "failed");
     assert!(!f.root.path().join("blocked.md").exists());
     // External files may be edited or disappear after export. Restore never

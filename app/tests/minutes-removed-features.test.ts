@@ -57,3 +57,16 @@ test("legacy draft edits, adoption and version restoration are deleted from nati
   const fixture=readFileSync(new URL("storage/stored_minutes_fixture.rs",root),"utf8");
   assert.doesNotMatch(fixture,/fn (?:undo|restore|adopt|save_minutes|create_minutes)/);
 });
+test("structured minutes export is removed and only exact Markdown publishing remains",()=>{
+  const root=new URL("../src-tauri/src/",import.meta.url);
+  const shared=readFileSync(new URL("storage/exports.rs",root),"utf8");
+  assert.doesNotMatch(shared,/\b(?:ExportRequest|PreparedExport|MinutesContent|MinutesInput)\b|fn (?:prepare_export|write_export|write_export_using|existing_export|checked_source)\b/);
+  assert.match(shared,/pub\(super\) fn (?:record|safe_filename)\(/);
+  const modules=readFileSync(new URL("storage.rs",root),"utf8");
+  assert.doesNotMatch(modules,/\bExportRequest\b/);
+  const writer=readFileSync(new URL("storage/markdown_exports.rs",root),"utf8");
+  for(const name of ["prepare_markdown_export","write_markdown_export","existing_markdown_export"])
+    assert.match(writer,new RegExp("fn "+name+"\\("));
+  assert.doesNotMatch(writer,/minutes_drafts|minutes::|\.markdown\(/);
+  assert.match(writer,/prepared\.document\.markdown\.as_bytes\(\)/);
+});

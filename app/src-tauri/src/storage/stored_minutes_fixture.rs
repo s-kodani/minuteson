@@ -76,6 +76,37 @@ pub(super) struct StoredRevision {
 }
 
 impl Storage {
+    // Historical receipt seeding only. Never opens an external path or
+    // reinstates the deleted structured-minutes export commands.
+    pub(super) fn seed_stored_export_receipt(
+        &self,
+        meeting: &str,
+        revision: &str,
+        draft: &MinutesDraft,
+        path: &Path,
+        state: &str,
+        output: &[u8],
+    ) -> ExportRecord {
+        assert!(matches!(state, "succeeded" | "failed"));
+        let id = Uuid::new_v4().to_string();
+        let now = now_ms().unwrap();
+        let content = serde_json::to_vec(&draft.payload).unwrap();
+        let request_hash = format!("{:x}", Sha256::digest(format!("stored-receipt:{id}")));
+        let content_hash = format!("{:x}", Sha256::digest(content));
+        let output_hash = format!("{:x}", Sha256::digest(output));
+        let db = self.connection.lock().unwrap();
+        db.execute("INSERT INTO export_records(id,meeting_id,minutes_revision_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,source_draft_id,source_draft_lock_version,format,destination_path,state,error_message,created_at,updated_at,exported_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'markdown',?10,?11,?12,?13,?13,?14)",params![id,meeting,revision,request_hash,content_hash,output_hash,output.len() as i64,draft.id,draft.lock_version,path.to_str().unwrap(),state,if state=="failed"{Some("stored export failure")}else{None},now,if state=="succeeded"{Some(now)}else{None}]).unwrap();
+        db.query_row(
+            &format!(
+                "SELECT {} FROM export_records WHERE id=?1",
+                super::exports::COLUMNS
+            ),
+            [id],
+            super::exports::record,
+        )
+        .unwrap()
+    }
+
     pub(super) fn seed_stored_minutes_head(
         &self,
         meeting: &str,

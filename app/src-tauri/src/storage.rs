@@ -69,7 +69,7 @@ pub(crate) use diarization::DiarizationInput;
 pub(crate) use diarization_preferences::{DiarizationPreferences, DiarizationPreferencesSnapshot};
 pub(crate) use draft_splits::DraftUtteranceAudioRequest;
 pub use drafts::{TranscriptDraft, TranscriptDraftPayload};
-pub(crate) use exports::{ExportRecord, ExportRequest};
+pub(crate) use exports::ExportRecord;
 pub(crate) use jobs::{
     retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
