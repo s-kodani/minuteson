@@ -18,6 +18,7 @@ const localPort = code => code.replaceAll(":1420", `:${port}`);
 const selected = args.includes("--only") ? new Set(option("--only").split(",")) : null;
 const suites = [
   ["notification-menu", "browser-fixture.js", "notification-menu-browser-check.js"],
+  ["simple-workspace", "browser-fixture.js", "simple-workspace-browser-check.js"],
   ["notification-archive", null, "notification-archive-browser-check.js"],
   ["simple-transcript", "browser-fixture.js", "simple-transcript-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
@@ -29,18 +30,12 @@ const suites = [
   ["info", "info-popover-browser-fixture.tsx", "info-popover-browser-check.js"],
   ["import", "import-browser-fixture.js", "import-modal-browser-check.js"],
   ["data", "data-save-browser-fixture.js", "data-save-browser-check.js"],
+  ["no-maintenance", "data-save-browser-fixture.js", "no-maintenance-browser-check.js"],
   ["data-layout", "data-save-browser-fixture.js", "data-save-layout-browser-check.js"],
   ["data-action", "data-save-browser-fixture.js", "data-action-confirmation-browser-check.js"],
   ["move", "data-save-browser-fixture.js", "storage-move-browser-check.js"],
-  ["recovery", "data-save-browser-fixture.js", "recovery-browser-check.js"],
-  ["recovery-action", "data-save-browser-fixture.js", "recovery-action-confirmation-browser-check.js"],
-  ["deletion", "deletion-browser-fixture.js", "deletion-browser-check.js"],
   ["model-review", "model-deletion-browser-fixture.js", "model-deletion-browser-check.js"],
-  ["model-body", "model-body-deletion-browser-fixture.js", "model-body-deletion-browser-check.js"],
   ["model-rebinding", "model-rebinding-browser-fixture.js", "model-rebinding-browser-check.js"],
-  ["audio", "audio-deletion-browser-fixture.js", "audio-deletion-browser-check.js"],
-  ["partial-recording", "partial-recording-browser-fixture.js", "partial-recording-browser-check.js"],
-  ["partial-startup", "partial-startup-browser-fixture.js", "partial-startup-browser-check.js"],
   ["info-production", "theme-browser-fixture.js", "info-production-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
@@ -77,11 +72,11 @@ const suites = [
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],
   ["import-toast", "import-browser-fixture.js", "import-toast-browser-check.js"],
-  ["recovery-toast", "data-save-browser-fixture.js", "recovery-toast-browser-check.js"],
   ["job-notifications", "browser-fixture.js", "job-notifications-browser-check.js"],
   ["plain-minutes", null, "minutes-markdown-editor-browser-check.js"],
   ["plain-minutes-production", "plain-minutes-production-browser-fixture.js", "plain-minutes-production-browser-check.js"],
   ["global-minutes-model", "plain-minutes-production-browser-fixture.js", "global-minutes-model-browser-check.js"],
+  ["minutes-progress-toast", "plain-minutes-production-browser-fixture.js", "minutes-progress-toast-browser-check.js"],
   // Structured minutes/evidence/adoption suites no longer describe the product.
   // Plain-body saving, generation and leaving are covered above instead.
   ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
@@ -100,12 +95,10 @@ const readiness = {
   "info-popover-browser-fixture.tsx": "infoFixture", "browser-fixture.js": "monBrowserFixture",
   "import-browser-fixture.js": "monImportFixture", "model-deletion-browser-fixture.js": "modelDeletionFixture",
   "data-save-browser-fixture.js": "dataFixture", "deletion-browser-fixture.js": "deletionFixture",
-  "model-body-deletion-browser-fixture.js": "modelBodyFixture", "model-profile-browser-fixture.js": "modelProfileFixture",
-  "model-rebinding-browser-fixture.js": "rebindingFixture", "model-preparation-browser-fixture.js": "modelPreparationFixture",
+  "model-profile-browser-fixture.js": "modelProfileFixture",
+  "model-rebinding-browser-fixture.js": "rebindingFixture",
   "model-download-browser-fixture.tsx": "modelDownloadFixture",
   "audio-deletion-browser-fixture.js": "audioDeletionFixture", "theme-browser-fixture.js": "themeFixture",
-  "partial-recording-browser-fixture.js": "partialRecordingFixture",
-  "partial-startup-browser-fixture.js": "partialStartupFixture",
   "toast-browser-fixture.tsx": "toastFixture",
   "capture-scope-browser-fixture.tsx": "scopeFixture",
 };
@@ -119,7 +112,7 @@ for (const [name, fixture, source] of suites) {
   const capturePrefix = JSON.stringify(resolve(output, name + "-"));
   // Explicit drivers for the production workspace: real tab/summary clicks,
   // never forcing hidden controls visible or replacing the application's UI.
-  const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const waitSpeakerLayout=()=>page.waitForFunction(()=>{const panel=document.querySelector(".workspace-panel-shell");return !panel||panel.dataset.narrow===String(matchMedia("(max-width: 1119px)").matches);});const detailUI={openMeetingRow:async(title="既存会議")=>{const row=page.locator(".meeting-table tbody tr").filter({has:page.locator(".meeting-name").filter({hasText:title})}).first();await row.waitFor();const actions=row.locator(".meeting-row-actions");const trigger=actions.locator(":scope > button");if(await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();},openMaintenanceTools:async()=>{await page.getByRole("button",{name:"設定",exact:true}).click();const toggle=page.getByRole("button",{name:"中断・削除の管理",exact:true});if(await toggle.getAttribute("aria-expanded")!=="true")await toggle.click();},openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:async()=>{await openDetails(".transcript-workspace-tools");await detailUI.openSpeakerPanel();for(const selector of [".speaker-name-tools",".speaker-merge-tools"]){for(const details of await page.locator(selector).all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();}await detailUI.closeSpeakerPanel();for(const details of await page.locator(".utterance-edit-tools").all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();},openSpeakerPanel:async()=>{await waitSpeakerLayout();const button=page.getByRole("button",{name:"話者一覧を開く",exact:true});if(await button.isVisible()&&await button.getAttribute("aria-expanded")!=="true")await button.click();},closeSpeakerPanel:async()=>{await waitSpeakerLayout();const dialog=page.locator(".workspace-drawer[open]");if(await dialog.count())await dialog.getByRole("button",{name:"話者一覧を閉じる",exact:true}).click();},openDiarization:async()=>{const tools=page.locator(".speaker-diarization-tools");if(await tools.count()){await detailUI.openSpeakerPanel();await openDetails(".speaker-diarization-tools");}},openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
+  const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const waitSpeakerLayout=()=>page.waitForFunction(()=>{const panel=document.querySelector(".workspace-panel-shell");return !panel||panel.dataset.narrow===String(matchMedia("(max-width: 1119px)").matches);});const detailUI={openMeetingRow:async(title="既存会議")=>{const row=page.locator(".meeting-table tbody tr").filter({has:page.locator(".meeting-name").filter({hasText:title})}).first();await row.waitFor();const actions=row.locator(".meeting-row-actions");const trigger=actions.locator(":scope > button");if(await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();},openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:async()=>{await openDetails(".transcript-workspace-tools");await detailUI.openSpeakerPanel();for(const selector of [".speaker-name-tools",".speaker-merge-tools"]){for(const details of await page.locator(selector).all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();}await detailUI.closeSpeakerPanel();for(const details of await page.locator(".utterance-edit-tools").all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();},openSpeakerPanel:async()=>{await waitSpeakerLayout();const button=page.getByRole("button",{name:"話者一覧を開く",exact:true});if(await button.isVisible()&&await button.getAttribute("aria-expanded")!=="true")await button.click();},closeSpeakerPanel:async()=>{await waitSpeakerLayout();const dialog=page.locator(".workspace-drawer[open]");if(await dialog.count())await dialog.getByRole("button",{name:"話者一覧を閉じる",exact:true}).click();},openDiarization:async()=>{const tools=page.locator(".speaker-diarization-tools");if(await tools.count()){await detailUI.openSpeakerPanel();await openDetails(".speaker-diarization-tools");}},openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
   const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}detailUI.applyMinutesTheme=theme=>(${applyMinutesFixtureTheme.toString()})(page,theme);detailUI.applyPlaybackTheme=theme=>(${applyPlaybackFixtureTheme.toString()})(page,theme);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
   const wrapper = cli.endsWith(".sh");
   const run = spawnSync(wrapper ? cli : process.execPath, [...(wrapper ? [] : [cli]), `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });

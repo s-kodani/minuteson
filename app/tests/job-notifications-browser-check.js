@@ -31,7 +31,7 @@ async (page, capturePath, detailUI) => {
   check(await host().locator(".toast-card").getAttribute("data-toast-id") === savedId, "duplicate invalidation repeated notice");
   await noWork(); results.push("exact output publication is notified once across workspace navigation, without adopting");
   await host().getByRole("button", { name: "会議を開く", exact: true }).click(); await detailUI.openMeetingTools(); await page.getByRole("textbox", { name: "会議名を変更", exact: true }).waitFor();
-  check(await page.locator("#rename-title").inputValue() === "会議A", "toast opened wrong meeting");
+  check(await page.locator(".meeting-title-row h1").innerText() === "会議A", "toast opened wrong meeting");
   await noWork(); results.push("safe notification action reads and opens the exact meeting only");
 
   for (const mode of ["lost", "foreign", "hidden"]) {
@@ -112,7 +112,7 @@ async (page, capturePath, detailUI) => {
   const text = editor.getByRole("textbox", { name: /の発言$/ }).first(); await page.evaluate(() => window.monBrowserFixture.failSave = true); await text.fill("通知で失われない編集中の本文");
   await start({ meetingId: "meeting-1", meetingTitle: "会議B" });
   await host().getByRole("button", { name: "会議を開く", exact: true }).click(); await page.getByRole("alert").filter({ hasText: "模擬保存競合" }).first().waitFor();
-  check(await text.inputValue() === "通知で失われない編集中の本文" && await page.locator("#rename-title").inputValue() === "会議A", "failed edit flush switched meeting/discarded input"); await noWork();
+  check(await text.inputValue() === "通知で失われない編集中の本文" && await page.locator(".meeting-title-row h1").innerText() === "会議A", "failed edit flush switched meeting/discarded input"); await noWork();
   results.push("notification navigation honors pending edit save failure and retains original meeting/input");
 
   await boot(); await start({ meetingId: "meeting-1", meetingTitle: "会議B" }); await page.evaluate(() => window.monBrowserFixture.missingMeetingId = "meeting-1");

@@ -15,16 +15,16 @@ async page=>{
   results.push("all simultaneous notifications are listed without saving or replacing the current editor");
   await page.waitForTimeout(4300);check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"notifications auto-expired in menu");
   results.push("ordinary notifications remain until explicitly closed");
-  await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知 0"}).getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
+  await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知 0"}).getByRole("button",{name:"エラー通知を削除",exact:true}).click();
   await page.evaluate(()=>window.monBrowserFixture.showToast({key:"menu-test-0",message:"一覧だけの通知 0",level:"error",eventId:"op-0"}));
-  check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"dismissing toast deleted history");
+  check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===5,"deleted history was recreated");
   check(await page.evaluate(()=>!window.monBrowserFixture.notifications().some(n=>n.key==="menu-test-0")),"dismissed event replayed as a toast");
   await dialog.getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();await dialog.waitFor({state:"hidden"});
   await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="通知一覧");
   check(await input.inputValue()==="通知を開いても未保存の入力を保持","notification dismissal lost input");
   await page.getByRole("button",{name:"通知一覧",exact:true}).click();await dialog.waitFor();
-  check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"reopening duplicated or lost notifications");
-  results.push("dismissing a toast retains its history without replay; reopening preserves input and focus");
+  check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===5,"reopening duplicated or lost notifications");
+  results.push("deleting a history event removes it without polling replay; reopening preserves input and focus");
   for(const [width,theme]of [[1200,"light"],[400,"dark"]]){
     await page.setViewportSize({width,height:800});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
     const bounds=await dialog.boundingBox();check(bounds.x>=0&&bounds.x+bounds.width<=width&&bounds.y>=0&&bounds.y+bounds.height<=800,"menu outside viewport");

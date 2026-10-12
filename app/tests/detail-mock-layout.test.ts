@@ -145,7 +145,6 @@ test("minutes chrome keeps workspace insets and preview has one guarded dismiss 
 
 test("secondary settings and vocabulary fields retain space between neighboring groups", () => {
   const css=source("prototype-alignment.css");
-  assert.match(css,/\.settings-management-toggle \{ margin:18px 0;/);
   assert.match(css,/\.vocabulary-list article \{ display:grid; gap:12px;/);
   assert.match(css,/\.vocabulary-list label \{ min-width:0; gap:8px;/);
   assert.match(css,/\.vocabulary-list article>\.analysis-actions \{ margin:0; align-items:center;/);
@@ -296,13 +295,6 @@ test("pointer opening an import captures its actual entry point before the nativ
   assert.match(panel,/restoreTarget=\{\(\) => opener.current\}/);
 });
 
-test("maintenance headings and immediate actions have spacing independent of optional text", () => {
-  const css=source("prototype-alignment.css");
-  assert.match(css,/\.settings-management-toggle \.options-dialog-content>\.analysis-card \{\s*display:grid; gap:16px; min-width:0; margin:0;/);
-  assert.match(css,/\.settings-management-toggle \.options-dialog-content>\.analysis-card>:is\(h2,p,ul,\.analysis-actions\) \{ margin-block:0;/);
-  assert.match(css,/\.settings-management-toggle \.options-dialog-content>\.analysis-card>button \{ justify-self:start; max-width:100%; \}/);
-  assert.match(css,/\.settings-management-toggle \.options-dialog-content>\.analysis-card>ul:empty \{ display:none; \}/);
-});
 
 test("model acquisition records and consent actions keep natural gaps and one scroll owner", () => {
   const css=source("prototype-alignment.css");

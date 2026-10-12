@@ -1,15 +1,13 @@
 import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { rowMenuReturnTarget } from "./row-menu";
-import { quietMaintenance } from "./maintenance-visibility";
-import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
 import { CommonModal } from "./common-modal";
 import { useEffect, useRef, useState } from "react";
 import type { DataOperation } from "./data-operation";
 import { dataRequest, type DataRequest, type DataSnapshot } from "./data-operation-state";
 import { assertAudioDeletionPage, type AudioDeletionPage, type AudioDeletionReceipt } from "./audio-deletion-operation-state";
-import { audioDeletionDispositionLabel, audioDeletionNewScope, audioDeletionPhaseLabel, audioDeletionPublishRequest, audioDeletionStartupLabel } from "./audio-deletion-ui-state";
+import { audioDeletionDispositionLabel, audioDeletionNewScope, audioDeletionPhaseLabel, audioDeletionPublishRequest } from "./audio-deletion-ui-state";
 import { bytesLabel } from "./import-state";
 import { stopAllPlayback } from "./playback-barrier";
 
@@ -139,28 +137,14 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
 }
 export type AudioDeletionControl = ReturnType<typeof useAudioDeletion>;
 
-export function AudioDeletionPanel({ operation, control: c, visible, meetingTitle, compact = false }: { operation: DataOperation; control: AudioDeletionControl; visible: boolean; meetingTitle?: string; compact?: boolean }) {
-  const s = operation.snapshot, p = c.preview, active = s?.kind === "audio_deletion", needed = !!c.listing?.writeBlocked || !!p?.pending;
-  const quiet = quietMaintenance({ compact, connected: operation.connected, supported: operation.audioDeletionSupported, listed: !!c.listing, itemCount: c.listing?.items.length ?? 0, attention: !!(active || needed || c.error || c.protectedNow || c.open || c.listing?.restartRequired || c.receipt?.restartRequired) });
+export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { operation: DataOperation; control: AudioDeletionControl; meetingTitle?: string }) {
+  const s = operation.snapshot, p = c.preview, active = s?.kind === "audio_deletion";
   const trackKind = (kind: string) => ({ mic: "マイク", system: "システム音声", imported: "取り込み音声", processed: "処理済み音声" } as Record<string, string>)[kind] ?? kind;
   const trackState = (state: string) => ({ ready: "保存済み", interrupted: "中断", failed: "失敗" } as Record<string, string>)[state] ?? state;
   return <>
     <ToastNotice scope="audio" type="deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    {(visible && !quiet || active || needed || c.error || c.protectedNow || (isTauri() && !operation.connected)) && <section className="analysis-card deletion-panel" aria-label="音声だけの削除と中断対応">
-      <div className="heading-with-info"><h2 id="audio-deletion-heading" tabIndex={-1}>音声だけの削除と中断対応</h2><InfoPopover label="音声だけの削除" details={<p>会議の管理音声だけを削除します。文字起こし・議事録・下書き・根拠テキスト・編集履歴・ジョブ・外部出力の記録は保持します。音声の再生・解析・再解析と、根拠からの音声再生はできなくなります。外部の原本やバックアップは対象外です。</p>}>文書・根拠テキスト・編集履歴を残して管理音声を削除します。音声の再生と再解析はできなくなります。実行前に範囲を確認します。</InfoPopover></div>
-      {!operation.audioDeletionSupported && operation.connected && <p>この環境の音声削除は保留中です。</p>}
-      {!operation.connected && <p role="alert">状態を確認できるまで変更を停止しています。{operation.error}</p>}
-      <IconButton label="音声削除と書込停止の状態を再読込" icon="refresh" type="button" className="small-secondary" disabled={c.rpcBusy} onClick={() => void operation.refresh().catch(() => {})} />
-      {needed && <p role="alert">編集・録音・AI処理などの通常書込みを停止しています。{c.listing?.reason}</p>}
-      {!!c.listing?.items.length && <ul>{c.listing.items.map(i => <li key={i.operationId}><p>会議 {i.meetingId ?? "確認できません"} · 操作 {i.operationId} · 記録状態 {i.startupReason?.startsWith("restored_audio_") ? "復元時の利用不可記録・削除同意なし" : i.startupReason ? "完了記録あり・対象確認が必要" : i.state}</p>{i.startupReason && <p role="alert">{audioDeletionStartupLabel(i.startupReason)}</p>}{i.errorMessage && <p role="alert">{i.errorMessage}</p>}<button type="button" className="small-secondary" disabled={!i.reviewAllowed || !c.canReviewPending} onClick={() => void c.reviewPending(i.operationId)}>未完了音声削除の対象を確認</button></li>)}</ul>}
-      {active && <p role="status">{s.busy ? `${audioDeletionPhaseLabel(s.phase)}。停止要求後も実際の終了を待ちます。` : p ? audioDeletionPhaseLabel(p.phase) : "音声削除の確認待ちです。"}</p>}
-      {active && s.busy && <button type="button" className="stop-button" disabled={c.rpcBusy || s.phase === "cancelling"} onClick={() => void c.cancel()}>音声削除の安全な停止を要求</button>}
-      {p && !s?.busy && !c.receipt && <div className="analysis-actions"><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => { c.opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; c.setOpen(true); }}>音声削除の確認内容を開く</button><button type="button" className="small-secondary" disabled={!c.canResolve} onClick={() => void c.submit("refresh")}>音声の残りを再検査</button></div>}
-      {c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" className="small-secondary" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
-      <IssueNotice scope={p?.meetingId ?? "audio"} type="audio-deletion" label="音声削除" message={c.error || (active ? s.errorMessage : "")} />
-      {(c.listing?.restartRequired || c.receipt?.restartRequired) && <><p role="alert">通常利用にはアプリの再起動が必要です。未確認の応答は先に同じ操作で確認してください。</p><button type="button" disabled={c.protectedNow || !!s?.busy} onClick={() => void c.quit()}>終了する（再起動は手動）</button></>}
-    </section>}
-    <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.getElementById("audio-deletion-heading")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">
+    <IssueNotice scope={p?.meetingId ?? "deletion"} type="audio-deletion" label="音声削除" message={c.error || (active ? s?.errorMessage : "")} />
+    <CommonModal portal ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">
       <h2 id="audio-deletion-title" ref={c.heading} tabIndex={-1}>{p?.phase === "reconfirmation" ? p.reconfirmationSourceKind === "native_audio_pending" ? "残り音声への新しい同意" : "再出現した音声への新しい同意" : "音声だけの削除を確認"}</h2>
       {p && <><h3 className="data-path">会議名（一覧表示）: {meetingTitle ?? "確認できません。会議IDを照合してください。"}</h3><p className="data-path">会議ID: {p.meetingId}<br />操作ID: {p.operationId}</p>
         <p>確認した管理音声だけを削除します。アプリ内では復元できません。音声の再生・解析・再解析と、根拠からの音声再生ができなくなります。文字起こし・議事録・下書き・根拠テキストと履歴は保持します。残ったテキストからの議事録生成は音声解析とは別です。</p><p>外部の原本・出力済み文書・バックアップは削除しません。媒体上の安全消去は保証しません。</p>

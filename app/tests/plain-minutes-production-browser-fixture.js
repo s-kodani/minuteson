@@ -65,6 +65,7 @@ bridge.invoke=async(cmd,args={})=>{
     } finally {data.exportActive=false;}
   }
   if(cmd==="start_markdown_minutes_generation"){
+    if(data.startMode==="held")await new Promise(resolve=>{data.startRelease=resolve;});
     data.plainCalls.push({cmd,args:copy(args)});const r=args.request,saved=data.plain[r.input.meetingId]??null;
     let job=data.jobs.find(j=>j.operationId===r.input.operationId);
     if(!job){

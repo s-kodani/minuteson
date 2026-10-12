@@ -69,6 +69,95 @@ fn deletion_review_is_read_only_and_wrong_confirmation_never_writes_or_removes()
     assert!(f.audio.exists());
     f.unaffected();
 }
+
+#[test]
+fn automatic_cleanup_cancels_unstarted_without_deleting_changed_audio() {
+    let f = Fixture::new();
+    let p = f.pending();
+    std::fs::write(&f.audio, b"KEEP CHANGED AUDIO").unwrap();
+    assert!(crate::storage::deletion::automatic::meeting(
+        &f.storage,
+        &lease(),
+        &p.preview.operation_id,
+        &|| false
+    )
+    .unwrap());
+    assert_eq!(std::fs::read(&f.audio).unwrap(), b"KEEP CHANGED AUDIO");
+    assert!(f.storage.get_meeting(&f.meeting).unwrap().is_some());
+    assert!(listing(&f.storage).unwrap().items.is_empty());
+    f.unaffected();
+}
+
+#[test]
+fn automatic_cleanup_finishes_fixed_scope_and_preserves_reappeared_files() {
+    for changed in [false, true] {
+        let f = Fixture::new();
+        let mut p = f.prepared();
+        let stop = Cell::new(false);
+        let id = p.preview.confirmation_id.clone();
+        assert!(p
+            .execute(
+                &f.storage,
+                &lease(),
+                &id,
+                false,
+                &|| stop.get(),
+                &|phase| if phase == "deleting_database" {
+                    stop.set(true)
+                }
+            )
+            .is_err());
+        assert!(!f.audio.exists());
+        if changed {
+            std::fs::create_dir_all(f.audio.parent().unwrap()).unwrap();
+            std::fs::write(&f.audio, b"NEW AUDIO MUST SURVIVE").unwrap();
+        }
+        let result = crate::storage::deletion::automatic::meeting(
+            &f.storage,
+            &lease(),
+            &p.preview.operation_id,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(result, !changed);
+        assert_eq!(
+            f.storage.get_meeting(&f.meeting).unwrap().is_some(),
+            changed
+        );
+        if changed {
+            assert_eq!(std::fs::read(&f.audio).unwrap(), b"NEW AUDIO MUST SURVIVE");
+        }
+        f.unaffected();
+    }
+}
+
+#[test]
+fn automatic_cleanup_requires_active_admission_and_honors_cancellation() {
+    let f = Fixture::new();
+    let p = f.pending();
+    assert!(crate::storage::deletion::automatic::meeting(
+        &f.storage,
+        &lease(),
+        &p.preview.operation_id,
+        &|| true
+    )
+    .is_err());
+    let analysis = crate::analysis_worker::AnalysisController::default();
+    let invalid = analysis
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    analysis.begin_exit().unwrap();
+    assert!(crate::storage::deletion::automatic::meeting(
+        &f.storage,
+        &invalid,
+        &p.preview.operation_id,
+        &|| false
+    )
+    .is_err());
+    assert!(f.audio.exists());
+    assert_eq!(listing(&f.storage).unwrap().items.len(), 1);
+    f.unaffected();
+}
 #[test]
 fn deletion_confirmed_pipeline_only_acknowledges_after_files_rows_and_wal_complete() {
     let f = Fixture::new();
@@ -153,11 +242,21 @@ fn deletion_path_pages_are_bounded_metadata_and_reject_stale_or_unaligned_offset
     let first = p.page(id, 0).unwrap();
     assert_eq!(first.entries.len(), 50);
     assert_eq!(first.next_offset, Some(50));
-    let directories: Vec<_> = first.entries.iter().filter(|entry| entry.directory).collect();
+    let directories: Vec<_> = first
+        .entries
+        .iter()
+        .filter(|entry| entry.directory)
+        .collect();
     assert!(!directories.is_empty());
     assert!(directories.iter().all(|entry| entry.bytes.is_none()
-        && !entry.registered && !entry.changed && !entry.missing));
-    let audio = first.entries.iter().find(|entry| entry.relative_path.ends_with("/source.flac")).unwrap();
+        && !entry.registered
+        && !entry.changed
+        && !entry.missing));
+    let audio = first
+        .entries
+        .iter()
+        .find(|entry| entry.relative_path.ends_with("/source.flac"))
+        .unwrap();
     assert_eq!(audio.bytes, Some(6));
     assert!(audio.registered && !audio.missing && !audio.changed);
     assert_eq!(p.page(id, 50).unwrap().entries.len(), 50);

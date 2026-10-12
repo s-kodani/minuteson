@@ -34,6 +34,7 @@ export class ToastController {
   private entries = new Map<string, Entry>();
   private history = new Map<number, Toast>();
   private historyIds = new Map<string, number>();
+  private removedHistory = new Map<string, true>();
   private historySnapshot: readonly Toast[] = [];
   private acknowledged = new Map<string, string>();
   // Keep exact operation receipts across transient empty reads and view changes.
@@ -55,6 +56,7 @@ export class ToastController {
   isActive = (key: string, id: number) => this.entries.get(key)?.toast.id === id;
   private recordHistory(input: ToastInput, id?: number) {
     const stamp=JSON.stringify([input.key,signature(input)]), prior=this.historyIds.get(stamp);
+    if(this.removedHistory.has(stamp))return;
     const identity=id??prior??++this.serial;
     this.historyIds.set(stamp,identity);
     this.history.set(identity,{...input,id:identity,important:input.important??input.level==="error"});
@@ -63,6 +65,7 @@ export class ToastController {
   record(input:ToastInput) {
     if(!input.message.trim())return;
     const stamp=JSON.stringify([input.key,signature(input)]), id=this.historyIds.get(stamp), old=id===undefined?null:this.history.get(id);
+    if(this.removedHistory.has(stamp))return;
     this.recordHistory(input);
     if(!old||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
   }
@@ -97,6 +100,7 @@ export class ToastController {
   show(input: ToastInput) {
     if (!input.message.trim()) { this.resolve(input.key); return; }
     const old = this.entries.get(input.key), stamp = signature(input);
+    if(this.removedHistory.has(JSON.stringify([input.key,stamp])))return;
     if (input.eventId && this.acknowledgedEvents.has(JSON.stringify([input.key, stamp]))) return;
     if (!old && this.acknowledged.get(input.key) === stamp) return;
     if (old && signature(old.toast) === stamp) {
@@ -113,6 +117,12 @@ export class ToastController {
   }
   resolve(key: string) {
     this.acknowledged.delete(key);
+    // A source clearing a current, unversioned problem starts a new occurrence.
+    // Durable event receipts stay deleted across empty reads and remounts.
+    for(const stamp of this.removedHistory.keys()){
+      const [owner,event]=JSON.parse(stamp) as [string,string];
+      if(owner===key&&JSON.parse(event)[3]===null)this.removedHistory.delete(stamp);
+    }
     const entry = this.entries.get(key);
     if (entry) { this.stop(entry); this.entries.delete(key); this.publish(); }
   }
@@ -132,6 +142,19 @@ export class ToastController {
       if (this.acknowledgedEvents.size > 512) this.acknowledgedEvents.delete(this.acknowledgedEvents.keys().next().value!);
     }
     this.publish(); entry.toast.onClose?.();
+  }
+  removeHistory(id: number) {
+    const notice=this.history.get(id);
+    if(!notice||notice.actionBusy)return;
+    // Delete this exact event, never a newer notification sharing its key.
+    // Polling an old receipt must not recreate the removed history or toast.
+    const stamp=JSON.stringify([notice.key,signature(notice)]);
+    this.removedHistory.set(stamp,true);
+    if(this.removedHistory.size>512)this.removedHistory.delete(this.removedHistory.keys().next().value!);
+    this.history.delete(id);
+    if(this.historyIds.get(stamp)===id)this.historyIds.delete(stamp);
+    const active=this.isActive(notice.key,id);
+    if(active)this.dismiss(notice.key,id);else this.publish();
   }
   pause(key: string, reason: string, paused: boolean, id?: number) {
     const entry = this.entries.get(key); if (!entry || id !== undefined && entry.toast.id !== id || entry.pauses.has(reason) === paused) return;

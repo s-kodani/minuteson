@@ -1,13 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
-import { CommonModal } from "./common-modal";
-import { ModelImportGuide } from "./model-import-guide";
 import { ModelIssue } from "./model-issue";
-import { assertGuidedInspection, type GuidedModelSource } from "./model-import-guide-state";
-import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, type ModelPlacementEntry, type ModelInspectionReport, type ModelPlacementReceipt, type ModelCompatibilitySummary } from "./model-inspection-state";
+import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, type ModelPlacementEntry, type ModelPlacementReceipt, type ModelCompatibilitySummary } from "./model-inspection-state";
 import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
-import type { ModelBodyDeletionControl } from "./model-body-deletion";
 
 type Pending = { token: string; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
@@ -15,13 +11,11 @@ let unresolved: Pending | null = null;
 // fresh download replaces an uncertain writer or a retained download receipt.
 const downloads = new Map<string, DownloadReceipt>();
 const engines = [{ engine: "whisper.cpp", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; deletionControl?: ModelBodyDeletionControl; refreshEpoch?: number; compact?: boolean }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; compact?: boolean }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [selection, setSelection] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState<Pending | null>(unresolved);
-  const [manual, setManual] = useState(false), [report, setReport] = useState<ModelInspectionReport | null>(null), [source, setSource] = useState<GuidedModelSource | null>(null), [trusted, setTrusted] = useState(false), [picking, setPicking] = useState(false);
-  const [localReview, setLocalReview] = useState<ModelPlacementEntry | null>(null);
-  const mounted = useRef(true), running = useRef(false), blocked = useRef(locked || recordingActive), opener = useRef<HTMLElement | null>(null);
+  const mounted = useRef(true), running = useRef(false), blocked = useRef(locked || recordingActive);
   blocked.current = locked || recordingActive;
   const retain = (value: Pending | null) => { unresolved = value; if (mounted.current) setPending(value); };
   const load = async () => {
@@ -74,10 +68,6 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }, { entry, preview });
   };
   const useModel = (engine: string, value: string) => {
-    const local = entries.find(item => item.packageId === value && item.engine === engine);
-    if (local && local.sourceType !== "download" && !canReviewApplication(local)) {
-      setLocalReview(local); setTrusted(false); setManual(true); return;
-    }
     return run("モデルを準備しています", async () => {
     if (pending || unresolved) throw Error("前の準備の状態を確認してください。");
     let entry = entries.find(item => item.packageId === value && item.engine === engine && item.placementRecorded && item.bodyRemoved !== true);
@@ -109,29 +99,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       }
     }
     if (!entry) throw Error("使用するモデルを選択してください。");
-    if (entry.sourceType !== "download" && !canReviewApplication(entry)) throw Error("ローカルモデルの実行ファイルを確認してから使用してください。");
+    if (entry.sourceType !== "download" && !canReviewApplication(entry)) throw Error("このモデルは使用できません。配布モデルを選択してください。");
     await apply(entry);
     if (mounted.current) setSelection(current => ({ ...current, [engine]: entry!.packageId }));
     });
   };
-  const inspect = (chosen: GuidedModelSource) => run("ファイルを確認しています", async () => {
-    const value = await step("preview", async token => {
-      const result = await invoke<ModelInspectionReport>("inspect_model_package", { token, ...chosen });
-      assertGuidedInspection(result, chosen); return result;
-    });
-    setSource(chosen); setReport(value); setTrusted(false);
-  });
-  const importModel = () => run("モデルを取り込んでいます", async () => {
-    if (!source || !report || !trusted || unresolved) return;
-    const chosen = source, checked = report;
-    const result = await step("place", async token => {
-      const receipt = await invoke<ModelPlacementReceipt>("place_model_package", { token, ...chosen, expectedReviewHash: checked.reviewHash });
-      assertPlacementReceipt(receipt, token, checked.reviewHash); return receipt;
-    });
-    const entry = (await load()).placed.find(item => item.packageId === result.packageId);
-    if (!entry) throw Error("取り込み結果を確認できません。");
-    await apply(entry); setReport(null); setSource(null); setManual(false);
-  });
   const recheck = () => run("モデルの状態を確認しています", async () => {
     const value = unresolved; if (!value) return;
     await invoke("cancel_model_inspection", { token: value.token });
@@ -147,7 +119,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     if (value.stage === "apply" && !current.catalog.find(item => item.name === "standard")?.components.some(item => item.packageId === value.entry?.packageId && item.checkOperationId === value.preview?.checkOperationId && item.settingsMatch && item.compatibilityCurrent)) throw Error("モデル選択の保存を確認できません。現在の設定は変更していません。");
     retain(null);
   });
-  const disabled = locked || recordingActive || !!busy || picking || !!pending || !isTauri();
+  const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
   const installed = entries.filter(item => item.placementRecorded && item.bodyRemoved !== true);
   const selectedProfile = profiles.find(item => item.name === "standard");
   return <section className="analysis-card model-inspection" aria-label="AIモデル">
@@ -161,21 +133,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       return <div className="model-selection-row" key={engine}><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {options.filter(item => item.review.manifest.engine === engine).map(item => <option key={item.id} value={"official:" + item.id}>{item.label}</option>)}
-        {installed.filter(item => item.engine === engine).map(item => <option key={item.packageId} value={item.packageId}>{item.modelName}</option>)}
-      </select></label><button type="button" disabled={disabled || !value || used?.packageId === value && used.settingsMatch && used.compatibilityCurrent} onClick={event => { opener.current = event.currentTarget; void useModel(engine, value); }}>{available ? "使用" : "ダウンロードして使用"}</button></div>;
+        {installed.filter(item => item.engine === engine).map(item => <option key={item.packageId} value={item.packageId} disabled={item.sourceType !== "download" && !canReviewApplication(item)}>{item.modelName}</option>)}
+      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || used?.packageId === value && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{available ? "使用" : "ダウンロードして使用"}</button></div>;
     })}</div>
-    <button type="button" className="small-secondary" disabled={disabled} onClick={event => { opener.current = event.currentTarget; setLocalReview(null); setReport(null); setSource(null); setManual(true); }}>ローカルから取り込む</button>
     {!!installed.length && <section className="model-inventory" aria-label="導入済みモデル"><h3>導入済みモデル</h3><ul>{installed.map(item => <li key={item.packageId}><strong>{item.modelName}</strong><span>{selectedProfile?.components.some(component => component.packageId === item.packageId && component.settingsMatch && component.compatibilityCurrent) ? "使用中" : "導入済み"}</span></li>)}</ul></section>}
     {busy && <p role="status">{busy}</p>}
     <ModelIssue label="モデルの準備" message={error} />
     {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}
-    <CommonModal open={manual} blocked={!!busy || picking || !!pending} onDismiss={() => setManual(false)} restoreTarget={() => opener.current} dismissLabel="閉じる" aria-label="ローカルからモデルを取り込む">
-      <h2>ローカルから取り込む</h2>
-      {!localReview && <ModelImportGuide disabled={disabled} onInspect={inspect} onPickingChange={setPicking} onChanged={() => { setSource(null); setReport(null); setTrusted(false); }} />}
-      {localReview && <><p>{localReview.modelName}</p><p>端末上で実行して動作を確認します。信頼できる配布元のファイルだけを使用してください。</p><label className="inline-label"><input type="checkbox" checked={trusted} disabled={disabled} onChange={event => setTrusted(event.target.checked)} />実行ファイルの動作確認を許可する</label><button type="button" disabled={disabled || !trusted} onClick={() => void run("モデルを準備しています", async () => { await apply(localReview); setManual(false); setLocalReview(null); })}>使用</button></>}
-      {report && <><p>{report.manifest.modelName}</p><label className="inline-label"><input type="checkbox" checked={trusted} disabled={disabled} onChange={event => setTrusted(event.target.checked)} />配布元を信頼し、実行ファイルの動作確認を許可する</label><button type="button" disabled={disabled || !trusted} onClick={() => void importModel()}>取り込んで使用</button></>}
-      <ModelIssue label="モデルの準備" message={error} />
-      {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}
-    </CommonModal>
   </section>;
 }

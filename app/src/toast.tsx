@@ -60,7 +60,7 @@ function NotificationHistoryRow({notice,active,onOpen,locked,restoreFocus}:{noti
     <div className="toast-body"><p><span className="toast-label">{labels[notice.level]}： </span>{notice.message}</p>
       {notice.meetingId&&onOpen?<button type="button" className="small-secondary" disabled={locked} onClick={()=>void onOpen(notice.meetingId!)}>会議を開く</button>:active&&action?<button type="button" className="small-secondary" disabled={action.disabled||notice.actionBusy} onClick={()=>void toasts.act(notice.key,notice.id,true).catch(cause=>toasts.show({key:toastKey(notice.key,"action-failed"),level:"error",message:String(cause)}))}>{notice.actionBusy?"実行中":action.label}</button>:null}
     </div>
-    {active&&<button type="button" className="icon-button small-secondary" aria-label={`${labels[notice.level]}通知を閉じる`} title="通知を閉じる" onClick={()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);restoreFocus();toasts.dismiss(notice.key,notice.id);}}><ActionIcon name="close"/></button>}
+    <button type="button" className="icon-button small-secondary" aria-label={`${labels[notice.level]}通知を削除`} title="通知を削除" disabled={notice.actionBusy} onClick={()=>{if(noticeElementVisible(element.current))toasts.markRendered(notice.key,notice.id,true);restoreFocus();toasts.removeHistory(notice.id);}}><ActionIcon name="trash"/></button>
   </section>;
 }
 

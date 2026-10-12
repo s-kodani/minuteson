@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 mod dialog;
 #[cfg(unix)]
+mod automatic;
+#[cfg(unix)]
 pub(crate) mod partial_recording;
 mod work;
 #[cfg(unix)]
@@ -30,6 +32,11 @@ pub(crate) use work::AudioTarget;
 #[cfg(unix)]
 pub(crate) use work::ModelTarget;
 use work::{Completion, Work};
+
+#[cfg(unix)]
+pub(crate) fn finish_interrupted_deletions(app: &AppHandle) -> Result<(), String> {
+    automatic::run(app)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

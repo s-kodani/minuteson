@@ -30,12 +30,13 @@ test("uncertain model writers are retained until cancellation and durable readba
   const recheck = view.slice(view.indexOf("const recheck"), view.indexOf("const disabled"));
   assert.doesNotMatch(recheck, /start_model_download|place_downloaded_model|check_model_compatibility|apply_model_profile_application/);
 });
-test("local runtime execution requires explicit trust even for previously imported files", () => {
+test("local import is removed and unverified installed runtimes cannot be executed", () => {
   const view = source("model-inspection.tsx");
-  assert.match(view, /local.sourceType !== "download" && !canReviewApplication\(local\)/);
-  assert.match(view, /setLocalReview\(local\); setTrusted\(false\)/);
-  assert.match(view, /!source \|\| !report \|\| !trusted \|\| unresolved/);
-  assert.match(view, /disabled=\{disabled \|\| !trusted\}/);
+  assert.doesNotMatch(view, /ModelImportGuide|ローカルから取り込む|place_model_package|inspect_model_package|<CommonModal/);
+  assert.match(view, /disabled=\{item.sourceType !== "download" && !canReviewApplication\(item\)\}/);
+  assert.match(view, /entry.sourceType !== "download" && !canReviewApplication\(entry\)\) throw Error/);
+  const native=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
+  assert.doesNotMatch(native,/inspect_model_package|select_model_files|place_model_package|mod model_file_dialog/);
 });
 test("simple model rows retain aligned controls and mobile wrapping", () => {
   const css = source("prototype-alignment.css");

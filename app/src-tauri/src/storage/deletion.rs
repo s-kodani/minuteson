@@ -3,6 +3,8 @@
 #[cfg(unix)]
 pub(crate) mod audio;
 #[cfg(unix)]
+pub(crate) mod automatic;
+#[cfg(unix)]
 mod audio_supersession;
 #[cfg(unix)]
 mod completion;

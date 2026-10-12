@@ -29,7 +29,6 @@ mod model_compatibility;
 mod model_download;
 mod model_download_ipc;
 mod model_download_recipe;
-mod model_file_dialog;
 mod model_inspection;
 mod model_official_catalog;
 mod model_placement;
@@ -92,45 +91,7 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
 
-#[tauri::command]
-async fn inspect_model_package(
-    window: WebviewWindow,
-    token: String,
-    directory: std::path::PathBuf,
-    manifest: Option<model_inspection::PackageManifest>,
-) -> Result<model_inspection::Report, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can inspect models".into());
-    }
-    let guard = window
-        .state::<model_inspection::Inspector>()
-        .begin(&token)?;
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            let cancelled = || guard.cancelled() || lease.cancelled();
-            match manifest {
-                Some(ref declared) => {
-                    model_inspection::inspect_declared(&directory, declared, &cancelled)
-                }
-                None => model_inspection::inspect(&directory, &cancelled),
-            }
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[tauri::command]
-async fn select_model_files(
-    window: WebviewWindow,
-    multiple: bool,
-) -> Result<Option<Vec<std::path::PathBuf>>, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can select model files".into());
-    }
-    model_file_dialog::select(&window, multiple).await
-}
 
 #[tauri::command]
 fn cancel_model_inspection(window: WebviewWindow, token: String) -> Result<(), String> {
@@ -420,55 +381,6 @@ async fn check_model_compatibility(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-async fn place_model_package(
-    window: WebviewWindow,
-    token: String,
-    directory: std::path::PathBuf,
-    expected_review_hash: String,
-    manifest: Option<model_inspection::PackageManifest>,
-) -> Result<model_placement::PlacementReceipt, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can place models".into());
-    }
-    let app = window.app_handle().clone();
-    if app.state::<SessionStore>().snapshot().is_active() {
-        return Err("録音が停止してからモデルを配置してください".into());
-    }
-    let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-    // Model bodies stay in OS app-data even when the meeting root moves later.
-    let models_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    tauri::async_runtime::spawn_blocking(move || {
-        AnalysisController::with_model_preparation(&app, &|| guard.cancelled(), |lease| {
-            let cancelled = || guard.cancelled() || lease.cancelled();
-            match manifest {
-                Some(ref declared) => model_placement::place_with_manifest(
-                    &app.state::<Storage>(),
-                    &models_root,
-                    &directory,
-                    &token,
-                    &expected_review_hash,
-                    Some(declared),
-                    &cancelled,
-                ),
-                None => model_placement::place(
-                    &app.state::<Storage>(),
-                    &models_root,
-                    &directory,
-                    &token,
-                    &expected_review_hash,
-                    &cancelled,
-                ),
-            }
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[tauri::command]
 fn get_audio_import(window: WebviewWindow) -> Result<import_controller::Snapshot, String> {
@@ -586,57 +498,6 @@ async fn get_model_deletion_items(
     .await
     .map_err(|e| e.to_string())?
 }
-#[cfg(unix)]
-#[tauri::command]
-fn review_model_body_deletion(
-    window: WebviewWindow,
-    package_id: String,
-    expected_review_hash: String,
-) -> Result<data_controller::Snapshot, String> {
-    let app = data_app(&window)?;
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    DataController::review_model_deletion(
-        &app,
-        root,
-        data_controller::ModelTarget::Fresh {
-            package: package_id,
-            review: expected_review_hash,
-        },
-    )
-}
-#[cfg(unix)]
-#[tauri::command]
-fn review_pending_model_deletion(
-    window: WebviewWindow,
-    operation_id: String,
-) -> Result<data_controller::Snapshot, String> {
-    let app = data_app(&window)?;
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("models");
-    DataController::review_model_deletion(
-        &app,
-        root,
-        data_controller::ModelTarget::Pending(operation_id),
-    )
-}
-#[cfg(unix)]
-#[tauri::command]
-fn get_model_deletion_paths(
-    window: WebviewWindow,
-    confirmation_id: String,
-    offset: usize,
-) -> Result<storage::deletion::models::operations::PathPage, String> {
-    data_app(&window)?
-        .state::<DataController>()
-        .model_deletion_page(&confirmation_id, offset)
-}
 
 #[cfg(unix)]
 #[tauri::command]
@@ -690,78 +551,10 @@ fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapsho
     DataController::review_move(&data_app(&window)?)
 }
 
-#[tauri::command]
-async fn get_recovery_items(
-    window: WebviewWindow,
-) -> Result<storage::backup::recovery::Listing, String> {
-    let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().recovery_listing())
-        .await
-        .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-fn review_recovery_item(
-    window: WebviewWindow,
-    source: storage::backup::recovery::Source,
-    operation_id: String,
-) -> Result<data_controller::Snapshot, String> {
-    DataController::review_recovery(&data_app(&window)?, source, operation_id)
-}
 
-#[cfg(unix)]
-#[tauri::command]
-async fn get_partial_recording_items(
-    window: WebviewWindow,
-    after: Option<String>,
-) -> Result<storage::recordings::partial::Listing, String> {
-    let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .partial_recording_listing(after.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[cfg(unix)]
-#[tauri::command]
-fn review_partial_recording(
-    window: WebviewWindow,
-    session_id: String,
-) -> Result<data_controller::Snapshot, String> {
-    DataController::review_partial_recording(&data_app(&window)?, session_id)
-}
 
-#[cfg(unix)]
-#[tauri::command]
-async fn get_partial_recording_result(
-    window: WebviewWindow,
-    session_id: String,
-    review_hash: String,
-) -> Result<Option<storage::recordings::partial::Summary>, String> {
-    let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .partial_recovery_result(&session_id, &review_hash)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
-#[cfg(unix)]
-#[tauri::command]
-async fn get_partial_recording_results(
-    window: WebviewWindow,
-    after: Option<String>,
-) -> Result<storage::recordings::partial::ResultListing, String> {
-    let app = data_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Storage>()
-            .partial_recovery_listing(after.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2489,6 +2282,10 @@ pub fn run() {
             capture_test::CaptureTests::initialize(app.handle(), &app.path().app_data_dir()?)?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                #[cfg(unix)]
+                if let Err(error) = data_controller::finish_interrupted_deletions(&handle) {
+                    eprintln!("中断処理の自動整理に失敗しました: {error}");
+                }
                 // Recovery can hash hours of audio, so never hold up window startup.
                 match handle.state::<Storage>().recover_completed_recordings() {
                     Ok(ids) if !ids.is_empty() => {
@@ -2514,8 +2311,6 @@ pub fn run() {
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 startup_attention::get_startup_report,
                 startup_attention::quit_blocked_startup,
-                inspect_model_package,
-                select_model_files,
                 model_download_ipc::review_model_download,
                 model_official_catalog::get_official_model_options,
                 model_download_ipc::start_model_download,
@@ -2535,7 +2330,6 @@ pub fn run() {
                 apply_job_model_rebinding,
                 get_job_model_rebinding_result,
                 check_model_compatibility,
-                place_model_package,
                 get_audio_import,
                 select_audio_import,
                 start_audio_import,
@@ -2552,12 +2346,6 @@ pub fn run() {
                 #[cfg(unix)]
                 get_model_deletion_items,
                 #[cfg(unix)]
-                review_model_body_deletion,
-                #[cfg(unix)]
-                review_pending_model_deletion,
-                #[cfg(unix)]
-                get_model_deletion_paths,
-                #[cfg(unix)]
                 get_audio_deletion_items,
                 #[cfg(unix)]
                 review_meeting_audio_deletion,
@@ -2568,16 +2356,6 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 get_storage_bootstrap,
                 review_storage_move,
-                get_recovery_items,
-                review_recovery_item,
-                #[cfg(unix)]
-                get_partial_recording_items,
-                #[cfg(unix)]
-                review_partial_recording,
-                #[cfg(unix)]
-                get_partial_recording_result,
-                #[cfg(unix)]
-                get_partial_recording_results,
                 get_data_operation_availability,
                 list_restored_meeting_ids,
                 select_data_operation,

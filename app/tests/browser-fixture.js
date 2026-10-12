@@ -143,7 +143,13 @@ mockIPC(async (command, args) => {
       const review={utteranceId,trackId:"microphone",estimatedState:"unknown",manualAssignment:false,segmentCount:0,overlapCount:0,page:args.request.page,pageCount:1,segments:[],overlaps:[],...structuredClone(fixture.speakerReviews?.[utteranceId]??{})};
       return args.request.includeIntervals?review:{...review,segments:[],overlaps:[]};
     }) };
-    case "list_meetings": return meetings;
+    case "rename_meeting": {
+      const meeting=meetings.find(item=>item.id===args.id);
+      if(fixture.failRename)throw Error("合成の会議名保存失敗");
+      if(!meeting||meeting.lockVersion!==args.expectedLockVersion)throw Error("合成の会議更新競合");
+      meeting.title=args.title.trim();meeting.lockVersion++;return structuredClone(meeting);
+    }
+    case "list_meetings": return structuredClone(meetings);
     case "get_meeting":
       if (fixture.failMeetingRead) throw Error("模擬会議読込失敗");
       return fixture.missingMeetingId === args.id ? null : meetings.find((meeting) => meeting.id === args.id) ?? null;

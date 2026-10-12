@@ -71,7 +71,6 @@ button:disabled { opacity:.5; }
 .landing-tools>.workspace-tools-body { max-height:none; }
 .landing-tools>summary { display:list-item; }
 .content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
-.settings-management-toggle { margin:18px 0; font-size:13px; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
 .meeting-detail-status { padding:18px 28px 12px; background:var(--surface); max-height:20dvh; }
 .meeting-detail-status h1 { margin:0; font-size:24px; font-weight:650; line-height:1.4; overflow-wrap:anywhere; }
@@ -642,15 +641,6 @@ button:disabled { opacity:.5; }
 .capture-input-selection select { padding-right:32px; }
 .recording-workspace-heading>button { flex:none; }
 .capture-scope-details .options-dialog-content>label { display:grid; gap:8px; margin:0; min-width:0; }
-/* Maintenance cards can have a button immediately after their heading.
-   Space actual children instead of depending on optional paragraph margins. */
-.settings-management-toggle .options-dialog-content>.analysis-card {
-  display:grid; gap:16px; min-width:0; margin:0;
-}
-.settings-management-toggle .options-dialog-content>.analysis-card>:is(h2,p,ul,.analysis-actions) { margin-block:0; }
-.settings-management-toggle .options-dialog-content>.analysis-card>h2 { font-size:17px; }
-.settings-management-toggle .options-dialog-content>.analysis-card>button { justify-self:start; max-width:100%; }
-.settings-management-toggle .options-dialog-content>.analysis-card>ul:empty { display:none; }
 /* Download records scroll with their owning dialog, never inside a second list. */
 .model-download-settings .options-dialog-content>:is(h3,h4,details,.analysis-actions,.model-download-catalog) { margin-block:0; }
 .model-download-settings .options-dialog-content>button { justify-self:start; max-width:100%; }
@@ -738,3 +728,14 @@ button:disabled { opacity:.5; }
 .transcript-main>.transcript-actions:first-child>h2 { margin-right:auto; }
 .import-dialog fieldset { grid-template-columns:minmax(0,1fr); }
 @media(max-width:600px) { .model-selection-row { flex-wrap:wrap; } .model-selection-row>label { flex-basis:100%; } }
+/* Keep the primary title and its edit affordance together without extra UI. */
+.meeting-title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.meeting-title-row h1 { min-width: 0; margin: 0; }
+.meeting-title-row .icon-button { flex: 0 0 32px; }
+.meeting-rename-dialog { width: min(480px, calc(100vw - 32px)); }
+.meeting-rename-dialog form { display: grid; gap: 20px; }
+.meeting-rename-dialog label { display: grid; gap: 8px; }
+.meeting-rename-dialog input { width: 100%; min-width: 0; }
+.meeting-rename-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.settings-nav-glyph { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; height: 24px; }
+.settings-nav-glyph .action-icon { width: 24px; height: 24px; }

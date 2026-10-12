@@ -29,20 +29,10 @@ async function (page) {
   await page.waitForFunction(() => document.querySelector('.model-selection-row button')?.disabled);
   check(await count("start_model_download") === 1 && await count("apply_model_profile_application") === 1, "remount repeated model work");
   results.push("reopening settings reads the current selection without downloading or applying again");
-  await select.selectOption("44444444-4444-4444-8444-444444444444");
-  await asrRow.getByRole("button", { name: "使用", exact: true }).click();
-  const modal = page.getByRole("dialog", {name:"ローカルからモデルを取り込む",exact:true}); await modal.waitFor();
-  check(await modal.getByRole("button", {name:"使用",exact:true}).isDisabled(), "local runtime executed without trust");
-  await modal.getByRole("checkbox",{name:"実行ファイルの動作確認を許可する",exact:true}).check();
-  await page.evaluate(() => { window.modelDownloadFixture.mode = "applyLost"; });
-  await modal.getByRole("button",{name:"使用",exact:true}).click();
-  await modal.getByRole("button",{name:"現在の状態を確認",exact:true}).waitFor();
-  check(await count("check_model_compatibility") === 2 && await count("apply_model_profile_application") === 2, "local setup omitted verification");
-  await modal.getByRole("button",{name:"現在の状態を確認",exact:true}).click();
-  await modal.getByRole("button",{name:"現在の状態を確認",exact:true}).waitFor({state:"hidden"});
-  check(await count("apply_model_profile_application") === 2, "lost application response was replayed instead of read back");
-  await modal.getByRole("button",{name:/閉じる$/}).click();
-  results.push("local runtime needs trust; lost selection acknowledgement is verified without another write");
+  check(await page.getByRole("button", {name:"ローカルから取り込む",exact:true}).count() === 0, "local import action remains");
+  check(await select.locator('option[value="44444444-4444-4444-8444-444444444444"]').evaluate(e => e.disabled), "unverified local executable can be selected");
+  check(await count("inspect_model_package") === 0 && await count("place_model_package") === 0 && await count("select_model_files") === 0, "local import IPC was called");
+  results.push("local import is removed; existing unverified runtimes cannot be executed silently");
   await page.screenshot({path:"simple-models.png"});
   return {passed:results.length,results};
 }

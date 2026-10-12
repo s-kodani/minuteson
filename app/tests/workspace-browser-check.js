@@ -60,7 +60,7 @@ async page => {
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("未保存の点検日を保持します。");
   await text.evaluate(e => { window.monBrowserFixture.headerEditNode = e; }); await open().click();
   await page.getByRole("alert").filter({ hasText: "編集内容はこの画面に保持" }).waitFor();
-  check(await text.inputValue() === "未保存の点検日を保持します。" && await text.evaluate(e => e === window.monBrowserFixture.headerEditNode) && await page.locator("#rename-title").inputValue() === "会議A", "failed flush discarded input or navigated to another meeting");
+  check(await text.inputValue() === "未保存の点検日を保持します。" && await text.evaluate(e => e === window.monBrowserFixture.headerEditNode) && await page.locator(".meeting-title-row h1").innerText() === "会議A", "failed flush discarded input or navigated to another meeting");
   results.push("the recording link waits for edited content; failed saving preserves the mounted input and current meeting");
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; });
   await editor.getByRole("button", { name: "保存を再試行", exact: true }).click();
@@ -69,7 +69,7 @@ async page => {
   await text.fill("遅い保存中も点検日を保持します。"); await open().click();
   await update({ ...session, revision: ++session.revision, sessionId: "different-synthetic-session" });
   await page.getByRole("alert").filter({ hasText: "録音の対象が変更" }).waitFor();
-  check(await page.locator("#rename-title").inputValue() === "会議A" && await text.inputValue() === "遅い保存中も点検日を保持します。", "changed recording was adopted after a delayed flush");
+  check(await page.locator(".meeting-title-row h1").innerText() === "会議A" && await text.inputValue() === "遅い保存中も点検日を保持します。", "changed recording was adopted after a delayed flush");
   results.push("a recording session changed during edit flushing refuses the old navigation target without losing input");
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 0; });
   await page.setViewportSize({ width: 960, height: 640 });
