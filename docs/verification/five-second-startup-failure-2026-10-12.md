@@ -1,5 +1,7 @@
 # 5秒録音の開始直後失敗と原因表示
 
+追記。ユーザーが最新 `/private/tmp/mon-speaker-name-response-qa.aag26C/MON QA.app` で最初の理由 `microphone_configuration_changed` を確認した。初期化直後の遅延通知を5秒枠の開始前に再確認する補修と、新しいQAは [追修正記録](microphone-prewindow-settle-2026-10-12.md) を参照。以下の「最初の理由未確認」はこの報告前の履歴。通知を起こした実機条件と録音成功は引き続き未確認。
+
 2026-10-12。ユーザーの5秒テストは、形式読取り修正版でも開始直後に `capture_audio_write_failed / no system audio samples were received` で失敗した。後半の空音声エラーだけではPC音声を一次原因と断定できない。マイクとPC音声の元の失敗理由を保持し、音声専用5秒テストの準備順序を変更した。実機の原因確定と成功録音・停止保存は再試験が必要。
 
 ## 初回診断版で残った問題

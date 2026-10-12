@@ -36,6 +36,7 @@ final class CaptureTestWindow: @unchecked Sendable {
   }
 
   var accepting: Bool { lock.withLock { start != nil && !closed } }
+  var preparing: Bool { lock.withLock { start == nil && !closed } }
 
   func open(at nanoseconds: Int64?) throws {
     try lock.withLock {

@@ -1,5 +1,5 @@
 // Production React, synthetic CAS persistence and silent PCM. No native data.
-async page => {
+async (page, _capturePath, detailUI) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true });
   // The speaker side panel owns a separate engine-settings textarea. Only
@@ -14,6 +14,12 @@ async page => {
   const saved = () => page.waitForFunction(() => document.querySelector('.transcript-actions [role="status"]')?.textContent === "保存済み");
   const writes = () => page.evaluate(() => window.monBrowserFixture.calls.filter(c => c.command === "save_transcript_draft"));
   const payload = () => page.evaluate(() => window.monBrowserFixture.draft.payload);
+  const options = () => page.getByRole("dialog", { name: "文字起こしの編集オプション", exact: true });
+  const openOptions = async () => { await editor.getByRole("button", { name: "回復入力・話者・一括編集操作", exact: true }).click(); await options().waitFor(); };
+  const closeOptions = async () => { await options().getByRole("button", { name: "確認を閉じる", exact: true }).click(); await options().waitFor({ state: "hidden" }); };
+  const settings = at => page.getByRole("dialog", { name: `${at}の発言設定`, exact: true });
+  const openSettings = async at => { await row(at).getByRole("button", { name: `${at}の発言設定`, exact: true }).click(); await settings(at).waitFor(); };
+  const closeSettings = async at => { await settings(at).getByRole("button", { name: "確認を閉じる", exact: true }).click(); await settings(at).waitFor({ state: "hidden" }); };
   const boot = async (many = false) => {
     await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
     await page.waitForFunction(() => !document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
@@ -21,11 +27,18 @@ async page => {
     await page.locator(".meeting-name").first().click();
     await read("00:00:00").waitFor();
   };
-  const begin = () => editor.getByRole("button", { name: "編集を開始", exact: true }).click();
+  const begin = async () => {
+    if (await page.evaluate(() => !!window.monBrowserFixture.draft)) return;
+    await openOptions(); await options().getByRole("button", { name: "編集を開始", exact: true }).click();
+    await page.waitForFunction(() => !!window.monBrowserFixture.draft); await closeOptions();
+  };
   await boot();
   check(await body.locator("textarea").count() === 0 && await read("00:00:00").evaluate(e => e.tagName === "P" && getComputedStyle(e).userSelect === "text" && Number.parseFloat(getComputedStyle(e).lineHeight) / Number.parseFloat(getComputedStyle(e).fontSize) >= 1.69), "read-only text is not selectable with specified line height");
-  check(await row("00:00:00").getByRole("button", { name: "00:00:00の発言を編集", exact: true }).isDisabled(), "editing was offered without a versioned draft");
-  results.push("normal transcript is selectable non-button text with 1.7 line height; editing requires its versioned draft");
+  check(await row("00:00:00").getByRole("button", { name: "00:00:00の発言を編集", exact: true }).getAttribute("aria-disabled") === "false" && !await page.evaluate(() => window.monBrowserFixture.draft), "direct editing is unavailable or eagerly creates a draft");
+  await edit("00:00:00");
+  check(await page.evaluate(() => window.monBrowserFixture.draft?.meetingId === "meeting-0" && window.monBrowserFixture.draft.baseAnalysisId === "analysis" && window.monBrowserFixture.draft.lockVersion === 0 && window.monBrowserFixture.calls.filter(c => c.command === "begin_transcript_draft").length === 1) && (await writes()).length === 0, "direct edit did not acquire its versioned draft exactly once before accepting input");
+  await cancel("00:00:00"); await read("00:00:00").waitFor();
+  results.push("normal transcript is selectable text with 1.7 line height; direct edit acquires its exact versioned draft without a body write");
   await begin(); await edit("00:00:00"); await text("00:00:00").fill("確定するまでは未保存です。");
   await page.waitForTimeout(950);
   check((await writes()).length === 0 && (await payload()).utterances.length === 0 && await editor.getByText("未保存", { exact: true }).isVisible(), "typing persisted before explicit confirmation");
@@ -38,8 +51,21 @@ async page => {
   check(!(await payload()).utterances.some(u => u.utterance_id === "speech-b") && await text("00:00:20").inputValue() === "第二発言はまだ未確定" && await editor.getByText("未保存", { exact: true }).isVisible(), "one confirm persisted another buffer");
   await cancel("00:00:20"); await read("00:00:20").waitFor(); await saved();
   results.push("confirm affects only its own field; another buffer remains unsaved and can be cancelled independently");
-  await edit("00:00:00"); await text("00:00:00").fill("本文だけ取消します"); await row("00:00:00").getByRole("checkbox", { name: "佐藤", exact: true }).check(); await cancel("00:00:00"); await read("00:00:00").waitFor(); await saved();
-  check(await read("00:00:00").textContent() === "第一発言の変更" && await row("00:00:00").getByRole("checkbox", { name: "佐藤", exact: true }).isChecked(), "text cancel discarded speaker assignment");
+  await boot(); await begin(); await edit("00:00:00"); await edit("00:00:20");
+  await text("00:00:00").fill("同時取消する第一本文"); await text("00:00:20").fill("同時取消する第二本文");
+  await page.evaluate(() => { window.monBrowserFixture.recovery.saveWait = true; });
+  await cancel("00:00:00"); await page.waitForFunction(() => !!window.monBrowserFixture.recovery.releaseSave);
+  await cancel("00:00:20");
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.utterance-text-edit button')).filter(e => e.textContent === "キャンセル" && e.disabled).length === 2);
+  await page.evaluate(() => { window.monBrowserFixture.recovery.releaseSave(); window.monBrowserFixture.recovery.releaseSave = null; });
+  await text("00:00:00").waitFor({ state: "hidden" }); await text("00:00:20").waitFor({ state: "hidden" }); await saved();
+  check((await writes()).length === 0 && await page.evaluate(() => Object.values(window.monBrowserFixture.recovery.records).every(r => !r.payload.buffers.length)), "concurrent cancellation wrote text or left a recoverable cancelled buffer");
+  results.push("two cancellations share an in-flight recovery save and clear both buffers without publishing body");
+  await edit("00:00:00"); await text("00:00:00").fill("第一発言の変更"); await commit("00:00:00"); await read("00:00:00").waitFor(); await saved();
+  await edit("00:00:00"); await text("00:00:00").fill("本文だけ取消します"); await openSettings("00:00:00"); await settings("00:00:00").getByRole("checkbox", { name: "佐藤", exact: true }).check(); await closeSettings("00:00:00"); await cancel("00:00:00"); await read("00:00:00").waitFor(); await saved();
+  await openSettings("00:00:00");
+  check(await read("00:00:00").textContent() === "第一発言の変更" && await settings("00:00:00").getByRole("checkbox", { name: "佐藤", exact: true }).isChecked(), "text cancel discarded speaker assignment");
+  await closeSettings("00:00:00");
   results.push("text cancellation preserves a speaker assignment made in the same row");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("再生中も保持する未確定本文");
   await row("00:00:20").getByRole("button", { name: "音声を再生", exact: true }).click();
@@ -65,7 +91,7 @@ async page => {
   check(await text("00:00:00").inputValue() === "未確認の保存結果を保持" && (await writes()).length === 1 && (await payload()).utterances[0].effective_text === "未確認の保存結果を保持", "lost-response cancel overwrote advanced native state");
   results.push("a lost response with advanced native state refuses blind cancellation, retains input and never overwrites history");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("再読込失敗時も保持"); await page.evaluate(() => { window.monBrowserFixture.failDraftRead = true; });
-  await editor.getByRole("button", { name: "再読込", exact: true }).click(); const discard = page.getByRole("dialog", { name: "文字起こし編集の破棄を確認", exact: true });
+  await openOptions(); await options().getByRole("button", { name: "再読込", exact: true }).click(); const discard = page.getByRole("dialog", { name: "文字起こし編集の破棄を確認", exact: true });
   await discard.getByRole("button", { name: "入力を破棄して再読込する", exact: true }).click(); await discard.getByRole("alert").waitFor();
   check(await text("00:00:00").inputValue() === "再読込失敗時も保持", "failed reload cleared local buffers");
   await discard.getByRole("button", { name: "確認を閉じる", exact: true }).click();
@@ -75,6 +101,12 @@ async page => {
   check(await text("00:00:00").inputValue() === "応答待ち中の新しい本文" && (await payload()).utterances[0].effective_text === "確定時点の本文" && await editor.getByText("未保存", { exact: true }).isVisible(), "older acknowledgement replaced newer local text");
   await commit("00:00:00"); await read("00:00:00").waitFor(); await saved(); check(await read("00:00:00").textContent() === "応答待ち中の新しい本文" && (await writes()).length === 2, "newer text could not be explicitly confirmed");
   results.push("an older acknowledgement keeps newly typed text in edit mode; the newer text needs its own confirmation");
+  await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("保存待ちにフォーカスを移す本文");
+  await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 250; }); await commit("00:00:00");
+  const movedSearch = editor.getByRole("searchbox", { name: "発言を検索", exact: true }); await movedSearch.focus();
+  await read("00:00:00").waitFor(); await saved();
+  check(await movedSearch.evaluate(e => e === document.activeElement) && (await writes()).length === 1, "save acknowledgement stole focus chosen outside the row");
+  results.push("save acknowledgement restores its disabled-button origin but never steals a later move to search");
   await boot(true); await begin(); await edit("00:00:00"); await text("00:00:00").fill("ページ外の編集中本文");
   await text("00:00:00").evaluate(e => { window.retainedTextNode = e; e.setSelectionRange(2, 6); });
   await editor.getByRole("button", { name: "次へ", exact: true }).click(); await editor.getByRole("button", { name: "次へ", exact: true }).click();
@@ -84,18 +116,27 @@ async page => {
   check(await text("00:00:00").evaluate(e => e === window.retainedTextNode && e.selectionStart === 2 && e.selectionEnd === 6), "retained editor remounted or lost caret");
   check(await editor.getByText("1 / 103 発言", { exact: true }).isVisible(), "retained rows distorted actual search count");
   results.push("103-row paging and search retain both out-of-page buffers and the exact textarea/caret without inflating search counts");
-  await editor.getByRole("combobox", { name: "話者で絞り込み", exact: true }).selectOption("speaker-b");
+  await openOptions(); await options().getByRole("combobox", { name: "話者で絞り込み", exact: true }).selectOption("speaker-b"); await closeOptions();
   check(await text("00:00:00").isVisible() && await text("00:01:42").isVisible(), "speaker filter dropped pinned edit fields");
-  await cancel("00:00:00"); await cancel("00:01:42"); await search.focus();
+  await cancel("00:00:00"); await text("00:00:00").waitFor({ state: "hidden" });
+  const nextCancel = row("00:01:42").getByRole("button", { name: "キャンセル", exact: true });
+  await nextCancel.scrollIntoViewIfNeeded(); const targetBox = await nextCancel.boundingBox();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2); await page.mouse.down();
+  try {
+    const heldBox = await nextCancel.boundingBox();
+    check(await row("00:00:00").isVisible() && Math.abs(heldBox.y - targetBox.y) < 1, "focus transition removed a preceding retained row or moved the click target before pointerup");
+  } finally { await page.mouse.up(); }
+  await text("00:01:42").waitFor({ state: "hidden" }); await search.focus();
   await row("00:00:00").waitFor({ state: "hidden" }); await row("00:01:42").waitFor({ state: "hidden" });
   check((await writes()).length === 0 && await editor.getByRole("article").count() === 1, "cancelling retained fields wrote or kept stale pinning");
   results.push("speaker filters preserve editing rows; cancel plus focus exit removes pins without writing");
+  results.push("pointerdown focus keeps the preceding retained row and target coordinates until the one-click cancellation finishes; temporary pin is then released");
   await boot(); await begin(); const search2 = editor.getByRole("searchbox", { name: "発言を検索", exact: true }); await search2.fill("点検日"); await edit("00:00:00"); await text("00:00:00").fill("検索に一致しなくなる本文"); await text("00:00:00").press("Control+Enter"); await read("00:00:00").waitFor();
   check(await row("00:00:00").evaluate(e => document.activeElement === e), "confirmation removed focused row before focus restoration");
   await page.screenshot({ path: "retained-confirmed-row.png" }); await search2.focus(); await row("00:00:00").waitFor({ state: "hidden" });
   results.push("a confirmed field excluded by its own search remains pinned while focused, then disappears only after focus exits");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("編集済み本文を正確に二分します。");
-  await row("00:00:00").getByRole("button", { name: "発言を手動分割", exact: true }).click();
+  await openSettings("00:00:00"); await settings("00:00:00").getByRole("button", { name: "発言を手動分割", exact: true }).click();
   const split = page.getByRole("dialog", { name: "発言の手動分割", exact: true }); await split.waitFor();
   check(await split.locator(".split-preview p").allTextContents().then(parts => parts.join("") === "編集済み本文を正確に二分します。"), "split preview ignored the unconfirmed edit buffer");
   await split.getByRole("button", { name: "分割して保存", exact: true }).click(); await split.waitFor({ state: "hidden" }); await saved();
@@ -103,10 +144,10 @@ async page => {
   results.push("manual split previews the staged text and acknowledges it before splitting; removed source buffers are released");
   await boot(); await begin(); await edit("00:00:00"); await text("00:00:00").fill("表示幅とテーマを切り替えても編集は続きます。\n改行も維持します。");
   for (const theme of ["light", "dark"]) for (const width of [960, 1200]) {
-    await page.setViewportSize({ width, height: 900 }); await page.getByRole("banner").getByRole("combobox", { name: "表示テーマ", exact: true }).selectOption(theme); await text("00:00:00").focus();
-    check(await row("00:00:00").evaluate(e => e.scrollWidth <= e.clientWidth && Number.parseFloat(getComputedStyle(e.parentElement).rowGap) >= 16) && await text("00:00:00").inputValue() === "表示幅とテーマを切り替えても編集は続きます。\n改行も維持します。", "edit layout overflowed or lost text across theme/width");
+    await page.setViewportSize({ width, height: 900 }); await detailUI.applyPlaybackTheme(theme); await text("00:00:00").focus();
+    check(await row("00:00:00").evaluate(e => e.scrollWidth <= e.clientWidth && Number.parseFloat(getComputedStyle(e).paddingTop) >= 16 && Number.parseFloat(getComputedStyle(e).paddingBottom) >= 16) && await text("00:00:00").inputValue() === "表示幅とテーマを切り替えても編集は続きます。\n改行も維持します。", "edit layout overflowed, lacks row padding or lost text across theme/width");
     await row("00:00:00").scrollIntoViewIfNeeded(); await page.screenshot({ path: `edit-${theme}-${width}.png` });
   }
-  results.push("960px/1200px light/dark edit layouts retain multiline input with >=16px row spacing and no row overflow");
+  results.push("960px/1200px light/dark mock-aligned edit layouts retain multiline input with >=16px vertical row padding and no row overflow");
   return { passed: results.length, results };
 }

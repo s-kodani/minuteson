@@ -10,12 +10,15 @@ private final class StartupConditions: @unchecked Sendable {
   private var allowed = true
   private var authorization: AVAuthorizationStatus = .authorized
   private var requested = 0
+  private var connected = true
   func mayContinue() -> Bool { lock.withLock { allowed } }
   func requestStop() { lock.withLock { allowed = false } }
   func permission() -> AVAuthorizationStatus { lock.withLock { authorization } }
   func setPermission(_ value: AVAuthorizationStatus) { lock.withLock { authorization = value } }
   func requestedPermission() { lock.withLock { requested += 1 } }
   var requests: Int { lock.withLock { requested } }
+  func disconnect() { lock.withLock { connected = false } }
+  var deviceConnected: Bool { lock.withLock { connected } }
 }
 
 private final class StartupClock: @unchecked Sendable {
@@ -71,6 +74,7 @@ private final class SilentMicrophoneEngine: MicrophoneCaptureEngine, @unchecked 
   var startCount: Int { lock.withLock { starts } }
   var stopCount: Int { lock.withLock { stops } }
   var removalCount: Int { lock.withLock { removals } }
+  var verificationCount: Int { lock.withLock { verifies } }
   var hasObserver: Bool { lock.withLock { observer != nil } }
   var hasTap: Bool { lock.withLock { tap != nil } }
   var controlledInNotification: Bool { lock.withLock { controlInNotification } }
@@ -194,12 +198,13 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     _ directory: URL, _ engine: SilentMicrophoneEngine,
     _ conditions: StartupConditions = StartupConditions(), clock: CaptureClockDomain? = nil,
     testWindow: CaptureTestWindow? = nil, factory: StartupFactory? = nil,
-    request: (@Sendable () async -> Bool)? = nil
+    request: (@Sendable () async -> Bool)? = nil,
+    devices: (@Sendable () throws -> CaptureInputDevices)? = nil
   ) -> MicrophoneRecorder {
     MicrophoneRecorder(
       outputURL: directory.appendingPathComponent("microphone.caf"), clock: clock,
       microphoneUID: "frozen-mic", testWindow: testWindow, mayContinue: conditions.mayContinue,
-      makeEngine: { try factory?.make() ?? engine }, devices: Self.devices,
+      makeEngine: { try factory?.make() ?? engine }, devices: devices ?? Self.devices,
       permission: conditions.permission,
       requestPermission: request ?? {
         conditions.requestedPermission()
@@ -585,21 +590,216 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       try await recorder.start()
       if !tapFirst { engine.notify(stopped: true) }
       XCTAssertEqual(recorder.snapshot().frames, 0)
-      try window.open(at: 1_000_000_500)
+      try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
       try engine.emit(host: 1_000_000_000)
-      if tapFirst {
-        XCTAssertEqual(recorder.snapshot().appendFailures, 0)
-        XCTAssertEqual(recorder.snapshot().frames, 480)
-        XCTAssertEqual(recorder.deviceUID, "frozen-mic")
-        XCTAssertNoThrow(try recorder.snapshot().requireWritable())
-      } else {
-        XCTAssertEqual(recorder.snapshot().frames, 0)
-        XCTAssertEqual(recorder.snapshot().appendFailures, 1)
-        XCTAssertTrue(
-          recorder.snapshot().captureFailureDetail?.contains("microphone_configuration_changed")
-            == true)
-      }
+      XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+      XCTAssertEqual(recorder.snapshot().frames, 480)
+      XCTAssertEqual(recorder.deviceUID, "frozen-mic")
+      XCTAssertNoThrow(try recorder.snapshot().requireWritable())
+      XCTAssertEqual(engine.startCount, tapFirst ? 1 : 2)
       XCTAssertFalse(engine.controlledInNotification)
+    }
+  }
+
+  func testDelayedTestPreparationNotificationRestartsSameBindingBeforeOpeningWindow() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), testWindow: window)
+    defer { recorder.stop() }
+    try await recorder.start()
+    // Delayed after the original synchronous activation, like the reported
+    // incident. No native device, TCC request or real microphone is touched.
+    engine.notify(stopped: true)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
+    XCTAssertTrue(window.accepting)
+    XCTAssertEqual(engine.startCount, 2)
+    XCTAssertEqual(engine.selectedBinding?.epoch, 1)
+    XCTAssertEqual(engine.selectedBinding?.uid, "frozen-mic")
+    XCTAssertEqual(window.metadata().windowEndNs, 6_000_000_500)
+    try engine.emit(host: 1_000_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    engine.notify(stopped: true)
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable())
+    XCTAssertEqual(recorder.snapshot().appendFailures, 1)
+    XCTAssertFalse(engine.controlledInNotification)
+  }
+
+  func testTestPreparationProofRequiresThreeStableChecksAndRejectsEarlyPCM() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), testWindow: window)
+    defer { recorder.stop() }
+    try await recorder.start()
+    engine.onVerify = { source, count in
+      XCTAssertTrue(window.preparing)
+      if count == 4 { source.notify() }
+    }
+    try await recorder.openTestWindow(
+      now: { 1_000_000_500 },
+      pause: {
+        XCTAssertTrue(window.preparing)
+        try engine.emit(host: 1_000_000_000)
+      })
+    XCTAssertTrue(window.accepting)
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertEqual(engine.startCount, 1)
+    XCTAssertEqual(engine.verificationCount, 9, "window opened before three stable proofs")
+    XCTAssertFalse(engine.controlledInNotification)
+  }
+
+  func testTestPreparationChangingIdentityFormatPermissionOrStopNeverOpensWindow() async throws {
+    for stage in 0..<9 {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let conditions = StartupConditions()
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      let recorder = recorder(
+        dir, engine, conditions, clock: try StartupClock().domain(), testWindow: window,
+        devices: {
+          let report = Self.devices()
+          return CaptureInputDevices(
+            microphonePermission: report.microphonePermission,
+            devices: report.devices.filter { conditions.deviceConnected || $0.uid != "frozen-mic" })
+        })
+      try await recorder.start()
+      switch stage {
+      case 0: engine.setIdentity(uid: "other-default", objectID: 2)
+      case 1: engine.setIdentity(uid: "frozen-mic", objectID: 1)
+      case 2: engine.setFormat(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!)
+      case 3: engine.setFormat(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!)
+      case 4:
+        engine.setFormat(
+          AVAudioFormat(
+            commonFormat: .pcmFormatInt16, sampleRate: 48000, channels: 1,
+            interleaved: false)!)
+      case 5:
+        engine.setFormat(
+          AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1,
+            interleaved: true)!)
+      case 6: conditions.setPermission(.denied)
+      case 7: conditions.requestStop()
+      default: conditions.disconnect()
+      }
+      engine.notify(stopped: true)
+      do {
+        try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
+        XCTFail("changed preparation opened the window, stage \(stage)")
+      } catch {
+        XCTAssertFalse(window.accepting)
+        XCTAssertNil(window.metadata().windowStartNs)
+        XCTAssertEqual(engine.startCount, 1)
+        XCTAssertEqual(recorder.snapshot().frames, 0)
+      }
+      recorder.stop()
+      assertClosed(engine, recorder)
+    }
+  }
+
+  func testTestPreparationStoppedWithoutNotificationNeverRestarts() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+    let recorder = recorder(dir, engine, clock: try StartupClock().domain(), testWindow: window)
+    try await recorder.start()
+    engine.setRunning(false)
+    do {
+      try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
+      XCTFail("unexplained engine stop opened the window")
+    } catch {
+      XCTAssertNil(window.metadata().windowStartNs)
+      XCTAssertEqual(engine.startCount, 1)
+    }
+    recorder.stop()
+    assertClosed(engine, recorder)
+  }
+
+  func testTestPreparationStopDuringRestartControlsNeverOpensWindow() async throws {
+    for stage in 0..<2 {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let conditions = StartupConditions()
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      let recorder = recorder(
+        dir, engine, conditions, clock: try StartupClock().domain(), testWindow: window)
+      try await recorder.start()
+      engine.notify(stopped: true)
+      if stage == 0 { engine.onPrepare = { _ in conditions.requestStop() } }
+      if stage == 1 { engine.onStart = { _, _ in conditions.requestStop() } }
+      do {
+        try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
+        XCTFail("stopped restart opened the window")
+      } catch {
+        XCTAssertNil(window.metadata().windowStartNs)
+        XCTAssertEqual(engine.startCount, stage == 0 ? 1 : 2)
+      }
+      recorder.stop()
+      assertClosed(engine, recorder)
+    }
+  }
+
+  func testTestPreparationRepeatedNotificationsAndStoppedRestartsAreBounded() async throws {
+    for stopped in [false, true] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      let recorder = recorder(dir, engine, clock: try StartupClock().domain(), testWindow: window)
+      try await recorder.start()
+      if stopped {
+        engine.notify(stopped: true)
+        engine.onStart = { source, _ in source.notify(stopped: true) }
+      } else {
+        engine.onVerify = { source, _ in source.notify() }
+      }
+      do {
+        try await recorder.openTestWindow(now: { 1_000_000_500 }, pause: {})
+        XCTFail("unstable preparation opened the window")
+      } catch {
+        XCTAssertFalse(window.accepting)
+        XCTAssertNil(window.metadata().windowStartNs)
+        XCTAssertEqual(engine.startCount, stopped ? 3 : 1)
+        XCTAssertEqual(recorder.snapshot().frames, 0)
+        XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+      }
+      engine.onVerify = nil
+      recorder.stop()
+      assertClosed(engine, recorder)
+    }
+  }
+
+  func testTestPreparationStopDuringProofAndCancelledWaitNeverOpenWindow() async throws {
+    for cancelled in [false, true] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let engine = SilentMicrophoneEngine()
+      let conditions = StartupConditions()
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      let recorder = recorder(
+        dir, engine, conditions, clock: try StartupClock().domain(), testWindow: window)
+      try await recorder.start()
+      if !cancelled { engine.onVerify = { _, _ in conditions.requestStop() } }
+      do {
+        try await recorder.openTestWindow(
+          now: { 1_000_000_500 }, pause: { if cancelled { throw CancellationError() } })
+        XCTFail("cancelled preparation opened the window")
+      } catch {
+        XCTAssertNil(window.metadata().windowStartNs)
+        XCTAssertEqual(engine.startCount, 1)
+      }
+      recorder.stop()
+      assertClosed(engine, recorder)
     }
   }
 

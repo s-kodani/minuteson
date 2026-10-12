@@ -118,6 +118,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   const transcriptRoot = useRef<HTMLElement>(null);
   const followPort=useRef<HTMLDivElement>(null);
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const [pointerRetainedRow, setPointerRetainedRow] = useState<string | null>(null);
+  const pointerRetention = useRef<{ id: number; frame: number | null } | null>(null);
   const [nameSessions,setNameSessions] = useState<Record<string,SpeakerNameSession>>({});
   const nameBuffers = useRef<Record<string,SpeakerNameSession>>({});
   const nameInputs = useRef(new Map<string,HTMLInputElement>());
@@ -211,6 +213,27 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
     };
     document.addEventListener("focusin", focus);
     return () => document.removeEventListener("focusin", focus);
+  }, []);
+  useEffect(() => {
+    const release = (event: PointerEvent) => {
+      const held = pointerRetention.current;
+      if (!held || held.id !== event.pointerId) return;
+      // Focus changes during pointerdown must not remove a preceding retained
+      // row and move the target before pointerup/click are delivered.
+      if (held.frame !== null) cancelAnimationFrame(held.frame);
+      held.frame = requestAnimationFrame(() => {
+        if (pointerRetention.current !== held) return;
+        pointerRetention.current = null; setPointerRetainedRow(null);
+      });
+    };
+    document.addEventListener("pointerup", release, true);
+    document.addEventListener("pointercancel", release, true);
+    return () => {
+      document.removeEventListener("pointerup", release, true);
+      document.removeEventListener("pointercancel", release, true);
+      const frame = pointerRetention.current?.frame;
+      if (frame !== undefined && frame !== null) cancelAnimationFrame(frame);
+    };
   }, []);
   useLayoutEffect(() => {
     const pending = focusAfterRemoval.current;
@@ -372,7 +395,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
     return counts;
   }, [view]);
   const filtered=useMemo(()=>view?filterUtterances(view,speakerFilter,query):[],[view,speakerFilter,query]);
-  const retained = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, [...Object.keys(textSessions), ...(focusedRow ? [focusedRow] : [])]);
+  const retained = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, [...Object.keys(textSessions), ...(focusedRow ? [focusedRow] : []), ...(pointerRetainedRow ? [pointerRetainedRow] : [])]);
   const shown = retained.rows;
   const textDirty = textBuffersDirty(textSessions, view?.utterances ?? []);
   const nameDirty = namesDirty(nameSessions,view?.speakers ?? []);
@@ -501,6 +524,11 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
     let session = textBuffers.current[id];
     const pending = textOperations.current.get(id);
     if (!editable || !session || pending?.kind === "cancel" || pending && kind === "commit") return;
+    // Disabling the clicked commit/cancel button can move focus to body while
+    // persistence is pending. Capture its row before that transition, without
+    // taking focus back from a field the user chooses during the save.
+    const row = source.closest<HTMLElement>(".utterance-row");
+    const startedFocused = !!row?.contains(document.activeElement);
     const operation = { kind }; textOperations.current.set(id, operation);
     setTextPending(current => ({ ...current, [id]: kind })); setError("");
     try {
@@ -522,7 +550,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
       await saveQueue.flush();
       setBodyManual(false);
       if (textOperations.current.get(id) !== operation || textBuffers.current[id] !== session) { await recovery.flushRecovery(); return; }
-      const row = source.closest<HTMLElement>(".utterance-row"), restoreFocus = !!row?.contains(document.activeElement);
+      const restoreFocus = !!row?.contains(document.activeElement)
+        || startedFocused && document.activeElement === document.body;
       removingBuffers.current.set(id,{ session,kind }); syncRecoveryBuffers();
       await recovery.flushRecovery();
       if(restoreFocus && (document.activeElement === document.body || row?.contains(document.activeElement))) {
@@ -633,7 +662,13 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
   if(splitting)try{splitAt=splitPosition(splitting.startUs,splitting.endUs,splitSeconds);if(splitOffset<1||splitOffset>=splitPieces.length)throw Error("空の部分を作らない本文の切れ目を指定してください。");}catch(cause){splitError=String(cause);}
 
   return (
-    <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onKeyDown={event => {
+    <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onPointerDownCapture={event => {
+      if (event.button !== 0 || !(event.target instanceof Element) || !event.target.closest(".utterance-row")) return;
+      const previous = pointerRetention.current;
+      if (previous?.frame !== undefined && previous.frame !== null) cancelAnimationFrame(previous.frame);
+      pointerRetention.current = { id: event.pointerId, frame: null };
+      setPointerRetainedRow(focusedRow);
+    }} onKeyDown={event => {
       if (appShortcut(event.nativeEvent) !== "undo" || nativeTextTarget(event.target) || overlayOpen() || !editable || !draft || (draft.lockVersion === 0 && !dirty && !saving && !textDirty && !nameDirty) || undoPending.current) return;
       event.preventDefault(); void undo(true);
     }}>

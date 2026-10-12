@@ -1136,7 +1136,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
         guard self?.recovery?.owns(token) == true else { return }
         if self?.configurationChanged == false,
           self?.recovery?.accepts(token) == true,
-          self?.clock == nil || self?.testWindow != nil
+          self?.clock == nil || self?.testWindow?.preparing == false
         {
           self?.stats.appendFailures += 1
           self?.stats.retainCaptureFailure(
@@ -1314,6 +1314,94 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     engine?.stop()
     engine = nil
+  }
+
+  /// A synchronous start proof cannot fence delayed HAL notifications. Keep
+  /// both tracks' shared window closed until three spaced proofs agree. Only
+  /// this pre-window phase may restart the same engine; never repair a measured
+  /// five-second window by discarding an interruption or inventing PCM.
+  func openTestWindow(
+    now: @Sendable () -> Int64? = { PCMInputLevel.nowNanoseconds() },
+    pause: @Sendable () async throws -> Void = {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+  ) async throws {
+    guard let testWindow, let engine else {
+      throw ProbeError.capture("five-second test microphone is not initialized")
+    }
+    let (token, format) = try lock.withLock {
+      guard testWindow.preparing, stats.frames == 0, let recovery, let file else {
+        throw ProbeError.capture("five-second test microphone preparation is obsolete")
+      }
+      return (try recovery.currentBinding(), file.processingFormat)
+    }
+    var previousRevision: UInt64?
+    var stableProofs = 0
+    var restarts = 0
+    for _ in 0..<20 {
+      try Task.checkCancellation()
+      guard mayContinue() else { throw ProbeError.capture("microphone stop was requested") }
+      try await pause()
+      try Task.checkCancellation()
+      let revision = try lock.withLock {
+        guard mayContinue(), recovery?.accepts(token) == true, testWindow.preparing,
+          stats.frames == 0, configurationRevision < UInt64.max
+        else { throw ProbeError.capture("five-second test microphone preparation is stopped") }
+        try stats.requireWritable(raw: rawSegments?.snapshot())
+        return configurationRevision
+      }
+      let authorization = permission()
+      guard authorization == .authorized else {
+        throw ProbeError.permission(CaptureFailureGuide.microphonePermission(authorization))
+      }
+      let selected = try InputDevices.choose(token.uid, from: devices().devices)
+      guard selected.objectID == token.objectID else {
+        throw ProbeError.capture("microphone identity changed during test preparation")
+      }
+      try engine.verifyDevice(token)
+      guard MicrophonePCMFormat.matches(format, engine.inputFormat) else {
+        throw RebindError.formatChanged
+      }
+      if !engine.isRunning {
+        guard restarts < 2,
+          lock.withLock({
+            mayContinue() && recovery?.accepts(token) == true && configurationChanged
+              && testWindow.preparing && configurationRevision == revision
+          })
+        else {
+          throw ProbeError.capture("microphone engine is not running during test preparation")
+        }
+        // Controls run on this serialized owner, never Apple's notify queue.
+        engine.prepare()
+        guard mayContinue() else { throw ProbeError.capture("microphone stop was requested") }
+        try engine.start()
+        restarts += 1
+        previousRevision = nil
+        stableProofs = 0
+        continue
+      }
+      let opened = try lock.withLock {
+        guard mayContinue(), recovery?.accepts(token) == true, testWindow.preparing else {
+          throw ProbeError.capture("five-second test microphone preparation is stopped")
+        }
+        try stats.requireWritable(raw: rawSegments?.snapshot())
+        guard configurationRevision == revision else {
+          previousRevision = nil
+          stableProofs = 0
+          return false
+        }
+        stableProofs = previousRevision == revision ? stableProofs + 1 : 1
+        previousRevision = revision
+        configurationChanged = false
+        guard stableProofs >= 3 else { return false }
+        // The same callback lock fences the final revision and window opening.
+        // A later notification is an in-window failure, not another retry.
+        try testWindow.open(at: now())
+        return true
+      }
+      if opened { return }
+    }
+    throw ProbeError.capture("microphone configuration did not stabilize before five-second test")
   }
 
   private func suspend(_ reason: String? = nil, unavailable: Bool = false) {
@@ -1604,7 +1692,7 @@ public enum CaptureCommand {
         {
           throw ProbeError.capture("five-second test was cancelled during initialization")
         }
-        try testWindow?.open(at: PCMInputLevel.nowNanoseconds())
+        if testWindow != nil { try await mic.openTestWindow() }
         manifest.captureTest = testWindow?.metadata()
         try write(manifest, to: manifestURL)
         if options.stopOnFile {
