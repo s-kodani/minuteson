@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { DraftSaveQueue } from "../src/draft-save.ts";
-import { createMinutesSaveQueue } from "../src/minutes-save.ts";
+import { createMinutesSaveQueue, readMinutesSaveTarget } from "../src/minutes-save.ts";
 import { editInline, textNode } from "../src/minutes-edit.ts";
 import type { MinutesContent, MinutesDraft } from "../src/minutes-state.ts";
 import { installMinutesFixture } from "./minutes-browser-fixture.js";
@@ -292,4 +292,66 @@ test("browser response-loss fault commits once then is consumed before explicit 
   await queue.retry();
   assert.equal(data.history.a.length,1);
   assert.equal(queue.snapshot().dirty,false);
+});
+
+for(const mode of ["fail","missing","wrong_meeting","wrong_base","wrong_id"]){
+  test(`explicit minutes reload keeps the uncertain input and acknowledgement on ${mode} read`,async()=>{
+    const {data,invoke}=await fixture();
+    const original=structuredClone(data.drafts.a) as MinutesDraft;
+    const queue=createMinutesSaveQueue(invoke);
+    queue.load(original);
+    data.lostMinutesSaveResponse=true;
+    queue.edit(d=>editInline(d,{block:0},[textNode("保存成功応答を喪失")]));
+    await assert.rejects(queue.flush(),/応答喪失/);
+    queue.edit(d=>editInline(d,{block:0},[textNode("破棄せず保持する最新入力")]));
+    const pending=structuredClone(queue.snapshot().payload);
+    data.minutesDraftReadMode=mode;
+    await assert.rejects(async()=>{
+      const read=await readMinutesSaveTarget(invoke,original);
+      queue.load(read);
+    },/読取失敗|入力を保持/);
+    assert.deepEqual(queue.snapshot().draft,original);
+    assert.deepEqual(queue.snapshot().payload,pending);
+    assert.equal(queue.snapshot().dirty,true);
+    assert.match(queue.snapshot().error!,/応答喪失/);
+    data.minutesDraftReadMode="normal";
+    await queue.retry();
+    assert.deepEqual(queue.snapshot().draft?.payload,pending);
+    assert.equal(data.history.a.length,2);
+  });
+}
+
+test("confirmed minutes reload acknowledges the lost commit without replaying or replacing immutable references",async()=>{
+  const {data,invoke}=await fixture();
+  const original=structuredClone(data.drafts.a) as MinutesDraft;
+  const queue=createMinutesSaveQueue(invoke);
+  queue.load(original);
+  data.lostMinutesSaveResponse=true;
+  queue.edit(d=>editInline(d,{block:0},[textNode("実際に保存された本文")]));
+  await assert.rejects(queue.flush(),/応答喪失/);
+  queue.edit(d=>editInline(d,{block:0},[textNode("明示確認で破棄する追記")]));
+  queue.load(await readMinutesSaveTarget(invoke,original));
+  assert.equal(queue.snapshot().dirty,false);
+  assert.equal(queue.snapshot().error,null);
+  assert.equal(queue.snapshot().draft?.payload.blocks[0].type,"heading");
+  assert.deepEqual(queue.snapshot().payload,data.drafts.a.payload);
+  assert.deepEqual(queue.snapshot().payload?.evidence,original.payload.evidence);
+  assert.equal(data.history.a.length,1);
+});
+
+test("reading a clean minutes view with no draft remains valid without inventing an editor draft",async()=>{
+  const {data,invoke}=await fixture();
+  delete data.drafts.a;
+  assert.equal(await readMinutesSaveTarget(invoke,{meetingId:"m1",baseMinutesId:"a",id:null}),null);
+});
+
+test("minutes reload cannot load an archived old-base draft while a different base is active",async()=>{
+  const {data,invoke}=await fixture();
+  const original=structuredClone(data.drafts.a) as MinutesDraft;
+  data.drafts.p={...structuredClone(original),id:"draft-p",baseMinutesId:"p",payload:structuredClone(data.views.p.content)};
+  data.current="p";
+  // The native API supports archived base-specific reads for previews.
+  assert.equal((await invoke("get_minutes_draft",{meetingId:"m1",minutesId:"a"})).id,original.id);
+  await assert.rejects(readMinutesSaveTarget(invoke,original),/入力を保持/);
+  assert.equal(data.calls.at(-1).args.minutesId,null);
 });

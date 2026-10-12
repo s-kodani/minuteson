@@ -210,7 +210,16 @@ export async function installMinutesFixture(page) {
           if(data.lostExportResponse){data.lostExportResponse=false;throw Error("模擬応答喪失");}
           return copy(e);
         }
-        if (cmd === "get_minutes_draft") return copy(data.drafts[args.minutesId ?? data.current] ?? null);
+        if (cmd === "get_minutes_draft") {
+          if(data.minutesDraftReadDelay)await new Promise(resolve=>setTimeout(resolve,data.minutesDraftReadDelay));
+          if(data.minutesDraftReadMode==="fail")throw Error("模擬議事録読取失敗");
+          if(data.minutesDraftReadMode==="missing")return null;
+          const draft=copy(data.drafts[args.minutesId ?? data.current] ?? null);
+          if(draft&&data.minutesDraftReadMode==="wrong_meeting")draft.meetingId="other-meeting";
+          if(draft&&data.minutesDraftReadMode==="wrong_base")draft.baseMinutesId="other-base";
+          if(draft&&data.minutesDraftReadMode==="wrong_id")draft.id="other-draft";
+          return draft;
+        }
         if (cmd === "create_minutes_draft") {
           if(args.minutesId!==data.current) throw Error("noncurrent minutes");
           if(!data.drafts[data.current]) data.drafts[data.current]={id:`draft-${data.current}`,meetingId:"m1",baseMinutesId:data.current,lockVersion:0,updatedAt:0,contentHash:"draft-hash",payload:copy(data.views[data.current].content)};

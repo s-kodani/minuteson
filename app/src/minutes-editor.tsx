@@ -6,7 +6,7 @@ import { IconButton, type ActionIconName } from "./action-icon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { registerPendingEdits } from "./draft-save";
-import { createMinutesSaveQueue } from "./minutes-save";
+import { createMinutesSaveQueue, readMinutesSaveTarget } from "./minutes-save";
 import { changeList, changeTable, convertBlock, editInline, formatInline, inlineAt, insertBlock, removeBlock, setEvidenceVerification, type InlineAddress, type InlineSelection } from "./minutes-edit";
 import { MinutesDocument, type MinutesDocumentHandle } from "./minutes-document";
 import { MinutesRichField } from "./minutes-rich-field";
@@ -128,12 +128,12 @@ export function MinutesEditor({ view, meetingTitle, initialDraft, locked, regist
   const reload = () => run(async () => {
     if (compositions.current.size) throw new Error("日本語入力を確定してから再読込してください");
     const read = async () => {
-    const draft = await invoke<MinutesDraft | null>("get_minutes_draft", { meetingId: view.meetingId, minutesId: view.id });
+    const draft = await readMinutesSaveTarget(invoke, { meetingId: view.meetingId, baseMinutesId: view.id, id: queue.snapshot().draft?.id ?? null });
     if (mounted.current) { queue.load(draft); failure.current = ""; setSelection(null); setEpoch((v) => v + 1); }
     };
     if (queue.snapshot().dirty || failure.current) {
       const expected = JSON.stringify(queue.snapshot().payload), expectedFailure = failure.current;
-      await confirm({ title: "議事録編集の破棄を確認", target: `会議「${meetingTitle ?? view.meetingId}」の議事録編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存の議事録編集を破棄して保存済み内容を再読込します。この入力は復元できません。生成原文と保存済み編集は保持します。", validate: () => !compositions.current.size && failure.current === expectedFailure && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: read });
+      await confirm({ title: "議事録編集の破棄を確認", target: `会議「${meetingTitle ?? view.meetingId}」の議事録編集`, confirmLabel: "入力を破棄して再読込する", message: "未保存または保存結果が未確認の編集入力を破棄して、保存済み内容を再読込します。この入力は復元できません。生成原文と保存済み編集は保持します。", validate: () => !compositions.current.size && failure.current === expectedFailure && JSON.stringify(queue.snapshot().payload) === expected, onError: cause => { if (mounted.current) setError(String(cause)); }, action: read });
     } else await read();
   });
   const failed = (cause: unknown) => { failure.current = String(cause); setError(String(cause)); };
