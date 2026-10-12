@@ -49,6 +49,5 @@ export function CaptureTestPanel({control,currentUid,currentScope,canStart,locke
     {control.pending&&<p role="alert">開始要求の受付結果が未確認です。開始は再送しません。</p>}
     {!control.connected&&<p role="status">テストの状態を確認できていません。</p>}
     {control.error&&<p role="alert" className="action-error">{control.error}</p>}
-    <button type="button" className="small-secondary" disabled={locked||control.commandBusy} onClick={()=>void control.client.refresh().catch(()=>{})}>テストの結果を再確認</button>
   </section>;
 }

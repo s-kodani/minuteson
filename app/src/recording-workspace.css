@@ -14,7 +14,8 @@
 .input-level meter{width:100%;height:18px;accent-color:var(--accent);}
 .input-level-clipping{color:var(--text);font-weight:600;}
 @media(max-width:600px){.recording-workspace{padding:16px;margin:12px auto;}.recording-track-status,.recording-write-tracks{grid-template-columns:1fr;}}
-.capture-test-panel { margin: 1.25rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
-.capture-test-panel h3 { margin-top: 0; }
+.capture-test-panel { display: flex; flex-direction: column; gap: 12px; margin: 1.25rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
+.capture-test-panel > button { align-self: flex-start; }
+.capture-test-panel > :is(h3,p,dl) { margin: 0; }
 .capture-test-panel p { overflow-wrap: anywhere; }
 .capture-test-audio .card-actions > div { flex: 1 1 180px; min-width: 0; }

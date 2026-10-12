@@ -68,13 +68,13 @@ async page=>{
     await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByText("テストの入力を初期化しています",{exact:true}).waitFor();
     check(await count("start_capture_test")===1&&await normal().isDisabled(),"lost accepted reply replayed or enabled capture");
-    await panel().getByRole("button",{name:"テストの結果を再確認",exact:true}).click();check(await count("start_capture_test")===1,"read replayed start");
+    const firstPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,firstPoll);check(await count("start_capture_test")===1,"read replayed start");
     results.push("lost accepted start reply is reconciled by read-only ownership polling, never by resubmitting capture");
 
     await boot();await page.evaluate(()=>window.closeFixture.testAbsentStart=true);await start().click();await accept().click();
     await modal().getByRole("alert").waitFor();await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();await modal().waitFor({state:"hidden"});
     await panel().getByRole("alert").filter({hasText:"開始要求の受付結果が未確認"}).waitFor();
-    await panel().getByRole("button",{name:"テストの結果を再確認",exact:true}).click();
+    const absentPoll=await count("get_capture_test_snapshot");await page.waitForFunction(n=>window.closeFixture.calls.filter(c=>c.command==="get_capture_test_snapshot").length>n,absentPoll);
     check(await count("start_capture_test")===1&&await start().isDisabled()&&await normal().isDisabled(),"unknown absence allowed replay");
     results.push("missing result after an uncertain start stays unknown and blocks new recording without guessing that audio stopped");
 
@@ -119,23 +119,28 @@ async page=>{
     check(await count("cancel_capture_test")===1&&await count("discard_capture_test")===1,"close did not cancel/collect exactly owned test");
     results.push("close confirmation can decline safely; accepted exit waits for test termination and collection before final native guard");
 
-    await boot();await page.getByText("録音の詳細設定",{exact:true}).click();
+    const details=()=>page.getByRole("dialog",{name:"録音の詳細設定",exact:true});
+    const openDetails=async()=>{await page.getByRole("button",{name:"録音の詳細設定",exact:true}).click();await details().waitFor();};
+    const closeDetails=async()=>{await page.keyboard.press("Escape");await details().waitFor({state:"hidden"});};
+    await boot();await openDetails();
     await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("application");
     const application=page.getByRole("combobox",{name:"録音するアプリ",exact:true});await application.waitFor();
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
     check(await start().isDisabled(),"unselected app permitted test");
     const appKey=await application.locator('option').nth(1).getAttribute("value");await application.selectOption(appKey);
+    await closeDetails();
     await start().click();check((await modal().innerText()).includes("会議ブラウザ")&&(await modal().innerText()).includes("他のタブ"),"app confirmation omitted scope limit");
     await accept().click();await modal().waitFor({state:"hidden"});await ready();
     const scoped=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_capture_test").args.request.captureScope);
     check(scoped.mode==="application"&&scoped.application.pid===123&&scoped.application.launchTimeUs===1791100000000001&&(await panel().innerText()).includes("会議ブラウザ"),"app test lost exact process identity");
-    await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("system");await panel().getByRole("alert").filter({hasText:"現在の入力選択とは異なる"}).waitFor();
+    await openDetails();await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("system");await closeDetails();await panel().getByRole("alert").filter({hasText:"現在の入力選択とは異なる"}).waitFor();
     check(await play("PC").isDisabled()&&(await panel().innerText()).includes("会議ブラウザ"),"old application test relabelled as system");
     results.push("app test requires explicit process selection, freezes exact identity and tab limitations, and never relabels its result after scope changes");
 
-    await boot();await page.getByText("録音の詳細設定",{exact:true}).click();await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("application");
+    await boot();await openDetails();await page.getByRole("combobox",{name:"PC音声の取得範囲",exact:true}).selectOption("application");
     await page.waitForFunction(()=>{const e=document.querySelector('[aria-label="録音するアプリ"]');return e&&!e.disabled;});
     await application.selectOption(await application.locator('option').nth(1).getAttribute("value"));
+    await closeDetails();
     await page.evaluate(()=>window.closeFixture.mutateApplicationDuringFlush=true);await start().click();await accept().click();await modal().getByRole("alert").waitFor();
     check(await count("start_capture_test")===0,"restarted app accepted test");await modal().getByRole("button",{name:"確認を閉じる",exact:true}).click();
     results.push("application restart during edit flushing rejects test before admission without falling back to whole-system capture");
@@ -153,7 +158,7 @@ async page=>{
     await boot();await begin();await ready();await play("マイク").click();await panel().getByRole("button",{name:"一時停止",exact:true}).waitFor();await page.evaluate(()=>window.closeFixture.testReadFailure=true);
     await panel().getByText("テストの状態を確認できていません。",{exact:true}).waitFor();await released();
     check(await play("マイク").isDisabled()&&await normal().isDisabled()&&await start().isDisabled(),"unknown ownership allowed playback/capture");
-    await page.evaluate(()=>window.closeFixture.testReadFailure=false);await panel().getByRole("button",{name:"テストの結果を再確認",exact:true}).click();await idle();
+    await page.evaluate(()=>window.closeFixture.testReadFailure=false);await idle();
     check(await count("start_capture_test")===1&&await play("マイク").isEnabled(),"read recovery resent capture");
     results.push("ownership read failure stops and locks private playback/recording; valid read recovery never restarts capture");
 
@@ -168,10 +173,10 @@ async page=>{
 
     await boot();await begin();await ready();
     for(const width of [1280,960,360])for(const theme of ["light","dark"]){
-      await page.setViewportSize({width,height:700});await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);
+      await page.setViewportSize({width,height:700});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
       await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);await play("マイク").scrollIntoViewIfNeeded();
       check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth),"test panel horizontal overflow");
-      await page.screenshot({path:`capture-test-${theme}-${width}.png`});
+      await page.screenshot({path:`output/playwright/test-controls-${theme}-${width}-20261012.png`});
     }
     results.push("ready inputs, separate playback and cleanup controls fit both themes at 1280/960/360px without horizontal overflow");
     await discard().click();await idle();return {passed:results.length,results};

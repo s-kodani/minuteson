@@ -31,3 +31,13 @@ Rustの最終関連検査は96成功・既存の専用6ignore、うち録音前�
 検査ログは `/private/tmp/mon-unreceived-rust-final-20261012.log`、`/private/tmp/mon-unreceived-swift-rerun-20261012.log`、`/private/tmp/mon-unreceived-unit-final-20261012.log`、`/private/tmp/mon-unreceived-browser-timed-20261012.log`。構築ログは `/private/tmp/mon-unreceived-front-final-20261012.log` と `/private/tmp/mon-unreceived-qa-final-20261012.log`。
 
 使用中のQAは起動・終了・上書きせず、OS許可・周囲の音・PC再生音を操作しない。既存の録音・会議・モデルを読み取ったり削除したりしない。CIは実行しない。新QAでマイクだけの5秒テストとPC再生音ありの5秒テストを確認する必要があり、短い再試験は10〜20分を目安とする。実機での確認前に解消済みとは断定せず、4時間検査へ直行しない。議事録の簡素化は生成と画面接続を含む実装3〜6時間、統合確認1〜2時間が別残件。
+
+## 5秒テストの操作を整理
+
+同日、ユーザー指定で「テストの結果を再確認」ボタンを削除した。状態は既存の0.5秒ごとの読取りで自動更新する。通信復旧時も開始要求を再送しない。取消・破棄・通常録音の開始判定が内部で使う状態確認は残し、所有権や停止完了の検証は緩めていない。テスト欄の直下の要素を縦に配置し、12pxの余白を統一した。初期状態の操作は「5秒録音して確認」だけになる。
+
+フロント単体920件成功（検査本体2.654秒、壁時計2.88秒）、型検査・フロント構築6.62秒。Playwrightによる合成IPC・無音PCMの既存画面検査26条件が17.31秒、PC未受信と不要ボタンの不在・余白の検査8条件が2.43秒で成功。自動読取りによる応答喪失の回復と開始の再送防止、ライト／ダークと1280／960／360pxでの横溢れ防止を確認した。最初の広範囲検査は17条件後、以前のインライン設定を前提とした検査側の重複セレクタで10.47秒後に失敗した。実際の設定モーダルを開閉する検査へ更新して26条件を再実行した。favicon 404と開発用WebSocketの接続制限は引き続き発生した。画像は `output/playwright/test-controls-*-20261012.png`。検証専用ブラウザだけを終了した。
+
+実装・検査調整の作業は約5〜10分の概算（個別計測なし）。QA構築93.48秒で、既存の構築キャッシュを再利用し、Rustの別テストtargetやモデル取得は増やしていない。`/private/tmp/mon-test-controls-qa.kOyriL/MON QA.app` に別コピーし、識別子 `jp.mon.desktop.qa`、deep／strictアドホック署名検査、署名済み構築元との本体SHA256一致を確認した。本体SHA256は `45bf38e24fe2d02ae0f676a520c2e13125221b861ab5d8b6a0a1f05c17c926ed`。正式署名・公証ではない。使用中のQAは変更せず、新QAも起動していない。今回は表示だけの変更でRust／Swift検査と実録音・CIは実行しない。実録音の再試験と議事録簡素化の残対応・時間目安は上記から変更しない。
+
+ログは `/private/tmp/mon-test-controls-unit-20261012.log`、`/private/tmp/mon-test-controls-build-20261012.log`、`/private/tmp/mon-test-controls-qa-20261012.log`、`/private/tmp/mon-test-controls-partial-browser-20261012.log`、`/private/tmp/mon-test-controls-full-browser-20261012.log`（最初の失敗）、`/private/tmp/mon-test-controls-full-browser-final-20261012.log`（26条件成功）。並行工程の時間を総経過時間として合計しない。
