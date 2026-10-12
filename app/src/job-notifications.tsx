@@ -84,7 +84,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     {[...notices].filter(([, event])=>event?.topic!=="issue").map(([key, event]) => <ToastNotice key={key} scope="analysis-notifications" type={key} meetingId={event?.job.meetingId} message={event?.message ?? ""} level={event?.level} important={event?.important} eventId={event?.eventId} action={event ? { kind: "open", label: "会議を開く", disabled: locked, run: () => open(event.job.meetingId) } : undefined} />)}
     <IssueNotice scope="analysis-notifications" type="read" message={readError} label="解析通知の読込・結果確認" action={{ kind: "retry", label: "状態を再読込", disabled: locked || reading, run: retryRead }} />
     <IssueNotice scope="analysis-notifications" type="listen" message={listenerError ? `${listenerError}\n状態の定期読込は続けています。` : ""} label="解析通知の受信" />
-    <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? `解析ワーカー：${workerError}\n再起動後にジョブの再開状態を確認してください。` : ""} level="error" important action={{kind:"retry",label:"状態を再読込",disabled:locked||reading,run:retryRead}} />
+    <ToastNotice scope="analysis-notifications" type="worker" message={workerError ? `解析ワーカー：${workerError}` : ""} level="error" important action={{kind:"retry",label:"状態を再読込",disabled:locked||reading,run:retryRead}} />
     {issues.map(job=><JobIssue key={job.id} job={job} locked={locked} onOpen={open} historical={![...notices.values()].some(event=>event?.topic==="issue"&&event.job.id===job.id)}/>)}
   </>;
 }

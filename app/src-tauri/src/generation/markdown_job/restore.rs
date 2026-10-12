@@ -62,7 +62,7 @@ pub(in crate::generation) fn references(
     let p: Parameters = serde_json::from_value(parameters).map_err(|e| e.to_string())?;
     p.engine.validate()?;
     p.markdown_target.validate()?;
-    if p.schema_version != 5
+    if !matches!(p.schema_version, 5 | 6)
         || job.kind != "minutes_generation"
         || job.total_units != Some(p.plan.nodes.len() as i64)
         || p.plan.nodes.is_empty()

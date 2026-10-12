@@ -166,7 +166,7 @@ fn fixture(long: bool, pending: bool, queued: bool) -> Fixture {
                     } else {
                         EXACT.into()
                     };
-                    let batch = assets.batch(&extract_task(&old_input, slices).unwrap(), &text);
+                    let batch = assets.batch(&extract_task(&old_input, slices, &p).unwrap(), &text);
                     (text, vec![batch])
                 }
                 _ => {
@@ -174,7 +174,7 @@ fn fixture(long: bool, pending: bool, queued: bool) -> Fixture {
                     let mut batches = vec![];
                     while cursor.result().is_none() {
                         let text = EXACT.to_string();
-                        batches.push(assets.batch(&merge_task(&cursor).unwrap(), &text));
+                        batches.push(assets.batch(&merge_task(&cursor, &p).unwrap(), &text));
                         cursor.accept(text).unwrap();
                         if pending {
                             assert!(cursor.result().is_none());

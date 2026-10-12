@@ -14,6 +14,16 @@ pub(super) fn system() -> &'static str {
 pub(super) fn schema() -> Value {
     json!({"type":"object","properties":{"markdown":{"type":"string"}},"required":["markdown"],"additionalProperties":false})
 }
+// Reserve tokens for JSON framing and escaping instead of allowing the model
+// to consume its entire fixed prediction budget inside an unclosed string.
+// The CLI grammar constrains generation; this is not truncation of saved text.
+pub(super) fn bounded_schema(prediction_tokens: u32) -> Value {
+    let limit = prediction_tokens.saturating_sub(128).max(4) / 4;
+    let mut value = schema();
+    value["properties"]["markdown"]["minLength"] = json!(1);
+    value["properties"]["markdown"]["maxLength"] = json!(limit);
+    value
+}
 
 pub(crate) fn text(value: Value) -> Result<String, String> {
     let mut object = value

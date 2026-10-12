@@ -40,7 +40,11 @@ struct Output {
 }
 
 pub(crate) fn is_markdown(spec: &JobSpec) -> bool {
-    spec.kind == JobKind::MinutesGeneration && spec.parameters["generation"]["schemaVersion"] == 5
+    spec.kind == JobKind::MinutesGeneration
+        && matches!(
+            spec.parameters["generation"]["schemaVersion"].as_u64(),
+            Some(5 | 6)
+        )
 }
 pub(crate) fn enqueue(
     storage: &Storage,
@@ -68,7 +72,7 @@ pub(crate) fn enqueue(
     storage.enqueue_markdown_minutes_job_configured(request,profile,target,|input|{
         let plan=plan::build(input,prompt_budget)?;let total=plan.nodes.len() as i64;
         // Storage binds the fixed target once within its admission transaction.
-        let parameters=serde_json::json!({"schemaVersion":5,"engine":engine,"promptBudget":prompt_budget,"plan":plan});
+        let parameters=serde_json::json!({"schemaVersion":6,"engine":engine,"promptBudget":prompt_budget,"plan":plan});
         Ok((parameters,Some(total)))
     })
 }
@@ -97,7 +101,7 @@ fn checked_fixed_parameters(
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || p.schema_version != 5
+        || !matches!(p.schema_version, 5 | 6)
         || p.markdown_target.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
@@ -147,19 +151,30 @@ fn checked_checkpoint(
     }
     Ok(c)
 }
-fn extract_task(input: &MinutesInput, slices: &[plan::Slice]) -> Result<Task, String> {
+fn task_schema(p: &Parameters) -> Value {
+    if p.schema_version == 6 {
+        markdown::bounded_schema(p.engine.prediction_tokens)
+    } else {
+        markdown::schema()
+    } // Exact replay of already saved task bytes.
+}
+fn extract_task(
+    input: &MinutesInput,
+    slices: &[plan::Slice],
+    p: &Parameters,
+) -> Result<Task, String> {
     Ok(Task {
         system: markdown::system().into(),
         prompt: plan::extract_prompt(input, slices)?,
-        schema: markdown::schema(),
+        schema: task_schema(p),
         local: None,
     })
 }
-fn merge_task(cursor: &plan::Cursor) -> Result<Task, String> {
+fn merge_task(cursor: &plan::Cursor, p: &Parameters) -> Result<Task, String> {
     Ok(Task {
         system: plan::MERGE_SYSTEM.into(),
         prompt: cursor.task()?,
-        schema: markdown::schema(),
+        schema: task_schema(p),
         local: None,
     })
 }
@@ -201,7 +216,7 @@ fn replay_with(
                 if saved.batches.len() != 1 {
                     return Err("抽出の保存形式が不正です".into());
                 }
-                markdown::text(verify(&extract_task(input, slices)?, &saved.batches[0])?)?
+                markdown::text(verify(&extract_task(input, slices, p)?, &saved.batches[0])?)?
             }
             node => {
                 let mut current = cursor(node, &outputs, p.prompt_budget)?;
@@ -209,7 +224,7 @@ fn replay_with(
                     if cancelled() {
                         return Ok(None);
                     }
-                    let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
+                    let text = markdown::text(verify(&merge_task(&current, p)?, batch)?)?;
                     current.accept(text)?;
                 }
                 current
@@ -235,7 +250,7 @@ fn replay_with(
             if cancelled() {
                 return Ok(None);
             }
-            let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
+            let text = markdown::text(verify(&merge_task(&current, p)?, batch)?)?;
             current.accept(text)?;
         }
         if current.result().is_some() {
@@ -390,7 +405,7 @@ pub(crate) fn process(
                         &spec,
                         job_id,
                         index,
-                        extract_task(&input, slices)?,
+                        extract_task(&input, slices, &p)?,
                         &p,
                         &cancelled,
                     )?
@@ -419,7 +434,7 @@ pub(crate) fn process(
                             &spec,
                             job_id,
                             index,
-                            merge_task(&current)?,
+                            merge_task(&current, &p)?,
                             &p,
                             &cancelled,
                         )?

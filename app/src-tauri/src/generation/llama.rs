@@ -154,7 +154,9 @@ pub(crate) fn parse_output(bytes: &[u8]) -> Result<Value, String> {
     let value = stream
         .next()
         .ok_or("議事録のJSON出力がありません")?
-        .map_err(|e| format!("議事録JSONが不正です: {e}"))?
+        .map_err(|e| if e.is_eof() {
+            "議事録の生成が途中で終了しました。未完成の本文は保存していません。議事録を再生成してください。（minutes_output_incomplete）".to_string()
+        } else { format!("議事録JSONが不正です: {e}") })?
         .0;
     let tail = std::str::from_utf8(&framed[stream.byte_offset()..])
         .map_err(|_| "議事録出力がUTF-8ではありません")?
@@ -163,6 +165,18 @@ pub(crate) fn parse_output(bytes: &[u8]) -> Result<Value, String> {
         return Err("議事録出力に会話ログ・余分な内容があります".into());
     }
     Ok(value)
+}
+
+pub(super) fn validate_markdown_bound(value: &Value, schema: &Value) -> Result<(), String> {
+    if let (Some(text), Some(limit)) = (
+        value["markdown"].as_str(),
+        schema["properties"]["markdown"]["maxLength"].as_u64(),
+    ) {
+        if text.chars().count() as u64 > limit {
+            return Err("議事録本文が固定の生成上限を超えています。未完成・上限超過の本文は保存しません。（minutes_output_limit）".into());
+        }
+    }
+    Ok(())
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -355,6 +369,7 @@ pub(crate) fn run_unit(
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     let value = parse_output(&bytes)?;
+    validate_markdown_bound(&value, schema)?;
     // Freeze exactly the validated adapter result, including the fixed CLI's
     // optional end marker. The scheduler later registers and hashes this file.
     File::open(&result_path)

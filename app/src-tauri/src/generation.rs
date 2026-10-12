@@ -203,7 +203,7 @@ pub(crate) fn restore_checkpoint_references(
     value: Value,
     mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
 ) -> Result<Value, String> {
-    if parameters["schemaVersion"] == 5 {
+    if matches!(parameters["schemaVersion"].as_u64(), Some(5 | 6)) {
         return markdown_job::restore::references(job, parameters, value, map);
     }
     use crate::saved_artifact::Role;
@@ -548,6 +548,7 @@ fn verify_task_bytes(
         return Err("議事録の完了結果形式が不正です".into());
     }
     let raw = llama::parse_output(&read(&artifacts[3])?)?;
+    llama::validate_markdown_bound(&raw, &task.schema)?;
     if task.local.as_ref().is_some_and(|local| local != &raw) {
         return Err("議事録のローカル確定処理が変更されています".into());
     }

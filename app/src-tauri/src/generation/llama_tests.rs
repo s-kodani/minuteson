@@ -2,6 +2,38 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn incomplete_output_is_not_repaired_or_published_and_has_a_recoverable_message() {
+    for source in [
+        br#"{"markdown":"unfinished"#.as_slice(),
+        br#"{"markdown":"unfinished\"#.as_slice(),
+    ] {
+        let error = parse_output(source).unwrap_err();
+        assert!(error.contains("minutes_output_incomplete"));
+        assert!(error.contains("保存していません"));
+    }
+    assert!(parse_output(br#"{"markdown":oops}"#)
+        .unwrap_err()
+        .contains("JSONが不正"));
+}
+
+#[test]
+fn markdown_bound_counts_decoded_unicode_without_truncating_text() {
+    let schema = crate::generation::markdown::bounded_schema(2048);
+    assert_eq!(schema["properties"]["markdown"]["maxLength"], 480);
+    assert!(validate_markdown_bound(&json!({"markdown":"あ".repeat(480)}), &schema).is_ok());
+    assert!(
+        validate_markdown_bound(&json!({"markdown":"あ".repeat(481)}), &schema)
+            .unwrap_err()
+            .contains("minutes_output_limit")
+    );
+    assert!(validate_markdown_bound(
+        &json!({"markdown":"old saved body".repeat(1000)}),
+        &crate::generation::markdown::schema()
+    )
+    .is_ok());
+}
+
+#[test]
 fn literal_markdown_whitespace_preserves_text_without_accepting_other_invalid_json() {
     let source = "{\n\"markdown\":\"# 会議\n\n- 点検日\t確認\r\n[区間](audio:00:00:01-00:00:02)\"\n}\n[end of text]";
     assert_eq!(

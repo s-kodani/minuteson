@@ -87,11 +87,17 @@ async page => {
   results.push("notification navigation respects failed edit saving and retains original meeting/input");
 
   await boot();await page.evaluate(()=>window.monBrowserFixture.emitWorkerError("模擬ワーカー停止"));
-  await alert("模擬ワーカー停止").waitFor();await host().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
+  await alert("模擬ワーカー停止").waitFor();
+  check(!(await alert("模擬ワーカー停止").innerText()).includes("再起動後"),"ordinary generation error acquired a restart recommendation");
+  await host().getByRole("button",{name:"エラー通知を閉じる",exact:true}).click();
   await page.getByRole("button",{name:"設定",exact:true}).click();await openHistory();
   check(await history().locator(".toast-card").filter({hasText:"模擬ワーカー停止"}).count()===1,"worker failure history lost");
   await closeHistory();await noWork();
   results.push("worker failure remains in menu history without automatic recovery/execution");
+
+  await boot();await page.evaluate(()=>window.monBrowserFixture.emitWorkerError("ワーカー停止。再起動後にジョブ状態を確認してください。"));
+  await alert("再起動後にジョブ状態を確認してください。").waitFor();await noWork();
+  results.push("explicit native restart guidance is preserved without adding generic guidance");
 
   await boot();await page.evaluate(async()=>{const f=window.monBrowserFixture;f.notificationJobs=Array.from({length:55},(_,i)=>f.makeNotificationJob({meetingId:"historical-"+i,meetingTitle:"履歴会議"+i,createdAt:1,updatedAt:2,state:"failed",errorCode:"engine-"+i}));await f.emitNotification();});
   await page.waitForFunction(()=>window.monBrowserFixture.notifications().length===0);

@@ -21,6 +21,7 @@ assert list(schema['properties'])==['markdown']
 assert 'utteranceId' not in json.dumps(p) and 'speakerId' not in json.dumps(p)
 kind={kind:?}
 if kind=='invalid': print(json.dumps({{'items':[]}}));sys.exit(0)
+if kind=='truncated': print('{{"markdown":"unfinished');sys.exit(0)
 if kind=='wide' and 'utterances' in p: text='異なる確認事項\n'*230
 else: text=' \n# 点検会議\n- 点検日\n[区間](audio:00:00:00.100001-00:00:00.799999)\n'
 print(json.dumps({{'markdown':text}},ensure_ascii=False))
@@ -33,8 +34,8 @@ print(json.dumps({{'markdown':text}},ensure_ascii=False))
         executable: Fingerprint::capture(&executable, &|| false).unwrap(),
         model: Fingerprint::capture(&model, &|| false).unwrap(),
         threads: 1,
-        context_tokens: 8192,
-        prediction_tokens: 2048,
+        context_tokens: if kind == "wide" { 16384 } else { 8192 },
+        prediction_tokens: if kind == "wide" { 8192 } else { 2048 },
         gpu_layers: 0,
         seed: 1,
     }
@@ -62,6 +63,37 @@ fn request(storage: &Storage, long: bool) -> MinutesJobRequest {
         expected_meeting_lock_version: committed.meeting_lock_version,
         expected_draft: None,
     }
+}
+
+#[test]
+fn incomplete_markdown_preserves_human_body_and_never_commits_a_partial_unit() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let req = request(&storage, false);
+    let human = save(&storage, &req.meeting_id, None, "保持する人間の本文");
+    let job = markdown_job::enqueue(
+        &storage,
+        req.clone(),
+        engine(root.path(), "truncated"),
+        "standard",
+        2400,
+        Some(human.stamp()),
+    )
+    .unwrap();
+    let (spec, _) = storage.fixed_job_input(&job.id).unwrap();
+    assert_eq!(spec.parameters["generation"]["schemaVersion"], 6);
+    claim(&storage, &job);
+    let error = markdown_job::process(&storage, &job.id, &|| false, &|_| {}).unwrap_err();
+    assert!(error.contains("minutes_output_incomplete"));
+    assert_eq!(
+        storage
+            .get_minutes_markdown(&req.meeting_id)
+            .unwrap()
+            .unwrap(),
+        human
+    );
+    assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 0);
+    assert!(storage.fixed_job_input(&job.id).unwrap().1.is_none());
 }
 fn save(
     storage: &Storage,
