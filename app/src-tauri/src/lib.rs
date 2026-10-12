@@ -1166,6 +1166,35 @@ fn save_minutes_preferences(
 }
 
 #[tauri::command]
+async fn get_minutes_markdown(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<Option<storage::minutes_markdown::MarkdownDocument>, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().get_minutes_markdown(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_minutes_markdown(
+    window: WebviewWindow,
+    request: storage::minutes_markdown::SaveMarkdownRequest,
+) -> Result<storage::minutes_markdown::MarkdownDocument, String> {
+    let app = minutes_app(&window)?;
+    let worker = app.clone();
+    let document = tauri::async_runtime::spawn_blocking(move || {
+        worker.state::<Storage>().save_minutes_markdown(request)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("minutes-markdown-changed", &document.meeting_id);
+    Ok(document)
+}
+
+#[tauri::command]
 async fn get_minutes_versions(
     window: WebviewWindow,
     meeting_id: String,
@@ -2730,6 +2759,8 @@ pub fn run() {
                 get_diarization_tracks,
                 start_minutes_generation,
                 get_minutes_versions,
+                get_minutes_markdown,
+                save_minutes_markdown,
                 get_minutes_exports,
                 get_minutes_export_status,
                 export_minutes_markdown,

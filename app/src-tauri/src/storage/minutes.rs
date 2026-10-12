@@ -251,4 +251,4 @@ fn check_projections(
 
 #[cfg(test)]
 #[path = "minutes_tests.rs"]
-mod tests;
+pub(super) mod tests;

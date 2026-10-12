@@ -2,6 +2,143 @@ use super::*;
 use crate::storage::model_metadata::{historical, ModelFileMetadata};
 
 #[test]
+fn exact_minutes_markdown_survives_archive_additive_restore_reopen_and_rebackup() {
+    use crate::storage::minutes_markdown::SaveMarkdownRequest;
+    // Reuse one callback type through the generic reconstruction stack.
+    // Separate closures at each call needlessly duplicate its code generation.
+    let check: fn() -> bool = || false;
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let source_storage = Storage::open(root.path().into()).unwrap();
+    let meeting = source_storage.create_meeting("Markdown backup").unwrap().id;
+    let text="\r\n# 人間が編集した議事録\r\n\t**そのまま**  \n[区間](audio:00:00:01.000001-00:00:02.999999)\n<script>表示だけ</script>\n ";
+    let original = source_storage
+        .save_minutes_markdown(SaveMarkdownRequest {
+            meeting_id: meeting.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected: None,
+            markdown: text.into(),
+        })
+        .unwrap();
+    let path = output.path().join("markdown.monbackup");
+    source_storage.create_backup_archive(&path, &check).unwrap();
+    let source = archive::read(&mut File::open(path).unwrap(), output.path(), &check).unwrap();
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let untouched = target.create_meeting("Existing human text").unwrap().id;
+    let kept = target
+        .save_minutes_markdown(SaveMarkdownRequest {
+            meeting_id: untouched.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected: None,
+            markdown: "この本文は変えない".into(),
+        })
+        .unwrap();
+    let ids =
+        RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &check).unwrap();
+    let fixed = restore_fixed::FixedData::new(&ids, output.path(), &check).unwrap();
+    let sealed = SealedWorkspace::prepare(&fixed, output.path(), &check).unwrap();
+    target.publish_restore(&sealed, &ids, &check).unwrap();
+    let restored_id = ids.get("meetings", "", &meeting).unwrap();
+    let restored = target.get_minutes_markdown(&restored_id).unwrap().unwrap();
+    assert_eq!(restored.markdown, text);
+    assert_eq!(restored.content_hash, original.content_hash);
+    assert_eq!(restored.lock_version, original.lock_version);
+    assert_ne!(restored.operation_id, original.operation_id);
+    assert_eq!(
+        target.get_minutes_markdown(&untouched).unwrap(),
+        Some(kept.clone())
+    );
+    assert_eq!(
+        source_storage.get_minutes_markdown(&meeting).unwrap(),
+        Some(original)
+    );
+    drop(target);
+    let target = Storage::open(target_root.path().into()).unwrap();
+    assert_eq!(
+        target.get_minutes_markdown(&restored_id).unwrap(),
+        Some(restored)
+    );
+    assert_eq!(target.get_minutes_markdown(&untouched).unwrap(), Some(kept));
+    let next = output.path().join("markdown-rebackup.monbackup");
+    target.create_backup_archive(&next, &check).unwrap();
+    let next = archive::read(&mut File::open(next).unwrap(), output.path(), &check).unwrap();
+    let next_ids =
+        RestoreIds::prepare(&next, output.path(), &Uuid::new_v4().to_string(), &check).unwrap();
+    let next_fixed = restore_fixed::FixedData::new(&next_ids, output.path(), &check).unwrap();
+    let next_sealed = SealedWorkspace::prepare(&next_fixed, output.path(), &check).unwrap();
+    assert_eq!(
+        next_sealed
+            .connection()
+            .query_row::<String, _, _>(
+                "SELECT markdown FROM minutes_markdown WHERE markdown=?1",
+                [text],
+                |r| r.get(0)
+            )
+            .unwrap(),
+        text
+    );
+    let db = target.connection.lock().unwrap();
+    for table in [
+        "minutes_revisions",
+        "minutes_items",
+        "evidence_links",
+        "working_drafts",
+        "edit_operations",
+    ] {
+        assert_eq!(
+            db.query_row::<i64, _, _>(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap(),
+            0,
+            "{table}"
+        );
+    }
+}
+
+#[test]
+fn archive_rejects_tampered_minutes_markdown_without_repairing_source() {
+    use crate::storage::minutes_markdown::SaveMarkdownRequest;
+    let check: fn() -> bool = || false;
+    let root = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = storage.create_meeting("Markdown corruption").unwrap().id;
+    storage
+        .save_minutes_markdown(SaveMarkdownRequest {
+            meeting_id: meeting.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected: None,
+            markdown: "保存済み".into(),
+        })
+        .unwrap();
+    storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE minutes_markdown SET markdown='改変' WHERE meeting_id=?1",
+            [&meeting],
+        )
+        .unwrap();
+    assert!(storage
+        .create_backup_archive(&output.path().join("invalid.monbackup"), &check)
+        .is_err());
+    assert_eq!(
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row::<String, _, _>(
+                "SELECT markdown FROM minutes_markdown WHERE meeting_id=?1",
+                [meeting],
+                |r| r.get(0)
+            )
+            .unwrap(),
+        "改変"
+    );
+}
+
+#[test]
 fn restore_managed_model_jobs_and_flow_preserve_all_engine_proofs_without_installing_models_and_rebackup_again(
 ) {
     let (_root, app_data, storage, meeting, jobs) =
@@ -343,7 +480,7 @@ fn restore_model_metadata_rebackup_rerestore_keeps_native_transcription_name_tex
         drop(reopened);
         source = archive::read(&mut File::open(&path).unwrap(), output.path(), &|| false).unwrap();
         assert_eq!(source.manifest.file_references, original);
-        assert_eq!(source.manifest.tables.len(), 32);
+        assert_eq!(source.manifest.tables.len(), 33);
         for table in crate::storage::model_metadata::TABLES {
             assert_eq!(
                 source

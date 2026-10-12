@@ -3,7 +3,10 @@ use super::*;
 use crate::minutes_document::{from_generated, GeneratedItem, ItemKind, SourceType};
 use serde_json::json;
 
-fn fixture(storage: &Storage, units: i64) -> (MinutesJobRequest, JobSnapshot, MinutesContent) {
+pub(in crate::storage) fn fixture(
+    storage: &Storage,
+    units: i64,
+) -> (MinutesJobRequest, JobSnapshot, MinutesContent) {
     let meeting = super::super::analysis::tests::saved_meeting(storage);
     let mut source = super::super::analysis::tests::input();
     source.utterances[0].text = "点検日は2026-10-09。担当者は未確認です。".into();

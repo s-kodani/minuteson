@@ -34,6 +34,7 @@ mod minutes;
 mod minutes_drafts;
 mod minutes_evidence;
 mod minutes_input;
+pub(crate) mod minutes_markdown;
 mod minutes_preferences;
 mod minutes_ui;
 mod model_checks;
@@ -120,6 +121,7 @@ const MIGRATION_27: &str = include_str!("migrations/0027_model_catalog_history.s
 const MIGRATION_28: &str = include_str!("migrations/0028_transcript_edit_recovery.sql");
 const MIGRATION_29: &str = include_str!("migrations/0029_recording_input_snapshots.sql");
 const MIGRATION_30: &str = include_str!("migrations/0030_restored_input_delivery.sql");
+const MIGRATION_31: &str = include_str!("migrations/0031_minutes_markdown.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -702,6 +704,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (28, MIGRATION_28),
     (29, MIGRATION_29),
     (30, MIGRATION_30),
+    (31, MIGRATION_31),
 ];
 
 fn verify_migration_history(connection: &Connection) -> Result<usize, Box<dyn Error>> {

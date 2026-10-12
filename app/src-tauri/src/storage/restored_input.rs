@@ -433,6 +433,25 @@ pub(in crate::storage) fn validate_database(
 pub(in crate::storage) fn remove_schema_for_test(db: &Connection) {
     if db
         .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=31)",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM minutes_markdown", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        db.execute_batch(
+            "DROP TABLE minutes_markdown; DELETE FROM schema_migrations WHERE version=31;",
+        )
+        .unwrap();
+    }
+    if db
+        .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=30)",
             [],
             |r| r.get::<_, bool>(0),

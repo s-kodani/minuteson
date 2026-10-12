@@ -73,7 +73,7 @@ fn read(storage: &Storage, output: &Path) -> VerifiedArchive {
 fn relational_rules_cover_every_identifier_and_fk_in_the_trusted_schema() {
     let db = portable::schema(MIGRATIONS.len()).unwrap();
     let tables = portable::tables(&db).unwrap();
-    assert_eq!(tables.len(), 32);
+    assert_eq!(tables.len(), 33);
     for table in &tables {
         let bindings = rules(&db, table).unwrap();
         for column in &table.columns {

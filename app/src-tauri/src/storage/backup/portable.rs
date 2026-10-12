@@ -25,6 +25,7 @@ pub(super) const TABLES: &[&str] = &[
     "utterance_speakers",
     "analysis_input_snapshots",
     "minutes_revisions",
+    "minutes_markdown",
     "minutes_items",
     "evidence_links",
     "working_drafts",
@@ -736,6 +737,7 @@ fn bounded_line(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
 }
 
 pub(super) fn validate_scopes(db: &Connection) -> Result<(), String> {
+    crate::storage::minutes_markdown::verify_all(db)?;
     super::input_snapshots::validate_database(db, &|| false)?;
     for (table, head) in [
         ("analysis_revisions", "current_analysis_id"),

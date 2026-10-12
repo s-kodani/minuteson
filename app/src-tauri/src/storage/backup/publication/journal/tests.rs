@@ -370,7 +370,7 @@ fn restore_journal_migrates_v21_and_excludes_all_local_recovery_records_from_bac
     target.create_backup_archive(&path, &|| false).unwrap();
     let source = archive::read(&mut File::open(path).unwrap(), f.output.path(), &|| false).unwrap();
     assert_eq!(source.manifest.schema_version, MIGRATIONS.len());
-    assert_eq!(source.manifest.tables.len(), 32);
+    assert_eq!(source.manifest.tables.len(), 33);
     assert!(source
         .manifest
         .tables
@@ -731,7 +731,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
             0
         );
     }
-    assert_eq!(source.manifest.tables.len(), 32);
+    assert_eq!(source.manifest.tables.len(), 33);
 }
 
 #[test]

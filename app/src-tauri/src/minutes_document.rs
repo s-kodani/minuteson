@@ -532,11 +532,22 @@ impl MinutesContent {
 
     #[allow(dead_code)]
     pub(crate) fn markdown(&self, input: &MinutesInput) -> Result<String, String> {
+        self.render_markdown(input, false)
+    }
+
+    // Storage update only: preserve the existing effective text and formatting,
+    // replacing fixed utterance chips with ordinary Markdown audio intervals.
+    pub(crate) fn plain_markdown(&self, input: &MinutesInput) -> Result<String, String> {
+        self.render_markdown(input, true)
+    }
+
+    fn render_markdown(&self, input: &MinutesInput, audio_links: bool) -> Result<String, String> {
         self.validate(input)?;
         let links: HashMap<_, _> = self.evidence.iter().map(|e| (e.id.as_str(), e)).collect();
         let mut rendered = Markdown {
             links,
             used: vec![],
+            audio_links,
         };
         let mut output = String::new();
         for block in &self.blocks {
@@ -762,6 +773,7 @@ fn utc_label(ms: i64) -> Option<String> {
 struct Markdown<'a> {
     links: HashMap<&'a str, &'a Evidence>,
     used: Vec<String>,
+    audio_links: bool,
 }
 impl Markdown<'_> {
     fn inline(&mut self, content: &[Inline], table: bool) -> String {
@@ -794,6 +806,21 @@ impl Markdown<'_> {
                 Inline::Evidence {
                     evidence_link_id, ..
                 } => {
+                    let evidence = self.links[evidence_link_id.as_str()];
+                    if self.audio_links {
+                        let precise = |us: i64| {
+                            let base = time_label(us);
+                            if us % 1_000_000 == 0 {
+                                base
+                            } else {
+                                format!("{base}.{:06}", us % 1_000_000)
+                            }
+                        };
+                        let start = precise(evidence.start_us);
+                        let end = precise(evidence.end_us);
+                        output.push_str(&format!(" [{start}–{end}](audio:{start}-{end})"));
+                        continue;
+                    }
                     let index = match self.used.iter().position(|id| id == evidence_link_id) {
                         Some(i) => i,
                         None => {
@@ -801,7 +828,6 @@ impl Markdown<'_> {
                             self.used.len() - 1
                         }
                     };
-                    let evidence = self.links[evidence_link_id.as_str()];
                     output.push_str(&format!(
                         " {}[^根拠{}]",
                         time_label(evidence.start_us),

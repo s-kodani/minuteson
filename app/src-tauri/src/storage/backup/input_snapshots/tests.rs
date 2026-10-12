@@ -799,7 +799,7 @@ fn legacy_twenty_eight_schema_has_no_snapshot_column_and_migrates_without_changi
     assert!(has_column(&db).unwrap());
     assert_eq!(
         super::super::super::verify_migration_history(&db).unwrap(),
-        30
+        31
     );
     drop(db);
     drop(storage);
