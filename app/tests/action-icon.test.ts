@@ -81,8 +81,8 @@ test("ordinary refresh, pause and page navigation labels do not remain as text-o
     visit(parsed);
   }
   assert.deepEqual(remaining,[]);
-  // Manual recovery/model-deletion screens and their controls were removed.
-  assert.ok(icons>=28,`expected remaining secondary paths, found ${icons}`);
+  // Manual recovery/model-deletion and redundant display controls were removed.
+  assert.ok(icons>=27,`expected remaining secondary paths, found ${icons}`);
 });
 
 test("recovery pagination icons preserve guarded read actions and explicit labels", () => {

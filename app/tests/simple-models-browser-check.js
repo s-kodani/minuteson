@@ -3,7 +3,32 @@ async function (page) {
   await page.evaluate(() => window.modelDownloadFixture.setParent(true));
   const select = page.getByRole("combobox", { name: "文字起こしのモデル", exact: true });
   const asrRow = page.locator('.model-selection-row').filter({has:select});
-  await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+  await select.waitFor();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    for (const width of [1200, 800, 390]) {
+      await page.setViewportSize({width, height:900});
+      const metrics = await page.locator('.model-selection-row').evaluateAll(rows => rows.map(row => {
+        const select = row.querySelector('select'), button = row.querySelector('button');
+        const field = select.getBoundingClientRect(), action = button.getBoundingClientRect();
+        const fieldStyle = getComputedStyle(select), actionStyle = getComputedStyle(button);
+        return {height:field.height, buttonHeight:action.height, top:field.top, buttonTop:action.top,
+          font:fieldStyle.fontSize, buttonFont:actionStyle.fontSize,
+          lineHeight:fieldStyle.lineHeight, buttonLineHeight:actionStyle.lineHeight,
+          right:Math.max(field.right,action.right)};
+      }));
+      check(metrics.length === 3, "expected all three model selectors");
+      for (const metric of metrics) {
+        check(metric.height === 40 && Math.abs(metric.height - metric.buttonHeight) < 1, `model control heights differ at ${width}px (${theme})`);
+        check(metric.font === metric.buttonFont && metric.lineHeight === metric.buttonLineHeight, "model control fonts differ");
+        if (width > 600) check(Math.abs(metric.top - metric.buttonTop) < 1, "model controls are vertically misaligned");
+        check(metric.right <= width, "model controls overflow the viewport");
+      }
+    }
+  }
+  results.push("all three model selectors match button height, typography and alignment in both themes at three viewport widths");
+  await page.setViewportSize({width:1200,height:900});
+  await select.selectOption("official:synthetic-catalog");
   check(await page.getByRole("combobox").count() === 3, "expected three simple model choices");
   check(await page.getByRole("button", { name: /取得定義|取得記録|配置・構成記録/ }).count() === 0, "obsolete setup actions remain");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "lost"; });

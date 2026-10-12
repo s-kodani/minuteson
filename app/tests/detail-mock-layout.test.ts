@@ -125,9 +125,9 @@ test("mixed action rows and select fields align without removing wrapping or che
   assert.match(css,/\.meeting-form-row \{ align-items:center; flex-wrap:wrap;/);
   assert.match(css,/\.theme-choice select,\.common-modal select,\.capture-input-selection select \{ min-height:40px;[^}]*border-radius:8px;/);
   assert.match(css,/\.audio-controls label \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px;/);
-  assert.match(css,/\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
+  assert.match(css,/\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select,\.model-selection-row select \{\s*-webkit-appearance:none; appearance:none; padding-right:32px;/);
   assert.match(css,/background-size:5px 5px; background-repeat:no-repeat;/);
-  assert.match(css,/@media\(forced-colors:active\) \{\s*\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
+  assert.match(css,/@media\(forced-colors:active\) \{\s*\.theme-choice select,\.common-modal select,\.audio-controls select,\.capture-input-selection select,\.model-selection-row select \{ -webkit-appearance:auto; appearance:auto; background-image:none;/);
   assert.match(css,/\.action-error:has\(>button\) \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;/);
   assert.match(css,/\.vocabulary-list \.analysis-actions label \{ gap:8px;/);
   assert.match(css,/\.transcript-main>\.transcript-actions:first-child \{ min-height:32px;/);

@@ -196,17 +196,37 @@ impl Publication {
         if prefixes.len() != 2 {
             return Err("原音声の確定証拠が両入力で揃っていません".into());
         }
-        let origin = prefixes
+        let audio_prefixes: Vec<_> = prefixes
             .iter()
-            .map(Prefix::first_capture_nanoseconds)
+            .filter(|prefix| prefix.frames() > 0)
+            .collect();
+        if audio_prefixes.len() != 2
+            && !(manifest.system_audio_unreceived
+                && audio_prefixes.len() == 1
+                && audio_prefixes[0].lane() == crate::recording_segments::Lane::Microphone)
+        {
+            return Err("原音声の未取得範囲と録音manifestが一致しません".into());
+        }
+        let origin = audio_prefixes
+            .iter()
+            .map(|prefix| prefix.first_capture_nanoseconds())
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .min()
             .unwrap();
-        let all_groups = vec![
-            groups(&prefixes[0], origin, &manifest.microphone)?,
-            groups(&prefixes[1], origin, &manifest.system)?,
-        ];
+        let all_groups = audio_prefixes
+            .iter()
+            .map(|prefix| {
+                groups(
+                    prefix,
+                    origin,
+                    match prefix.lane() {
+                        crate::recording_segments::Lane::Microphone => &manifest.microphone,
+                        crate::recording_segments::Lane::System => &manifest.system,
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let descriptions: Vec<_> = all_groups
             .iter()
             .map(|groups| {
@@ -225,7 +245,7 @@ impl Publication {
             .collect();
         let input_hash = hash(
             &serde_json::to_vec(&serde_json::json!({"version":1,
-            "manifest":manifest_hash, "raw":[prefixes[0].tip_hash(), prefixes[1].tip_hash()],
+            "manifest":manifest_hash, "raw":prefixes.iter().map(Prefix::tip_hash).collect::<Vec<_>>(),
             "origin":origin, "groups":descriptions}))
             .map_err(|e| e.to_string())?,
         );
@@ -234,7 +254,7 @@ impl Publication {
             base,
             PLAN,
             input_hash,
-            prefixes,
+            &audio_prefixes,
             all_groups,
             &|| false,
             #[cfg(target_os = "macos")]
@@ -301,7 +321,7 @@ impl Publication {
             base,
             PARTIAL_PLAN,
             input_hash,
-            prefixes,
+            &prefixes.iter().collect::<Vec<_>>(),
             all_groups,
             cancelled,
             #[cfg(target_os = "macos")]
@@ -314,7 +334,7 @@ impl Publication {
         base: &Path,
         plan_name: &'static str,
         input_hash: String,
-        prefixes: &[Prefix],
+        prefixes: &[&Prefix],
         all_groups: Vec<Vec<FlacGroup>>,
         cancelled: &impl Fn() -> bool,
         #[cfg(target_os = "macos")] recovery_rebind: Option<relocation::RecoveryRebind>,

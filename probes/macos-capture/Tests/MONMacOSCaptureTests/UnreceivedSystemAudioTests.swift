@@ -4,6 +4,14 @@ import XCTest
 @testable import MONMacOSCapture
 
 final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
+  private func directory() throws -> URL {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+      at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    let path = try XCTUnwrap(realpath(root.path, nil))
+    defer { free(path) }
+    return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+  }
   func testWriterPermitsOnlyExplicitCleanUnreceivedTestAndRetainsFailures() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
@@ -18,20 +26,92 @@ final class UnreceivedSystemAudioTests: XCTestCase, @unchecked Sendable {
         writer.retainFailure(ProbeError.permission("synthetic denial"))
       }
       do {
-        try await writer.finish(allowUnreceivedTestAudio: mode != "ordinary")
+        try await writer.finish(allowUnreceivedAudio: mode != "ordinary")
         XCTAssertEqual(mode, "test")
-        try await writer.finish(allowUnreceivedTestAudio: true)
+        try await writer.finish(allowUnreceivedAudio: true)
       } catch {
         XCTAssertNotEqual(mode, "test")
         let firstFailure = String(describing: error)
         do {
-          try await writer.finish(allowUnreceivedTestAudio: true)
+          try await writer.finish(allowUnreceivedAudio: true)
           XCTFail("retry must retain \(mode) failure")
         } catch { XCTAssertEqual(String(describing: error), firstFailure) }
       }
       XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
       XCTAssertEqual(writer.stats.frames, 0)
     }
+  }
+
+  func testCleanUnreceivedRecordingClosesEmptyRawProofWithoutCreatingAudio() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let owner = UUID().uuidString.lowercased()
+    let raw = try RawRecordingSegments(output: root, owner: owner, lane: "system")
+    let url = root.appendingPathComponent("system.caf")
+    let writer = SystemPCMWriter(outputURL: url, rawSegments: raw)
+    try await writer.finish(allowUnreceivedAudio: true)
+    try await writer.finish(allowUnreceivedAudio: true)
+    XCTAssertEqual(raw.snapshot().sealedFrames, 0)
+    XCTAssertEqual(raw.snapshot().sealedSegments, 0)
+    XCTAssertTrue(raw.snapshot().producerClosed)
+    XCTAssertNil(raw.snapshot().failure)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+  }
+
+  func testOrdinaryUnreceivedManifestRequiresOwnedRawAndBothAcquisitionClosures() async throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let owner = UUID().uuidString.lowercased()
+    let raw = try RawRecordingSegments(output: root, owner: owner, lane: "system")
+    try raw.finish()
+    func reading(_ value: Int64) -> CaptureClockReading {
+      CaptureClockReading(
+        hostBeforeNs: value, continuousNs: value + 10, utcMs: 1_700_000_000_000,
+        hostAfterNs: value + 20)
+    }
+    let box = ReadingBox(reading(1_000_000_000))
+    let clock = try CaptureClockDomain(units: MachTimeUnits(numerator: 1, denominator: 1)) {
+      box.read()
+    }
+    var mic = TrackStats(callbackCount: 1, frames: 8000, sampleRate: 8000, channels: 2)
+    mic.recordSavedClock(.timestamp(1_000_000_010), frames: 8000, sourceFrame: 0)
+    var pc = TrackStats()
+    pc.rawSegments = raw.snapshot()
+    pc.systemRecovery = .init(state: "stopped", sourceEpoch: 1, interruptions: 0, reason: nil)
+    box.set(reading(2_100_000_000))
+    let micClosure = try clock.close(.microphone)
+    let pcClosure = try clock.close(.system)
+    let original = Manifest(
+      schemaVersion: 2, scenario: "quiet-ordinary", captureMode: "system", backend: "coreaudio",
+      targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic", requestedDurationSeconds: nil,
+      osVersion: "synthetic", architecture: "arm64", state: "saved", microphone: mic, system: pc,
+      errors: [], recordingOwnerId: owner)
+    for problem in ["raw", "owner", "capture", "callback", "format", "write", "state", "closure"] {
+      var invalid = original
+      switch problem {
+      case "raw": invalid.system.rawSegments = nil
+      case "owner": invalid.recordingOwnerId = UUID().uuidString.lowercased()
+      case "capture": invalid.system.retainCaptureFailure(ProbeError.permission("synthetic denial"))
+      case "callback": invalid.system.callbackCount = 1
+      case "format": invalid.system.sampleRate = 8000
+      case "write": invalid.system.appendFailures = 1
+      case "state":
+        invalid.system.systemRecovery = .init(
+          state: "disconnected", sourceEpoch: 1, interruptions: 1, reason: "lost")
+      default: break
+      }
+      XCTAssertThrowsError(
+        try invalid.finalizeStoppedClock(
+          clock, microphoneClosure: micClosure,
+          systemClosure: problem == "closure" ? nil : pcClosure), problem)
+    }
+    var saved = original
+    try saved.finalizeStoppedClock(clock, microphoneClosure: micClosure, systemClosure: pcClosure)
+    XCTAssertEqual(saved.schemaVersion, 3)
+    XCTAssertEqual(saved.systemAudioUnreceived, true)
+    XCTAssertEqual(saved.system.clockSegments?.count, 0)
+    XCTAssertEqual(saved.microphone.clockSegments?.last?.timelineEndUs, 1_000_000)
+    XCTAssertEqual(saved.captureEnd?.endUs, 1_100_000)
   }
 
   func testTestClockUsesSavedMicrophoneOriginAndRejectsEmptyPCContradictions() throws {

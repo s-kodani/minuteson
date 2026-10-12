@@ -9,12 +9,13 @@ test("meeting title editing has its own guarded modal instead of management sect
   assert.match(main,/expectedLockVersion: selectedMeeting.lockVersion/);
   assert.match(main,/!renameOpen \|\| meetingBusy \|\| writeLocked \|\| !renameTitle.trim\(\)/);
 });
-test("navigation progress is a uniquely owned toast and settings gear is 28px",()=>{
-  assert.match(main,/type="navigation-progress" level="info"/);
-  assert.match(main,/setNavigationEvent\(crypto.randomUUID\(\)\)/);
+test("navigation has no routine progress toast and settings gear is 28px",()=>{
+  assert.doesNotMatch(main,/navigation-progress|編集の保存を確認中|操作を実行中/);
   assert.doesNotMatch(main,/navigationBusy && <(?:p|span) role="status"/);
   assert.match(main,/settings-nav-glyph.*ActionIcon name="gear"/);
   const css=readFileSync(new URL("../src/prototype-alignment.css",import.meta.url),"utf8");
   assert.match(css,/\.settings-nav-glyph \{[^}]*align-items: center; justify-content: center; flex: 0 0 28px; height: 28px;/);
   assert.match(css,/\.settings-nav-glyph \.action-icon \{ width: 28px; height: 28px;/);
+  const theme=readFileSync(new URL("../src/theme.tsx",import.meta.url),"utf8");
+  assert.doesNotMatch(theme,/本文と再生の表示設定|保存済み表示設定を再読込/);
 });

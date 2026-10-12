@@ -27,6 +27,38 @@ pub(super) struct CaptureEnd {
 }
 
 impl CaptureManifest {
+    pub(super) fn validated_unreceived_system(&self, owner: &str) -> Result<bool, String> {
+        if !self.system_audio_unreceived {
+            return Ok(false);
+        }
+        let track = &self.system;
+        #[cfg(unix)]
+        let empty_raw = track.raw_segments.as_ref().is_some_and(|status| {
+            status.capacity_owner(owner, crate::recording_segments::Lane::System)
+        });
+        #[cfg(not(unix))]
+        let empty_raw = false;
+        if self.schema_version != 3
+            || self.state != "saved"
+            || !self.errors.is_empty()
+            || self.recording_owner_id.as_deref() != Some(owner)
+            || !crate::input_levels::valid_owner(owner)
+            || self.capture_end.is_none()
+            || self.capture_clock.is_none()
+            || track.frames != 0
+            || track.callback_count != 0
+            || track.append_failures != 0
+            || track.sample_rate.is_some()
+            || track.channels.is_some()
+            || track.capture_failure.is_some()
+            || track.capture_failure_detail.is_some()
+            || track.clock_segments.as_deref() != Some(&[])
+            || !empty_raw
+        {
+            return Err("未取得のPC音声の形式・終了証拠が不正です".into());
+        }
+        Ok(true)
+    }
     pub(super) fn validated_capture_clock(&self) -> Result<Option<&CaptureClock>, String> {
         match (self.schema_version, &self.capture_clock) {
             (1, None) => Ok(None),

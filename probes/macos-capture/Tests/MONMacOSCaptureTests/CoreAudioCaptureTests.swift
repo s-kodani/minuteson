@@ -52,6 +52,47 @@ private final class SilentTapDriver: CoreAudioCaptureDriver, @unchecked Sendable
 }
 
 final class CoreAudioCaptureTests: XCTestCase, @unchecked Sendable {
+  func testQuietPCStopsNormallyWithClosedEmptyRawProofButFailedStopStillFails() async throws {
+    for failedStop in [false, true] {
+      let created = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mon-quiet-tap-\(UUID())")
+      try FileManager.default.createDirectory(
+        at: created, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+      let path = try XCTUnwrap(realpath(created.path, nil))
+      defer { free(path) }
+      let root = URL(fileURLWithPath: String(cString: path), isDirectory: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let raw = try RawRecordingSegments(
+        output: root, owner: UUID().uuidString.lowercased(), lane: "system")
+      let driver = SilentTapDriver()
+      let recorder = SystemAudioRecorder(
+        outputURL: root.appendingPathComponent("system.caf"), clock: try CaptureClockDomain.live(),
+        retries: true, backend: "coreaudio",
+        factory: { recorder, _ in
+          CoreAudioCaptureStream(
+            driver: driver,
+            deliver: { source, sample in recorder.receive(from: source, sampleBuffer: sample) },
+            ended: { source, error in recorder.sourceEnded(source, error: error) })
+        }, rawSegments: raw)
+      try await recorder.start(targetPID: nil)
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+      driver.setStopFailure(failedStop)
+      do {
+        let ending = try await recorder.stopRecording()
+        XCTAssertFalse(failedStop)
+        let replay = try await recorder.stopRecording()
+        XCTAssertEqual(replay, ending)
+        XCTAssertTrue(raw.snapshot().producerClosed)
+        XCTAssertEqual(raw.snapshot().sealedFrames, 0)
+      } catch {
+        XCTAssertTrue(failedStop)
+        XCTAssertTrue(String(describing: error).contains("synthetic tap stop failure"))
+      }
+      XCTAssertEqual(recorder.snapshot().frames, 0)
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: root.appendingPathComponent("system.caf").path))
+    }
+  }
   private let identity = CaptureApplicationIdentity(
     pid: 123, bundleIdentifier: "com.example.confirmed", launchTimeUs: 1_791_100_000_000_001)
 

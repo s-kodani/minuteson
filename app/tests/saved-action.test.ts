@@ -55,6 +55,6 @@ test("workspace reports the actual phase without removing busy and duplicate-ope
   assert.match(main, /if \(navigating.current\) return;\s*navigating.current = true/);
   assert.match(main, /await runAfterSaving\(\(\) => flushPendingEdits\(reason\), action, setNavigationPhase\)/);
   assert.match(main, /reason: "leave" \| "tab" = "leave"/);
-  assert.match(main, /navigationPhase === "saving" \? "編集の保存を確認中" : "操作を実行中"/);
+  assert.doesNotMatch(main, /編集の保存を確認中|操作を実行中|navigation-progress/);
   assert.doesNotMatch(main, /setNavigationBusy/);
 });

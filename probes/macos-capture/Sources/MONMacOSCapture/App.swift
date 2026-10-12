@@ -408,16 +408,31 @@ struct Manifest: Encodable {
     guard schemaVersion == 2, captureTest == nil,
       let owner = recordingOwnerId, InputLevelReport.validOwner(owner),
       let micStart = microphone.firstCaptureNanoseconds,
-      let pcStart = system.firstCaptureNanoseconds,
       let microphoneClosure, let systemClosure
     else { throw ProbeError.capture("recording owner and both acquisition closures are required") }
-    let origin = min(micStart, pcStart)
+    let unreceived = system.frames == 0
+    if unreceived {
+      try system.requireWritable()
+      guard system.callbackCount == 0, system.sampleRate == nil, system.channels == nil,
+        system.firstCaptureNanoseconds == nil, system.captureFailureDetail == nil,
+        let raw = system.rawSegments, raw.ownerId == owner, raw.lane == "system",
+        raw.producerClosed, raw.sealedSegments == 0, raw.sealedFrames == 0,
+        raw.lastEntrySHA256 == nil, raw.failure == nil,
+        system.systemRecovery?.state == "stopped"
+      else { throw ProbeError.capture("unreceived system track has inconsistent closure evidence") }
+      system.clockSegments = []
+      systemAudioUnreceived = true
+    }
+    guard unreceived || system.firstCaptureNanoseconds != nil else {
+      throw ProbeError.capture("system capture clock is missing")
+    }
+    let origin = min(micStart, system.firstCaptureNanoseconds ?? micStart)
     try microphone.finishClock(originNanoseconds: origin)
-    try system.finishClock(originNanoseconds: origin)
+    if !unreceived { try system.finishClock(originNanoseconds: origin) }
     let (metadata, ending) = try clock.ending(
       originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
     guard let micEnd = microphone.clockSegments?.last?.timelineEndUs,
-      let pcEnd = system.clockSegments?.last?.timelineEndUs,
+      let pcEnd = unreceived ? 0 : system.clockSegments?.last?.timelineEndUs,
       micEnd <= ending.microphoneClosedUs, pcEnd <= ending.systemClosedUs
     else { throw ProbeError.capture("saved PCM extends beyond its acquisition closure") }
     captureClock = metadata
@@ -924,12 +939,16 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       captureStarted = false
       pcm.invalidateLevels()
     }
-    let allowUnreceivedTestAudio =
-      !proveEnding && testWindow?.metadata().completed == true
+    let allowUnreceivedAudio =
+      (proveEnding && lock.withLock { captureClosure != nil }
+        || !proveEnding && testWindow?.metadata().completed == true)
       && streamStopError == nil && previous?.state == "connected"
-    do { try await pcm.finish(allowUnreceivedTestAudio: allowUnreceivedTestAudio) } catch {
-      lock.withLock { stopFailure = String(describing: error) }
-      throw error
+    do { try await pcm.finish(allowUnreceivedAudio: allowUnreceivedAudio) } catch {
+      let failure =
+        streamStopError.map { "system stop failed: \($0); writer finalization: \(error)" }
+        ?? String(describing: error)
+      lock.withLock { stopFailure = failure }
+      throw ProbeError.capture(failure)
     }
     if let streamStopError {
       lock.withLock { stopFailure = streamStopError }
@@ -1932,7 +1951,8 @@ public enum CaptureCommand {
         if let testWindow, !testWindow.metadata().completed {
           throw ProbeError.capture("five-second test stopped before its window completed")
         }
-        guard micStats.frames > 0, systemStats.frames > 0 || testWindow != nil,
+        guard micStats.frames > 0,
+          systemStats.frames > 0 || testWindow != nil || systemClosure != nil,
           micStats.appendFailures == 0, systemStats.appendFailures == 0
         else {
           throw ProbeError.capture("audio track is empty or contains failed writes")

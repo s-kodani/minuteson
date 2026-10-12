@@ -461,14 +461,14 @@ button:disabled { opacity:.5; }
 .audio-controls select { box-sizing:border-box; height:var(--action-height,40px); min-height:var(--action-height,40px); padding:5px 8px; font:inherit; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 /* WebKit's native select ignores padding/min-height. Retain the native select
    semantics while drawing the field and its theme-aware chevron ourselves. */
-.theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select {
+.theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select,.model-selection-row select {
   -webkit-appearance:none; appearance:none; padding-right:32px;
   background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
   background-position:right 16px center,right 11px center;
   background-size:5px 5px; background-repeat:no-repeat;
 }
 @media(forced-colors:active) {
-  .theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select { -webkit-appearance:auto; appearance:auto; background-image:none; }
+  .theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select,.model-selection-row select { -webkit-appearance:auto; appearance:auto; background-image:none; }
 }
 .common-modal .playback-follow-choice input[type=checkbox],.vocabulary-list input[type=checkbox] { margin:0; flex:none; }
 .meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
@@ -722,7 +722,7 @@ button:disabled { opacity:.5; }
 .model-selection-list { display:grid; gap:16px; margin-block:20px; }
 .model-selection-row { display:flex; align-items:flex-end; gap:12px; }
 .model-selection-row>label { display:grid; gap:8px; flex:1; min-width:0; }
-.model-selection-row select { width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); }
+.model-selection-row select { width:100%; min-width:0; height:40px; box-sizing:border-box; padding:9px 32px 9px 12px; border:1px solid var(--border); border-radius:8px; background-color:var(--surface); color:var(--text); }
 .model-selection-row>button,.model-selection-row select { min-height:40px; font-family:inherit; font-size:13px; line-height:20px; }
 .model-selection-row>button { flex:none; }
 .transcript-main>.transcript-actions:first-child>h2 { margin-right:auto; }

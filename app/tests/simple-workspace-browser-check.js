@@ -22,5 +22,12 @@ async (page,capturePath)=>{
   await tools.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();await tools.waitFor({state:"hidden"});
   results.push("meeting operation menu contains no recording session or meeting info sections");
   for(const width of [1200,400]){await page.setViewportSize({width,height:800});const h=await title.boundingBox(),b=await edit.boundingBox();check(b.x>=h.x+h.width&&Math.abs((h.y+h.height/2)-(b.y+b.height/2))<2,"title edit icon lacks spacing or vertical alignment");await page.screenshot({path:capturePath(`simple-workspace-${width}.png`)});}
+  await page.setViewportSize({width:1200,height:800});
+  await page.getByRole("button",{name:"設定",exact:true}).click();
+  await page.locator('.content h1').filter({hasText:/^設定$/}).waitFor();
+  check(await page.getByRole("button",{name:"本文と再生の表示設定",exact:true}).count()===0,"removed display settings remain");
+  check(await page.locator('.theme-settings select').count()===1,"settings should retain only the theme selector");
+  check(await page.locator('.toast-host .toast-body p').filter({hasText:/操作を実行中|編集の保存を確認中/}).count()===0,"settings navigation shows a routine progress toast");
+  results.push("settings keeps its theme selector without the removed reading panel or routine navigation notifications");
   return {passed:results.length,results};
 }

@@ -209,7 +209,6 @@ function MainWindow() {
   const [recoveredCount, setRecoveredCount] = useState(0);
   const [navigationPhase, setNavigationPhase] = useState<SavedActionPhase>("idle");
   const navigationBusy = navigationPhase !== "idle";
-  const [navigationEvent, setNavigationEvent] = useState("");
   const loadOrigins = async () => {
     try { setRestoredIds(await invoke<string[]>("list_restored_meeting_ids")); setOriginError(""); }
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
@@ -220,7 +219,6 @@ function MainWindow() {
   const withSavedEdits = async (action: () => void | Promise<void>, reason: "leave" | "tab" = "leave") => {
     if (navigating.current) return;
     navigating.current = true;
-    setNavigationEvent(crypto.randomUUID());
     setMeetingError("");
     try {
       await runAfterSaving(() => flushPendingEdits(reason), action, setNavigationPhase);
@@ -718,7 +716,6 @@ function MainWindow() {
           }} /> : renderMeetingTools(null, null)}
           <section className="meetings-card" aria-label="保存済み会議" hidden={detail}>
             <div className="card-head"><input type="search" className="meeting-search" aria-label="会議名を検索" placeholder="会議名を検索" value={meetingQuery} onChange={event => setMeetingQuery(event.target.value)} /><IconButton label="再読込" icon="refresh" onClick={reloadMeetings} disabled={!isTauri() || writeLocked} /></div>
-            <ToastNotice scope="main" type="navigation-progress" level="info" important={false} eventId={`${navigationEvent}:${navigationPhase}`} message={navigationBusy ? navigationPhase === "saving" ? "編集の保存を確認中" : "操作を実行中" : ""} />
             <ToastNotice scope="main" type="recording-recovered" message={recoveredCount > 0 ? `前回の音声保存 ${recoveredCount} 件を検証して復旧しました。` : ""} onClose={() => setRecoveredCount(0)} />
             {!detail && <IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} />}
             {restoredFilter && <p className="meeting-list-notice">今回復元した会議を表示しています。<button type="button" className="small-secondary" disabled={writeLocked} onClick={() => void withSavedEdits(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}

@@ -42,6 +42,133 @@ fn caf(frames: u64) -> Vec<u8> {
     }
     bytes
 }
+
+#[test]
+fn unreceived_system_recording_saves_only_microphone_and_preserves_closed_empty_proof() {
+    let f = Fixture::new(1, 2000, false);
+    let path = f.base.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let tip = json!({"schemaVersion":2,"ownerId":f.session.id,"lane":"system",
+        "sealedSegments":0,"sealedFrames":0,"lastEntrySHA256":null,"producerClosed":true});
+    write(
+        &f.base.join("raw-system.json"),
+        &serde_json::to_vec(&tip).unwrap(),
+    );
+    let mut status = tip;
+    status["failure"] = Value::Null;
+    manifest["systemAudioUnreceived"] = json!(true);
+    manifest["system"] = json!({"frames":0,"callbackCount":0,"appendFailures":0,
+        "clockSegments":[],"rawSegments":status});
+    // Only task-created synthetic files, never real user recordings.
+    for name in [
+        "system.caf",
+        "raw-system-00000001.caf",
+        "raw-system-00000001.json",
+    ] {
+        std::fs::remove_file(f.base.join(name)).unwrap();
+    }
+    write(&path, &serde_json::to_vec(&manifest).unwrap());
+    let original = std::fs::read(f.base.join("microphone.caf")).unwrap();
+    let saved = f.storage.finalize_recording(&f.session.id).unwrap();
+    assert_eq!(saved.state, "saved");
+    assert_eq!(saved.duration_us, 900000);
+    assert_eq!(f.registered_tracks(), 1);
+    let plan = f
+        .storage
+        .recorded_audio_plan(&f.session.meeting_id)
+        .unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(plan.tracks[0].kind, "mic");
+    assert_eq!(plan.tracks[0].chunks[0].frames, 2000);
+    assert_eq!(
+        std::fs::read(f.base.join("microphone.caf")).unwrap(),
+        original
+    );
+    assert!(!f.base.join("system.caf").exists());
+    let root = f.storage.root.clone();
+    drop(f.storage);
+    let reopened = Storage::open(root).unwrap();
+    assert_eq!(
+        reopened
+            .recorded_audio_plan(&f.session.meeting_id)
+            .unwrap()
+            .tracks
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn unreceived_system_recording_rejects_conflicting_payload_unclosed_owner_and_failures() {
+    for problem in [
+        "payload",
+        "callback",
+        "frames",
+        "append",
+        "capture",
+        "detail",
+        "clock",
+        "owner",
+        "missing-end",
+        "open-tip",
+        "failed-tip",
+        "foreign-tip",
+        "tip-frames",
+        "mic-origin",
+    ] {
+        let f = Fixture::new(1, 2000, false);
+        let path = f.base.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut tip = json!({"schemaVersion":2,"ownerId":f.session.id,"lane":"system",
+            "sealedSegments":0,"sealedFrames":0,"lastEntrySHA256":null,"producerClosed":true});
+        if problem == "open-tip" {
+            tip["producerClosed"] = json!(false);
+        }
+        if problem == "foreign-tip" {
+            tip["ownerId"] = json!(Uuid::new_v4().to_string());
+        }
+        if problem == "tip-frames" {
+            tip["sealedFrames"] = json!(1);
+        }
+        write(
+            &f.base.join("raw-system.json"),
+            &serde_json::to_vec(&tip).unwrap(),
+        );
+        tip["failure"] = if problem == "failed-tip" {
+            json!("synthetic sync failure")
+        } else {
+            Value::Null
+        };
+        manifest["systemAudioUnreceived"] = json!(true);
+        manifest["system"] = json!({"frames":0,"callbackCount":0,"appendFailures":0,
+            "clockSegments":[],"rawSegments":tip});
+        match problem {
+            "callback" => manifest["system"]["callbackCount"] = json!(1),
+            "frames" => manifest["system"]["frames"] = json!(1),
+            "append" => manifest["system"]["appendFailures"] = json!(1),
+            "capture" => manifest["system"]["captureFailure"] = json!("capture_audio_write_failed"),
+            "detail" => manifest["system"]["captureFailureDetail"] = json!("denied"),
+            "clock" => manifest["system"]["clockSegments"] = Value::Null,
+            "owner" => manifest["recordingOwnerId"] = json!(Uuid::new_v4().to_string()),
+            "missing-end" => manifest["captureEnd"] = Value::Null,
+            "mic-origin" => {
+                manifest["microphone"]["clockSegments"][0]["timelineStartUs"] = json!(100);
+                manifest["microphone"]["clockSegments"][0]["timelineEndUs"] = json!(250100);
+            }
+            _ => {}
+        }
+        if problem != "payload" {
+            std::fs::remove_file(f.base.join("system.caf")).unwrap();
+        }
+        write(&path, &serde_json::to_vec(&manifest).unwrap());
+        assert!(
+            f.storage.finalize_recording(&f.session.id).is_err(),
+            "{problem}"
+        );
+        assert_eq!(f.registered_tracks(), 0, "{problem}");
+        assert!(f.base.join("microphone.caf").exists());
+    }
+}
 impl Fixture {
     pub(crate) fn registered_tracks(&self) -> i64 {
         self.storage

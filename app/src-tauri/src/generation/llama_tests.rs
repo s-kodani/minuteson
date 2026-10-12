@@ -2,6 +2,30 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn literal_markdown_whitespace_preserves_text_without_accepting_other_invalid_json() {
+    let source = "{\n\"markdown\":\"# 会議\n\n- 点検日\t確認\r\n[区間](audio:00:00:01-00:00:02)\"\n}\n[end of text]";
+    assert_eq!(
+        parse_output(source.as_bytes()).unwrap(),
+        json!({"markdown":"# 会議\n\n- 点検日\t確認\r\n[区間](audio:00:00:01-00:00:02)"})
+    );
+    assert_eq!(
+        parse_output(br#"{"markdown":"escaped \\n and \"quotes\""}"#).unwrap(),
+        json!({"markdown":"escaped \\n and \"quotes\""})
+    );
+    for source in [
+        "{\"markdown\":\"a\0b\"}",
+        "{\"markdown\":\"a\u{1b}b\"}",
+        "{\"markdown\":\"a\n",
+        "{\"markdown\":\"a\n\",\"markdown\":\"b\"}",
+        "{\"markdown\":\"a\n\"}{}",
+        "log\n{\"markdown\":\"a\n\"}",
+        "{\"markdown\":\"a\\\nb\"}",
+    ] {
+        assert!(parse_output(source.as_bytes()).is_err(), "{source:?}");
+    }
+}
+
+#[test]
 fn output_is_one_complete_object_not_a_log_or_truncated_completion() {
     for good in [r#"{"items":[]}"#, " \n{\"items\":[]}\n [end of text]\n"] {
         assert_eq!(parse_output(good.as_bytes()).unwrap(), json!({"items":[]}));

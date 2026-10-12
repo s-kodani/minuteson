@@ -31,6 +31,8 @@ struct CaptureManifest {
     microphone: CaptureTrack,
     system: CaptureTrack,
     #[serde(default)]
+    system_audio_unreceived: bool,
+    #[serde(default)]
     capture_clock: Option<CaptureClock>,
     #[serde(default)]
     capture_end: Option<CaptureEnd>,
@@ -45,6 +47,12 @@ struct CaptureTrack {
     sample_rate: Option<f64>,
     channels: Option<i64>,
     append_failures: i64,
+    #[serde(default)]
+    callback_count: i64,
+    #[serde(default)]
+    capture_failure: Option<String>,
+    #[serde(default)]
+    capture_failure_detail: Option<String>,
     #[serde(default)]
     clock_segments: Option<Vec<crate::audio_clock::ClockSegment>>,
     #[cfg(unix)]
@@ -508,6 +516,14 @@ impl Storage {
                 &|| false,
             )?;
             match (prefix, &track.raw_segments) {
+                (Some(prefix), Some(status))
+                    if lane == Lane::System
+                        && manifest.system_audio_unreceived
+                        && status.agrees_with_unreceived(&prefix) =>
+                {
+                    prefix.verify_at(&self.root.join(base), &|| false)?;
+                    prefixes.push(prefix);
+                }
                 (None, None) => {} // Native recordings made before raw segment support.
                 (Some(prefix), Some(status))
                     if manifest.schema_version == 3
@@ -598,15 +614,33 @@ impl Storage {
             return Err("録音manifestと開始条件が一致しません".into());
         }
         let mic_format = manifest.microphone.validated_format()?;
-        let system_format = manifest.system.validated_format()?;
+        let unreceived = manifest.validated_unreceived_system(session_id)?;
+        let system_format = if unreceived {
+            None
+        } else {
+            Some(manifest.system.validated_format()?)
+        };
         let capture_clock = manifest.validated_capture_clock()?;
         let mic_timeline = manifest
             .microphone
             .validated_timeline(capture_clock.is_some())?;
-        let system_timeline = manifest
-            .system
-            .validated_timeline(capture_clock.is_some())?;
-        if capture_clock.is_some() && mic_timeline.start_us.min(system_timeline.start_us) != 0 {
+        let system_timeline = if unreceived {
+            clock::CaptureTimeline {
+                start_us: 0,
+                end_us: 0,
+                segments: &[],
+            }
+        } else {
+            manifest
+                .system
+                .validated_timeline(capture_clock.is_some())?
+        };
+        let first_saved_us = if unreceived {
+            mic_timeline.start_us
+        } else {
+            mic_timeline.start_us.min(system_timeline.start_us)
+        };
+        if capture_clock.is_some() && first_saved_us != 0 {
             return Err("録音の共通原点が最初の保存音声と一致しません".into());
         }
         let ending = manifest.validated_capture_end(session_id, &mic_timeline, &system_timeline)?;
@@ -635,8 +669,17 @@ impl Storage {
         };
         let mic_file =
             self.checked_capture_file(&base.join("microphone.caf"), Some(&manifest.microphone))?;
-        let system_file =
-            self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?;
+        let system_file = if unreceived {
+            let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
+            if crate::input_levels::open_capture_file_at_optional(&directory, "system.caf")?
+                .is_some()
+            {
+                return Err("未取得のPC音声に音声ファイルがあります".into());
+            }
+            None
+        } else {
+            Some(self.checked_capture_file(&base.join("system.caf"), Some(&manifest.system))?)
+        };
         #[cfg(unix)]
         let raw_prefixes = self.verify_completed_raw_prefixes(&base, &manifest, session_id)?;
         #[cfg(unix)]
@@ -705,22 +748,23 @@ impl Storage {
             )?;
         }
         if !converted {
-            for (kind, file, format, timeline, frames) in [
-                (
-                    "mic",
-                    &mic_file,
-                    mic_format,
-                    &mic_timeline,
-                    manifest.microphone.frames,
-                ),
-                (
+            let mut tracks = vec![(
+                "mic",
+                &mic_file,
+                mic_format,
+                &mic_timeline,
+                manifest.microphone.frames,
+            )];
+            if let (Some(system_file), Some(system_format)) = (&system_file, system_format) {
+                tracks.push((
                     "system",
-                    &system_file,
+                    system_file,
                     system_format,
                     &system_timeline,
                     manifest.system.frames,
-                ),
-            ] {
+                ));
+            }
+            for (kind, file, format, timeline, frames) in tracks {
                 let asset_id = insert_capture_asset(
                     &transaction,
                     &session.meeting_id,
@@ -977,6 +1021,9 @@ pub(in crate::storage) mod tests {
             sample_rate: Some(8_000.0),
             channels: Some(1),
             append_failures: 0,
+            callback_count: 0,
+            capture_failure: None,
+            capture_failure_detail: None,
             clock_segments: None,
             #[cfg(unix)]
             raw_segments: None,

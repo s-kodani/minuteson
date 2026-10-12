@@ -64,6 +64,12 @@ impl Status {
             }
     }
     pub(crate) fn agrees_with_completed(&self, prefix: &Prefix, frames: u64) -> bool {
+        frames > 0 && self.agrees_with_closed(prefix, frames)
+    }
+    pub(crate) fn agrees_with_unreceived(&self, prefix: &Prefix) -> bool {
+        prefix.lane() == Lane::System && self.agrees_with_closed(prefix, 0)
+    }
+    fn agrees_with_closed(&self, prefix: &Prefix, frames: u64) -> bool {
         self.schema_version == 2
             && self.owner_id == prefix.tip.owner_id
             && self.lane == prefix.tip.lane
@@ -74,7 +80,6 @@ impl Status {
             && self.producer_closed
             && prefix.tip.producer_closed
             && self.failure.is_none()
-            && frames > 0
     }
 }
 

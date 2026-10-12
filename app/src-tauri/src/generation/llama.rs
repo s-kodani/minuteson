@@ -110,17 +110,53 @@ impl LlamaConfig {
 // Only the official completion adapter's exact end marker is allowed after
 // one JSON object. Never search arbitrary logs for a plausible JSON substring,
 // remove thinking traces, repair truncated output, or accept a second object.
+// Some completion builds emit literal line breaks/tabs inside JSON strings.
+// Escape only those whitespace bytes, preserving the decoded text exactly;
+// never change structure, quote boundaries, escapes or other control bytes.
+fn framed_json(bytes: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(bytes.len());
+    let (mut quoted, mut escaped) = (false, false);
+    for &byte in bytes {
+        if quoted && !escaped {
+            match byte {
+                b'\n' => {
+                    result.extend_from_slice(b"\\n");
+                    continue;
+                }
+                b'\r' => {
+                    result.extend_from_slice(b"\\r");
+                    continue;
+                }
+                b'\t' => {
+                    result.extend_from_slice(b"\\t");
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        result.push(byte);
+        if escaped {
+            escaped = false;
+        } else if quoted && byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            quoted = !quoted;
+        }
+    }
+    result
+}
 pub(crate) fn parse_output(bytes: &[u8]) -> Result<Value, String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_OUTPUT_BYTES {
         return Err("議事録出力のサイズが不正です".into());
     }
-    let mut stream = serde_json::Deserializer::from_slice(bytes).into_iter::<StrictValue>();
+    let framed = framed_json(bytes);
+    let mut stream = serde_json::Deserializer::from_slice(&framed).into_iter::<StrictValue>();
     let value = stream
         .next()
         .ok_or("議事録のJSON出力がありません")?
         .map_err(|e| format!("議事録JSONが不正です: {e}"))?
         .0;
-    let tail = std::str::from_utf8(&bytes[stream.byte_offset()..])
+    let tail = std::str::from_utf8(&framed[stream.byte_offset()..])
         .map_err(|_| "議事録出力がUTF-8ではありません")?
         .trim();
     if !value.is_object() || (!tail.is_empty() && tail != "[end of text]") {

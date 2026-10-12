@@ -1,11 +1,9 @@
-import { IconButton } from "./action-icon";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { isTheme, isTextSize, readingPreferences, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
 import { IssueStatus, ToastNotice } from "./toast";
-import { SettingsDisclosure } from "./settings-disclosure";
 
 const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -76,15 +74,6 @@ export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolea
       {state.pendingTheme && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
       {state.pendingDisplay && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>文字サイズ・追従設定の保存を再試行</button>}
     </div>}
-    <SettingsDisclosure label="本文と再生の表示設定" initialOpen={!compact} attention={!!(state.error || state.busy || state.uncertain || state.pendingPreferences)}>
-    <TextSizeSelection locked={locked} />
-    <PlaybackFollowingSelection locked={locked} />
-    <p className="hint">文字サイズは文字起こし・議事録の本文に適用します。追従は文字起こしの時間位置へ移動します。手動スクロールで一時停止し、再開ボタンか新しい再生で戻ります。編集中・文字選択中・確認画面では移動しません。</p>
-    <div className="analysis-actions">
-      <IconButton label="保存済み表示設定を再読込" icon="refresh" type="button" className="small-secondary" disabled={state.busy || !isTauri()} onClick={() => void controller.reload()} />
-      <span role="status">{state.busy ? "表示設定を保存中" : state.uncertain ? "表示設定は未確認" : state.pendingPreferences ? "選択は未保存" : state.snapshot ? "保存済み設定を使用しています。" : isTauri() ? "表示設定を確認しています。" : "ブラウザプレビューではOS設定に追従します。"}</span>
-    </div>
-    </SettingsDisclosure>
   </section>;
 }
 // This owner stays mounted across navigation. Periodic reads are state updates,
