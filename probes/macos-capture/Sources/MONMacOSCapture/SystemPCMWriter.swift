@@ -37,11 +37,16 @@ final class SystemPCMWriter: @unchecked Sendable {
   }
 
   func invalidateLevels() { lock.withLock { savedStats.inputLevel.invalidate() } }
-  func recordFailure() {
+  func recordFailure(_ error: Error? = nil) {
     lock.withLock {
       savedStats.appendFailures += 1
+      if let error { savedStats.retainCaptureFailure(error) }
       savedStats.inputLevel.invalidate()
     }
+  }
+
+  func retainFailure(_ error: Error) {
+    lock.withLock { savedStats.retainCaptureFailure(error) }
   }
 
   func append(

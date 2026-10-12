@@ -51,7 +51,11 @@ enum CoreAudioTapSample {
       time.mFlags.contains(.hostTimeValid), time.mHostTime > 0,
       time.mFlags.contains(.sampleTimeValid), time.mSampleTime >= 0,
       Int64(exactly: time.mSampleTime) != nil
-    else { throw ProbeError.capture("tap PCM format or hardware timestamp is invalid") }
+    else {
+      throw ProbeError.capture(
+        "PC音声のPCM形式または取得時刻を検証できません。詳細: tap PCM format or hardware timestamp is invalid; rate=\(asbd.mSampleRate), channels=\(asbd.mChannelsPerFrame), format=\(asbd.mFormatID), flags=\(asbd.mFormatFlags), frameBytes=\(asbd.mBytesPerFrame), planes=\(buffers.count), timeFlags=\(time.mFlags.rawValue), hostTime=\(time.mHostTime), sampleTime=\(time.mSampleTime)"
+      )
+    }
     let frameBytes = Int(asbd.mBytesPerFrame)
     let bytes = Int(buffers[0].mDataByteSize)
     guard bytes > 0, bytes % frameBytes == 0,
@@ -62,7 +66,11 @@ enum CoreAudioTapSample {
     for buffer in buffers {
       guard buffer.mData != nil, Int(buffer.mDataByteSize) == bytes,
         buffer.mNumberChannels == (format.isInterleaved ? format.channelCount : 1)
-      else { throw ProbeError.capture("tap PCM buffer planes do not match their format") }
+      else {
+        throw ProbeError.capture(
+          "PC音声の入力バッファと音声形式が一致しません。詳細: tap PCM buffer planes do not match their format; interleaved=\(format.isInterleaved), channels=\(format.channelCount), planes=\(buffers.count), planeChannels=\(buffer.mNumberChannels), planeBytes=\(buffer.mDataByteSize), expectedBytes=\(bytes), hasData=\(buffer.mData != nil)"
+        )
+      }
     }
     var block: CMBlockBuffer?
     let total = bytes * buffers.count

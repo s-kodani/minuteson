@@ -31,6 +31,10 @@ struct Options {
       && (targetPIDs.isEmpty || applicationIdentity != nil)
   }
   var recoversCaptureClock: Bool { publishesInputStatus && recoversSystemAudio }
+  // Creating the tap aggregate may notify existing microphone engines. A
+  // private test opens no save window until both explicitly requested inputs
+  // are ready, so prepare its tap before activating the microphone.
+  var startsSystemBeforeMicrophone: Bool { captureTestOwner != nil && backend == "coreaudio" }
   var captureTestOwner: String? = nil
   var captureTestLeaseFD: Int32? = nil
 
@@ -231,6 +235,9 @@ struct TrackStats: Encodable {
   var firstPresentationTimeSeconds: Double?
   var lastPresentationTimeSeconds: Double?
   var appendFailures = 0
+  // Diagnostic only; keep the manifest track schema unchanged. The initiating
+  // failure is carried by requireWritable into manifest.errors instead.
+  var captureFailureDetail: String?
   var sampleRate: Double?
   var channels: UInt32?
   var clockSegments: [CapturedClockSegment]?
@@ -265,8 +272,15 @@ struct TrackStats: Encodable {
 
   func requireWritable(raw: RawSegmentStatus? = nil) throws {
     if let failure = raw?.failure ?? captureFailure {
-      throw ProbeError.capture(CaptureFailureGuide.message(failure))
+      let detail = captureFailureDetail.map { " 原因: \($0)" } ?? ""
+      throw ProbeError.capture(CaptureFailureGuide.message(failure) + detail)
     }
+  }
+
+  mutating func retainCaptureFailure(_ error: Error) {
+    guard captureFailureDetail == nil else { return }
+    let detail = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !detail.isEmpty { captureFailureDetail = String(detail.prefix(1200)) }
   }
 
   // The callback must use the same full processing format as a rebind. Equal
@@ -547,6 +561,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
     try lock.withLock {
       guard !stopping, stream === source, !streamEnded else {
+        // A callback may fail before start() returns. Keep its recorded reason
+        // rather than replacing it with the activation-state summary.
+        try pcm.stats.requireWritable()
         throw ProbeError.capture("system stream ended before activation")
       }
       try recovery?.activate(token)
@@ -577,7 +594,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         mayContinue: allowed,
         deliver: { [weak self] source, sample in
           self?.receive(from: source, sampleBuffer: sample)
-        }, ended: { [weak self] source, _ in self?.sourceEnded(source) })
+        }, ended: { [weak self] source, error in self?.sourceEnded(source, error: error) })
     }
     let content: SCShareableContent
     do {
@@ -719,18 +736,18 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
   func stream(_ stream: SCStream, didStopWithError error: Error) {
     if let source = lock.withLock({ self.stream?.native === stream ? self.stream : nil }) {
-      sourceEnded(source)
+      sourceEnded(source, error: error)
     }
   }
 
-  func sourceEnded(_ stream: any SystemCaptureStream) {
+  func sourceEnded(_ stream: any SystemCaptureStream, error: Error? = nil) {
     lock.withLock {
       guard self.stream === stream, let token = streamToken else { return }
       streamEnded = true
       guard !stopping, recovery?.owns(token) == true else { return }
       recovery?.interrupt("stream_stopped")
       pcm.invalidateLevels()
-      if !retries { pcm.recordFailure() }
+      if !retries { pcm.recordFailure(error) }
     }
   }
 
@@ -940,7 +957,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         do { try requireIdentity(identity) } catch {
           recovery?.interrupt("application_unavailable", unavailable: true)
           pcm.invalidateLevels()
-          if !retries { pcm.recordFailure() }
+          if !retries { pcm.recordFailure(error) }
           return
         }
       }
@@ -978,8 +995,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     } catch SystemPCMWriter.AppendError.formatChanged {
       recovery?.interrupt("format_changed", unavailable: true)
       pcm.invalidateLevels()
-      if !retries { pcm.recordFailure() }
+      if !retries { pcm.recordFailure(ProbeError.capture("PC音声の保存中に音声形式が変わりました")) }
     } catch {
+      pcm.retainFailure(error)
       if pcm.stats.captureFailure == nil { pcm.recordFailure() }
     }
   }
@@ -1121,6 +1139,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
           self?.clock == nil || self?.testWindow != nil
         {
           self?.stats.appendFailures += 1
+          self?.stats.retainCaptureFailure(
+            ProbeError.capture("マイクの初期化完了後に音声エンジンの構成が変更されました（microphone_configuration_changed）"))
         }
         self?.configurationChanged = true
         if let revision = self?.configurationRevision, revision < UInt64.max {
@@ -1158,8 +1178,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
         self.stats.inputLevel.invalidate()
         return
       }
-      if identityError != nil {
-        if self.clock == nil || self.testWindow != nil { self.stats.appendFailures += 1 }
+      if let identityError {
+        if self.clock == nil || self.testWindow != nil {
+          self.stats.appendFailures += 1
+          self.stats.retainCaptureFailure(identityError)
+        }
         self.recovery?.interrupt("identity_changed")
         self.configurationChanged = true
         self.stats.inputLevel.invalidate()
@@ -1201,7 +1224,13 @@ final class MicrophoneRecorder: @unchecked Sendable {
           self.recovery?.interrupt("format_changed", unavailable: true)
           self.configurationChanged = true
           self.stats.inputLevel.invalidate()
-          if self.clock == nil || self.testWindow != nil { self.stats.appendFailures += 1 }
+          if self.clock == nil || self.testWindow != nil {
+            self.stats.appendFailures += 1
+            self.stats.retainCaptureFailure(
+              ProbeError.capture(
+                "マイクの入力PCMと選択済みの保存形式が一致しません（microphone_pcm_format_changed）; inputRate=\(buffer.format.sampleRate), channels=\(buffer.format.channelCount), inputFormat=\(buffer.format.commonFormat.rawValue), interleaved=\(buffer.format.isInterleaved), savedRate=\(file.processingFormat.sampleRate), savedChannels=\(file.processingFormat.channelCount), timestampRate=\(when.sampleRate)"
+              ))
+          }
           return
         }
         var savedSourceFrame: Int64?
@@ -1228,6 +1257,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
           buffer, observation: observation, sourceFrame: savedSourceFrame, sourceEpoch: token.epoch)
       } catch {
         self.stats.appendFailures += 1
+        self.stats.retainCaptureFailure(error)
         self.stats.inputLevel.invalidate()
       }
     }
@@ -1388,7 +1418,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
       file = nil
     }
     do { try rawSegments?.finish() } catch {
-      lock.withLock { stats.appendFailures += 1 }
+      lock.withLock {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(error)
+      }
     }
   }
 
@@ -1545,14 +1578,20 @@ public enum CaptureCommand {
       do {
         try power.acquire()
         manifest.power.acquired = true
+        if options.startsSystemBeforeMicrophone {
+          try await system.start(
+            targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+        }
         try await mic.start()
         manifest.microphoneDeviceUID = mic.deviceUID
         manifest.microphone = mic.snapshot()
         if options.usesStandaloneTapProbe {
           try tap.start(targetPIDs: options.targetPIDs)
         } else {
-          try await system.start(
-            targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+          if !options.startsSystemBeforeMicrophone {
+            try await system.start(
+              targetPID: options.targetPIDs.first, applicationIdentity: options.applicationIdentity)
+          }
           manifest.targetApplicationIdentity = options.applicationIdentity
           manifest.targetApplicationName = system.targetApplicationName
           manifest.targetBundleIdentifier = system.targetBundleIdentifier

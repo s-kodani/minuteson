@@ -563,8 +563,44 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     try engine.emit(sampleTime: 480, host: 1_000_000_000)
     XCTAssertEqual(recorder.snapshot().frames, 480)
     XCTAssertEqual(recorder.snapshot().appendFailures, 1)
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable()) { error in
+      XCTAssertTrue(String(describing: error).contains("microphone_configuration_changed"))
+    }
     XCTAssertFalse(window.metadata().completed)
     XCTAssertFalse(engine.controlledInNotification)
+  }
+
+  func testTapPreparationBeforeMicrophoneDoesNotBecomeAnActiveTestWriteFailure() async throws {
+    for tapFirst in [false, true] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let time = StartupClock()
+      let engine = SilentMicrophoneEngine()
+      let window = try CaptureTestWindow(ownerId: "735027d4-a03e-43d3-830a-21e767dfaf88")
+      let recorder = recorder(dir, engine, clock: try time.domain(), testWindow: window)
+      defer { recorder.stop() }
+      // Emulate only the configuration notification induced by a new tap
+      // aggregate. This does not create hardware, OS taps or permission prompts.
+      if tapFirst { engine.notify(stopped: true) }
+      try await recorder.start()
+      if !tapFirst { engine.notify(stopped: true) }
+      XCTAssertEqual(recorder.snapshot().frames, 0)
+      try window.open(at: 1_000_000_500)
+      try engine.emit(host: 1_000_000_000)
+      if tapFirst {
+        XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+        XCTAssertEqual(recorder.snapshot().frames, 480)
+        XCTAssertEqual(recorder.deviceUID, "frozen-mic")
+        XCTAssertNoThrow(try recorder.snapshot().requireWritable())
+      } else {
+        XCTAssertEqual(recorder.snapshot().frames, 0)
+        XCTAssertEqual(recorder.snapshot().appendFailures, 1)
+        XCTAssertTrue(
+          recorder.snapshot().captureFailureDetail?.contains("microphone_configuration_changed")
+            == true)
+      }
+      XCTAssertFalse(engine.controlledInNotification)
+    }
   }
 
   func testNormalRebindPreservesCAFAndRetiresOldPCMAndNotificationEpochs() async throws {
@@ -598,6 +634,7 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     recorder.stop()
     XCTAssertEqual(recorder.snapshot().frames, 960)
     XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    XCTAssertNil(recorder.snapshot().captureFailureDetail)
     let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))
     XCTAssertEqual(file.length, 960)
     let buffer = try XCTUnwrap(

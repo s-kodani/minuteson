@@ -46,7 +46,9 @@ private final class SilentTapDriver: CoreAudioCaptureDriver, @unchecked Sendable
   }
   func detach() throws { state.append("detach") }
   func emit(_ value: CMSampleBuffer) { lock.withLock { sample }?(value) }
-  func fail() { lock.withLock { failure }?(ProbeError.capture("synthetic tap interruption")) }
+  func fail(_ error: Error = ProbeError.capture("synthetic tap interruption")) {
+    lock.withLock { failure }?(error)
+  }
 }
 
 final class CoreAudioCaptureTests: XCTestCase, @unchecked Sendable {
@@ -363,5 +365,72 @@ final class CoreAudioCaptureTests: XCTestCase, @unchecked Sendable {
     try file.read(into: saved)
     XCTAssertEqual(saved.floatChannelData![0][0], 0.25)
     XCTAssertEqual(saved.floatChannelData![1][0], -0.5)
+  }
+
+  func testFailedTapKeepsOriginalReasonBeforeEmptyWriterCleanupWithoutHardware() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "mon-tap-failure-fixture-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let driver = SilentTapDriver()
+    let recorder = SystemAudioRecorder(
+      outputURL: directory.appendingPathComponent("system.caf"),
+      clock: try CaptureClockDomain.live(), backend: "coreaudio",
+      factory: { recorder, _ in
+        CoreAudioCaptureStream(
+          driver: driver,
+          deliver: { source, sample in
+            recorder.receive(from: source, sampleBuffer: sample)
+          }, ended: { source, error in recorder.sourceEnded(source, error: error) })
+      })
+    try await recorder.start(targetPID: nil)
+    let reason = "tap PCM format or hardware timestamp is invalid; timeFlags=1, sampleTime=-512"
+    driver.fail(ProbeError.capture(reason))
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while recorder.snapshot().appendFailures == 0, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(recorder.snapshot().frames, 0)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 1)
+    XCTAssertEqual(recorder.snapshot().captureFailure, "capture_audio_write_failed")
+    XCTAssertThrowsError(try recorder.snapshot().requireWritable()) { error in
+      XCTAssertTrue(String(describing: error).contains(reason))
+    }
+    driver.fail(ProbeError.capture("secondary failure must not replace the first"))
+    do {
+      try await recorder.stop()
+      XCTFail("empty input must not become saved")
+    } catch {
+      XCTAssertTrue(String(describing: error).contains("no system audio samples were received"))
+    }
+    XCTAssertEqual(recorder.snapshot().captureFailureDetail, reason)
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+  }
+
+  func testTapFailureMetadataExplainsRejectedTimeAndLayoutWithoutPCM() throws {
+    let buffer = try pcm()
+    var time = timestamp()
+    time.mSampleTime = -512
+    XCTAssertThrowsError(
+      try CoreAudioTapSample.copy(buffer.audioBufferList, time: time, format: buffer.format)
+    ) { error in
+      let message = String(describing: error)
+      XCTAssertTrue(message.contains("sampleTime=-512"))
+      XCTAssertTrue(message.contains("timeFlags="))
+      XCTAssertTrue(message.contains("planes=1"))
+      XCTAssertFalse(message.contains("0.25"))
+    }
+    let list = buffer.mutableAudioBufferList
+    let planes = UnsafeMutableAudioBufferListPointer(list)
+    planes[0].mNumberChannels = 1
+    XCTAssertThrowsError(
+      try CoreAudioTapSample.copy(UnsafePointer(list), time: timestamp(), format: buffer.format)
+    ) { error in
+      let message = String(describing: error)
+      XCTAssertTrue(message.contains("planeChannels=1"))
+      XCTAssertTrue(message.contains("channels=2"))
+      XCTAssertTrue(message.contains("hasData=true"))
+    }
   }
 }
