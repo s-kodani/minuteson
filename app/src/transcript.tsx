@@ -814,6 +814,18 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false,playb
               if (event.key === "Enter" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); void finishNameModal(event.key === "Enter" ? "commit" : "cancel"); }
             }}/></label>
           {(error || saveError || recoverySnapshot.error) && <p className="action-error" role="alert">{error || saveError || recoverySnapshot.error} 入力は保持しています。</p>}
+          {/* The native modal makes background recovery controls inert. Keep
+              the same explicit, read-only checks and frozen-request retries
+              reachable here; never dismiss or replay an uncertain name save. */}
+          {(recoverySnapshot.bodyPending || recoverySnapshot.pendingRequest || recoverySnapshot.error || recoveryManual && recoverySnapshot.dirty || saveError || bodyManual && dirty) && <div className="transcript-actions speaker-name-recovery-actions">
+            {recoverySnapshot.bodyPending && <button type="button" className="small-secondary" disabled={!editable || !!namePending[renamingSpeaker.id] || saving} onClick={() => void runRecoveryAction(recheckBody)}>本文の保存結果を確認</button>}
+            {recoverySnapshot.pendingRequest && <button type="button" className="small-secondary" disabled={!editable || !!namePending[renamingSpeaker.id] || recoverySnapshot.saving || recoverySnapshot.bodyPending} onClick={() => void runRecoveryAction(async () => {
+              const result = await recovery.recheckRecovery();
+              setNotice(result === "saved" ? "未確定入力の保存結果を確認しました。本文は確定していません。" : "回復記録は未更新です。入力と同じ保存要求を保持しています。再試行は別操作です。"); setNoticeVersion(null);
+            })}>回復保存の結果を確認</button>}
+            {(recoverySnapshot.error || recoveryManual && recoverySnapshot.dirty) && <button type="button" className="small-secondary" disabled={!editable || !!namePending[renamingSpeaker.id] || recoverySnapshot.saving || recoverySnapshot.bodyPending} onClick={() => void runRecoveryAction(async () => { await recovery.retryRecovery(); setRecoveryManual(false); })}>未確定入力の保存を再試行</button>}
+            {(saveError || bodyManual && dirty) && <button type="button" className="small-secondary" disabled={!editable || !!namePending[renamingSpeaker.id] || saving} onClick={() => void runRecoveryAction(retryTextBuffers)}>保存を再試行</button>}
+          </div>}
           <div className="transcript-actions"><button type="button" disabled={!editable || !!namePending[renamingSpeaker.id]} onClick={() => void finishNameModal("commit")}>{namePending[renamingSpeaker.id] ? "保存を確認中…" : "保存"}</button></div>
         </>}
       </CommonModal>
