@@ -172,6 +172,7 @@ export const dataSaveIPC = async (command, args) => {
   }
   if (command === "get_model_download_catalog") return { supported: false, entries: [], unknownEntries: 0 };
   if (command === "get_model_placements") return [];
+  if (command === "get_official_model_options") return [];
   if (command === "get_model_profiles") return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
   if (["get_analysis_preferences", "get_diarization_preferences", "get_minutes_preferences"].includes(command)) return { id: "profiles", payload: { standard: profile, highAccuracy: profile }, lockVersion: 0 };
   if (["get_audio_import"].includes(command)) return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };

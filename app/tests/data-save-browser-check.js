@@ -6,6 +6,10 @@ async (page) => {
   const check = (value, message) => { if (!value) throw Error(message); };
   const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
   const calls = command => page.evaluate(c => window.dataFixture.calls.filter(x => x.command === c), command);
+  const poll = async () => {
+    const before = (await calls("get_data_operation")).length;
+    await page.waitForFunction(n => window.dataFixture.calls.filter(c => c.command === "get_data_operation").length > n, before);
+  };
   const boot = async () => {
     await page.reload();
     await page.getByRole("button", { name: "設定", exact: true }).click();
@@ -14,7 +18,10 @@ async (page) => {
   const region = () => page.getByRole("region", { name: "データと保存" });
   const notifications = () => page.getByRole("complementary", { name: "通知", exact: true });
   const choose = kind => region().getByRole("button", { name: kind === "backup" ? "バックアップを作成" : "バックアップから追加復元", exact: true }).click();
-  const done = () => notifications().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
+  const done = async () => {
+    await page.waitForFunction(() => window.dataFixture.snapshot.phase === "completed");
+    await notifications().getByRole("status").filter({ hasText: /バックアップを作成しました|会議 2 件を追加復元しました/u }).waitFor();
+  };
   const confirm = () => page.getByRole("dialog").getByRole("button", { name: "追加して復元", exact: true }).click();
   const ready = async () => { await page.getByRole("dialog").waitFor(); await page.getByRole("heading", { name: "バックアップから追加復元", exact: true }).waitFor(); };
   const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
@@ -30,7 +37,7 @@ async (page) => {
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "editing enabled during native work");
-  check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
+  check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "navigation enabled during native work");
   check(!await notifications().getByRole("status").filter({ hasText: "バックアップを作成しました。" }).count(), "partial output labelled usable");
   await page.evaluate(() => window.dataFixture.complete()); await done();
   check(await page.evaluate(() => window.dataFixture.published) === 1, "backup duplicated");
@@ -138,7 +145,7 @@ async (page) => {
   for (const mode of ["delay", "cancelRace"]) {
     await boot(); await set({ mode }); await choose("restore"); await ready(); await confirm();
     await stop();
-    check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "cancel released write protection early");
+    check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "cancel released write protection early");
     await page.evaluate(() => window.dataFixture.complete()); await stopChoice().waitFor({ state: "hidden" });
     if (mode === "cancelRace") { await done(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 3, "winning commit suppressed"); }
     else { await region().getByRole("status").filter({ hasText: "取消済み" }).waitFor(); check(await page.evaluate(() => window.dataFixture.meetings.length) === 1, "cancel published meetings"); }
@@ -172,7 +179,7 @@ async (page) => {
 
   await boot(); await set({ mode: "attention" }); await choose("backup");
   await region().getByRole("alert").filter({ hasText: "同じ操作での再上書きは行いません" }).waitFor();
-  await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  await poll();
   check((await calls("start_data_operation")).length === 1 && !await region().getByText("バックアップを作成しました。", { exact: true }).count(), "attention result was re-published or labelled successful");
   results.push("uncertain backup publication: manual verification, no automatic overwrite or success");
 
@@ -186,13 +193,15 @@ async (page) => {
   check((await calls("start_data_operation")).length === 1, "recovered selection not exactly once");
   results.push("lost selection reply: read-only polling recovers review, explicit publication only");
 
-  await boot(); await set({ blocker: "AI処理中" }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  await boot(); await set({ blocker: "AI処理中" });
+  await page.waitForFunction(() => [...document.querySelectorAll('.data-save button')].some(b => b.textContent === "バックアップを作成" && b.disabled));
   check(await region().getByRole("button", { name: "バックアップを作成", exact: true }).isDisabled(), "active AI allowed data selection");
   check((await region().innerText()).includes("停止・完了後"), "stop/wait guidance missing");
-  await set({ blocker: null, failRead: true }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
+  await set({ blocker: null, failRead: true });
+  await page.waitForFunction(() => document.querySelector('button[aria-label="用語を追加"]')?.disabled);
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "failed state read did not lock writes");
-  await set({ failRead: false }); await region().getByRole("button", { name: "状態を再確認", exact: true }).click();
-  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "用語を追加" && !b.disabled));
+  await set({ failRead: false });
+  await page.waitForFunction(() => document.querySelector('button[aria-label="用語を追加"]')?.disabled === false);
   check(await page.getByRole("button", { name: "用語を追加", exact: true }).isEnabled(), "successful reread did not recover writes");
   results.push("active processing guidance + fail-closed state read recovery");
 

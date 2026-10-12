@@ -45,7 +45,7 @@ async page => {
   await stopButton.click(); await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).dblclick();
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "cancelling");
   for (let i = 0; i < 5; i++) await page.keyboard.press("Escape");
-  check(await modal(stopTitle).isVisible() && await count("cancel_data_operation") === 1 && await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "stop repeated or unlocked before worker termination");
+  check(await modal(stopTitle).isVisible() && await count("cancel_data_operation") === 1 && await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "stop repeated or unlocked before worker termination");
   await page.evaluate(() => window.dataFixture.complete()); await modal(stopTitle).waitFor({ state: "hidden" });
   check(await page.evaluate(t => window.dataFixture.calls.find(c => c.command === "cancel_data_operation").args.token === t && window.dataFixture.published === 0 && window.dataFixture.pendingMove !== null, token), "stop changed token or discarded partial copy");
   results.push("one explicit same-token stop waits for actual worker through repeated Escape and preserves partial copy");
@@ -61,7 +61,7 @@ async page => {
   await data().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); await modal(stopTitle).getByRole("alert").waitFor();
   check(await count("cancel_data_operation") === 1 && await modal(stopTitle).getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).isDisabled(), "lost stop acknowledgement repeated cancellation");
   await modal(stopTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
-  check(await page.getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "uncertain stop removed native write fence");
+  check(await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "会議一覧", exact: true }).isDisabled(), "uncertain stop removed native write fence");
   await page.evaluate(() => window.dataFixture.complete());
   results.push("lost stop acknowledgement stays visible without replay and leaves native write fence until worker terminates");
 
