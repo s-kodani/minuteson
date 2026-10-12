@@ -5,6 +5,9 @@ await installMinutesFixture({ addInitScript: async initialize => initialize(), r
 const data=window.__mon, copy=value=>structuredClone(value);
 const op=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 data.plain={m1:{meetingId:"m1",markdown:"# 点検会議\n\n- 点検日を確認する\n\n人間の保存済み追記\n",lockVersion:1,contentHash:"a".repeat(64),operationId:op(1),updatedAt:1}};
+if(window.__monMarkdownIntervalFixture)data.plain.m1.markdown="# 点検会議\n\n[点検区間](audio:00:00:01.000001-00:00:03.999999)\n\n[範囲外](audio:00:01:00-00:01:01) [逆順](audio:00:00:04-00:00:03) [外部](https://example.com)\n";
+data.audioSummary={schemaVersion:1,durationUs:60000000,modes:window.__monMarkdownIntervalFixture?["mic"]:[]};
+data.intervalMode="success";data.intervalCalls=[];data.intervalRelease=()=>{};
 if(new URLSearchParams(location.search).get("empty")==="1")data.plain={};
 data.plainMode="success";data.startMode="success";data.plainCalls=[];data.plainRelease=()=>{};
 data.exportMode="success";data.exportRecords={};data.exportActive=false;data.exportRelease=()=>{};
@@ -20,6 +23,23 @@ data.completePlain=()=>{
   data.emitPlain("analysis-job-changed");data.emitPlain("minutes-version-changed");
 };
 bridge.invoke=async(cmd,args={})=>{
+  if(cmd==="get_ready_analysis_flows")return [];
+  if(cmd==="get_meeting_audio_summary"){
+    data.intervalCalls.push({cmd,args:copy(args)});
+    if(data.intervalSummaryFailure)throw Error("合成音声情報の読込み失敗");return copy(data.audioSummary);
+  }
+  if(cmd==="prepare_markdown_interval_playback"){
+    data.intervalCalls.push({cmd,args:copy(args)});
+    if(data.intervalMode==="held")await new Promise(resolve=>data.intervalRelease=resolve);
+    if(data.intervalMode==="failure")throw Error("合成の音声検証失敗");
+    const r=args.request,first=Math.ceil(r.startUs*48000/1000000),last=Math.ceil(r.endUs*48000/1000000);
+    const token=`interval-${data.intervalCalls.filter(c=>c.cmd===cmd).length}`;
+    data.playbacks[token]={totalFrames:last-first,sampleRate:48000};
+    return {token,sampleRate:48000,channels:1,totalFrames:last-first,startUs:r.startUs,endUs:r.endUs,trackKind:r.mode,alignment:"unverified",
+      ...(data.intervalMode==="gap"?{missingRanges:[{trackKind:"mic",startUs:r.startUs,endUs:2000000,startFrame:0,endFrame:96000-first,reasonCode:"capture_timestamp_gap"}]}:{}),
+      ...(data.intervalMode==="wrong"?{endUs:r.endUs+1}:{})};
+  }
+  if(cmd==="read_playback_chunk"||cmd==="close_playback"||cmd==="cancel_playback_preparation")data.intervalCalls.push({cmd,args:copy(args)});
   if(cmd==="get_minutes_preferences"&&data.minutesPrefReadFailure)throw Error("合成の全体設定読込み失敗");
   if(cmd==="plugin:event|listen"){const id=await originalInvoke(cmd,args);listeners.set(id,args);return id;}
   if(cmd==="plugin:event|unlisten"){listeners.delete(args.eventId);return originalInvoke(cmd,args);}

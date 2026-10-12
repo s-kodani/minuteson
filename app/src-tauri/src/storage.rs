@@ -73,7 +73,7 @@ pub(crate) use exports::{ExportRecord, ExportRequest};
 pub(crate) use jobs::{
     retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
-pub(crate) use meeting_playback::MeetingPlaybackRequest;
+pub(crate) use meeting_playback::{MeetingPlaybackRequest, MeetingIntervalRequest, MeetingAudioSummary};
 pub(crate) use minutes::MinutesView;
 pub(crate) use minutes_drafts::MinutesDraft;
 pub(crate) use minutes_evidence::{

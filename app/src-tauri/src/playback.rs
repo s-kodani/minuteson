@@ -7,7 +7,7 @@ mod clock;
 mod meeting;
 mod preparation;
 pub(crate) use clock::ClockAudio;
-pub(crate) use meeting::MeetingAudio;
+pub(crate) use meeting::{MeetingAudio, MeetingIntervalAudio};
 pub(crate) use preparation::PlaybackPreparations;
 
 pub struct AudioSpan {
@@ -123,6 +123,7 @@ struct Playback {
 enum PreparedPlayback {
     Track(PreparedAudio),
     Meeting(MeetingAudio),
+    Interval(MeetingIntervalAudio),
 }
 
 impl PreparedPlayback {
@@ -130,6 +131,7 @@ impl PreparedPlayback {
         match self {
             Self::Track(audio) => audio.read_pcm(offset, frames),
             Self::Meeting(audio) => audio.read_pcm(offset, frames),
+            Self::Interval(audio) => audio.read_pcm(offset, frames),
         }
     }
 }
@@ -167,6 +169,15 @@ impl PlaybackStore {
             missing_ranges: audio.missing_ranges.clone(),
         };
         self.insert_prepared(info, PreparedPlayback::Meeting(audio))
+    }
+
+    pub(crate) fn insert_interval(&self, audio: MeetingIntervalAudio) -> Result<PlaybackInfo, String> {
+        let info = PlaybackInfo {
+            token: Uuid::new_v4().to_string(), sample_rate: meeting::MEETING_RATE, channels: 1,
+            total_frames: audio.total_frames, start_us: audio.start_us, end_us: audio.end_us,
+            track_kind: audio.track_kind.clone(), alignment: "unverified".into(), missing_ranges: audio.missing_ranges.clone(),
+        };
+        self.insert_prepared(info, PreparedPlayback::Interval(audio))
     }
 
     fn insert_prepared(
@@ -207,6 +218,9 @@ impl PlaybackStore {
         }
         let mut frames = PREVIEW_FRAMES.min(session.info.total_frames - offset_frames);
         if let PreparedPlayback::Meeting(audio) = &session.audio {
+            frames = audio.readable_frames(offset_frames, frames)?;
+        }
+        if let PreparedPlayback::Interval(audio) = &session.audio {
             frames = audio.readable_frames(offset_frames, frames)?;
         }
         let mut result =

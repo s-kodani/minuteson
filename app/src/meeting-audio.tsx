@@ -25,7 +25,7 @@ export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
       <TextSizeSelection locked={locked} />
       <PlaybackFollowingSelection locked={locked} />
       <button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議全体の音声に戻す</button>
-      <p>切替は会議全体の再生に適用します。発言・根拠を選ぶと、その元トラックの区間へ切り替わります。</p>
+      <p>切替は会議全体の再生に適用します。発言の時刻や議事録の区間を選ぶと、その区間へ切り替わります。</p>
     </div></OptionsModal>
   </div>, host)}{audio.controls}</>;
 }

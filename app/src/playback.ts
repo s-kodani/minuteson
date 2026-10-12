@@ -22,25 +22,27 @@ export interface PlaybackMissingRange {
 export function validateMissingRanges(info: PlaybackInfo): PlaybackMissingRange[] {
   if (info.missingRanges === undefined) return [];
   if (!Array.isArray(info.missingRanges) || info.missingRanges.length > 2 * 65_537
-    || info.startUs !== 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= 0
+    || !Number.isSafeInteger(info.startUs) || info.startUs < 0 || !Number.isSafeInteger(info.endUs) || info.endUs <= info.startUs
     || info.sampleRate !== 48000 || info.channels !== 1 || info.alignment !== "unverified"
     || !["mic", "system", "both", "imported"].includes(info.trackKind)
     || !Number.isSafeInteger(info.totalFrames)
-    || BigInt(info.totalFrames) !== (BigInt(info.endUs) * 48000n + 999999n) / 1000000n) {
+    || BigInt(info.totalFrames) !== (BigInt(info.endUs) * 48000n + 999999n) / 1000000n - (BigInt(info.startUs) * 48000n + 999999n) / 1000000n) {
     throw Error("会議音声の欠損情報が不正です。");
   }
   let previous: PlaybackMissingRange | null = null;
+  const firstFrame=(BigInt(info.startUs)*48000n+999999n)/1000000n;
+  const nonnegative=(frame:bigint)=>frame<0n?0n:frame;
   const counts = new Map<string,number>();
   for (const gap of info.missingRanges) {
     if (!gap || typeof gap !== "object" || Object.keys(gap).sort().join(",") !== "endFrame,endUs,reasonCode,startFrame,startUs,trackKind"
       || !["mic", "system", "imported"].includes(gap.trackKind)
       || (info.trackKind === "both" ? gap.trackKind === "imported" : gap.trackKind !== info.trackKind)
       || !Number.isSafeInteger(gap.startUs) || !Number.isSafeInteger(gap.endUs)
-      || gap.startUs < 0 || gap.endUs <= gap.startUs || gap.endUs > info.endUs
+      || gap.startUs < info.startUs || gap.endUs <= gap.startUs || gap.endUs > info.endUs
       || !Number.isSafeInteger(gap.startFrame) || !Number.isSafeInteger(gap.endFrame)
       || gap.startFrame < 0 || gap.endFrame <= gap.startFrame || gap.endFrame > info.totalFrames
-      || BigInt(gap.startFrame) !== BigInt(gap.startUs) * 48000n / 1000000n
-      || BigInt(gap.endFrame) !== (BigInt(gap.endUs) * 48000n + 999999n) / 1000000n
+      || BigInt(gap.startFrame) !== nonnegative(BigInt(gap.startUs)*48000n/1000000n-firstFrame)
+      || BigInt(gap.endFrame) !== (BigInt(gap.endUs)*48000n+999999n)/1000000n-firstFrame
       || typeof gap.reasonCode !== "string" || !gap.reasonCode || new TextEncoder().encode(gap.reasonCode).length > 256 || /\p{Cc}/u.test(gap.reasonCode)
       || previous && (gap.startFrame < previous.startFrame || gap.startFrame === previous.startFrame && gap.endFrame < previous.endFrame)) {
       throw Error("会議音声の欠損範囲と保存時間軸が一致しません。");

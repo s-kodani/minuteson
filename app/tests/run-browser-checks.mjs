@@ -24,6 +24,7 @@ const suites = [
   ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
   ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
+  ["plain-minutes-interval", "plain-minutes-interval-browser-fixture.js", "plain-minutes-interval-browser-check.js"],
   ["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"],
   ["keyboard-primary", "browser-fixture.js", "keyboard-primary-browser-check.js"],
   ["common", "common-modal-browser-fixture.tsx", "common-modal-browser-check.js"],

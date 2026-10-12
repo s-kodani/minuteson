@@ -1494,6 +1494,25 @@ async fn prepare_meeting_playback(
 }
 
 #[tauri::command]
+async fn get_meeting_audio_summary(window: WebviewWindow, meeting_id: String) -> Result<storage::MeetingAudioSummary, String> {
+    let app = minutes_app(&window)?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().meeting_audio_summary(&meeting_id))
+        .await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn prepare_markdown_interval_playback(window: WebviewWindow, request: storage::MeetingIntervalRequest,
+    preparation_id: String) -> Result<PlaybackInfo, String> {
+    let app = minutes_app(&window)?;
+    let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        guard.check()?;
+        let audio = app.state::<Storage>().prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
+        guard.publish(|| app.state::<PlaybackStore>().insert_interval(audio))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_utterance_playback(
     window: WebviewWindow,
     meeting_id: String,
@@ -2448,6 +2467,8 @@ pub fn run() {
                 cancel_playback_preparation,
                 finish_playback_preparation,
                 prepare_meeting_playback,
+                get_meeting_audio_summary,
+                prepare_markdown_interval_playback,
                 prepare_draft_utterance_playback,
                 get_minutes_evidence_source,
                 get_minutes_transcript_page,

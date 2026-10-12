@@ -4,6 +4,8 @@ use crate::playback::{AudioSpan, PlaybackStore};
 use sha2::{Digest, Sha256};
 use std::io::{Seek, SeekFrom, Write};
 
+mod markdown_interval;
+
 fn audio(
     rate: u32,
     channels: u32,
