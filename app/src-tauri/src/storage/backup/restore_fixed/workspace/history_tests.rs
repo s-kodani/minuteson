@@ -7,6 +7,55 @@ struct Fixture {
     meeting: String,
     flow: AnalysisFlow,
 }
+
+#[test]
+fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stale_human_edits() {
+    for later_edit in [false, true] {
+        let mut f = fixture(true);
+        let base = f.storage.load_current_analysis(&f.meeting).unwrap().unwrap();
+        let draft = f.storage.create_transcript_draft(&f.meeting, &base.id).unwrap();
+        let request = crate::storage::analysis_flows::regeneration::Request {
+            meeting_id: f.meeting.clone(), operation_id: Uuid::new_v4().to_string(),
+            expected: f.storage.regeneration_admission(&f.meeting).unwrap(),
+        };
+        f.storage.regenerate_analysis(&request, &||false).unwrap();
+        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        let trans = f.storage.acquire_local_inference_job().unwrap().unwrap();
+        crate::transcription::process(&f.storage, &trans.id, &||false, &|_|{}).unwrap().unwrap();
+        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        let diar = f.storage.acquire_local_inference_job().unwrap().unwrap();
+        crate::diarization::process(&f.storage, &diar.id, &||false, &|_|{}).unwrap().unwrap();
+        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        if later_edit {
+            let mut payload = draft.payload.clone();
+            payload.utterances.push(crate::storage::drafts::UtteranceEdit {
+                utterance_id: base.utterances[0].id.clone(), effective_text:"後続の手動修正".into(), speaker_ids:vec![],
+            });
+            f.storage.save_transcript_draft(&draft.id, draft.lock_version, payload).unwrap();
+        }
+        f.flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
+        assert!(f.flow.ready_to_publish);
+        let output = tempfile::tempdir().unwrap(); let source = read(&f, output.path());
+        let ids = ids(&source, output.path()); let fixed = FixedData::new(&ids, output.path(), &||false).unwrap();
+        let mut work = prepared(&fixed, output.path()).with_processing_history(&fixed, &||false).unwrap();
+        let meeting = ids.get("meetings", "", &f.meeting).unwrap();
+        let flow = crate::storage::analysis_flows::read_flow(&work.database, &meeting).unwrap().unwrap();
+        assert_eq!(flow.stage,"attention"); assert!(!flow.ready_to_publish);
+        let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
+        let target = plan.replacement.unwrap();
+        assert_eq!(target.analysis_id, ids.get("analysis_revisions", &f.meeting, &base.id).unwrap());
+        let stamp = target.draft.unwrap(); assert_eq!(stamp.id, ids.get("working_drafts", &f.meeting, &draft.id).unwrap());
+        assert_eq!(stamp.lock_version,draft.lock_version);
+        let saved_version:i64 = work.database.query_row("SELECT lock_version FROM working_drafts WHERE id=?1",params![stamp.id],|r|r.get(0)).unwrap();
+        assert_eq!(saved_version,draft.lock_version+i64::from(later_edit));
+        let head:String=work.database.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1",params![meeting],|r|r.get(0)).unwrap();
+        assert_eq!(head,target.analysis_id);
+        crate::storage::backup::validate_database(&mut work.database, &||false).unwrap();
+        drop(work);
+        crate::storage::backup::restore_fixed::workspace::seal::SealedWorkspace::prepare(&fixed, output.path(), &||false).unwrap().verify(&||false).unwrap();
+        assert_eq!(f.storage.load_current_analysis(&f.meeting).unwrap().unwrap(),base);
+    }
+}
 fn fixture(complete: bool) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let (storage, meeting) = crate::storage::analysis_flows::tests::fixture(root.path());

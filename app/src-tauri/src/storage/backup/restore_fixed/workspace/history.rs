@@ -116,11 +116,26 @@ impl FixedWorkspace {
                 "configuration"
             };
             let message = (stage != "review").then_some("バックアップから復元した解析工程です。音声とAIモデルの準備を確認してから明示的に再試行してください");
-            let new_hash = old
-                .plan
-                .as_ref()
-                .map(|text| format!("{:x}", Sha256::digest(text.as_bytes())));
-            if self.database.execute("UPDATE analysis_flows SET stage=?1,plan_hash=?2,error_message=?3 WHERE id=?4 AND meeting_id=?5",params![stage,new_hash,message,new,meeting]).map_err(|e|e.to_string())? != 1 {
+            let mut rebuilt_plan = old.plan.clone();
+            if let Some(mut plan) = plan.clone() {
+                if let Some(target) = &mut plan.replacement {
+                    target.content_hash = fixed.resolve("analysis_revisions", &old.meeting, &target.analysis_id, &target.content_hash)?;
+                    target.analysis_id = fixed.ids.get("analysis_revisions", &old.meeting, &target.analysis_id)?;
+                    if let Some(draft) = &mut target.draft {
+                        let version: i64 = source.query_row("SELECT lock_version FROM working_drafts WHERE id=?1 AND meeting_id=?2 AND target_kind='transcript'", params![draft.id,old.meeting], |r|r.get(0)).map_err(|e|e.to_string())?;
+                        // A later edit can legitimately make this admission
+                        // stamp stale. Preserve its old version (and rejection)
+                        // rather than blessing the newer human draft.
+                        if version == draft.lock_version {
+                            draft.content_hash = fixed.resolve("working_drafts", &old.meeting, &draft.id, &draft.content_hash)?;
+                        }
+                        draft.id = fixed.ids.get("working_drafts", &old.meeting, &draft.id)?;
+                    }
+                    rebuilt_plan = Some(serde_json::to_string(&plan).map_err(|e|e.to_string())?);
+                }
+            }
+            let new_hash = rebuilt_plan.as_ref().map(|text| format!("{:x}", Sha256::digest(text.as_bytes())));
+            if self.database.execute("UPDATE analysis_flows SET stage=?1,plan_hash=?2,error_message=?3,plan_json=?6 WHERE id=?4 AND meeting_id=?5",params![stage,new_hash,message,new,meeting,rebuilt_plan]).map_err(|e|e.to_string())? != 1 {
                 return Err("解析工程の構築先がありません".into());
             }
             if let (Some(hash), Some(rebuilt)) = (&old.hash, &new_hash) {

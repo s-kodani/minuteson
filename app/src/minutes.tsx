@@ -58,6 +58,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     alive.current = true;
     const unsubscribe = controller.subscribe(() => setDocumentState(controller.snapshot()));
     const unregister = registerPendingEdits(async reason => {
+      // Publishing transcription does not leave or replace the human's
+      // Markdown. Never save/prompt/discard it as a side effect of ASR.
+      if (reason === "transcription") return;
       // Both tab panels stay mounted. This is not leaving the meeting and
       // must not prompt or write the human's unfinished Markdown input.
       if (reason === "tab" && !controller.isComposing()) return;

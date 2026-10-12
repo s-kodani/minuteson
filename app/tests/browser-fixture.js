@@ -44,6 +44,19 @@ fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.emitUiPreferences = () => emit("ui-preferences-changed",fixture.uiPreferences?.lockVersion??0);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
 fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
+fixture.seedRegeneration = () => {
+  fixture.jobs = []; fixture.regenerationMissingModels=false; fixture.regenerationReadFail=false;
+  fixture.analysisFlow={id:crypto.randomUUID(),meetingId:meetings[0].id,stage:"review",lockVersion:1,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:false,readyToPublish:false};
+};
+fixture.regenerationTarget = async () => {
+  const draft = await stampFixtureDraft(fixture.draft);
+  return {target:{analysisId:fixture.currentId,contentHash:currentAnalysis().contentHash,draft:draft?{id:draft.id,contentHash:draft.contentHash,lockVersion:draft.lockVersion}:null},flow:fixture.analysisFlow?{id:fixture.analysisFlow.id,lockVersion:fixture.analysisFlow.lockVersion}:null};
+};
+fixture.finishRegeneration = async () => {
+  fixture.analysisFlow={...fixture.analysisFlow,stage:"diarization",lockVersion:3,readyToPublish:true,
+    transcriptionJob:{id:"regen-asr",kind:"transcription",state:"succeeded"},diarizationJob:{id:"regen-diar",kind:"diarization",state:"succeeded",outputAnalysisId:"regenerated-analysis"}};
+  await emit("analysis-job-changed",{});
+};
 fixture.setMeetingTitle = (id,title) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.title = title; };
 fixture.setMeetingSource = (id,sourceType) => { const meeting = meetings.find(m => m.id === id); if(!meeting) throw Error("Unknown fixture meeting"); meeting.sourceType=sourceType;meeting.lifecycle=sourceType === "audio_import" ? "imported" : "recorded"; };
 fixture.meetingAudio = { endUs:3600000000, sessions:{},holdModes:[],pending:[],failModes:[],corrupt:null,gaps:[] };
@@ -109,6 +122,7 @@ mockIPC(async (command, args) => {
   if (command === "get_ui_preferences" && fixture.uiReadFail) throw Error("模擬表示設定読込失敗");
   if (command === "get_ui_preferences" && fixture.uiPreferences) return structuredClone(fixture.uiPreferences);
   const baseline = dataIdleRead(command);
+  if (command === "get_ready_analysis_flows" && fixture.analysisFlow?.readyToPublish) return [structuredClone(fixture.analysisFlow)];
   if (baseline !== undefined) return baseline;
   fixture.calls.push({ command, args });
   switch (command) {
@@ -130,7 +144,32 @@ mockIPC(async (command, args) => {
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
     case "get_model_placements": return [];
     case "get_model_profiles": return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
-    case "get_analysis_flow": return null;
+    case "get_analysis_flow":
+      if(fixture.regenerationReadFail)throw Error("模擬解析状態読込失敗");
+      return args.meetingId===meetings[0].id?structuredClone(fixture.analysisFlow??null):null;
+    case "get_transcription_regeneration_target": return fixture.regenerationTarget();
+    case "regenerate_transcription": {
+      const request=args.request;
+      if(fixture.analysisFlow?.id===request.operationId)return structuredClone(fixture.analysisFlow);
+      if(fixture.regenerationMissingModels)throw Error("設定のローカルAIでモデルを導入してください");
+      if(JSON.stringify(request.expected)!==JSON.stringify(await fixture.regenerationTarget()))throw Error("確認後に文字起こしが変わりました");
+      fixture.regenerationRequest=structuredClone(request);fixture.regenerationGlobalThreads=fixture.preferences.payload.standard.threads;
+      fixture.analysisFlow={id:request.operationId,meetingId:request.meetingId,stage:"transcription",lockVersion:0,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:true,readyToPublish:false};
+      if(fixture.regenerationLostResponse){fixture.regenerationLostResponse=false;fixture.regenerationReadFail=!!fixture.regenerationUnreadable;throw Error("模擬再生成受付応答喪失");}
+      return structuredClone(fixture.analysisFlow);
+    }
+    case "publish_regenerated_transcription": {
+      if(fixture.analysisFlow?.id!==args.flowId||!fixture.analysisFlow.readyToPublish)throw Error("模擬再生成完了対象不一致");
+      const target=(await fixture.regenerationTarget()).target;
+      if(JSON.stringify(target)!==JSON.stringify(fixture.regenerationRequest.expected.target)){
+        fixture.analysisFlow={...fixture.analysisFlow,stage:"attention",readyToPublish:false,errorMessage:"再生成の開始後に文字起こしが編集されました。現在の修正を保持しています。"};
+        await emit("analysis-flow-changed",{});throw Error(fixture.analysisFlow.errorMessage);
+      }
+      fixture.candidate={...structuredClone(analysis),id:"regenerated-analysis",contentHash:"d".repeat(64),utterances:analysis.utterances.map(u=>({...u,effectiveText:"再生成された本文"}))};
+      fixture.currentId=fixture.candidate.id;fixture.draft=null;fixture.candidateVisible=false;
+      fixture.analysisFlow={...fixture.analysisFlow,stage:"review",lockVersion:4,readyToPublish:false};
+      await emit("analysis-flow-changed",{});return structuredClone(fixture.analysisFlow);
+    }
     case "get_diarization_tracks": if (fixture.failTracks) throw Error("模擬トラック読込失敗"); return fixture.trackPlan??{ tracks: [{ id: "microphone", kind: "mic", startUs: 0, endUs: 15000000 }, { id: "system", kind: "system", startUs: 20000000, endUs: 25000000 }] };
     case "get_diarization_preferences": return structuredClone(fixture.diarizationPreferences);
     case "save_diarization_preferences":

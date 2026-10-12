@@ -1,6 +1,7 @@
 use super::*;
 use rusqlite::Transaction;
 use serde_json::Value;
+pub(crate) mod regeneration;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +16,8 @@ pub(crate) struct AnalysisFlow {
     pub error_message: Option<String>,
     #[serde(skip)]
     pub plan: Option<Value>,
+    pub ready_to_publish: bool,
+    pub replacement_requested: bool,
 }
 
 pub(super) fn ensure_flow(db: &Connection, meeting: &str) -> Result<(), String> {
@@ -51,6 +54,10 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
         id.map(|id| super::jobs::load_job(db, &id)?.ok_or("工程ジョブがありません".into()))
             .transpose()
     };
+    let replacement_requested = plan.as_ref().is_some_and(|p| p.get("replacement").is_some_and(|v| !v.is_null()));
+    let ready_to_publish = stage == "diarization"
+        && replacement_requested
+        && diar.as_deref().map(|id| super::jobs::load_job(db, id)).transpose()?.flatten().is_some_and(|j| j.state == "succeeded");
     Ok(Some(AnalysisFlow {
         id,
         meeting_id: meeting.into(),
@@ -63,6 +70,8 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
         diarization_job: load(diar)?,
         error_message,
         plan,
+        ready_to_publish,
+        replacement_requested,
     }))
 }
 
@@ -95,13 +104,16 @@ impl Storage {
         }
         let output = diar.output_analysis_id.as_deref().ok_or("発言一覧がありません")?;
         let head: Option<String> = tx.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1", params![old.meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if head.is_some() || super::drafts::load_draft(&tx, &old.meeting_id)?.is_some() {
+        let plan = crate::analysis_flow::saved_plan(current.plan.clone().ok_or("固定条件がありません")?, &current.profile)?;
+        if let Some(target) = &plan.replacement {
+            regeneration::require_target(&tx, &old.meeting_id, target)?;
+        } else if head.is_some() || super::drafts::load_draft(&tx, &old.meeting_id)?.is_some() {
             return Err("既存の文字起こしと編集を保持しています。自動処理で上書きしません。".into());
         }
         // The reviewed stage is an internal terminal state. It and the public
         // head commit together; there is no observable candidate/adoption UI.
         tx.execute("UPDATE analysis_flows SET stage='review',error_message=NULL,lock_version=lock_version+1,updated_at=?1 WHERE id=?2 AND lock_version=?3", params![now_ms()?,old.id,old.lock_version]).map_err(|e| e.to_string())?;
-        if !adoption_parent_matches(&tx, &old.meeting_id, output, None)? {
+        if !adoption_parent_matches(&tx, &old.meeting_id, output, head.as_deref())? {
             return Err("文字起こしの入力と保存先が一致しません".into());
         }
         let hash: String = tx.query_row("SELECT content_hash FROM analysis_revisions WHERE id=?1 AND meeting_id=?2 AND publication_state='candidate'", params![output,old.meeting_id], |r|r.get(0)).map_err(|e|e.to_string())?;
@@ -109,7 +121,11 @@ impl Storage {
             return Err("文字起こし結果の内容が変更されています".into());
         }
         tx.execute("UPDATE analysis_revisions SET publication_state='committed' WHERE id=?1", params![output]).map_err(|e|e.to_string())?;
-        tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=NULL,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND current_analysis_id IS NULL", params![output,now_ms()?,old.meeting_id]).map_err(|e|e.to_string())?;
+        if plan.replacement.is_some() {
+            tx.execute("UPDATE working_drafts SET active=0 WHERE meeting_id=?1 AND target_kind='transcript' AND active=1", params![old.meeting_id]).map_err(|e|e.to_string())?;
+        }
+        let changed = tx.execute("UPDATE meetings SET current_analysis_id=?1,previous_analysis_id=NULL,lock_version=lock_version+1,updated_at=?2 WHERE id=?3 AND current_analysis_id IS ?4", params![output,now_ms()?,old.meeting_id,head]).map_err(|e|e.to_string())?;
+        if changed != 1 { return Err("文字起こしの保存先が変更されています".into()); }
         let flow = read_flow(&tx, &old.meeting_id)?.ok_or("解析工程がありません")?;
         tx.commit().map_err(|e|e.to_string())?;
         Ok(flow)

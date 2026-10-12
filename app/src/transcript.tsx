@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CommonModal } from "./common-modal";
 import { OptionsModal } from "./options-modal";
@@ -26,8 +26,8 @@ export function timeLabel(microseconds: number): string {
   return [Math.floor(seconds / 3600), Math.floor(seconds % 3600 / 60), seconds % 60].map(value => String(value).padStart(2, "0")).join(":");
 }
 const PAGE_SIZE = 50;
-export function TranscriptEditor({ meetingId, meetingTitle, locked = false, playbackHost = null, visible = true }: {
-  meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean;
+export function TranscriptEditor({ meetingId, meetingTitle, locked = false, playbackHost = null, visible = true, onAnalysisLoaded }: {
+  meetingId: string; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean) => void;
 }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const analysisRef = useRef(analysis); analysisRef.current = analysis;
@@ -55,6 +55,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
   const addingRef = useRef(false); addingRef.current = adding;
   const nameOpener = useRef<HTMLElement | null>(null), addOpener = useRef<HTMLElement | null>(null);
   const mounted = useRef(true), running = useRef(false), barrier = useRef(async () => {});
+  const bodyFocus = useRef<HTMLElement | null>(null);
   const [speakerMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body speaker-panel-body"; return node; });
   const [speakerFilter, setSpeakerFilter] = useState(""), [query, setQuery] = useState(""), [page, setPage] = useState(0);
   const audio = useTranscriptAudio(meetingId, locked);
@@ -70,6 +71,17 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
     active: visible && !locked, port: followPort, trackKinds: tracks.kinds, highlightRows: shown });
   const disabled = locked || loading || busy;
   const editable = !disabled && !!analysis;
+  // Restore only after React has replaced the editor and unlocked its row.
+  // A frame callback can precede that commit (notably in Chromium).
+  useLayoutEffect(() => {
+    const row = bodyFocus.current;
+    if (!row) return;
+    if (!row.isConnected || !visible || overlayOpen()) { bodyFocus.current = null; return; }
+    if (disabled) return;
+    if (document.activeElement !== document.body && !row.contains(document.activeElement)) { bodyFocus.current = null; return; }
+    const body = row.querySelector<HTMLElement>(".transcript-body-edit");
+    if (body) { bodyFocus.current = null; body.focus({ preventScroll: true }); }
+  });
   const run = async (action: () => Promise<void>) => {
     if (running.current || locked) return;
     running.current = true; setBusy(true); setError("");
@@ -101,13 +113,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
     const returnFocus = focusedRow && Object.hasOwn(inputs, focusedRow.dataset.utteranceId ?? "") ? focusedRow : null;
     await ensureDraft(); stage(inputs, name); await (retry ? queue.retry() : queue.flush());
     if (!mounted.current) return;
+    bodyFocus.current = returnFocus ?? null;
     setTexts(current => Object.fromEntries(Object.entries(current).filter(([id, value]) => inputs[id] !== value)));
     if (name && nameRef.current?.id === name.id && nameRef.current.value === name.value) setNameEditor(null);
-    requestAnimationFrame(() => {
-      if (returnFocus?.isConnected && visible && !overlayOpen() && (document.activeElement === document.body || returnFocus.contains(document.activeElement))) {
-        returnFocus.querySelector<HTMLElement>(".transcript-body-edit")?.focus({ preventScroll: true });
-      }
-    });
   };
   barrier.current = async () => {
     if (running.current) throw Error("文字起こしを保存中です。完了後に操作してください。");
@@ -124,7 +132,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
     if (isTauri()) void Promise.all([invoke<Analysis | null>("get_current_analysis", { meetingId }), invoke<Draft | null>("get_transcript_draft", { meetingId })]).then(([base, draft]) => {
       if (!mounted.current) return;
       if (base && base.meetingId !== meetingId || draft && (!base || draft.meetingId !== meetingId || draft.baseAnalysisId !== base.id)) throw Error("保存された文字起こしと編集が一致しません。");
-      setAnalysis(base); queue.load(draft);
+      setAnalysis(base); queue.load(draft); onAnalysisLoaded?.(!!base);
     }).catch(cause => { if (mounted.current) setError(String(cause)); }).finally(() => { if (mounted.current) setLoading(false); });
     else setLoading(false);
     return () => { mounted.current = false; unsubscribe(); unregister(); speakerMount.remove(); };
@@ -133,8 +141,8 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
   const openText = (utterance: Utterance) => { if (editable) setTexts(current => Object.hasOwn(current, utterance.id) ? current : { ...current, [utterance.id]: utterance.effectiveText }); };
   const cancelText = (id: string) => { if (!disabled && !snapshot.error && !snapshot.dirty) {
     const row = document.activeElement?.closest<HTMLElement>("[data-utterance-id]");
+    bodyFocus.current = row?.dataset.utteranceId === id ? row : null;
     setTexts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
-    requestAnimationFrame(() => { if (row?.isConnected && row.dataset.utteranceId === id && !overlayOpen()) row.querySelector<HTMLElement>(".transcript-body-edit")?.focus({ preventScroll: true }); });
   } };
   const openName = (id: string, opener: HTMLElement) => {
     const speaker = speakers.find(item => item.id === id); if (!speaker || !editable) return;

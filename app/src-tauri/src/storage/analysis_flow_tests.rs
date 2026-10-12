@@ -1,6 +1,8 @@
 use super::*;
 use crate::{analysis_flow, diarization, transcription};
 use std::os::unix::fs::PermissionsExt;
+#[path = "analysis_flow_tests/regeneration.rs"]
+mod regeneration;
 
 pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
     let (s, m, w) = super::super::transcription::tests::fixture(root, 4);

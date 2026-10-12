@@ -21,6 +21,7 @@ const suites = [
   ["simple-workspace", "browser-fixture.js", "simple-workspace-browser-check.js"],
   ["notification-archive", null, "notification-archive-browser-check.js"],
   ["simple-transcript", "browser-fixture.js", "simple-transcript-browser-check.js"],
+  ["transcription-regeneration", "browser-fixture.js", "transcription-regeneration-browser-check.js"],
   ["simple-models", "model-download-browser-fixture.tsx", "simple-models-browser-check.js"],
   ["plain-minutes-export", "plain-minutes-production-browser-fixture.js", "plain-minutes-export-browser-check.js"],
   ["shared-settings", "settings-modal-browser-fixture.tsx", "settings-modal-browser-check.js"],

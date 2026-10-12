@@ -44,11 +44,12 @@ test("modified Enter and Space do not replace selection with a body editor", () 
   }
 });
 
-test("keyboard browser driver uses visible controls for commit, undo, cancel and modal return", () => {
+test("keyboard browser driver uses current visible controls for commit, cancel and modal return", () => {
   const driver=readFileSync(new URL("./keyboard-primary-browser-check.js",import.meta.url),"utf8");
   const runner=readFileSync(new URL("./run-browser-checks.mjs",import.meta.url),"utf8");
   assert.match(runner,/\["keyboard-primary", "browser-fixture.js", "keyboard-primary-browser-check.js"\]/);
-  for (const key of ["Meta+f","Enter","Space","Meta+Enter","Meta+z","Escape","Shift+Tab"]) assert.ok(driver.includes(`"${key}"`));
+  for (const key of ["Meta+f","Enter","Space","Meta+Enter","Escape","Shift+Tab"]) assert.ok(driver.includes(`"${key}"`));
+  assert.doesNotMatch(driver,/回復入力・話者・一括編集操作/);
   assert.doesNotMatch(driver,/window\.|monBrowserFixture|dispatchEvent/);
   assert.doesNotThrow(()=>new Function(`return (${driver})`));
 });

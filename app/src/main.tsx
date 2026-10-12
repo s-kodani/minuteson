@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { InfoPopover } from "./info-popover";
 import { OptionsModal } from "./options-modal";
 import { SettingsModalScope } from "./settings-modal-scope";
+import { useAnalysisPublication } from "./analysis-publication";
 import { ActionIcon, IconButton } from "./action-icon";
 import { RowMenu } from "./row-menu";
 import { ScreenHistory } from "./screen-history";
@@ -17,6 +18,7 @@ import {ArchivedInputNotices} from "./archived-input-notices";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { formatElapsed, useRecordingSession, type BridgeState } from "./session";
 import { meetingStatusLabel } from "./meeting-status";
 import { TranscriptEditor } from "./transcript";
@@ -214,14 +216,21 @@ function MainWindow() {
     catch (cause) { setOriginError(`復元由来を確認できません: ${String(cause)}`); }
   };
   const [analysisEpoch, setAnalysisEpoch] = useState(0);
+  const [transcriptMeeting, setTranscriptMeeting] = useState<string | null>(null);
   const navigating = useRef(false);
   const priorPhase = useRef<string | null>(null);
-  const withSavedEdits = async (action: () => void | Promise<void>, reason: "leave" | "tab" = "leave") => {
+  const withSavedEdits = async (action: () => void | Promise<void>, reason: "leave" | "tab" | "transcription" = "leave") => {
     if (navigating.current) return;
     navigating.current = true;
     setMeetingError("");
     try {
-      await runAfterSaving(() => flushPendingEdits(reason), action, setNavigationPhase);
+      const reportPhase = (phase: SavedActionPhase) => {
+        // Publication must render the brief edit lock before taking the final
+        // input snapshot, not one paint after the native head has changed.
+        if (reason === "transcription") flushSync(() => setNavigationPhase(phase));
+        else setNavigationPhase(phase);
+      };
+      await runAfterSaving(() => flushPendingEdits(reason), action, reportPhase);
     } catch (cause) {
       setMeetingError(`操作を完了できませんでした。編集内容はこの画面に保持しています: ${String(cause)}`);
     } finally {
@@ -248,6 +257,7 @@ function MainWindow() {
   const closeConfirm = useActionConfirmation(false);
   const navigationLocked = baseNavigationLocked || captureBusy || closingBusy || startConfirm.pending;
   const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
+  const publicationError = useAnalysisPublication(writeLocked, action => withSavedEdits(action, "transcription"));
   const root = useRef({ selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state });
   root.current = { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state };
   const goBack = async () => {
@@ -669,6 +679,7 @@ function MainWindow() {
         <RecordingInputNotice windowLabel="main"/>
         <RecordingJournalNotice/>
         <ThemeNotifications locked={writeLocked} />
+        <IssueNotice scope="main" type="transcription-publication" label="文字起こしの保存" message={publicationError} />
         <ToastNotice scope={state.kind === "ready" ? state.snapshot.sessionId ?? "recording" : "recording"} type="recording-failure" level="error" message={state.kind === "ready" ? state.snapshot.errorMessage : state.kind === "error" ? state.message : ""} />
         <header className="topbar"><nav className="screen-navigation" aria-label="画面の移動">{history.previous && <IconButton label="前の画面へ戻る" icon="previous" disabled={navigationLocked} onClick={() => void goBack()} />}{screen !== "meetings" && <><button type="button" className="breadcrumb-button" disabled={navigationLocked} onClick={() => void withSavedEdits(() => { setSelectedMeeting(null); setMeetingToolsOpen(false); setRestoredFilter(null); setScreen("meetings"); })}>会議一覧</button><span aria-hidden="true">/</span></>}<span aria-current="page">{detail ? "会議詳細" : screen === "recording" ? "録音" : screen === "overview" || screen === "meetings" ? "会議一覧" : "設定"}</span></nav><div className="header-recording" aria-label="共通録音状態"><span className="header-status"><span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />{phaseLabel(state)}{state.kind === "ready" && recordingActive(state.snapshot) && <span className="header-timer">{formatElapsed(state.snapshot.elapsedMs)}</span>}</span>{state.kind === "ready" && recordingActive(state.snapshot) && <button type="button" className="small-secondary" disabled={navigationLocked} onClick={() => void openRecordingMeeting()}>録音画面へ</button>}{state.kind === "ready" && ["preparing", "recording"].includes(state.snapshot.phase) && <button type="button" className="stop-button" disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected} onClick={() => void stopRecording()}>録音を終了</button>}</div><ToastHost docked={detail}/></header>
         {detail && <div className="meeting-detail-status"><div><div className="meeting-title-row"><h1 title={selectedMeeting!.title}>{selectedMeeting!.title}</h1><IconButton ref={renameOpener} label="会議名を変更" icon="edit" disabled={writeLocked || meetingBusy} onClick={() => { setRenameTitle(selectedMeeting!.title); setRenameOpen(true); }} /></div><p className="lead">作成 {new Date(selectedMeeting!.createdAt).toLocaleString("ja-JP")}</p></div><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} /></div>}
@@ -709,7 +720,7 @@ function MainWindow() {
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {selectedMeeting ? <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} renderTools={renderMeetingTools} onHeadChanged={async () => {
+          {selectedMeeting ? <AnalysisPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={action => withSavedEdits(action, "transcription")} renderTools={renderMeetingTools} onHeadChanged={async () => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);
             setSelectedMeeting(meeting); setMeetings(items);
@@ -728,7 +739,7 @@ function MainWindow() {
             </tr>)}</tbody></table></div>}
           </section>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
-            <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} />
+            <TranscriptEditor key={`${selectedMeeting.id}:${analysisEpoch}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={present => setTranscriptMeeting(present ? selectedMeeting.id : null)} />
           </div>}
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-minutes" role="tabpanel" aria-labelledby="meeting-tab-minutes" hidden={detailTab !== "minutes"}><MinutesPanel key={`minutes:${selectedMeeting.id}`} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={writeLocked} withSavedEdits={withSavedEdits} visible={detailTab === "minutes"} onHeadChanged={async () => {
             const [meeting, items] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id }), invoke<Meeting[]>("list_meetings")]);

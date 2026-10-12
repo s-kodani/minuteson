@@ -18,6 +18,8 @@ pub(crate) struct Plan {
     pub(crate) whisper_managed: Option<Snapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sherpa_managed: Option<Snapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) replacement: Option<crate::storage::analysis_flows::regeneration::Target>,
 }
 
 // Pure saved-plan decoding: never checks model availability or starts a CLI.
@@ -32,6 +34,9 @@ pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan
     }
     plan.whisper.validate_settings()?;
     plan.sherpa.validate_settings(None)?;
+    if let Some(target) = &plan.replacement {
+        target.validate()?;
+    }
     if let Some(s) = &plan.whisper_managed {
         s.validate(profile, &Execution::Whisper(&plan.whisper))?;
     }
@@ -40,7 +45,7 @@ pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan
     }
     Ok(plan)
 }
-fn prepare(
+pub(crate) fn prepare(
     storage: &Storage,
     profile: &str,
     cancelled: &impl Fn() -> bool,
@@ -89,6 +94,7 @@ fn prepare(
         sherpa,
         whisper_managed,
         sherpa_managed,
+        replacement: None,
     })
 }
 
@@ -197,6 +203,12 @@ fn step(
                     }
                 }
                 if job.state == "succeeded" {
+                    // Regeneration waits for the main window's edit barrier.
+                    // It flushes even an open text field before the native CAS;
+                    // later human edits therefore win without being discarded.
+                    if plan.replacement.is_some() {
+                        return Ok(None);
+                    }
                     return storage.complete_analysis_flow(flow).map(Some);
                 }
             } else {

@@ -1123,6 +1123,43 @@ fn get_analysis_flow(
 }
 
 #[tauri::command]
+async fn get_transcription_regeneration_target(window: WebviewWindow, meeting_id: String) -> Result<storage::analysis_flows::regeneration::Admission, String> {
+    if window.label() != "main" { return Err("文字起こしの再生成はメイン画面から操作してください".into()); }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().regeneration_admission(&meeting_id)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn regenerate_transcription(window: WebviewWindow, request: storage::analysis_flows::regeneration::Request) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" { return Err("文字起こしの再生成はメイン画面から操作してください".into()); }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(flow) = app.state::<Storage>().regeneration_replay(&request)? { return Ok(flow); }
+        let flow = AnalysisController::with_model_preparation(&app, &|| false, |lease| {
+            app.state::<capture_test::CaptureTests>().require_empty()?;
+            app.state::<Storage>().regenerate_analysis(&request, &|| lease.cancelled())
+        })?;
+        let _ = app.emit("analysis-flow-changed", flow.clone());
+        Ok(flow)
+    }).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn get_ready_analysis_flows(window: WebviewWindow) -> Result<Vec<storage::analysis_flows::AnalysisFlow>, String> {
+    if window.label() != "main" { return Err("文字起こしの保存はメイン画面から操作してください".into()); }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().ready_analysis_flows()).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn publish_regenerated_transcription(window: WebviewWindow, meeting_id: String, flow_id: String, expected_lock_version: i64) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" { return Err("文字起こしの保存はメイン画面から操作してください".into()); }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = app.state::<Storage>().publish_regenerated_flow(&meeting_id, &flow_id, expected_lock_version);
+        if let Ok(Some(flow)) = app.state::<Storage>().analysis_flow(&meeting_id) { let _ = app.emit("analysis-flow-changed", flow); }
+        result
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
 fn start_analysis_flow(
     window: WebviewWindow,
     meeting_id: String,
@@ -2420,6 +2457,10 @@ pub fn run() {
                 close_playback,
                 finish_main_close,
                 get_analysis_flow,
+                get_transcription_regeneration_target,
+                regenerate_transcription,
+                get_ready_analysis_flows,
+                publish_regenerated_transcription,
                 start_analysis_flow,
                 continue_analysis_flow,
                 retry_diarization,

@@ -118,7 +118,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   }
 }
 
-export type PendingEditReason = "leave" | "tab";
+export type PendingEditReason = "leave" | "tab" | "transcription";
 const pendingEdits = new Set<(reason: PendingEditReason) => Promise<void>>();
 
 export function registerPendingEdits(flush: (reason: PendingEditReason) => Promise<void>): () => void {

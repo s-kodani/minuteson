@@ -1,5 +1,6 @@
 // Baseline for older main-window browser fixtures. Not production code.
 export function dataIdleRead(command) {
+  if (command === "get_ready_analysis_flows") return [];
   if (command === "get_model_download_catalog") return { supported: false, entries: [], unknownEntries: 0 };
   if (command === "get_recorder_operation_notices") return { schemaVersion: 1, entries: ["window_action", "confirmation", "theme_read", "info_read", "session_read"].map(source => ({ source, revision: 0, eventId: null, message: null, dismissed: false })) };
   if (command === "get_capture_test_recovery") return { schemaVersion: 1, revision: 2, phase: "clear", runId: null, errorMessage: null };
