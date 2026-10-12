@@ -36,6 +36,7 @@ import type { ImportSnapshot } from "./import-state";
 import type { RecordingSnapshot } from "./session";
 import "./style.css";
 import "./prototype-alignment.css";
+import "./recorder-panel.css";
 import { ThemeProvider, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications, useTheme } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
@@ -112,28 +113,34 @@ function RecorderPanel() {
   const state = useRecordingSession();
   const decision = useRecordingConfirmation("recorder");
   const action = useWindowAction();
+  const closeAction = useWindowAction();
   const operations = useRecorderOperations(), theme = useTheme();
   const actionRelay = useRecorderOperationPublisher("window_action", action.error, !action.busy, action.resolved);
   const decisionRelay = useRecorderOperationPublisher("confirmation", decision.error, !decision.requestBusy, decision.requestResolved && decision.connected);
   const themeRelay = useRecorderOperationPublisher("theme_read", theme.state.error, !theme.state.busy, !!theme.state.snapshot && !theme.state.error);
-  const sessionError = state.kind === "error" ? state.message : "";
+  const sessionError = state.kind === "error" ? state.message : state.kind === "ready" ? state.snapshot.errorMessage ?? "" : "";
   const sessionRelay = useRecorderOperationPublisher("session_read", sessionError, true, state.kind === "ready");
-  const localProblem = [action.error, decision.error, theme.state.error, sessionError, actionRelay, decisionRelay, themeRelay, sessionRelay, operations.error].filter(Boolean).join("\n");
+  const localProblem = [action.error, closeAction.error, decision.error, theme.state.error, sessionError, actionRelay, decisionRelay, themeRelay, sessionRelay, operations.error].filter(Boolean).join("\n");
   const idle = state.kind === "ready" && state.snapshot.phase === "idle";
   return (
     <main className="mini-shell" aria-label="録音ミニパネル">
+      <div className="mini-row">
+      <span className="mini-drag" data-tauri-drag-region title="ドラッグで移動" aria-hidden="true">⠿</span>
+      <div className="mini-summary">
       <div className="mini-top">
         <span className={`status-dot ${state.kind === "ready" && state.snapshot.phase === "recording" ? "live" : ""}`} />
         <strong>{phaseLabel(state)}</strong>
-        <RecorderInfoTrigger disabled={decision.visible} problem={localProblem} />
-        {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
-      <div className="mini-bottom">
+        {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
         <div className="mini-save-diagnostics">{state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?<><RecordingWriteStatus compact owner={state.snapshot.sessionId}/><RecordingJournalCompactStatus owner={state.snapshot.sessionId}/></>:<span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>}</div>
-        <button type="button" onClick={() => action.run("open_main_window")} disabled={action.busy || !isTauri()}>メインを開く</button>
+      </div>
+      <div className="mini-bottom">
         {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <button type="button" className="stop-button" onClick={() => void decision.request()} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected}>{state.snapshot.phase === "preparing" ? "中止" : "停止"}</button>}
-        {idle && <IconButton label="閉じる" icon="close" className="text-button" onClick={() => action.run("hide_recorder_preview")} disabled={action.busy} />}
+        <IconButton label="メインを開く" icon="open" onClick={() => action.run("open_main_window")} disabled={action.busy || !isTauri()} />
+        <RecorderInfoTrigger disabled={decision.visible} problem={localProblem} />
+        <IconButton label="ミニパネルを閉じる" icon="close" className="text-button" onClick={() => closeAction.run("hide_recorder_panel")} disabled={closeAction.busy || !isTauri()} />
+      </div>
       </div>
       <RecordingInputNotice windowLabel="recorder"/>
     </main>
@@ -614,7 +621,7 @@ function MainWindow() {
       }
     });
   };
-  const canPreview = state.kind === "ready" && state.snapshot.phase === "idle";
+  const canPreview = isTauri();
   const shownMeetings = meetings.filter(meeting => (!restoredFilter || restoredFilter.includes(meeting.id)) && meeting.title.toLocaleLowerCase("ja-JP").includes(meetingQuery.toLocaleLowerCase("ja-JP")));
   const detail = screen === "overview" && !!selectedMeeting;
   const renderMeetingTools = (analysisTools: ReactNode, review: ModalReplacement | null, persistentViews?: ReactNode) => <OptionsModal className={detail ? "meeting-workspace-tools workspace-tools" : "landing-tools workspace-tools"} triggerHost={detail ? meetingActionsHost : null}
@@ -627,7 +634,7 @@ function MainWindow() {
         <div className="card-actions">
           <button type="button" onClick={() => void prepareSelectedRecording()} disabled={!isTauri() || !selectedMeeting || selectedMeeting.lifecycle !== "draft" || selectedMeeting.sourceType != null || writeLocked || state.kind !== "ready" || !["idle","error"].includes(state.snapshot.phase)}>録音準備を開く</button>
           <button type="button" className="stop-button" onClick={() => void stopRecording()} disabled={captureBusy || navigationBusy || recordingDecision.requestBusy || recordingDecision.visible || !recordingDecision.connected || state.kind !== "ready" || (state.snapshot.phase !== "recording" && state.snapshot.phase !== "preparing")}>録音を停止</button>
-          <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルをプレビュー</button>
+          <button type="button" className="secondary" onClick={() => action.run("show_recorder_preview")} disabled={!canPreview || action.busy}>ミニパネルを表示</button>
         </div>
         {!captureAvailable && <p className="capture-note">macOS録音プローブが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
         <IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError} />

@@ -109,11 +109,7 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
     let uid = try hal.tapUID(tap)
     aggregate = try hal.createAggregate(tapUID: uid)
     let asbd = try hal.format(tap)
-    guard let format = AVAudioFormat(streamDescription: withUnsafePointer(to: asbd) { $0 }),
-      format.commonFormat == .pcmFormatFloat32
-    else {
-      throw ProbeError.capture("tap does not supply Float32 PCM")
-    }
+    let format = try CoreAudioTapSample.format(asbd)
     let formatBox = SendableFormat(value: format)
     io = try hal.createIO(aggregate, queue: ioQueue) {
       _, input, timestamp, _, _ in

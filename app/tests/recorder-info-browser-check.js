@@ -1,4 +1,4 @@
-async (page, capturePath = path => path) => {
+async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}`) => {
   const context = page.context(), results = [], calls = [];
   const check = (ok, message) => { if (!ok) throw Error(message); };
   const recording = { revision: 1, phase: "recording", elapsedMs: 45000, microphoneConnected: true, systemAudioConnected: true, meetingId: "synthetic", sessionId: "00000000-0000-4000-8000-000000000001", errorMessage: null };
@@ -49,7 +49,7 @@ async (page, capturePath = path => path) => {
     check(await close.evaluate(element => element === document.activeElement), "initial focus not close");
     check(await popup.getByRole("dialog").getAttribute("aria-modal") === "false", "help became confirmation");
     check((await popup.getByRole("dialog").innerText()).includes("文字起こし・話者分離は録音終了後"), "missing analysis explanation");
-    check(await popup.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.scrollingElement.scrollHeight > innerHeight), "large text not vertically scrollable or horizontal clipping");
+    check(await popup.getByRole("dialog").evaluate(e => document.documentElement.scrollWidth <= innerWidth && e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight > e.clientHeight && getComputedStyle(e).overflowY === "auto"), "large text not vertically scrollable or horizontal clipping");
     await popup.screenshot({ path: capturePath("recorder-info-dark-20.png") });
     await popup.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector(".recorder-info-trigger button")?.getAttribute("aria-expanded") === "false");

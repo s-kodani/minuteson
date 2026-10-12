@@ -3,5 +3,5 @@
   "identifier": "recorder",
   "description": "Recorder panel: read the same canonical session updates.",
   "windows": ["recorder"],
-  "permissions": ["core:default", "core:event:allow-listen"]
+  "permissions": ["core:default", "core:event:allow-listen", "core:window:allow-start-dragging"]
 }

@@ -1,0 +1,19 @@
+/* The mock's single horizontal row, with truthful save state underneath. */
+.mini-shell { padding:10px 14px; border-radius:12px; }
+.mini-shell .mini-row { display:flex; align-items:center; gap:8px; min-height:64px; }
+.mini-shell .mini-drag { flex:none; width:10px; color:var(--muted); cursor:grab; user-select:none; }
+.mini-shell .mini-summary { flex:1; min-width:0; }
+.mini-shell .mini-top { gap:5px; white-space:nowrap; }
+.mini-shell .mini-top strong { font-size:12px; font-weight:650; }
+.mini-shell .timer { margin-left:0; font-size:14px; font-weight:650; }
+.mini-shell .status-dot { width:8px; height:8px; }
+.mini-shell .mini-save-diagnostics { margin-top:4px; gap:2px; }
+.mini-shell .mini-inputs { margin-top:3px; gap:3px; }
+.mini-shell .mini-input-status { font-size:9px; line-height:12px; }
+.mini-shell .mini-bottom { flex:none; gap:4px; margin:0; align-items:center; }
+.mini-shell .mini-bottom button { display:inline-flex; align-items:center; justify-content:center; height:32px; min-height:32px; padding:0 8px; font-size:12px; line-height:18px; border-radius:8px; }
+.mini-shell .mini-bottom .icon-button,.mini-shell .mini-bottom .info-trigger { width:28px; min-width:28px; padding:0; }
+.mini-shell .mini-bottom .stop-button { color:var(--danger-text); background:var(--surface); border:1px solid var(--danger-text); }
+.mini-shell .mini-bottom .text-button { background:transparent; border-color:transparent; }
+.mini-shell .mini-bottom .info-trigger span { font-size:16px; }
+.mini-shell .mini-input-notice { margin-top:4px; }

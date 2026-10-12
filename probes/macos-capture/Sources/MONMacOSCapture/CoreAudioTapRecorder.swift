@@ -120,15 +120,7 @@ final class CoreAudioTapRecorder: @unchecked Sendable {
         "create tap aggregate device")
       let streamDescription: AudioStreamBasicDescription = try propertyValue(
         tapID, kAudioTapPropertyFormat)
-      guard
-        let format = AVAudioFormat(
-          streamDescription: withUnsafePointer(to: streamDescription) { $0 })
-      else {
-        throw ProbeError.capture("tap audio format is unsupported")
-      }
-      guard format.commonFormat == .pcmFormatFloat32 else {
-        throw ProbeError.capture("tap audio format is not Float32 PCM")
-      }
+      let format = try CoreAudioTapSample.format(streamDescription)
       file = try AVAudioFile(
         forWriting: outputURL, settings: format.settings,
         commonFormat: .pcmFormatFloat32, interleaved: format.isInterleaved)

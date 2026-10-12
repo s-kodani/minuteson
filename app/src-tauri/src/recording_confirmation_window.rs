@@ -1,7 +1,6 @@
 use crate::recorder::RecorderController;
 use crate::recording_confirmation::{
-    centered_position, fitted_size, recorder_close_action, DecisionPhase, RecorderCloseAction,
-    StopDecision, StopDecisionStore,
+    centered_position, fitted_size, DecisionPhase, StopDecision, StopDecisionStore,
 };
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::Storage;
@@ -37,9 +36,13 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
             .as_deref()
             .and_then(|label| app.get_webview_window(label))
         {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            // A user-hidden mini panel stays hidden even if its stop decision
+            // is subsequently cancelled. Visible openers keep their focus.
+            if window.label() != "recorder" || window.is_visible().unwrap_or(false) {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
         }
     }
     if let Some(id) = value.id.as_deref() {
@@ -135,7 +138,7 @@ pub fn request_recording_confirmation(
                 .map_err(|e| e.to_string())?;
         }
         modal.set_always_on_top(true).map_err(|e| e.to_string())?;
-        for label in ["main", "recorder"] {
+        for label in ["main"] {
             if let Some(background) = app.get_webview_window(label) {
                 background.set_enabled(false).map_err(|e| e.to_string())?;
             }
@@ -221,39 +224,19 @@ pub fn close_requested(app: &AppHandle) {
     }
 }
 
-pub fn recorder_close_requested(app: &AppHandle, expected: RecordingSnapshot) {
-    let app = app.clone();
-    // Never wait for the lifecycle lock on the native event-loop thread:
-    // capture admission may itself need a window operation on that thread.
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = RecorderController::with_transition(&app, || {
-            let current = app.state::<SessionStore>().snapshot();
-            let decision = session_changed(&app, &current);
-            match recorder_close_action(&expected, &current, &decision)? {
-                RecorderCloseAction::Keep => Ok(()),
-                RecorderCloseAction::FocusConfirmation => {
-                    focus(&app);
-                    Ok(())
-                }
-                RecorderCloseAction::Hide => app
-                    .get_webview_window("recorder")
-                    .ok_or("録音パネルがありません")?
-                    .hide()
-                    .map_err(|e| e.to_string()),
-                RecorderCloseAction::RequestConfirmation => {
-                    let window = app
-                        .get_webview_window("recorder")
-                        .ok_or("録音パネルがありません")?;
-                    request_recording_confirmation(window, Some(false)).map(|_| ())
-                }
-            }
-        });
-        if let Err(cause) = result {
-            let message =
-                format!("録音状態と保存結果を保持しています。新しい停止は送っていません: {cause}");
-            for label in ["main", "recorder"] {
-                let _ = app.emit_to(label, "recording-confirmation-request-error", &message);
-            }
+pub fn hide_recorder(app: &AppHandle) -> Result<(), String> {
+    // Visibility only: no recorder lock, state read, stop, save or decision.
+    // Even failed help dismissal must not trap the panel on screen.
+    app.get_webview_window("recorder")
+        .ok_or("録音パネルがありません")?
+        .hide()
+        .map_err(|e| e.to_string())?;
+    let _ = crate::recorder_info::hide(app, false);
+    if let Some(main) = app.get_webview_window("main") {
+        if !main.is_visible().map_err(|e| e.to_string())? {
+            main.show().map_err(|e| e.to_string())?;
+            main.set_focus().map_err(|e| e.to_string())?;
         }
-    });
+    }
+    Ok(())
 }

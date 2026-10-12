@@ -82,6 +82,7 @@ export function RecorderInfoWindow() {
   return <main className="recorder-info-window" role="dialog" aria-modal="false" aria-labelledby="recorder-info-title">
     <div className="info-popover-head"><h3 id="recorder-info-title">録音パネル</h3><button ref={button} type="button" className="info-close" aria-label="録音パネルの説明を閉じる" disabled={busy || !isTauri()} onClick={() => void close()}>×</button></div>
     <p>メイン画面を最小化しても、録音状態と経過時間を確認し、停止の確認を開けます。</p>
+    <p>×はミニパネルだけを非表示にします。録音は停止しません。再表示はメイン画面の「ミニパネルを表示」から行えます。</p>
     <p>マイクとPCの音声は別々の入力です。無音、切断、欠損は区別して表示します。入力状態や保存の要対応は、メイン画面で詳細と対処方法を確認してください。</p>
     <p>文字起こし・話者分離は録音終了後に行います。説明を閉じても、録音の停止やデータの変更は行いません。</p>
     {error && <p role="alert">説明画面を閉じられません：{error}。閉じる操作を再試行できます。</p>}

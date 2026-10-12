@@ -2290,15 +2290,9 @@ async fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, Stri
 }
 
 #[tauri::command]
-fn show_recorder_preview(
-    window: WebviewWindow,
-    store: State<'_, SessionStore>,
-) -> Result<(), String> {
+fn show_recorder_preview(window: WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Only the main window can open the preview".into());
-    }
-    if store.snapshot().is_active() {
-        return Err("Preview is only available while idle".into());
     }
     let panel = window
         .app_handle()
@@ -2309,18 +2303,11 @@ fn show_recorder_preview(
 }
 
 #[tauri::command]
-fn hide_recorder_preview(
-    window: WebviewWindow,
-    store: State<'_, SessionStore>,
-) -> Result<(), String> {
+fn hide_recorder_panel(window: WebviewWindow) -> Result<(), String> {
     if window.label() != "recorder" {
-        return Err("Only the recorder panel can close its preview".into());
+        return Err("Only the recorder panel can hide itself".into());
     }
-    if store.snapshot().is_active() {
-        return Err("An active recording panel cannot be hidden".into());
-    }
-    recorder_info::hide(window.app_handle(), false)?;
-    window.hide().map_err(|error| error.to_string())
+    recording_confirmation_window::hide_recorder(window.app_handle())
 }
 
 #[tauri::command]
@@ -2700,7 +2687,7 @@ pub fn run() {
                 request_recording_confirmation,
                 decide_recording_confirmation,
                 show_recorder_preview,
-                hide_recorder_preview,
+                hide_recorder_panel,
                 open_main_window,
                 recorder_info::get_recorder_info,
                 recorder_operation_notices::get_recorder_operation_notices,
@@ -2808,10 +2795,7 @@ pub fn run() {
                     recording_confirmation_window::close_requested(window.app_handle());
                 } else if window.label() == "recorder" {
                     api.prevent_close();
-                    recording_confirmation_window::recorder_close_requested(
-                        window.app_handle(),
-                        window.state::<SessionStore>().snapshot(),
-                    );
+                    let _ = recording_confirmation_window::hide_recorder(window.app_handle());
                 } else if window.label() == "main" {
                     api.prevent_close();
                     if window.state::<StopDecisionStore>().snapshot().visible() {
