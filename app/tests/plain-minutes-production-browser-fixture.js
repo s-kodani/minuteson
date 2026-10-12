@@ -20,6 +20,7 @@ data.completePlain=()=>{
   data.emitPlain("analysis-job-changed");data.emitPlain("minutes-version-changed");
 };
 bridge.invoke=async(cmd,args={})=>{
+  if(cmd==="get_minutes_preferences"&&data.minutesPrefReadFailure)throw Error("合成の全体設定読込み失敗");
   if(cmd==="plugin:event|listen"){const id=await originalInvoke(cmd,args);listeners.set(id,args);return id;}
   if(cmd==="plugin:event|unlisten"){listeners.delete(args.eventId);return originalInvoke(cmd,args);}
   if(cmd==="get_minutes_markdown"){

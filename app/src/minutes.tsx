@@ -34,7 +34,6 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const exportOpener = useRef<HTMLButtonElement|null>(null), returnExportFocus = useRef(false);
   const [source, setSource] = useState<VersionState | null>(null);
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
-  const [profile, setProfile] = useState<"standard" | "highAccuracy">("standard");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [externalChange, setExternalChange] = useState(false);
@@ -115,14 +114,16 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     if (!controller.observe(saved)) throw Error("保存済みの議事録が変更されています。入力を保持し、再読込から確認してください。");
     const enqueue = async () => {
       const preferences = await invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences");
-      const engine = preferences.payload[profile];
+      // The global model picker writes the standard slot. Read it again at
+      // admission (after replacement confirmation), never a meeting override.
+      const engine = preferences.payload.standard;
       if (!engine || !minutesConfigured(engine)) throw Error("設定のローカルAIで議事録用モデルを導入してください。");
       const analysis = await invoke<VersionState>("get_analysis_versions", { meetingId });
       const version = analysis.versions.find(v => v.id === analysis.currentId);
       if (!version) throw Error("先に文字起こしを完了してください。");
       const base = { input: { meetingId, expectedAnalysisId: version.id, expectedContentHash: version.contentHash,
         expectedMeetingLockVersion: analysis.meetingLockVersion, expectedDraft: analysis.draft },
-        ...engine, profile: profile === "highAccuracy" ? "high_accuracy" : "standard" };
+        ...engine, profile: "standard" };
       const expected = markdownStamp(saved), key = JSON.stringify({ base, expected });
       const operationId = startOperations.current.get(key) ?? crypto.randomUUID();
       startOperations.current.set(key, operationId);
@@ -138,6 +139,9 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   }));
   const exportMarkdown = (opener:HTMLButtonElement) => run(async () => {
     exportOpener.current = opener;
+    // WebKit mouse activation otherwise leaves focus on the containing main.
+    // Bind focus before disabling this icon so cancellation can restore it.
+    opener.focus({ preventScroll: true });
     // Recovery is read-only and never prompts to save new input or reopens a
     // native dialog. It belongs to the original frozen export operation.
     if (exporter.snapshot().needsCheck) {
@@ -175,7 +179,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const generationJobs = jobs.filter(j => j.kind === "minutes_generation");
   const pending = generationJobs.some(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state));
   const disabled = locked || busy || !loaded || !isTauri();
-  const engine = settings?.[profile];
+  const engine = settings?.standard;
   const cannotGenerate = disabled || recordingActive || pending || !source?.currentId || !engine || !minutesConfigured(engine);
   return <section className="analysis-card minutes-card plain-minutes-card" aria-label="議事録">
     <div className="card-head"><h2>議事録</h2><div className="plain-minutes-primary-actions">
@@ -188,7 +192,6 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
           <div className="plain-minutes-option-actions"><IconButton label="議事録を再読込" icon="refresh" disabled={disabled} onClick={() => void run(async () => {
             await confirmMarkdownLeave(controller, meetingTitle, read, confirm); await refreshRef.current();
           })} />{documentState.document && <button type="button" disabled={cannotGenerate} onClick={() => void start()}>議事録を再生成</button>}</div>
-          <label>生成に使うモデル<select disabled={disabled || pending} value={profile} onChange={event => setProfile(event.target.value as typeof profile)}><option value="standard">標準</option><option value="highAccuracy">高精度</option></select></label>
           {(!engine || !minutesConfigured(engine)) && <p>設定のローカルAIから議事録用モデルを導入してください。</p>}
           {generationJobs.length > 0 && <ul className="analysis-jobs" aria-label="議事録生成の状況">{generationJobs.map(j => <li key={j.id}>
             <div><strong>{jobLabel(j.state)}</strong><span>{j.completedUnits} / {j.totalUnits ?? "?"}</span>{j.errorCode && <span className="action-error">{j.errorCode}</span>}</div>

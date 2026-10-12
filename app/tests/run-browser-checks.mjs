@@ -80,6 +80,7 @@ const suites = [
   ["job-notifications", "browser-fixture.js", "job-notifications-browser-check.js"],
   ["plain-minutes", null, "minutes-markdown-editor-browser-check.js"],
   ["plain-minutes-production", "plain-minutes-production-browser-fixture.js", "plain-minutes-production-browser-check.js"],
+  ["global-minutes-model", "plain-minutes-production-browser-fixture.js", "global-minutes-model-browser-check.js"],
   // Structured minutes/evidence/adoption suites no longer describe the product.
   // Plain-body saving, generation and leaving are covered above instead.
   ["toast", "toast-browser-fixture.tsx", "toast-browser-check.js"],
