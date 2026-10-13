@@ -162,7 +162,7 @@ pub(crate) fn restore_checkpoint_references(
     value: Value,
     mut map: impl FnMut(crate::saved_artifact::Role, &str, &str) -> Result<(String, String), String>,
 ) -> Result<Value, String> {
-    if matches!(parameters["schemaVersion"].as_u64(), Some(5 | 6 | 7)) {
+    if parameters["schemaVersion"].as_u64() == Some(7) {
         return markdown_job::restore::references(job, parameters, value, map);
     }
     use crate::saved_artifact::Role;

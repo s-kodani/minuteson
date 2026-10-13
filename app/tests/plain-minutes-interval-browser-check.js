@@ -49,14 +49,10 @@ async page=>{
   await page.evaluate(()=>window.__mon.intervalMode="success");await link().click();await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();await close();
   results.push("wrong native interval is rejected and closed before reading PCM; explicit retry succeeds");
   await page.evaluate(()=>window.__mon.intervalMode="gap");const gapReads=await count("read_playback_chunk");await link().click();
-  await player().getByRole("button",{name:"音声欠損を確認",exact:true}).waitFor();
-  check(await count("read_playback_chunk")===gapReads,"gap was synthesized or automatically skipped");
-  await player().getByRole("button",{name:"音声欠損を確認",exact:true}).click();
-  const missing=page.getByRole("dialog",{name:"音声欠損を確認",exact:true});await missing.getByRole("button",{name:"次の保存音声へ",exact:true}).click();
-  await missing.locator(':scope > .common-modal-dismiss-row > [data-dialog-cancel]').click();
-  check(await count("read_playback_chunk")===gapReads,"explicit seek started playback without play action");
-  await player().getByRole("button",{name:"再生",exact:true}).click();await page.waitForFunction(before=>window.__mon.intervalCalls.filter(c=>c.cmd==="read_playback_chunk").length>before,gapReads);await close();
-  results.push("reported interval gaps stop without PCM padding or implicit skip; user can seek and explicitly play saved audio");
+  await player().getByRole("button",{name:"一時停止",exact:true}).waitFor();
+  await page.waitForFunction(before=>window.__mon.intervalCalls.filter(c=>c.cmd==="read_playback_chunk").length>before,gapReads);
+  check(await player().getByRole("button",{name:"音声欠損を確認",exact:true}).count()===0,"removed gap dialog remains");await close();
+  results.push("interval playback automatically skips missing time and reads saved PCM without a gap dialog or fabricated padding");
   await page.evaluate(()=>window.__mon.intervalMode="held");const closedBefore=await count("close_playback");await link().click();await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).waitFor();
   const countBefore=await count("read_playback_chunk");await player().getByRole("button",{name:"再生準備を取り消す",exact:true}).click();await player().waitFor({state:"hidden"});
   await page.evaluate(()=>window.__mon.intervalRelease());await page.waitForFunction(before=>window.__mon.intervalCalls.filter(c=>c.cmd==="close_playback").length>before,closedBefore);

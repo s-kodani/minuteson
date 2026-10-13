@@ -63,7 +63,7 @@ pub(in crate::generation) fn references(
     p.engine.validate()?;
     validate_capacity(&p)?;
     p.markdown_target.validate()?;
-    if !matches!(p.schema_version, 5 | 6 | 7)
+    if p.schema_version != 7
         || job.kind != "minutes_generation"
         || job.total_units != Some(p.plan.nodes.len() as i64)
         || p.plan.nodes.is_empty()

@@ -44,7 +44,8 @@ test("playback status never adds a visible dock row, and preparation retains a s
   assert.match(player,/snapshot.buffering && <span className="sr-only" role="status"/);
   assert.match(player,/label=\{preparing \? "再生準備を取り消す"/);
   assert.match(player,/onClick=\{preparing \? clear : playFromBar\} disabled=\{locked\}/);
-  assert.match(player,/<OptionsModal label="音声欠損を確認" icon="more" attention><PlaybackMissing/);
+  assert.doesNotMatch(player,/PlaybackMissing|音声欠損を確認|<OptionsModal/);
+  assert.match(player,/max=\{info\?\.totalFrames \?\? 1\} step=\{1\}/);
 });
 
 test("return to full meeting is explicit, paused and stays in the playback settings modal", () => {

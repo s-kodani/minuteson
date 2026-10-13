@@ -214,45 +214,62 @@ test("both-track missing ranges advance through overlaps and adjacent boundaries
   assert.equal(nextSavedFrame(tail,480000),null);
 });
 
-test("leading missing audio never reads or schedules silence and explicit seek stays paused",async()=>{
+test("play at zero skips a leading gap and schedules saved PCM without fabricated silence",async()=>{
   const {clock,reads,player}=missingPlayer(missingInfo([gap(0,200000)]));
-  await player.play();assert.deepEqual(reads,[]);assert.equal(clock.parts.length,0);
-  assert.equal(player.snapshot().playing,false);assert.equal(player.snapshot().error,null);
-  player.seek(9600);assert.equal(player.snapshot().frame,9600);assert.equal(player.snapshot().playing,false);
-  await player.play();assert.equal(reads[0],9600);assert.equal(clock.parts[0].packet.channels[0][0],0.25);
+  await player.play();assert.equal(reads[0],9600);assert.equal(clock.parts.length,3);
+  assert.equal(player.snapshot().frame,9600);assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().error,null);
+  assert.equal(clock.parts[0].packet.channels[0][0],0.25);
+  player.pause();player.seek(0);await player.play();assert.equal(reads[3],9600);
   player.clear();
 });
 
-test("prefetch shortens the packet but lets all preceding PCM finish before pausing at a gap",async()=>{
+test("prefetch finishes all preceding PCM before skipping an interior gap and continuing playback",async()=>{
   const {clock,reads,player}=missingPlayer(missingInfo([gap(3_000_000,4_000_000)]));
   await player.play();assert.deepEqual(reads,[0,65536,131072]);
   assert.equal(clock.parts[2].packet.frames,144000-131072);
   assert.equal(player.snapshot().playing,true);
   clock.end(0);await tick();clock.end(1);await tick();
   assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().frame,131072);
-  clock.end(2);await tick();assert.equal(player.snapshot().playing,false);assert.equal(player.snapshot().frame,144000);
-  assert.deepEqual(reads,[0,65536,131072]);assert.equal(player.snapshot().error,null);
-  await player.play();assert.equal(reads.length,3);
-  player.seek(192000);assert.equal(player.snapshot().playing,false);
-  player.setRate(2);await player.play();assert.equal(reads[3],192000);assert.equal(clock.parts[3].rate,2);
-  assert.equal(clock.parts[4].at,clock.parts[3].at+65536/48000/2);player.clear();
+  clock.end(2);await tick();assert.equal(player.snapshot().playing,true);assert.equal(player.snapshot().frame,192000);
+  assert.deepEqual(reads,[0,65536,131072,192000,257536,323072]);assert.equal(player.snapshot().error,null);
+  assert.equal(clock.parts[3].packet.channels[0][0],0.25);
+  player.clear();
 });
 
-test("a gap shorter than one packet pauses after known audio, and trailing missing audio never loops automatically",async()=>{
+test("a trailing gap finishes at the exact timeline end without reading missing PCM or looping",async()=>{
   const {clock,reads,player}=missingPlayer(missingInfo([gap(100000,10_000_000)]));
   await player.play();assert.deepEqual(reads,[0]);assert.equal(clock.parts[0].packet.frames,4800);assert.equal(player.snapshot().playing,true);
-  clock.end(0);await tick();assert.equal(player.snapshot().frame,4800);assert.equal(player.snapshot().playing,false);
-  assert.equal(nextSavedFrame(player.snapshot().info!,4800),null);
-  await player.play();assert.deepEqual(reads,[0]);player.clear();
+  clock.end(0);await tick();assert.equal(player.snapshot().frame,480000);assert.equal(player.snapshot().playing,false);
+  assert.deepEqual(reads,[0]);assert.equal(player.snapshot().error,null);player.clear();
 });
 
-test("seek into missing audio invalidates an in-flight packet without scheduling stale sound",async()=>{
+test("all-missing audio completes at the end without any read or scheduled source",async()=>{
+  const {clock,reads,player}=missingPlayer(missingInfo([gap(0,10_000_000)]));
+  await player.play();assert.deepEqual(reads,[]);assert.equal(clock.parts.length,0);
+  assert.equal(player.snapshot().frame,480000);assert.equal(player.snapshot().playing,false);player.clear();
+});
+
+test("overlapping input gaps are skipped as a union before reading valid saved audio",async()=>{
+  const data={...missingInfo([gap(0,200000),gap(100000,300000,"system"),gap(300000,400000)]),trackKind:"both"};
+  const {reads,player}=missingPlayer(data);await player.play();
+  assert.equal(reads[0],19200);assert.equal(player.snapshot().frame,19200);assert.equal(player.snapshot().playing,true);player.clear();
+});
+
+test("a non-step-aligned final PCM packet reaches the exact frame count and can replay from zero",async()=>{
+  const totalFrames=48000+137,data={...info,totalFrames},clock=new FakeClock(),reads:number[]=[];
+  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);return packet(totalFrames-offset);},()=>{});
+  player.load(data);await player.play();assert.deepEqual(reads,[0]);clock.end(0);await tick();
+  assert.equal(player.snapshot().frame,totalFrames);assert.equal(player.snapshot().playing,false);
+  await player.play();assert.deepEqual(reads,[0,0]);assert.equal(player.snapshot().frame,0);player.clear();
+});
+
+test("seek into missing audio invalidates an in-flight packet and resumes only new saved PCM",async()=>{
   const data=missingInfo([gap(100000,200000)]),clock=new FakeClock(),reads:number[]=[];
   let release!:(data:ArrayBuffer)=>void;
   const pending=new Promise<ArrayBuffer>(resolve=>{release=resolve;});
-  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);return pending;},()=>{});
+  const player=new ChunkPlayer(clock,async(_,offset)=>{reads.push(offset);return reads.length===1?pending:packet(playbackPacketFrames(data,offset));},()=>{});
   player.load(data);const playing=player.play();await tick();player.seek(6000);release(packet(4800));await playing;await tick();
-  assert.deepEqual(reads,[0]);assert.equal(clock.parts.length,0);assert.equal(player.snapshot().frame,6000);assert.equal(player.snapshot().playing,false);player.clear();
+  assert.deepEqual(reads,[0,9600,75136,140672]);assert.equal(clock.parts.length,3);assert.equal(player.snapshot().frame,9600);assert.equal(player.snapshot().playing,true);player.clear();
 });
 
 test("native packet crossing a known gap fails before any PCM is scheduled",async()=>{
@@ -264,5 +281,5 @@ test("native packet crossing a known gap fails before any PCM is scheduled",asyn
 test("loaded missing metadata is an owned snapshot rather than a mutable IPC object",async()=>{
   const data=missingInfo([gap(0,200000)]),{reads,player}=missingPlayer(data);
   data.missingRanges![0].endFrame=1;data.missingRanges!.length=0;
-  await player.play();assert.deepEqual(reads,[]);assert.equal(player.snapshot().info!.missingRanges![0].endFrame,9600);player.clear();
+  await player.play();assert.equal(reads[0],9600);assert.equal(player.snapshot().info!.missingRanges![0].endFrame,9600);player.clear();
 });

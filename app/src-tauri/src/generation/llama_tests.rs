@@ -17,12 +17,11 @@ fn incomplete_output_is_not_repaired_or_published_and_has_a_recoverable_message(
 }
 
 #[test]
-fn markdown_bound_counts_decoded_unicode_without_truncating_text() {
-    let schema = crate::generation::markdown::bounded_schema(2048);
-    assert_eq!(schema["properties"]["markdown"]["maxLength"], 480);
-    assert!(validate_markdown_bound(&json!({"markdown":"あ".repeat(480)}), &schema).is_ok());
+fn explicit_schema_bound_counts_decoded_unicode_without_deriving_a_token_budget() {
+    let schema = json!({"type":"object","properties":{"markdown":{"type":"string","maxLength":2}}});
+    assert!(validate_markdown_bound(&json!({"markdown":"あい"}), &schema).is_ok());
     assert!(
-        validate_markdown_bound(&json!({"markdown":"あ".repeat(481)}), &schema)
+        validate_markdown_bound(&json!({"markdown":"あいう"}), &schema)
             .unwrap_err()
             .contains("minutes_output_limit")
     );

@@ -29,12 +29,12 @@ test("interval admission refuses out of range, reversed and unsafe times",()=>{
   for(const range of [{startUs:-1,endUs:1},{startUs:1,endUs:1},{startUs:0,endUs:1000001},{startUs:0.1,endUs:1},{startUs:0,endUs:NaN}])
     assert.throws(()=>markdownIntervalRequest("m",summary,range));
 });
-test("interval gap stops playback instead of reading or manufacturing silent samples",async()=>{
-  let reads=0;
+test("interval playback skips a leading gap without reading or manufacturing its samples",async()=>{
+  const reads:number[]=[];
   const clock:PlaybackClock={now:()=>0,resume:async()=>{},schedule:()=>()=>{}};
-  const player=new ChunkPlayer(clock,async()=>{reads++;throw Error("must not read gap");},()=>{});
-  player.load(info);await player.play();assert.equal(reads,0);assert.equal(player.snapshot().playing,false);
-  player.seek(2399);await player.play();assert.equal(reads,1);
+  const player=new ChunkPlayer(clock,async(_,frame)=>{reads.push(frame);throw Error("synthetic read failure");},()=>{});
+  player.load(info);await player.play();assert.deepEqual(reads,[2399]);assert.equal(player.snapshot().playing,false);
+  assert.match(player.snapshot().error!,/synthetic read failure/);player.clear();
 });
 test("clipped tail gaps retain absolute microseconds and stop at the relative interval end",()=>{
   const r=markdownIntervalRequest("m",summary,{startUs:123456,endUs:300001});

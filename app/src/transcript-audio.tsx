@@ -10,8 +10,6 @@ import { PlaybackSurfaceControls, usePlaybackSurface } from "./playback-surface"
 import { meetingPlaybackLabel, validateMeetingPlayback, type MeetingPlaybackMode, type MeetingPlaybackRequest, type MeetingPlaybackRestore } from "./meeting-playback-state";
 import { playbackTimeline } from "./playback-follow";
 import { PlaybackPreparationPool } from "./playback-preparation";
-import { PlaybackMissing } from "./playback-missing";
-import { OptionsModal } from "./options-modal";
 import { ToastNotice } from "./toast";
 import { validateMarkdownPlayback, type MarkdownIntervalRequest } from "./minutes-audio-state";
 
@@ -229,14 +227,13 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     <>
       <div className="audio-controls" aria-busy={preparing || snapshot.buffering}>
         <IconButton label={preparing ? "再生準備を取り消す" : snapshot.playing ? "一時停止" : "再生"} icon={preparing ? "close" : snapshot.playing ? "pause" : "play"} onClick={preparing ? clear : playFromBar} disabled={locked} />
-        <input type="range" aria-label={intervalScope ? "Markdown区間内の再生位置" : meetingScope ? "会議全体の再生位置" : "発言内の再生位置"} title={!info ? "再生後に位置を変更できます" : undefined} min={0} max={info?.totalFrames ?? 1} step={Math.max(1, Math.floor((info?.sampleRate ?? 48000) / 10))} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={!info || preparing || locked} />
+        <input type="range" aria-label={intervalScope ? "Markdown区間内の再生位置" : meetingScope ? "会議全体の再生位置" : "発言内の再生位置"} title={!info ? "再生後に位置を変更できます" : undefined} min={0} max={info?.totalFrames ?? 1} step={1} value={snapshot.frame} onChange={(event) => player.seek(Number(event.target.value))} disabled={!info || preparing || locked} />
         <IconButton label="先頭へ" icon="restart" onClick={() => { player.pause(); player.seek(0); }} disabled={!info || preparing || locked} />
         <label>速度<select value={snapshot.rate} onChange={(event) => player.setRate(Number(event.target.value))} disabled={preparing || locked}>{[0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}</select></label>
         <span>{info ? `${durationLabel(snapshot.frame / info.sampleRate)} / ${durationLabel(info.totalFrames / info.sampleRate)}` : "0:00 / --:--"}</span>
         {info && <IconButton className="playback-close" label="再生を閉じる" icon="close" onClick={clear} disabled={locked} />}
       </div>
       <div className="heading-with-info"><span>{intervalScope ? "議事録の区間" : meetingScope ? meetingPlaybackLabel((info?.trackKind ?? options.idleMeetingMode) as MeetingPlaybackMode) : info?.trackKind === "mic" ? "マイク音声" : info?.trackKind === "system" ? "PC音声" : "保存音声"}</span><InfoPopover label={playbackLabel}>{intervalScope ? "Markdownに記述された開始・終了時刻の保存音声だけを再生します。マイクとPC音声がある会議では両方を混ぜ、マイクだけの会議ではマイクを再生します。同期精度は未検証です。" : meetingScope ? "選択した種類の保存音声を会議全体の時間軸で再生します。両方では各音声を半分の音量で混ぜます。実録音の同期やエコー除去の正確さは未検証です。" : "発言の元トラックを再生します。再生範囲は発言に対応した保存音声です。話者推定やトラック間の時刻補正の正確さを保証するものではありません。"}{(error || snapshot.error) && <p role="alert">音声を再生できません: {error || snapshot.error}</p>}</InfoPopover>
-        {(meetingScope || intervalScope) && info && !!info.missingRanges?.length && <OptionsModal label="音声欠損を確認" icon="more" attention><PlaybackMissing key={info.token} info={info} frame={snapshot.frame} disabled={preparing || locked} onSeek={frame=>{player.pause();player.seek(frame);}} /></OptionsModal>}
       </div>
       {snapshot.buffering && <span className="sr-only" role="status">音声を読み込んでいます。</span>}
     </>

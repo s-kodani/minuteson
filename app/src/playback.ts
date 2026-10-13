@@ -198,7 +198,11 @@ export class ChunkPlayer {
   async play(): Promise<void> {
     if (!this.info || this.playing) return;
     if (this.position >= this.info.totalFrames) this.position = 0;
-    if (missingAtFrame(this.info, this.position).length) { this.error=null; this.changed(); return; }
+    // Missing capture time is not playable PCM. Advance to saved audio rather
+    // than leaving an apparently working play button stuck at the beginning.
+    const saved = nextSavedFrame(this.info, this.position);
+    this.position = saved ?? this.info.totalFrames;
+    if (saved === null) { this.error=null; this.changed(); return; }
     this.playing = true;
     this.error = null;
     this.nextFrame = this.position;
@@ -228,11 +232,16 @@ export class ChunkPlayer {
         const info = this.info;
         const from = this.nextFrame;
         const frames = playbackPacketFrames(info, from);
-        // Stop only after preceding scheduled PCM has finished. Prefetch must
-        // not cut off known audio early or silently jump over missing time.
+        // Finish preceding PCM before advancing the meeting-time cursor. Do
+        // not read a missing range, synthesize silence, or truncate queued PCM.
         if (frames === 0) {
-          if (this.scheduled.length === 0) { this.position=from; this.playing=false; this.changed(); }
-          break;
+          if (this.scheduled.length !== 0) break;
+          const saved = nextSavedFrame(info, from);
+          this.position = this.nextFrame = saved ?? info.totalFrames;
+          this.nextTime = 0;
+          if (saved === null) this.playing = false;
+          this.changed();
+          continue;
         }
         const bytes = await this.read(info.token, from);
         if (generation !== this.generation) return;

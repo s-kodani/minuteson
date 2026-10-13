@@ -14,8 +14,7 @@ pub(super) mod restore;
 struct Parameters {
     schema_version: u32,
     engine: super::llama::LlamaConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    capacity: Option<Capacity>,
+    capacity: Capacity,
     prompt_budget: usize,
     plan: plan::Plan,
     markdown_target: GenerationTarget,
@@ -45,7 +44,7 @@ pub(crate) fn is_markdown(spec: &JobSpec) -> bool {
     spec.kind == JobKind::MinutesGeneration
         && matches!(
             spec.parameters["generation"]["schemaVersion"].as_u64(),
-            Some(5 | 6 | 7)
+            Some(7)
         )
 }
 pub(crate) fn enqueue(
@@ -145,7 +144,7 @@ fn checked_fixed_parameters(
         .ok_or("議事録プロファイルがありません")?;
     if spec.kind != JobKind::MinutesGeneration
         || envelope.schema_version != 1
-        || !matches!(p.schema_version, 5 | 6 | 7)
+        || p.schema_version != 7
         || p.markdown_target.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
         || envelope.request.operation_id != initial_operation
@@ -196,51 +195,31 @@ fn checked_checkpoint(
     Ok(c)
 }
 fn validate_capacity(p: &Parameters) -> Result<(), String> {
-    match (p.schema_version, &p.capacity) {
-        (7, Some(capacity)) => {
-            capacity.plan_limit(&p.engine, p.prompt_budget)?;
-            Ok(())
-        }
-        (5 | 6, None) => Ok(()),
-        _ => Err("議事録の固定モデル上限が不足・不正です".into()),
+    if p.schema_version != 7 {
+        return Err("議事録の固定モデル上限の形式が現行と一致しません".into());
     }
+    p.capacity.plan_limit(&p.engine, p.prompt_budget)?;
+    Ok(())
 }
 fn plan_limit(p: &Parameters) -> Result<usize, String> {
-    p.capacity.as_ref().map_or(Ok(p.prompt_budget), |c| {
-        c.plan_limit(&p.engine, p.prompt_budget)
-    })
+    p.capacity.plan_limit(&p.engine, p.prompt_budget)
 }
-fn task_system(system: &str, p: &Parameters) -> String {
-    if p.schema_version == 7 {
-        format!("{system}{}", super::model_budget::COMPLETION_INSTRUCTION)
-    } else {
-        system.into()
-    }
+fn task_system(system: &str) -> String {
+    format!("{system}{}", super::model_budget::COMPLETION_INSTRUCTION)
 }
-fn task_schema(p: &Parameters) -> Value {
-    if p.schema_version == 6 {
-        markdown::bounded_schema(p.engine.prediction_tokens)
-    } else {
-        markdown::schema()
-    } // Exact replay of already saved task bytes.
-}
-fn extract_task(
-    input: &MinutesInput,
-    slices: &[plan::Slice],
-    p: &Parameters,
-) -> Result<Task, String> {
+fn extract_task(input: &MinutesInput, slices: &[plan::Slice]) -> Result<Task, String> {
     Ok(Task {
-        system: task_system(markdown::system(), p),
+        system: task_system(markdown::system()),
         prompt: plan::extract_prompt(input, slices)?,
-        schema: task_schema(p),
+        schema: markdown::schema(),
         local: None,
     })
 }
-fn merge_task(cursor: &plan::Cursor, p: &Parameters) -> Result<Task, String> {
+fn merge_task(cursor: &plan::Cursor) -> Result<Task, String> {
     Ok(Task {
-        system: task_system(plan::MERGE_SYSTEM, p),
+        system: task_system(plan::MERGE_SYSTEM),
         prompt: cursor.task()?,
-        schema: task_schema(p),
+        schema: markdown::schema(),
         local: None,
     })
 }
@@ -282,7 +261,7 @@ fn replay_with(
                 if saved.batches.len() != 1 {
                     return Err("抽出の保存形式が不正です".into());
                 }
-                markdown::text(verify(&extract_task(input, slices, p)?, &saved.batches[0])?)?
+                markdown::text(verify(&extract_task(input, slices)?, &saved.batches[0])?)?
             }
             node => {
                 let mut current = cursor(node, &outputs, plan_limit(p)?)?;
@@ -290,7 +269,7 @@ fn replay_with(
                     if cancelled() {
                         return Ok(None);
                     }
-                    let text = markdown::text(verify(&merge_task(&current, p)?, batch)?)?;
+                    let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
                     current.accept(text)?;
                 }
                 current
@@ -316,7 +295,7 @@ fn replay_with(
             if cancelled() {
                 return Ok(None);
             }
-            let text = markdown::text(verify(&merge_task(&current, p)?, batch)?)?;
+            let text = markdown::text(verify(&merge_task(&current)?, batch)?)?;
             current.accept(text)?;
         }
         if current.result().is_some() {
@@ -367,9 +346,7 @@ fn infer(
     p: &Parameters,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<(String, Vec<Artifact>)>, String> {
-    let input_limit = p.capacity.as_ref().map_or(Ok(p.prompt_budget), |c| {
-        c.input_limit(&p.engine, p.prompt_budget)
-    })?;
+    let input_limit = p.capacity.input_limit(&p.engine, p.prompt_budget)?;
     if !plan::fits(&task.system, &task.prompt, input_limit) {
         return Err("議事録の入力が固定上限を超えています".into());
     }
@@ -380,9 +357,7 @@ fn infer(
     )?;
     let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
     let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
-    let execution = p.capacity.as_ref().map_or(Ok(runtime.clone()), |c| {
-        c.execution(&runtime, &task.system, &task.prompt)
-    })?;
+    let execution = p.capacity.execution(&runtime, &task.system, &task.prompt)?;
     let Some(raw) = super::llama::run_unit(
         &execution,
         &directory,
@@ -477,7 +452,7 @@ pub(crate) fn process(
                         &spec,
                         job_id,
                         index,
-                        extract_task(&input, slices, &p)?,
+                        extract_task(&input, slices)?,
                         &p,
                         &cancelled,
                     )?
@@ -506,7 +481,7 @@ pub(crate) fn process(
                             &spec,
                             job_id,
                             index,
-                            merge_task(&current, &p)?,
+                            merge_task(&current)?,
                             &p,
                             &cancelled,
                         )?
