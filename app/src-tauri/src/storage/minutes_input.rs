@@ -29,7 +29,8 @@ pub(crate) struct MinutesInput {
 // The native generation entry point checks the selected local engine first.
 // The request carries editor stamps; pending saves must be flushed by its UI.
 impl Storage {
-    #[allow(dead_code)]
+    // Historical database fixtures only; the product admits Markdown jobs.
+    #[cfg(test)]
     pub(crate) fn enqueue_minutes_job(
         &self,
         request: MinutesJobRequest,
@@ -45,6 +46,7 @@ impl Storage {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn enqueue_minutes_job_configured(
         &self,
         request: MinutesJobRequest,

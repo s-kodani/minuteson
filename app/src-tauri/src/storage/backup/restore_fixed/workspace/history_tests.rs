@@ -709,12 +709,9 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
             lock_version: draft.lock_version,
         }),
     };
-    let engine = crate::storage::generation_tests::normal_engine(f.root.path());
-    let job = crate::generation::enqueue(&f.storage, request, engine, "standard", 2400).unwrap();
-    f.storage.acquire_local_inference_job().unwrap().unwrap();
-    let revision = crate::generation::process(&f.storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let engine = crate::generation::stored_fixture::engine(f.root.path(), false);
+    let job = crate::generation::stored_fixture::seed_job(&f.storage, request, engine, "standard", 2400, 4).unwrap();
+    let revision = crate::generation::stored_fixture::seed_outputs(&f.storage, &job, false, false).unwrap();
     f.storage
         .seed_stored_minutes_head(&f.meeting, &revision)
         .unwrap();

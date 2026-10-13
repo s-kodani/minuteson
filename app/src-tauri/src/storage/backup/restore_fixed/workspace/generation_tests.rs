@@ -10,12 +10,9 @@ struct NativeFixture {
 fn fixture(long: bool, partial: bool) -> NativeFixture {
     let mut f = queued(long);
     if partial {
-        crate::storage::generation_tests::pause_in_merge(&f.storage, &f.job);
+        crate::generation::stored_fixture::seed_outputs(&f.storage, &f.job, true, true);
     } else {
-        f.storage.acquire_local_inference_job().unwrap();
-        crate::generation::process(&f.storage, &f.job.id, &|| false, &|_| {})
-            .unwrap()
-            .unwrap();
+        crate::generation::stored_fixture::seed_outputs(&f.storage, &f.job, false, long);
     }
     f.job = f.storage.get_job(&f.job.id).unwrap();
     f
@@ -51,17 +48,11 @@ fn queued_version(long: bool, version: u32) -> NativeFixture {
         }),
     };
     let engine = if long {
-        crate::storage::generation_tests::wide_engine(root.path())
+        crate::generation::stored_fixture::engine(root.path(), long)
     } else {
-        crate::storage::generation_tests::normal_engine(root.path())
+        crate::generation::stored_fixture::engine(root.path(), false)
     };
-    let job = match version {
-        2 => crate::generation::enqueue_previous(&storage, request, engine, "standard", 2400),
-        3 => crate::generation::enqueue_prompt_v3(&storage, request, engine, "standard", 2400),
-        4 => crate::generation::enqueue(&storage, request, engine, "standard", 2400),
-        _ => panic!("unsupported fixture version"),
-    }
-    .unwrap();
+    let job = crate::generation::stored_fixture::seed_job(&storage, request, engine, "standard", 2400, version).unwrap();
     NativeFixture {
         root,
         storage,
@@ -169,10 +160,7 @@ fn generation_workspace_rebuilds_worker_files_and_all_checkpoint_hashes_without_
 fn generation_workspace_preserves_previous_and_current_prompt_policies_without_inference() {
     for version in [2, 3, 4] {
         let mut f = queued_version(false, version);
-        f.storage.acquire_local_inference_job().unwrap();
-        crate::generation::process(&f.storage, &f.job.id, &|| false, &|_| {})
-            .unwrap()
-            .unwrap();
+        crate::generation::stored_fixture::seed_outputs(&f.storage, &f.job, false, false);
         f.job = f.storage.get_job(&f.job.id).unwrap();
         let before = calls(&f);
         let old_checkpoint = f.storage.fixed_job_input(&f.job.id).unwrap().1.unwrap();
@@ -227,14 +215,7 @@ fn generation_workspace_replays_historical_partial_merge_and_shared_retry_files(
         .storage
         .finish_job(&f.job.id, f.job.completed_units, "failed", Some("fixture"))
         .unwrap();
-    let child = crate::generation::RetryRequest {
-        meeting_id: f.meeting.clone(),
-        job_id: parent.id.clone(),
-        operation_id: Uuid::new_v4().to_string(),
-        expected_spec_hash: parent.spec_hash.clone(),
-    }
-    .enqueue(&f.storage)
-    .unwrap();
+    let child = crate::generation::stored_fixture::seed_retry(&f.storage, &parent);
     let before = calls(&f);
     let output = tempfile::tempdir().unwrap();
     let source = archive(&f, output.path());
@@ -409,14 +390,7 @@ fn generation_workspace_rejects_invalid_retry_parent_state_using_runtime_lineage
         .storage
         .finish_job(&f.job.id, f.job.completed_units, "failed", Some("fixture"))
         .unwrap();
-    crate::generation::RetryRequest {
-        meeting_id: f.meeting.clone(),
-        job_id: parent.id.clone(),
-        operation_id: Uuid::new_v4().to_string(),
-        expected_spec_hash: parent.spec_hash.clone(),
-    }
-    .enqueue(&f.storage)
-    .unwrap();
+    crate::generation::stored_fixture::seed_retry(&f.storage, &parent);
     let source = archive(&f, output.path());
     let ids = prepared(&source, output.path());
     let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
@@ -480,7 +454,7 @@ fn generation_workspace_validates_unstarted_job_without_creating_a_checkpoint_or
     let (spec, checkpoint) = crate::storage::jobs::read_fixed_input(&work.database, &job).unwrap();
     assert!(checkpoint.is_none());
     assert_eq!(spec.total_units, Some(1));
-    assert!(!f.root.path().join("engine.calls").exists());
+    assert!(calls(&f).is_empty());
     assert_eq!(
         work.database
             .query_row("SELECT count(*) FROM job_checkpoints", [], |r| r

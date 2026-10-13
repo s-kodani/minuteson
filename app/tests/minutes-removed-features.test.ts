@@ -70,3 +70,19 @@ test("structured minutes export is removed and only exact Markdown publishing re
   assert.doesNotMatch(writer,/minutes_drafts|minutes::|\.markdown\(/);
   assert.match(writer,/prepared\.document\.markdown\.as_bytes\(\)/);
 });
+test("structured worker execution and candidate publication are removed from the product",()=>{
+  const root=new URL("../src-tauri/src/",import.meta.url);
+  const worker=readFileSync(new URL("generation.rs",root),"utf8");
+  assert.doesNotMatch(worker,/fn (?:run_task|run_merge|save_items|save_task_output|enqueue_version|enqueue_previous|enqueue_legacy|enqueue_prompt_v3)\b|llama::run_unit|finish_minutes_candidate/);
+  assert.match(worker,/if !markdown_job::is_markdown\(&spec\)/);
+  assert.match(worker,/markdown_job::process\(storage, job_id, stopping, progress\)/);
+  assert.match(worker,/#\[cfg\(test\)\]\npub\(crate\) mod stored_fixture;/);
+  const seed=readFileSync(new URL("generation/stored_fixture.rs",root),"utf8");
+  assert.doesNotMatch(seed,/llama::run_unit|std::process|Command::|RetryRequest|retry_preflight/);
+  const storage=readFileSync(new URL("storage/minutes.rs",root),"utf8");
+  assert.doesNotMatch(storage,/finish_minutes_candidate|INSERT INTO minutes_revisions|INSERT INTO minutes_items|INSERT INTO evidence_links/);
+  assert.match(storage,/fn read_content\(/);
+  const admission=readFileSync(new URL("storage/minutes_input.rs",root),"utf8");
+  for(const name of ["enqueue_minutes_job","enqueue_minutes_job_configured"])
+    assert.match(admission,new RegExp("#\\[cfg\\(test\\)\\]\\n    pub\\(crate\\) fn "+name+"\\("));
+});

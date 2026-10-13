@@ -64,18 +64,16 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
             lock_version: draft.lock_version,
         }),
     };
-    let generation = crate::generation::enqueue(
+    let generation = crate::generation::stored_fixture::seed_job(
         &storage,
         request,
-        crate::storage::generation_tests::normal_engine(root.path()),
+        crate::generation::stored_fixture::engine(root.path(), false),
         "standard",
         2400,
+        4,
     )
     .unwrap();
-    storage.acquire_local_inference_job().unwrap().unwrap();
-    let candidate = crate::generation::process(&storage, &generation.id, &|| false, &|_| {})
-        .unwrap()
-        .unwrap();
+    let candidate = crate::generation::stored_fixture::seed_outputs(&storage, &generation, false, false).unwrap();
     storage
         .seed_stored_minutes_head(&meeting, &candidate)
         .unwrap();

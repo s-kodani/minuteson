@@ -431,7 +431,7 @@ fn request(meeting: &str, expected: Option<MarkdownStamp>, text: &str) -> SaveMa
 fn legacy(storage: &Storage) -> (String, String) {
     let (source, job, content) = super::super::minutes::tests::fixture(storage, 1);
     let revision = storage
-        .finish_minutes_candidate(&job.id, 1, content)
+        .seed_stored_candidate_for_job(&job.id, 1, content)
         .unwrap();
     let lock = storage
         .get_meeting(&source.meeting_id)

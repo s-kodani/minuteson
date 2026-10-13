@@ -1,20 +1,23 @@
-//! Fixed-input llama.cpp extraction and merging with durable unit provenance.
+//! Markdown-only generation dispatch and read-only saved-result validation.
 mod adaptive;
 pub(crate) mod llama;
 pub(crate) mod markdown;
 pub(crate) mod markdown_job;
 mod markdown_plan;
-pub(crate) mod model_budget;
 mod merge;
+pub(crate) mod model_budget;
 mod plan;
 pub(crate) mod restore;
 pub(crate) mod result;
+#[cfg(test)]
+pub(crate) mod stored_fixture;
 use crate::minutes_document::{from_generated, GeneratedItem, TEMPLATE_VERSION};
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::storage::{JobKind, JobSnapshot, JobSpec, MinutesInput, MinutesJobRequest, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
+
+const REMOVED_GENERATION: &str = "旧形式の議事録生成は廃止しました。全体設定のモデルで新しく生成してください。（minutes_structured_generation_removed）";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -53,26 +56,6 @@ impl StartRequest {
             &self.profile,
             self.prompt_budget,
             expected,
-        )
-    }
-    #[allow(dead_code)]
-    pub(crate) fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
-        use crate::local_engine::Fingerprint;
-        let engine = llama::LlamaConfig {
-            executable: Fingerprint::capture(&self.executable_path, &|| false)?,
-            model: Fingerprint::capture(&self.model_path, &|| false)?,
-            threads: self.threads,
-            context_tokens: self.context_tokens,
-            prediction_tokens: self.prediction_tokens,
-            gpu_layers: self.gpu_layers,
-            seed: self.seed,
-        };
-        enqueue(
-            storage,
-            self.input,
-            engine,
-            &self.profile,
-            self.prompt_budget,
         )
     }
 }
@@ -114,32 +97,7 @@ pub(crate) fn retry_preflight(
     if markdown_job::is_markdown(spec) {
         return markdown_job::retry_preflight(storage, original, spec, checkpoint, cancelled);
     }
-    let input = storage.load_minutes_input(&original.id)?;
-    let initial_operation = storage.fixed_job_initial_operation(&original.id)?;
-    let p = checked_parameters(spec, &input, &initial_operation)?;
-    let decoded = checked_checkpoint(original, &p, checkpoint.cloned())?;
-    let runtime = managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
-    runtime.verify(cancelled)?;
-    managed::verify(
-        &spec.profile_snapshot,
-        Execution::Llama(&p.engine, p.prompt_budget),
-        cancelled,
-    )?;
-    verify_saved_outputs(storage, spec, &input, &p, &decoded, cancelled)?
-        .ok_or("議事録再試行の検証が中断されました")?;
-    runtime.verify(cancelled)?;
-    managed::verify(
-        &spec.profile_snapshot,
-        Execution::Llama(&p.engine, p.prompt_budget),
-        cancelled,
-    )?;
-    if storage.load_minutes_input(&original.id)? != input {
-        return Err("検証中に議事録の固定入力が変更されました".into());
-    }
-    if cancelled() {
-        return Err("議事録再試行の照合を中断しました".into());
-    }
-    Ok(())
+    Err(REMOVED_GENERATION.into())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -298,80 +256,6 @@ fn budget(engine: &llama::LlamaConfig) -> Result<usize, String> {
         .filter(|n| *n >= 2048)
         .ok_or("議事録の入力と出力に十分なコンテキストがありません".into())
 }
-pub(crate) fn enqueue(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-) -> Result<JobSnapshot, String> {
-    enqueue_version(storage, request, engine, name, prompt_budget, 4)
-}
-#[cfg(test)]
-pub(crate) fn enqueue_prompt_v3(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-) -> Result<JobSnapshot, String> {
-    enqueue_version(storage, request, engine, name, prompt_budget, 3)
-}
-#[cfg(test)]
-pub(crate) fn enqueue_previous(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-) -> Result<JobSnapshot, String> {
-    enqueue_version(storage, request, engine, name, prompt_budget, 2)
-}
-#[cfg(test)]
-pub(crate) fn enqueue_legacy(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-) -> Result<JobSnapshot, String> {
-    enqueue_version(storage, request, engine, name, prompt_budget, 1)
-}
-fn enqueue_version(
-    storage: &Storage,
-    request: MinutesJobRequest,
-    engine: llama::LlamaConfig,
-    name: &str,
-    prompt_budget: usize,
-    schema_version: u32,
-) -> Result<JobSnapshot, String> {
-    if !matches!(name, "standard" | "high_accuracy") || prompt_budget > budget(&engine)? {
-        return Err("議事録プロファイルまたは入力上限が不正です".into());
-    }
-    engine.verify(&|| false)?;
-    let selected = storage.job_model_selection(
-        &request.meeting_id,
-        &request.operation_id,
-        name,
-        Execution::Llama(&engine, prompt_budget),
-    )?;
-    let profile = managed::attach(profile(&engine, name), selected)?;
-    storage.enqueue_minutes_job_configured(request, profile, |input| {
-        let plan = plan::build_versioned(input, prompt_budget, schema_version)?;
-        let total = plan.nodes.len() as i64;
-        let parameters = Parameters {
-            schema_version,
-            template_version: TEMPLATE_VERSION.into(),
-            engine,
-            prompt_budget,
-            plan,
-        };
-        Ok((
-            serde_json::to_value(parameters).map_err(|e| e.to_string())?,
-            Some(total),
-        ))
-    })
-}
 fn checked_parameters(
     spec: &JobSpec,
     input: &MinutesInput,
@@ -493,6 +377,7 @@ fn artifact_type(name: &str) -> Result<&'static str, String> {
         _ => Err("未対応の生成結果ファイルです".into()),
     }
 }
+#[cfg(test)]
 fn write_new(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -555,23 +440,6 @@ fn verify_task_bytes(
     }
     Ok(raw)
 }
-fn verify_normalized(
-    storage: &Storage,
-    meeting: &str,
-    artifact: &Artifact,
-    items: &[GeneratedItem],
-) -> Result<(), String> {
-    if artifact.name != "items.json" {
-        return Err("議事録の保存項目形式が不正です".into());
-    }
-    let normalized: Vec<GeneratedItem> =
-        serde_json::from_slice(&read_artifact(storage, meeting, artifact)?)
-            .map_err(|e| e.to_string())?;
-    if normalized != items {
-        return Err("議事録の保存項目と生成原文が一致しません".into());
-    }
-    Ok(())
-}
 fn merge_cursor(
     node: &plan::Node,
     outputs: &[Vec<GeneratedItem>],
@@ -598,32 +466,6 @@ fn merge_task(cursor: &adaptive::Cursor) -> Result<Task, String> {
         },
         local: cursor.local().then(|| adaptive::identity(sources)),
     })
-}
-fn replay_merge(
-    storage: &Storage,
-    spec: &JobSpec,
-    input: &MinutesInput,
-    p: &Parameters,
-    node: &plan::Node,
-    outputs: &[Vec<GeneratedItem>],
-    batches: &[SavedBatch],
-    cancelled: &impl Fn() -> bool,
-) -> Result<Option<adaptive::Cursor>, String> {
-    if batches.len() > 4096 {
-        return Err("統合の処理単位数が上限を超えています".into());
-    }
-    let mut cursor = merge_cursor(node, outputs, p)?;
-    for batch in batches {
-        if cancelled() {
-            return Ok(None);
-        }
-        let task = merge_task(&cursor)?;
-        let raw = verify_task_artifacts(storage, &spec.meeting_id, &task, &batch.artifacts)?;
-        let items = merge::parse(raw, input, cursor.next().unwrap())?;
-        verify_normalized(storage, &spec.meeting_id, &batch.normalized, &items)?;
-        cursor.accept(items)?;
-    }
-    Ok(Some(cursor))
 }
 fn checked_checkpoint(
     job: &JobSnapshot,
@@ -658,416 +500,17 @@ fn checked_checkpoint(
     }
     Ok(checkpoint)
 }
-struct VerifiedOutputs {
-    nodes: Vec<Vec<GeneratedItem>>,
-    pending: Option<adaptive::Cursor>,
-}
-fn verify_saved_outputs(
-    storage: &Storage,
-    spec: &JobSpec,
-    input: &MinutesInput,
-    p: &Parameters,
-    checkpoint: &Checkpoint,
-    cancelled: &impl Fn() -> bool,
-) -> Result<Option<VerifiedOutputs>, String> {
-    let mut outputs = vec![];
-    for saved in &checkpoint.outputs {
-        if cancelled() {
-            return Ok(None);
-        }
-        let node = &p.plan.nodes[saved.index];
-        let items = if p.adaptive_merge() && matches!(node, plan::Node::Merge { .. }) {
-            if !saved.artifacts.is_empty() || saved.merge_batches.is_empty() {
-                return Err("分割統合の完了結果形式が不正です".into());
-            }
-            let Some(cursor) = replay_merge(
-                storage,
-                spec,
-                input,
-                p,
-                node,
-                &outputs,
-                &saved.merge_batches,
-                cancelled,
-            )?
-            else {
-                return Ok(None);
-            };
-            let items = cursor.finish()?;
-            from_generated(input, items.clone())?;
-            result::normalize_versioned(items, p.schema_version)?
-        } else {
-            if !saved.merge_batches.is_empty() {
-                return Err("従来の生成単位に統合結果が混入しています".into());
-            }
-            let task = task(input, node, &outputs, p)?;
-            parse_node(
-                verify_task_artifacts(storage, &spec.meeting_id, &task, &saved.artifacts)?,
-                input,
-                node,
-                &outputs,
-                p.schema_version,
-            )?
-        };
-        verify_normalized(storage, &spec.meeting_id, &saved.normalized, &items)?;
-        outputs.push(items);
-    }
-    let pending = if let Some(pending) = &checkpoint.pending {
-        let Some(cursor) = replay_merge(
-            storage,
-            spec,
-            input,
-            p,
-            &p.plan.nodes[pending.index],
-            &outputs,
-            &pending.batches,
-            cancelled,
-        )?
-        else {
-            return Ok(None);
-        };
-        Some(cursor)
-    } else {
-        None
-    };
-    Ok(Some(VerifiedOutputs {
-        nodes: outputs,
-        pending,
-    }))
-}
-fn run_task(
-    storage: &Storage,
-    spec: &JobSpec,
-    job_id: &str,
-    index: usize,
-    task: Task,
-    p: &Parameters,
-    cancelled: &impl Fn() -> bool,
-) -> Result<Option<(Value, std::path::PathBuf)>, String> {
-    let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-    let raw = if let Some(local) = task.local {
-        for (name, bytes) in [
-            ("system.txt", task.system.as_bytes().to_vec()),
-            ("prompt.txt", task.prompt.as_bytes().to_vec()),
-            (
-                "schema.json",
-                serde_json::to_vec(&task.schema).map_err(|e| e.to_string())?,
-            ),
-            (
-                "result.json",
-                serde_json::to_vec(&local).map_err(|e| e.to_string())?,
-            ),
-        ] {
-            write_new(&directory.join(name), &bytes)?;
-        }
-        local
-    } else {
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Llama(&p.engine, p.prompt_budget),
-            cancelled,
-        )?;
-        let Some(raw) = llama::run_unit(
-            &managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?,
-            &directory,
-            &task.system,
-            &task.prompt,
-            &task.schema,
-            Duration::from_secs(1800),
-            cancelled,
-        )?
-        else {
-            return Ok(None);
-        };
-        raw
-    };
-    if cancelled() {
-        return Ok(None);
-    }
-    managed::verify(
-        &spec.profile_snapshot,
-        Execution::Llama(&p.engine, p.prompt_budget),
-        cancelled,
-    )?;
-    Ok(Some((raw, directory)))
-}
-fn save_items(
-    storage: &Storage,
-    meeting: &str,
-    directory: &std::path::Path,
-    items: &[GeneratedItem],
-) -> Result<Artifact, String> {
-    write_new(
-        &directory.join("items.json"),
-        &serde_json::to_vec(items).map_err(|e| e.to_string())?,
-    )?;
-    let asset = storage.register_analysis_artifact(
-        meeting,
-        &directory.join("items.json"),
-        artifact_type("items.json")?,
-    )?;
-    Ok(Artifact {
-        name: "items.json".into(),
-        id: asset.id,
-        hash: asset.content_hash,
-    })
-}
-fn save_task_output(
-    storage: &Storage,
-    meeting: &str,
-    directory: &std::path::Path,
-    items: &[GeneratedItem],
-) -> Result<SavedBatch, String> {
-    let normalized = save_items(storage, meeting, directory, items)?;
-    let mut artifacts = vec![];
-    for name in ["system.txt", "prompt.txt", "schema.json", "result.json"] {
-        let asset = storage.register_analysis_artifact(
-            meeting,
-            &directory.join(name),
-            artifact_type(name)?,
-        )?;
-        artifacts.push(Artifact {
-            name: name.into(),
-            id: asset.id,
-            hash: asset.content_hash,
-        });
-    }
-    Ok(SavedBatch {
-        artifacts,
-        normalized,
-    })
-}
-#[allow(clippy::too_many_arguments)]
-fn run_merge(
-    storage: &Storage,
-    spec: &JobSpec,
-    job_id: &str,
-    index: usize,
-    input: &MinutesInput,
-    p: &Parameters,
-    mut cursor: adaptive::Cursor,
-    checkpoint: &mut Checkpoint,
-    cancelled: &impl Fn() -> bool,
-    progress: &impl Fn(JobSnapshot),
-) -> Result<Option<(Vec<GeneratedItem>, Artifact)>, String> {
-    if checkpoint.pending.is_none() {
-        checkpoint.pending = Some(PendingMerge {
-            index,
-            batches: vec![],
-        });
-    }
-    while cursor.next().is_some() {
-        if cancelled() {
-            return Ok(None);
-        }
-        if checkpoint.pending.as_ref().unwrap().batches.len() >= 4096 {
-            return Err("統合の処理単位数が上限を超えています".into());
-        }
-        let Some((raw, directory)) = run_task(
-            storage,
-            spec,
-            job_id,
-            index,
-            merge_task(&cursor)?,
-            p,
-            cancelled,
-        )?
-        else {
-            return Ok(None);
-        };
-        let items = merge::parse(raw, input, cursor.next().unwrap())?;
-        let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
-        cursor.accept(items)?;
-        checkpoint.pending.as_mut().unwrap().batches.push(saved);
-        let job = match storage.save_job_checkpoint(
-            job_id,
-            index as i64,
-            index as i64,
-            serde_json::to_value(&*checkpoint).map_err(|e| e.to_string())?,
-        ) {
-            Ok(job) => job,
-            Err(error) => {
-                checkpoint.pending.as_mut().unwrap().batches.pop();
-                return Err(error);
-            }
-        };
-        let paused = job.state == "paused";
-        progress(job);
-        if paused {
-            return Ok(None);
-        }
-    }
-    if cancelled() {
-        return Ok(None);
-    }
-    let items = cursor.finish()?;
-    from_generated(input, items.clone())?;
-    let items = result::normalize_versioned(items, p.schema_version)?;
-    let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
-    Ok(Some((
-        items.clone(),
-        save_items(storage, &spec.meeting_id, &directory, &items)?,
-    )))
-}
 pub(crate) fn process(
     storage: &Storage,
     job_id: &str,
     stopping: &impl Fn() -> bool,
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
-    let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
-    if markdown_job::is_markdown(&spec) {
-        return markdown_job::process(storage, job_id, stopping, progress);
+    let (spec, _) = storage.fixed_job_input(job_id)?;
+    if !markdown_job::is_markdown(&spec) {
+        // Never launch an old structured worker, change its checkpoint, or
+        // create another candidate. Saved data remains readable/restorable.
+        return Err(REMOVED_GENERATION.into());
     }
-    let input = storage.load_minutes_input(job_id)?;
-    let p = checked_parameters(&spec, &input, &storage.fixed_job_initial_operation(job_id)?)?;
-    let job = storage.get_job(job_id)?;
-    let mut checkpoint = checked_checkpoint(&job, &p, checkpoint)?;
-    let cancelled = || {
-        stopping()
-            || storage
-                .get_job(job_id)
-                .map_or(true, |j| j.state != "running")
-    };
-    let attempt = (|| {
-        let runtime =
-            managed::rebinding::llama(&spec.profile_snapshot, &p.engine, p.prompt_budget)?;
-        runtime.verify(&cancelled)?;
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Llama(&p.engine, p.prompt_budget),
-            &cancelled,
-        )?;
-        let Some(VerifiedOutputs {
-            nodes: mut outputs,
-            pending: mut resumed_merge,
-        }) = verify_saved_outputs(storage, &spec, &input, &p, &checkpoint, &cancelled)?
-        else {
-            return Ok(None);
-        };
-        for index in checkpoint.outputs.len()..p.plan.nodes.len() {
-            if cancelled() {
-                return Ok(None);
-            }
-            let node = &p.plan.nodes[index];
-            let (items, output) = if p.adaptive_merge() && matches!(node, plan::Node::Merge { .. })
-            {
-                let cursor = match resumed_merge.take() {
-                    Some(cursor) => cursor,
-                    None => merge_cursor(node, &outputs, &p)?,
-                };
-                let Some((items, normalized)) = run_merge(
-                    storage,
-                    &spec,
-                    job_id,
-                    index,
-                    &input,
-                    &p,
-                    cursor,
-                    &mut checkpoint,
-                    &cancelled,
-                    progress,
-                )?
-                else {
-                    return Ok(None);
-                };
-                let pending = checkpoint
-                    .pending
-                    .take()
-                    .ok_or("統合の保存位置がありません")?;
-                (
-                    items,
-                    UnitOutput {
-                        index,
-                        artifacts: vec![],
-                        normalized,
-                        merge_batches: pending.batches,
-                    },
-                )
-            } else {
-                let Some((raw, directory)) = run_task(
-                    storage,
-                    &spec,
-                    job_id,
-                    index,
-                    task(&input, node, &outputs, &p)?,
-                    &p,
-                    &cancelled,
-                )?
-                else {
-                    return Ok(None);
-                };
-                let items = parse_node(raw, &input, node, &outputs, p.schema_version)?;
-                let saved = save_task_output(storage, &spec.meeting_id, &directory, &items)?;
-                (
-                    items,
-                    UnitOutput {
-                        index,
-                        artifacts: saved.artifacts,
-                        normalized: saved.normalized,
-                        merge_batches: vec![],
-                    },
-                )
-            };
-            checkpoint.outputs.push(output);
-            let saved = storage.save_job_checkpoint(
-                job_id,
-                index as i64,
-                index as i64 + 1,
-                serde_json::to_value(&checkpoint).map_err(|e| e.to_string())?,
-            );
-            let job = match saved {
-                Ok(job) => job,
-                Err(error) => {
-                    let output = checkpoint.outputs.pop().unwrap();
-                    if !output.merge_batches.is_empty() {
-                        checkpoint.pending = Some(PendingMerge {
-                            index,
-                            batches: output.merge_batches,
-                        });
-                    }
-                    return Err(error);
-                }
-            };
-            outputs.push(items);
-            let paused = job.state == "paused";
-            progress(job);
-            if paused {
-                return Ok(None);
-            }
-        }
-        runtime.verify(&cancelled)?;
-        managed::verify(
-            &spec.profile_snapshot,
-            Execution::Llama(&p.engine, p.prompt_budget),
-            &cancelled,
-        )?;
-        if storage.load_minutes_input(job_id)? != input {
-            return Err("議事録の固定入力が変更されています".into());
-        }
-        let content = from_generated(&input, outputs.pop().ok_or("議事録の最終結果がありません")?)?;
-        let candidate =
-            storage.finish_minutes_candidate(job_id, checkpoint.outputs.len() as i64, content)?;
-        progress(storage.get_job(job_id)?);
-        Ok(Some(candidate))
-    })();
-    if cancelled() {
-        let job = storage.get_job(job_id)?;
-        if job.state == "running" && stopping() {
-            storage.request_job_pause(job_id, "exit")?;
-        }
-        if storage.get_job(job_id)?.state == "pausing" {
-            progress(storage.save_job_checkpoint(
-                job_id,
-                checkpoint.outputs.len() as i64,
-                checkpoint.outputs.len() as i64,
-                serde_json::to_value(&checkpoint).map_err(|e| e.to_string())?,
-            )?);
-        }
-        if let Ok(Some(candidate)) = attempt {
-            return Ok(Some(candidate));
-        }
-        return Ok(None);
-    }
-    attempt
+    markdown_job::process(storage, job_id, stopping, progress)
 }

@@ -1,6 +1,6 @@
 use super::super::minutes_input::MinutesJobRequest;
 use super::*;
-use crate::minutes_document::{from_generated, GeneratedItem, ItemKind, SourceType};
+use crate::minutes_document::{from_generated, GeneratedItem, ItemKind, SourceType, VerificationState};
 use serde_json::json;
 
 pub(in crate::storage) fn fixture(
@@ -86,7 +86,7 @@ fn minutes_result_and_job_success_are_atomic_without_adopting_or_replacing_edits
     let draft = storage.load_transcript_draft(&request.meeting_id).unwrap();
     let source = storage.load_current_analysis(&request.meeting_id).unwrap();
     let id = storage
-        .finish_minutes_candidate(&job.id, 1, content.clone())
+        .seed_stored_candidate_for_job(&job.id, 1, content.clone())
         .unwrap();
     let snapshot = storage.get_job(&job.id).unwrap();
     assert_eq!(snapshot.state, "succeeded");
@@ -119,7 +119,7 @@ fn minutes_result_and_job_success_are_atomic_without_adopting_or_replacing_edits
         .unwrap()
         .is_none());
     assert!(storage
-        .finish_minutes_candidate(&job.id, 1, content)
+        .seed_stored_candidate_for_job(&job.id, 1, content)
         .is_err());
     let lock = storage
         .get_meeting(&request.meeting_id)
@@ -162,7 +162,7 @@ fn minutes_finalize_rolls_back_everything_when_success_transition_fails() {
     let (request, job, content) = fixture(&storage, 1);
     storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER simulate_minutes_success_failure BEFORE UPDATE OF output_minutes_id ON processing_jobs WHEN NEW.output_minutes_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'simulated success failure'); END;").unwrap();
     assert!(storage
-        .finish_minutes_candidate(&job.id, 1, content.clone())
+        .seed_stored_candidate_for_job(&job.id, 1, content.clone())
         .is_err());
     let db = storage.connection.lock().unwrap();
     for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
@@ -190,7 +190,7 @@ fn minutes_finalize_rolls_back_everything_when_success_transition_fails() {
             > 0
     );
     assert!(storage
-        .finish_minutes_candidate(&job.id, 1, content)
+        .seed_stored_candidate_for_job(&job.id, 1, content)
         .is_ok());
 }
 
@@ -233,7 +233,7 @@ fn incomplete_invalid_and_tampered_results_leave_the_job_running_without_a_candi
         }
         assert!(
             storage
-                .finish_minutes_candidate(&job.id, 1, content)
+                .seed_stored_candidate_for_job(&job.id, 1, content)
                 .is_err(),
             "{change}"
         );
@@ -257,7 +257,7 @@ fn regenerated_candidate_keeps_current_minutes_draft_and_fixed_evidence() {
     let storage = Storage::open(root.path().to_owned()).unwrap();
     let (mut request, job, content) = fixture(&storage, 1);
     let first = storage
-        .finish_minutes_candidate(&job.id, 1, content)
+        .seed_stored_candidate_for_job(&job.id, 1, content)
         .unwrap();
     let lock = storage
         .get_meeting(&request.meeting_id)
@@ -287,7 +287,7 @@ fn regenerated_candidate_keeps_current_minutes_draft_and_fixed_evidence() {
         .save_job_checkpoint(&second_job.id, 0, 1, json!({"result":"parsed"}))
         .unwrap();
     let second = storage
-        .finish_minutes_candidate(&second_job.id, 1, make_content(&storage, &second_job.id))
+        .seed_stored_candidate_for_job(&second_job.id, 1, make_content(&storage, &second_job.id))
         .unwrap();
     assert_eq!(
         storage
@@ -315,7 +315,7 @@ fn sql_minutes_result_pointer_cannot_cross_scope_or_change_after_success() {
     let storage = Storage::open(root.path().to_owned()).unwrap();
     let (request, job, content) = fixture(&storage, 1);
     let id = storage
-        .finish_minutes_candidate(&job.id, 1, content)
+        .seed_stored_candidate_for_job(&job.id, 1, content)
         .unwrap();
     let db = storage.connection.lock().unwrap();
     assert!(db
@@ -351,7 +351,7 @@ fn read_checks_both_content_hash_and_canonical_projections() {
         let storage = Storage::open(root.path().to_owned()).unwrap();
         let (request, job, content) = fixture(&storage, 1);
         let id = storage
-            .finish_minutes_candidate(&job.id, 1, content)
+            .seed_stored_candidate_for_job(&job.id, 1, content)
             .unwrap();
         let mut db = storage.connection.lock().unwrap();
         db.execute(

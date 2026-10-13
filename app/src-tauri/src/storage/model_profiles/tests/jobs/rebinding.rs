@@ -285,7 +285,19 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
 ) {
     let mut f = Fixture::with_tracks(124, true);
     ready(&mut f);
+    // Audio duration alone does not make a short transcript require multiple
+    // Markdown units. Preserve the draft as actual worker input and force
+    // more than one extraction before testing durable partial continuation.
+    let analysis = f.storage.load_current_analysis(&f.meeting).unwrap().unwrap();
+    let mut draft = f.storage.create_transcript_draft(&f.meeting, &analysis.id).unwrap();
+    draft.payload.utterances = vec![crate::storage::drafts::UtteranceEdit {
+        utterance_id: analysis.utterances[0].id.clone(),
+        effective_text: "点検日と異なる確認事項を記録します。".repeat(180),
+        speaker_ids: analysis.utterances[0].speaker_ids.clone(),
+    }];
+    f.storage.save_transcript_draft(&draft.id, draft.lock_version, draft.payload).unwrap();
     let jobs = enqueue_all(&f);
+    assert!(jobs[2].total_units.unwrap() > 1, "must exercise unfinished Markdown units");
     for (job, engine) in jobs
         .iter()
         .zip([Engine::Whisper, Engine::Sherpa, Engine::Llama])
@@ -479,8 +491,8 @@ fn model_rebinding_restored_partial_history_rechecks_omitted_pcm_and_logs_and_ru
         let after = f.storage.get_job(&next.id).unwrap();
         assert_eq!(after.state, "succeeded");
         let expected = (source.total_units.unwrap() - 1) as usize;
-        // Empty generated items require no additional local merge CLI. The
-        // first extract was durable before restore, and is not executed again.
+        // The Markdown fixture emits one short body per node, so every
+        // unfinished node needs one call. The first extract is not rerun.
         assert_eq!(
             calls_in(f.root.path()) + calls_in(f.app_data.path()) - calls,
             expected,

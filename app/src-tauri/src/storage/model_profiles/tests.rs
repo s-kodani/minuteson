@@ -162,7 +162,7 @@ impl Fixture {
             Engine::Whisper=>"model=; output=\nwhile [ \"$#\" -gt 0 ]; do case \"$1\" in --model) model=\"$2\"; shift;; --output-file) output=\"$2\"; shift;; esac; shift; done\nprintf '{\"model\":{\"multilingual\":true},\"params\":{\"model\":\"%s\",\"language\":\"ja\",\"translate\":false},\"transcription\":[]}' \"$model\" > \"$output.json\"".into(),
             Engine::Llama=>r#"predict=
 while [ "$#" -gt 0 ]; do case "$1" in --predict) predict="$2"; shift;; esac; shift; done
-if [ "$predict" = 64 ]; then printf '{"ok":true}'; else printf '{"schemaVersion":1,"items":[]}'; fi"#.into(),
+if [ "$predict" = 64 ]; then printf '{"ok":true}'; else printf '{"markdown":"Fixture minutes"}'; fi"#.into(),
             Engine::Sherpa=> {
                 // Echo actual CLI arguments rather than embedding an install
                 // UUID or CPU defaults. Identical fixture bytes can relocate.

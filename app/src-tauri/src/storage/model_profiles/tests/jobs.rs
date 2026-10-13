@@ -76,7 +76,7 @@ fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
         .unwrap();
     MinutesJobRequest {
         meeting_id: f.meeting.clone(),
-        operation_id: op.into(),
+        operation_id: if op == "managed-minutes" { Uuid::new_v4().to_string() } else { op.into() },
         expected_analysis_id: a.id,
         expected_content_hash: a.content_hash,
         expected_meeting_lock_version: f
@@ -85,7 +85,10 @@ fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
             .unwrap()
             .unwrap()
             .lock_version,
-        expected_draft: None,
+        expected_draft: f.storage.load_transcript_draft(&f.meeting).unwrap().map(|d| crate::storage::DraftStamp {
+            id: d.id,
+            lock_version: d.lock_version,
+        }),
     }
 }
 fn tracks(f: &Fixture) -> Vec<crate::diarization::TrackSettings> {
@@ -118,7 +121,7 @@ fn enqueue_all(f: &Fixture) -> Vec<JobSnapshot> {
     )
     .unwrap();
     let (l, b) = llama(f);
-    let m = crate::generation::enqueue(&f.storage, request(f, "managed-minutes"), l, "standard", b)
+    let m = crate::generation::markdown_job::enqueue_synthetic(&f.storage, request(f, "managed-minutes"), l, "standard", b, None)
         .unwrap();
     vec![w, d, m]
 }
@@ -308,20 +311,27 @@ fn managed_jobs_transaction_gate_rejects_removed_or_forged_proof_and_head_change
     for (job, kind) in jobs.iter().skip(1).zip(["diarization", "generation"]) {
         let (spec, _) = f.storage.fixed_job_input(&job.id).unwrap();
         let profile = spec.profile_snapshot;
-        let p = spec.parameters[kind].clone();
+        let mut p = spec.parameters[kind].clone();
         let count = f.count("analysis_input_snapshots");
+        let produced = std::cell::Cell::new(false);
         let result = if kind == "generation" {
+            let target = serde_json::from_value(p.as_object_mut().unwrap().remove("markdownTarget").unwrap()).unwrap();
+            let mut request = request(&f, "late-minutes");
+            request.operation_id = Uuid::new_v4().to_string();
             f.storage
-                .enqueue_minutes_job_configured(request(&f, "late-minutes"), profile, |_| {
+                .enqueue_markdown_minutes_job_configured(request, profile, target, |_| {
+                    produced.set(true);
                     Ok((p, spec.total_units))
                 })
         } else {
             f.storage
                 .enqueue_diarization_job(request(&f, "late-diar"), profile, |_| {
+                    produced.set(true);
                     Ok((p, spec.total_units.unwrap()))
                 })
         };
-        assert!(result.is_err());
+        assert!(produced.get(), "must reach snapshot production, not an earlier ID/target guard");
+        assert!(result.unwrap_err().contains("管理モデルの構成版が変わっています"));
         assert_eq!(f.count("analysis_input_snapshots"), count);
     }
 }
@@ -548,7 +558,7 @@ fn managed_jobs_retry_all_three_engines_keeps_old_conditions_after_profile_chang
             "minutes_generation" => crate::generation::RetryRequest {
                 meeting_id: f.meeting.clone(),
                 job_id: job.id.clone(),
-                operation_id: "retry-managed-minutes".into(),
+                operation_id: Uuid::new_v4().to_string(),
                 expected_spec_hash: failed.spec_hash,
             }
             .enqueue(&f.storage),
