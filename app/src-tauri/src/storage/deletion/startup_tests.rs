@@ -143,7 +143,6 @@ fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_
     let mut f = Fixture::new();
     {
         let db = f.storage().connection.lock().unwrap();
-        intent::historical_completed_fixture(&db, &f.operation);
         crate::storage::edit_recovery::remove_schema_for_test(&db);
     }
     let root = f.storage().root().to_owned();

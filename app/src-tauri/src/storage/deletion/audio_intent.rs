@@ -453,60 +453,6 @@ fn read_snapshot(
     Ok(snapshot)
 }
 
-#[cfg(test)]
-pub(in crate::storage) fn historical_completed_fixture(db: &Connection, operation: &str) {
-    removal::Receipt::load(db, operation, &|| false).unwrap();
-    let json: String = db
-        .query_row(
-            "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
-            [operation],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut header: Header = serde_json::from_str(&json).unwrap();
-    assert!(header.origin.is_none());
-    let mut snapshot = read_snapshot(
-        db,
-        operation,
-        header.snapshot_bytes,
-        &header.snapshot_hash,
-        header.chunk_count,
-        &|| false,
-    )
-    .unwrap();
-    snapshot.scope =
-        crate::storage::deletion::database::historical_scope_fixture(&snapshot.scope, 27);
-    snapshot.manifest.database_scope_hash = snapshot.scope.hash().unwrap();
-    let bytes = snapshot.encode().unwrap();
-    header.census_hash = snapshot.hash().unwrap();
-    header.snapshot_hash = hash(&bytes);
-    header.snapshot_bytes = bytes.len();
-    header.chunk_count = bytes.len().div_ceil(CHUNK);
-    let json = serde_json::to_string(&header).unwrap();
-    let progress = removal::historical_progress_fixture(db, operation, &header.census_hash);
-    db.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
-        false,
-    )
-    .unwrap();
-    db.execute("UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3,progress_json=?4 WHERE id=?1", params![operation,json,hash(json.as_bytes()),progress]).unwrap();
-    db.execute(
-        "DELETE FROM maintenance_paths WHERE operation_id=?1",
-        [operation],
-    )
-    .unwrap();
-    for (index, part) in bytes.chunks(CHUNK).enumerate() {
-        let json = chunk_json(part).unwrap();
-        db.execute("INSERT INTO maintenance_paths(operation_id,relative_path,kind,size_bytes,content_hash,identity_json,identity_hash) VALUES(?1,?2,'file',?3,?4,?5,?6)",params![operation,slot(index),part.len() as i64,hash(part),json,hash(json.as_bytes())]).unwrap();
-    }
-    db.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
-        true,
-    )
-    .unwrap();
-    removal::Receipt::load(db, operation, &|| false).unwrap();
-}
-
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {
     let db = storage
         .connection

@@ -15,12 +15,8 @@ fn database(version: usize) -> Connection {
     db
 }
 
-fn empty_scope(version: usize) -> Scope {
-    let known = known_schemas()
-        .unwrap()
-        .iter()
-        .find(|s| s.version == version)
-        .unwrap();
+fn empty_scope() -> Scope {
+    let known = current_schema().unwrap();
     Scope {
         version: 1,
         meeting_id: uuid::Uuid::new_v4().to_string(),
@@ -40,15 +36,21 @@ fn empty_scope(version: usize) -> Scope {
 
 #[test]
 fn history_schema_checks_do_not_admit_old_database_initialization() {
-    for version in 22..=MIGRATIONS.len() {
+    for version in 20..=MIGRATIONS.len() {
         let mut db = database(version);
-        let scope = empty_scope(version);
+        let scope = empty_scope();
         let original = scope.encode().unwrap();
-        scope.validate_format(&db).unwrap();
-        verify_rows_absent(&db, &scope, &|| false).unwrap();
-        assert_eq!(trusted_history_schema(&db).unwrap(), scope.schema_hash);
-        assert_eq!(trusted_schema(&db).is_ok(), version == MIGRATIONS.len());
-        assert_eq!(initialize_database(&mut db).is_ok(), version == MIGRATIONS.len());
+        let before = schema(&db).unwrap();
+        let current = version == MIGRATIONS.len();
+        assert_eq!(scope.validate_format(&db).is_ok(), current);
+        assert_eq!(verify_rows_absent(&db, &scope, &|| false).is_ok(), current);
+        assert_eq!(trusted_history_schema(&db).is_ok(), current);
+        assert_eq!(trusted_schema(&db).is_ok(), current);
+        assert_eq!(initialize_database(&mut db).is_ok(), current);
+        assert_eq!(schema(&db).unwrap(), before);
+        if !current {
+            continue;
+        }
         scope.validate_format(&db).unwrap();
         verify_rows_absent(&db, &scope, &|| false).unwrap();
         assert_eq!(scope.encode().unwrap(), original);
@@ -67,7 +69,7 @@ fn history_schema_checks_do_not_admit_old_database_initialization() {
 fn history_schema_rejects_unknown_backward_or_truncated_scope_despite_rehashed_values() {
     let db = database(MIGRATIONS.len());
     for change in 0..5 {
-        let mut scope = empty_scope(27);
+        let mut scope = empty_scope();
         match change {
             0 => scope.schema_hash = "a".repeat(64),
             1 => {
@@ -83,15 +85,13 @@ fn history_schema_rejects_unknown_backward_or_truncated_scope_despite_rehashed_v
         }
         assert!(scope.validate_format(&db).is_err());
     }
-    assert!(empty_scope(MIGRATIONS.len())
-        .validate_format(&database(27))
-        .is_err());
+    assert!(empty_scope().validate_format(&database(27)).is_err());
 }
 
 #[test]
 fn history_schema_never_trusts_matching_version_with_changed_structure_or_disabled_guards() {
     for change in 0..5 {
-        let db = database(27);
+        let db = database(MIGRATIONS.len());
         match change {
             0 => db
                 .execute_batch("CREATE TABLE unknown_scope(body TEXT)")
@@ -113,7 +113,7 @@ fn history_schema_never_trusts_matching_version_with_changed_structure_or_disabl
             }
         }
         assert!(trusted_history_schema(&db).is_err());
-        assert!(empty_scope(27).validate_format(&db).is_err());
+        assert!(empty_scope().validate_format(&db).is_err());
     }
     let db = database(MIGRATIONS.len());
     db.execute_batch("DELETE FROM schema_migrations WHERE version=28")
@@ -129,14 +129,15 @@ fn history_scope_absence_checks_new_rows_without_authorizing_their_deletion() {
         .create_meeting("NEW ROWS MUST SURVIVE OLD CONSENT")
         .unwrap()
         .id;
-    let mut scope = empty_scope(27);
+    let mut scope = empty_scope();
+    scope.schema_hash = "a".repeat(64);
     scope.meeting_id = meeting.clone();
     let mut db = storage.connection.lock().unwrap();
     assert!(verify_rows_absent(&db, &scope, &|| false).is_err());
     let tx = db.transaction().unwrap();
     assert!(erase_rows(&tx, &scope, &|| false)
         .unwrap_err()
-        .contains("旧版"));
+        .contains("現行形式"));
     tx.rollback().unwrap();
     assert_eq!(
         db.query_row(
@@ -151,11 +152,29 @@ fn history_scope_absence_checks_new_rows_without_authorizing_their_deletion() {
 
 #[test]
 fn history_schema_refuses_fk_corruption_and_any_unknown_temp_object() {
-    let db = database(27);
+    let db = database(MIGRATIONS.len());
     db.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO vocabulary_scopes VALUES('meeting:00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',0,1); PRAGMA foreign_keys=ON;").unwrap();
     assert!(trusted_history_schema(&db).is_err());
-    let db = database(27);
+    let db = database(MIGRATIONS.len());
     db.execute_batch("CREATE TEMP TABLE unknown_attention(id TEXT)")
         .unwrap();
     assert!(trusted_history_schema(&db).is_err());
+}
+
+#[test]
+fn audio_use_refuses_a_missing_journal_in_old_and_current_databases() {
+    let meeting = uuid::Uuid::new_v4().to_string();
+    for version in [20, 21, MIGRATIONS.len()] {
+        let db = database(version);
+        if version == MIGRATIONS.len() {
+            db.execute_batch("DROP TABLE maintenance_operations")
+                .unwrap();
+        }
+        let before = schema(&db).unwrap();
+        let error =
+            crate::storage::deletion::audio::intent::removal::completion::deleted(&db, &meeting)
+                .unwrap_err();
+        assert!(error.contains("音声削除台帳が欠落"));
+        assert_eq!(schema(&db).unwrap(), before);
+    }
 }

@@ -328,7 +328,7 @@ fn read_with_progress(
 }
 
 #[cfg(test)]
-pub(in crate::storage) fn historical_header_fixture(db: &Connection, operation: &str) {
+pub(in crate::storage) fn mismatched_schema_header_fixture(db: &Connection, operation: &str) {
     let json: String = db
         .query_row(
             "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
@@ -337,7 +337,7 @@ pub(in crate::storage) fn historical_header_fixture(db: &Connection, operation: 
         )
         .unwrap();
     let mut header: Header = serde_json::from_str(&json).unwrap();
-    header.schema_hash = super::super::database::historical_schema_hash_fixture(27);
+    header.schema_hash = "a".repeat(64);
     let json = serde_json::to_string(&header).unwrap();
     db.set_db_config(
         rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,

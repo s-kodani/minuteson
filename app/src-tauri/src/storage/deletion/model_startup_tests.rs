@@ -102,7 +102,7 @@ fn current_completed_model_reopens_without_rewriting_evidence_or_reviving_bodies
 }
 
 #[test]
-fn history_old_model_consent_can_be_read_but_never_starts_current_deletion() {
+fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_deletion() {
     let f = Fixture::new();
     let op = uuid::Uuid::new_v4().to_string();
     let owner = AnalysisController::default()
@@ -123,8 +123,7 @@ fn history_old_model_consent_can_be_read_but_never_starts_current_deletion() {
     .unwrap();
     {
         let db = f.storage.connection.lock().unwrap();
-        // Synthetic old fixed intent on the latest test DB: validating a
-        // historical header must not admit it to a new deletion start.
+        // Rehashing a mismatched schema header must not grant deletion access.
         let _writer = crate::storage::deletion::fence::write_model_prepared(
             &f.storage,
             &db,
@@ -132,8 +131,8 @@ fn history_old_model_consent_can_be_read_but_never_starts_current_deletion() {
             &owner,
         )
         .unwrap();
-        intent::historical_header_fixture(&db, &op);
-        intent::read(&db, &op).unwrap();
+        intent::mismatched_schema_header_fixture(&db, &op);
+        assert!(intent::read(&db, &op).is_err());
     }
     let saved = fixed(&f, &op);
     assert!(removal::start(&f.storage, &op, &owner, &|| false).is_err());

@@ -607,7 +607,17 @@ pub(crate) fn inspect_synthetic_copy(storage: &crate::storage::Storage) -> Repor
     use std::os::unix::fs::DirBuilderExt;
     let base = tempfile::tempdir().unwrap();
     let base = base.path().canonicalize().unwrap();
-    let bootstrap = Bootstrap::open(&base.join("config"), storage.root()).unwrap();
+    let config = base.join("config");
+    let app_data = base.join("app-data");
+    let initial = Bootstrap::open(&config, &app_data).unwrap();
+    let seed = crate::storage::Storage::open(initial.root().to_owned()).unwrap();
+    initial.initialize(&seed).unwrap();
+    drop(seed);
+    drop(initial);
+    // A current, explicitly prepared test record is not old-root adoption.
+    // Production still refuses unregistered pre-bootstrap databases.
+    crate::bootstrap::set_test_root(&config, &app_data, storage.root());
+    let bootstrap = Bootstrap::open(&config, &app_data).unwrap();
     bootstrap.initialize(storage).unwrap();
     let target = base.join("copy");
     std::fs::DirBuilder::new()

@@ -171,11 +171,6 @@ pub(in crate::storage::deletion) fn inspect_one(
 pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
     let has_table: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     if !has_table {
-        // Verified old private images predate the deletion journal. A missing
-        // journal in a current image is corruption, not permission to use audio.
-        if database::legacy_without_journal(db)? {
-            return Ok(false);
-        }
         return Err("現行DBの音声削除台帳が欠落しています。音声を利用しません".into());
     }
     // Also route a restored header claiming this meeting when its nullable FK

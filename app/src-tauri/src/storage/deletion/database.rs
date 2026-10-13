@@ -149,118 +149,46 @@ struct KnownSchema {
     hash: String,
     targets: Vec<(&'static str, &'static str)>,
 }
-#[cfg(test)]
-pub(super) fn historical_scope_fixture(current: &Scope, version: usize) -> Scope {
-    let known = known_schemas()
-        .unwrap()
-        .iter()
-        .find(|s| s.version == version)
-        .unwrap();
-    let mut scope = current.clone();
-    scope.schema_hash = known.hash.clone();
-    scope
-        .tables
-        .retain(|t| known.targets.iter().any(|(name, _)| t.name == *name));
-    scope
-}
-#[cfg(test)]
-pub(super) fn historical_schema_hash_fixture(version: usize) -> String {
-    known_schemas()
-        .unwrap()
-        .iter()
-        .find(|s| s.version == version)
-        .unwrap()
-        .hash
-        .clone()
-}
-fn known_schemas() -> Result<&'static Vec<KnownSchema>, String> {
-    // Cache only the schema built from this binary's fixed migrations, never a
-    // live connection's schema, migration history, trigger/FK state or rows.
-    // Each actual DB still undergoes every inspection below on every call.
-    static EXPECTED: std::sync::OnceLock<Result<Vec<KnownSchema>, String>> =
-        std::sync::OnceLock::new();
+fn current_schema() -> Result<&'static KnownSchema, String> {
+    // Only repository-owned current SQL is cached, never a live connection's
+    // history, trigger/FK state or rows. Every actual DB is inspected below.
+    static EXPECTED: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
     EXPECTED
         .get_or_init(|| {
             let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
             expected.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e| e.to_string())?;
-            let mut versions = Vec::new();
-            for (index, (_, sql)) in crate::storage::MIGRATIONS.iter().enumerate() {
+            for (_, sql) in crate::storage::MIGRATIONS {
                 expected.execute_batch(sql).map_err(|e| e.to_string())?;
-                let version = index + 1;
-                if version >= 22 {
-                    let objects = schema(&expected)?;
-                    let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
-                    let targets = TARGETS.iter().copied().filter(|(name, _)| {
-                        objects.iter().any(|(kind, object, _, _)| kind == "table" && object.as_str() == *name)
-                    }).collect();
-                    versions.push(KnownSchema { version, objects, hash, targets });
-                }
             }
-            Ok(versions)
+            let objects = schema(&expected)?;
+            let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
+            Ok(KnownSchema { version: crate::storage::MIGRATIONS.len(), objects, hash, targets: TARGETS.to_vec() })
         })
         .as_ref()
         .map_err(Clone::clone)
 }
-// Older portable/private readers may inspect v20/v21 before their normal
-// migration. Check the actual fixed schema too: truncating migration history
-// cannot disguise a current DB with its deletion journal removed.
-pub(super) fn legacy_without_journal(db: &Connection) -> Result<bool, String> {
-    let version = crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?;
-    if !(20..22).contains(&version) {
-        return Ok(false);
-    }
-    #[cfg(unix)]
-    super::startup::verify_temp_schema(db)?;
-    let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-    expected.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").map_err(|e|e.to_string())?;
-    for (_, sql) in &crate::storage::MIGRATIONS[..version] {
-        expected.execute_batch(sql).map_err(|e| e.to_string())?;
-    }
-    if schema(db)? != schema(&expected)?
-        || !db
-            .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
-            .map_err(|e| e.to_string())?
-        || !db
-            .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
-            .map_err(|e| e.to_string())?
-    {
-        return Err("音声利用可否を確認する旧DBの構造・保護が既知の形式と一致しません".into());
-    }
-    if db
-        .prepare("PRAGMA foreign_key_check")
-        .map_err(|e| e.to_string())?
-        .query([])
-        .map_err(|e| e.to_string())?
-        .next()
-        .map_err(|e| e.to_string())?
-        .is_some()
-    {
-        return Err("旧DBの参照整合性を確認できません".into());
-    }
-    Ok(true)
-}
 pub(super) fn trusted_schema(db: &Connection) -> Result<String, String> {
-    Ok(inspect_schema(db, false)?.hash.clone())
+    Ok(inspect_schema(db)?.hash.clone())
 }
-// Historical readers verify an exact repository-owned schema and checksum
-// chain. This is not permission to capture or execute an old deletion scope.
+// Saved deletion history uses the same current schema as new operations.
 pub(super) fn trusted_history_schema(db: &Connection) -> Result<String, String> {
-    Ok(inspect_schema(db, true)?.hash.clone())
+    trusted_schema(db)
 }
 pub(super) fn verify_history_schema_hash(db: &Connection, hash: &str) -> Result<(), String> {
     history_schema(db, hash).map(|_| ())
 }
 fn history_schema(db: &Connection, hash: &str) -> Result<&'static KnownSchema, String> {
-    let actual = inspect_schema(db, true)?;
+    let actual = inspect_schema(db)?;
     saved_schema(actual, hash)
 }
-fn saved_schema(actual: &KnownSchema, hash: &str) -> Result<&'static KnownSchema, String> {
-    known_schemas()?
-        .iter()
-        .find(|known| known.hash == hash && known.version <= actual.version)
-        .ok_or_else(|| "削除履歴のDB定義が既知の旧形式と一致しません".into())
+fn saved_schema(actual: &'static KnownSchema, hash: &str) -> Result<&'static KnownSchema, String> {
+    if actual.hash == hash {
+        Ok(actual)
+    } else {
+        Err("削除履歴のDB定義が現行形式と一致しません".into())
+    }
 }
-fn inspect_schema(db: &Connection, history: bool) -> Result<&'static KnownSchema, String> {
+fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
     #[cfg(unix)]
     super::startup::verify_temp_schema(db)?;
     #[cfg(not(unix))]
@@ -273,13 +201,10 @@ fn inspect_schema(db: &Connection, history: bool) -> Result<&'static KnownSchema
         return Err("削除対象DBに未対応の一時オブジェクトがあります".into());
     }
     let version = crate::storage::verify_migration_history(db).map_err(|e| e.to_string())?;
-    if !history && version != crate::storage::MIGRATIONS.len() {
-        return Err("削除対象のDB移行が未完了です".into());
+    if version != crate::storage::MIGRATIONS.len() {
+        return Err("削除対象DBが現行形式ではありません".into());
     }
-    let expected = known_schemas()?
-        .iter()
-        .find(|known| known.version == version)
-        .ok_or("削除履歴を検査するDBの版が未対応です")?;
+    let expected = current_schema()?;
     let actual = schema(db)?;
     if actual != expected.objects {
         return Err("削除対象DBの構造・保護制約が既知の形式と一致しません".into());
@@ -631,7 +556,7 @@ impl Scope {
                 && s.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         };
-        let actual = inspect_schema(db, true)?;
+        let actual = inspect_schema(db)?;
         let known = saved_schema(actual, &self.schema_hash)?;
         if self.version != 1
             || !uuid(&self.meeting_id)
