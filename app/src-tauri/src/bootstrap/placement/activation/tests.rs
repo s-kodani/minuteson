@@ -233,18 +233,16 @@ fn activation_owned_schema_one_placement_upgrades_without_rewriting_original_cop
 }
 
 #[test]
-fn activation_legacy_shared_config_root_preserves_models_and_lost_response_replay() {
+fn activation_current_shared_app_parent_preserves_models_and_lost_response_replay() {
     let f = Fixture::new();
     let parent = f._base.path().canonicalize().unwrap();
     drop(f.storage);
     drop(f.bootstrap);
-    let root = parent.join("legacy-shared");
+    let root = parent.join("current-shared");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&root)
         .unwrap();
-    // A real pre-bootstrap legacy DB makes config and meeting roots identical.
-    drop(Storage::open(root.clone()).unwrap());
     let b = Bootstrap::open(&root, &root).unwrap();
     let storage = b.open_storage().unwrap();
     let meeting = storage.create_meeting("shared source").unwrap();

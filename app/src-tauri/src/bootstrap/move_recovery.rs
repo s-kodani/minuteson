@@ -534,9 +534,6 @@ impl Review {
             return Err("保持対象が変更されています".into());
         }
         record.pending_move = None;
-        if record.origin == Origin::Relocated && record.activation.is_none() {
-            record.origin = Origin::Legacy;
-        }
         record.revision = record
             .revision
             .checked_add(1)

@@ -808,18 +808,15 @@ fn history_install_refuses_unproven_journal_registry_creation_gap_and_control_me
 }
 
 #[test]
-fn history_install_legacy_shared_config_parent_keeps_models_and_control_at_source() {
+fn history_install_current_shared_app_parent_keeps_models_and_control_at_source() {
     let base = tempfile::tempdir().unwrap();
     let parent = base.path().canonicalize().unwrap();
     let shared = parent.join("shared");
-    let source = Storage::open(shared.clone()).unwrap();
-    source.create_meeting("legacy meeting").unwrap();
-    drop(source);
+    let b = Bootstrap::open(&shared, &shared).unwrap();
+    let source = b.open_storage().unwrap();
+    source.create_meeting("current meeting").unwrap();
     std::fs::create_dir(shared.join("models")).unwrap();
     std::fs::write(shared.join("models/model.gguf"), b"old model").unwrap();
-    let b = Bootstrap::open(&shared, &shared).unwrap();
-    let source = Storage::open(b.root().into()).unwrap();
-    b.initialize(&source).unwrap();
     let target = parent.join("target");
     std::fs::DirBuilder::new()
         .mode(0o700)
@@ -847,7 +844,7 @@ fn history_install_legacy_shared_config_parent_keeps_models_and_control_at_sourc
     assert!(shared.join(NAME).exists());
     assert!(!target.join(NAME).exists());
     assert!(!target.join("models").exists());
-    assert_eq!(b.view().unwrap().meeting_root, shared);
+    assert_eq!(b.view().unwrap().meeting_root, shared.join("data"));
 }
 
 #[test]

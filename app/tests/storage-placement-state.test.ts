@@ -6,5 +6,7 @@ test("storage selection differs from active root only with explicit restart obli
   assert.doesNotThrow(() => assertStorageView(view()));
   assert.throws(() => assertStorageView({ ...view(), restartRequired: false }));
   assert.doesNotThrow(() => assertStorageView({ ...view(), meetingRoot: "/old" }));
+  assert.throws(() => assertStorageView({ ...view(), origin: "legacy" } as unknown as StorageView));
+  assert.doesNotThrow(() => assertStorageView({ ...view(), origin: "default" }));
   for (const change of [{ activeMeetingRoot: "relative" }, { revision: -1 }, { pendingTarget: "/partial" }, { pendingOperationId: "forged" }]) assert.throws(() => assertStorageView({ ...view(), ...change }));
 });

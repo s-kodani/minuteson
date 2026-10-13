@@ -513,24 +513,22 @@ fn placement_restart_reopens_owned_partial_copy_and_preserves_current_old_root()
 }
 
 #[test]
-fn placement_legacy_shared_config_parent_keeps_models_control_and_old_meeting() {
+fn placement_current_shared_app_parent_keeps_models_control_and_meeting() {
     let temp = tempfile::tempdir().unwrap();
     let base = temp.path().canonicalize().unwrap();
     let old = base.join("old");
-    let seed = Storage::open(old.clone()).unwrap();
-    let meeting = seed.create_meeting("共有親の旧会議").unwrap().id;
-    let relative = format!("meetings/{meeting}/audio/legacy.flac");
-    let file = old.join(&relative);
+    let b = Bootstrap::open(&old, &old).unwrap();
+    let seed = b.open_storage().unwrap();
+    let meeting = seed.create_meeting("共有親の現行会議").unwrap().id;
+    let relative = format!("meetings/{meeting}/audio/source.flac");
+    let file = seed.root().join(&relative);
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(&file, b"legacy audio").unwrap();
+    std::fs::write(&file, b"current audio").unwrap();
     seed.register_ready_meeting_asset(&meeting, Path::new(&relative), "audio/flac")
         .unwrap();
-    drop(seed);
     std::fs::create_dir_all(old.join("models/package")).unwrap();
     std::fs::write(old.join("models/package/model.bin"), b"retain model").unwrap();
-    let b = Bootstrap::open(&old, &old).unwrap();
-    let storage = Storage::open(b.root().into()).unwrap();
-    b.initialize(&storage).unwrap();
+    let storage = seed;
     let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
     let target = base.join("target");
     std::fs::DirBuilder::new()
@@ -552,10 +550,10 @@ fn placement_legacy_shared_config_parent_keeps_models_control_and_old_meeting() 
         std::fs::read(old.join("models/package/model.bin")).unwrap(),
         b"retain model"
     );
-    assert_eq!(std::fs::read(old.join(&relative)).unwrap(), b"legacy audio");
+    assert_eq!(std::fs::read(storage.root().join(&relative)).unwrap(), b"current audio");
     assert!(!target.join("models").exists());
     assert!(!target.join(NAME).exists());
-    assert_eq!(b.view().unwrap().meeting_root, old);
+    assert_eq!(b.view().unwrap().meeting_root, old.join("data"));
     assert_eq!(b.view().unwrap().models_root, old.join("models"));
 }
 

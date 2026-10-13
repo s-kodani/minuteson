@@ -81,10 +81,10 @@ fn bootstrap_fresh_initialization_separates_data_models_and_control_then_reopens
     );
 }
 #[test]
-fn bootstrap_legacy_root_is_adopted_without_moving_database_audio_or_models() {
+fn bootstrap_unregistered_old_layout_is_not_adopted_or_converted() {
     let f = Fixture::new();
     let old = Storage::open(f.legacy.clone()).unwrap();
-    let meeting = old.create_meeting("legacy meeting").unwrap();
+    old.create_meeting("unsupported fixture").unwrap();
     tree_file(
         &f.legacy.join("meetings/audio"),
         "record.flac",
@@ -92,10 +92,9 @@ fn bootstrap_legacy_root_is_adopted_without_moving_database_audio_or_models() {
     );
     tree_file(&f.legacy.join("models"), "model.bin", b"model remains");
     drop(old);
-    let (b, s) = f.start();
-    assert_eq!(b.root(), f.legacy);
-    assert_eq!(b.view().unwrap().origin, "legacy");
-    assert_eq!(s.list_meetings().unwrap(), vec![meeting]);
+    let before = std::fs::read(f.legacy.join("meetings.sqlite3")).unwrap();
+    assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+    assert_eq!(std::fs::read(f.legacy.join("meetings.sqlite3")).unwrap(), before);
     assert!(!f.legacy.join("data").exists());
     assert_eq!(
         std::fs::read(f.legacy.join("meetings/audio/record.flac")).unwrap(),
@@ -108,18 +107,15 @@ fn bootstrap_legacy_root_is_adopted_without_moving_database_audio_or_models() {
 }
 
 #[test]
-fn bootstrap_shared_os_config_and_app_data_parent_preserves_legacy_database_and_models() {
+fn bootstrap_shared_os_config_and_app_data_parent_uses_current_data_directory() {
     let mut f = Fixture::new();
     f.config = f.legacy.clone();
-    let old = Storage::open(f.legacy.clone()).unwrap();
-    let meeting = old.create_meeting("shared parent").unwrap();
     tree_file(&f.legacy.join("models"), "model.bin", b"retained");
-    drop(old);
     let (b, s) = f.start();
-    assert_eq!(s.list_meetings().unwrap(), vec![meeting.clone()]);
+    let meeting = s.create_meeting("current shared parent").unwrap();
     let backup = f._directory.path().join("shared-parent.monbackup");
     s.create_backup_archive(&backup, &|| false).unwrap();
-    assert_eq!(b.view().unwrap().meeting_root, f.legacy);
+    assert_eq!(b.view().unwrap().meeting_root, f.legacy.join("data"));
     assert_eq!(
         std::fs::read(f.legacy.join("models/model.bin")).unwrap(),
         b"retained"
@@ -557,38 +553,27 @@ fn bootstrap_uninitialized_legacy_empty_database_is_not_silently_populated_with_
 }
 
 #[test]
-fn bootstrap_valid_configured_root_routes_startup_without_moving_models_or_adopting_a_pending_target(
-) {
-    let f = Fixture::new();
-    let (b, old) = f.start();
-    let original = old.create_meeting("old root").unwrap();
-    drop(old);
-    drop(b);
-    let relocated = Storage::open(f.target.clone()).unwrap();
-    let selected = relocated.create_meeting("configured root fixture").unwrap();
-    // Seed an already-verified configuration fixture, not a relocation test.
-    // There is deliberately no production API to activate an unverified copy.
-    let mut d = f.document();
-    d.record.current = Root::inspect(relocated.root()).unwrap();
-    d.record.origin = Origin::Relocated;
-    d.schema_version = 1; // Existing configured roots retain the legacy format.
-    d.record.revision = 1;
-    resign(&mut d);
-    f.replace_document(&d);
-    drop(relocated);
-    let (b, s) = f.start();
-    assert_eq!(s.list_meetings().unwrap(), vec![selected]);
-    assert_eq!(b.view().unwrap().origin, "relocated");
-    assert_eq!(b.view().unwrap().models_root, f.legacy.join("models"));
-    drop(s);
-    drop(b);
-    assert_eq!(
-        Storage::open(f.legacy.join("data"))
-            .unwrap()
-            .list_meetings()
-            .unwrap(),
-        vec![original]
-    );
+fn bootstrap_old_schema_and_missing_current_relocation_capability_are_rejected_before_open() {
+    for (version, origin) in [(1, Origin::Default), (1, Origin::Relocated), (2, Origin::Relocated)] {
+        let f = Fixture::new();
+        let (b, s) = f.start();
+        let original = s.create_meeting("current data remains").unwrap();
+        let root = b.root().to_owned();
+        drop(s);
+        drop(b);
+        let mut d = f.document();
+        d.schema_version = version;
+        d.record.origin = origin;
+        resign(&mut d);
+        f.replace_document(&d);
+        let config = std::fs::read(f.config.join(NAME)).unwrap();
+        let database = std::fs::read(root.join("meetings.sqlite3")).unwrap();
+        assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
+        assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), config);
+        assert_eq!(std::fs::read(root.join("meetings.sqlite3")).unwrap(), database);
+        assert!(!f.target.exists());
+        assert_eq!(Storage::open(root).unwrap().list_meetings().unwrap(), vec![original]);
+    }
 }
 
 #[test]

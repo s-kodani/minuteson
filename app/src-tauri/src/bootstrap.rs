@@ -164,7 +164,6 @@ impl Root {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Origin {
-    Legacy,
     Default,
     Relocated,
 }
@@ -195,7 +194,7 @@ struct Record {
     origin: Origin,
     current: Root,
     pending_move: Option<PendingMove>,
-    // Omitting None preserves the canonical hashes of existing schema-1 files.
+    // An inactive selection has no relocation admission capability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activation: Option<Activation>,
 }
@@ -311,9 +310,9 @@ pub(crate) struct Bootstrap {
 }
 
 impl Bootstrap {
-    pub(crate) fn open(config: &Path, legacy: &Path) -> Result<Self, String> {
+    pub(crate) fn open(config: &Path, app_data: &Path) -> Result<Self, String> {
         absolute(config)?;
-        absolute(legacy)?;
+        absolute(app_data)?;
         if let Ok(m) = std::fs::symlink_metadata(config) {
             if !m.is_dir() {
                 return Err("起動設定の親が通常のフォルダーではありません".into());
@@ -381,7 +380,7 @@ impl Bootstrap {
                 birth_ns: 0,
             },
             initial_origin: Origin::Default,
-            models_root: legacy.join("models"),
+            models_root: app_data.join("models"),
             state: Mutex::new(State {
                 loaded: None,
                 uncertain: false,
@@ -399,30 +398,20 @@ impl Bootstrap {
                 (l.record.current.path.clone(), l.record.origin.clone())
             }
             None => {
-                // Preserve the pre-bootstrap database. Only fresh installs use
-                // app-data/data, keeping models and control files outside it.
-                let old = std::fs::symlink_metadata(legacy.join("meetings.sqlite3"));
-                let fresh = legacy.join("data");
-                if old.is_ok() && std::fs::symlink_metadata(fresh.join("meetings.sqlite3")).is_ok()
-                {
-                    return Err(
-                        "旧保存先と新しい既定保存先の両方にDBがあります。自動選択しません".into(),
-                    );
-                }
-                match old {
-                    Ok(m) if regular(&m, false) => (legacy.to_path_buf(), Origin::Legacy),
-                    Ok(_) => {
-                        return Err("旧会議DBの実体が不正です。新しいDBへ切り替えません".into())
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (fresh, Origin::Default),
+                // No adoption or conversion of pre-bootstrap data. An
+                // unregistered object must not be mistaken for a fresh install.
+                match std::fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
+                    Ok(_) => return Err("旧形式の会議保存先は非対応です。初期開発の旧データを整理してから起動してください。自動移行は行いません".into()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
                     Err(e) => return Err(e.to_string()),
                 }
+                (app_data.join("data"), Origin::Default)
             }
         };
         if std::fs::symlink_metadata(&selected).is_ok_and(|m| !m.is_dir()) {
             return Err("会議保存先が通常のフォルダーではありません".into());
         }
-        // Only native default/legacy paths may be created before initialization.
+        // Only the native default path may be created before initialization.
         // Configured roots were already verified, so a missing one never reaches here.
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -500,11 +489,8 @@ impl Bootstrap {
         }
         let doc: Document = serde_json::from_slice(&bytes)
             .map_err(|e| format!("起動設定が不正です。空DBへ切り替えません: {e}"))?;
-        if !matches!(doc.schema_version, 1 | 2)
-            || (doc.schema_version == 1 && doc.record.activation.is_some())
-            || (doc.schema_version == 2
-                && doc.record.origin == Origin::Relocated
-                && doc.record.activation.is_none())
+        if doc.schema_version != 2
+            || (doc.record.origin == Origin::Relocated && doc.record.activation.is_none())
             || !sha(&doc.sha256)
             || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
         {
@@ -665,7 +651,6 @@ impl Bootstrap {
             bootstrap_path: self.config.join(NAME),
             revision: r.revision,
             origin: match r.origin {
-                Origin::Legacy => "legacy",
                 Origin::Default => "default",
                 Origin::Relocated => "relocated",
             }
@@ -747,11 +732,6 @@ impl Bootstrap {
             manifest_hash: manifest.into(),
         };
         r.pending_move = Some(p);
-        // Preserve schema-1 configured roots as legacy selections; they never
-        // acquired the new native relocation admission capability.
-        if r.origin == Origin::Relocated && r.activation.is_none() {
-            r.origin = Origin::Legacy;
-        }
         r.revision = r.revision.checked_add(1).ok_or("起動設定の版が上限です")?;
         self.write(&mut state, r)?;
         drop(state);
@@ -790,9 +770,6 @@ impl Bootstrap {
             }
         }
         r.pending_move = None;
-        if r.origin == Origin::Relocated && r.activation.is_none() {
-            r.origin = Origin::Legacy;
-        }
         r.revision = r.revision.checked_add(1).ok_or("起動設定の版が上限です")?;
         self.write(&mut state, r)?;
         drop(state);
