@@ -245,9 +245,6 @@ fn completed_kind(
         if row.9 == "{\"confirmationRecorded\":true}" {
             return Ok("meetingReconfirmation");
         }
-        if serde_json::from_str::<database::Scope>(&row.6).is_ok() {
-            return Ok("legacyDatabaseOnly");
-        }
         let (saved, _) = startup::supersession_source(db, &row.1, cancelled)?;
         if !storage.managed_anchor.matches_history_root(
             db,

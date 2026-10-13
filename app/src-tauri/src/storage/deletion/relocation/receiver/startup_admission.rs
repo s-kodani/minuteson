@@ -74,11 +74,7 @@ fn record_valid(record: &Record, version: u32) -> bool {
         ) {
             ("delete_meeting", "recovered", "keptMeeting")
             | ("delete_assets", "recovered", "keptAudio" | "keptModel")
-            | (
-                "delete_meeting",
-                "completed",
-                "completedMeeting" | "meetingReconfirmation" | "legacyDatabaseOnly",
-            )
+            | ("delete_meeting", "completed", "completedMeeting" | "meetingReconfirmation")
             | (
                 "delete_assets",
                 "completed",
@@ -709,6 +705,11 @@ mod tests {
         drop(snapshot);
         let db = storage.connection.lock().unwrap();
         records(&db, &current).unwrap();
+        let mut old_label = serde_json::to_value(&source).unwrap();
+        old_label["records"][0]["validation"] = "legacyDatabaseOnly".into();
+        let old_label: SourceFacts = serde_json::from_value(old_label).unwrap();
+        assert!(!record_valid(&old_label.records[0], old_label.version));
+        assert!(records(&db, &old_label).is_err());
         for version in [0, 1, 4] {
             let mut unsupported = serde_json::to_value(&source).unwrap();
             unsupported["version"] = version.into();

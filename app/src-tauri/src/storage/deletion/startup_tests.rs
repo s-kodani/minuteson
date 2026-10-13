@@ -110,12 +110,56 @@ fn evidence_database(db: &Connection) -> String {
     db.query_row("SELECT json_group_array(json_object('id',id,'meeting',meeting_id,'kind',kind,'state',state,'intent',target_manifest_json,'hash',target_hash,'consent',consent_at,'progress',progress_json,'error',error_code,'created',created_at,'updated',updated_at)) FROM (SELECT * FROM maintenance_operations ORDER BY id)",[],|r|r.get(0)).unwrap()
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn deletion_startup_rejects_row_only_completion_without_rewriting_or_granting_relocation() {
+    let base = tempfile::tempdir().unwrap();
+    let storage = Storage::open(base.path().join("root")).unwrap();
+    let meeting = storage.create_meeting("OLD SYNTHETIC ROW RECEIPT").unwrap();
+    let keep = storage.create_meeting("CURRENT KEEP").unwrap();
+    let operation = uuid::Uuid::new_v4().to_string();
+    {
+        let db = storage.connection.lock().unwrap();
+        let scope = database::Scope::capture(&db, &meeting.id, "", &|| false).unwrap();
+        db.execute("INSERT INTO maintenance_operations VALUES(?1,?2,'delete_meeting','cleanup',NULL,?3,?4,1,'{}',NULL,1,1)",
+            params![operation, meeting.id, scope.encode().unwrap(), scope.hash().unwrap()]).unwrap();
+        // Test-only SQL primitives create a canonical former row-only shape.
+        // This is a rejection fixture, not a production conversion path.
+        database::erase_confirmed_rows(&db, &operation, &scope, &|| false).unwrap();
+        database::finish_database_purge(&db, &operation, &scope, &|| false).unwrap();
+        database::verify_rows_absent(&db, &scope, &|| false).unwrap();
+        assert_eq!(
+            completed_attention(&db, &storage.managed_anchor, &storage.native_models_root).unwrap(),
+            vec![(operation.clone(), INVALID)]
+        );
+    }
+    let saved = evidence(&storage);
+    let snapshot = storage.prepare_relocation_snapshot(&|| false).unwrap();
+    assert!(
+        crate::storage::deletion::relocation::Source::capture(&storage, &snapshot, &|| false)
+            .is_err()
+    );
+    drop(snapshot);
+    assert_eq!(evidence(&storage), saved);
+    let root = storage.root().to_owned();
+    drop(storage);
+    let reopened = Storage::open(root).unwrap();
+    assert!(reopened.data_write_blocked());
+    assert!(reopened.create_meeting("NO IMPLICIT CONVERSION").is_err());
+    assert_eq!(evidence(&reopened), saved);
+    assert_eq!(reopened.get_meeting(&keep.id).unwrap().unwrap(), keep);
+    assert!(reopened.get_meeting(&meeting.id).unwrap().is_none());
+}
+
 #[test]
 fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_data() {
     let mut f = Fixture::new();
     {
         let db = f.storage().connection.lock().unwrap();
-        assert_eq!(crate::storage::verify_migration_history(&db).unwrap(), crate::storage::MIGRATIONS.len());
+        assert_eq!(
+            crate::storage::verify_migration_history(&db).unwrap(),
+            crate::storage::MIGRATIONS.len()
+        );
     }
     let saved = evidence(f.storage());
     f.cold();
@@ -130,9 +174,7 @@ fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_
         crate::storage::MIGRATIONS.len()
     );
     f.kept();
-    f.storage()
-        .create_meeting("AFTER VERIFIED REOPEN")
-        .unwrap();
+    f.storage().create_meeting("AFTER VERIFIED REOPEN").unwrap();
     f.cold();
     assert_eq!(evidence(f.storage()), saved);
     assert!(!f.storage().data_write_blocked());

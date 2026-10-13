@@ -256,23 +256,6 @@ pub(super) fn completed_attention(
                     }
                     return Ok(None);
                 }
-                // Old row-only receipts are internal legacy data, not public
-                // file consent. Validate them rather than ignoring a marker.
-                if let Ok(scope) = serde_json::from_str::<database::Scope>(&json) {
-                    let (meeting, sha, consent, created, updated): (Option<String>,String,Option<i64>,i64,i64) = db.query_row("SELECT meeting_id,target_hash,consent_at,created_at,updated_at FROM maintenance_operations WHERE id=?1",params![operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|e.to_string())?;
-                    if scope.encode()? != json
-                        || scope.hash()? != sha
-                        || meeting.is_some()
-                        || consent.is_none_or(|n| n < 0)
-                        || created < 0
-                        || updated < created
-                        || progress != "{\"databaseDeleted\":true,\"databasePurged\":true}"
-                    {
-                        return Err("DBだけの完了記録が不正です".into());
-                    }
-                    database::verify_rows_absent(db, &scope, &|| false)?;
-                    return Ok(None);
-                }
                 let (original, files) = source(db, &operation)?;
                 if !anchor.matches_history_root(
                     db,
