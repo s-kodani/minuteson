@@ -1,5 +1,6 @@
 import { MarkdownSaveController, type MarkdownDocument } from "./minutes-markdown-state.ts";
 import type { ConfirmationOptions, ConfirmationOutcome } from "./confirmation-state";
+import { SavedEditsCancelled } from "./confirmed-action.ts";
 
 // Navigation, native quit and explicit regeneration share the same decision.
 // A save is never implicit, and unknown save responses cannot be discarded by
@@ -28,5 +29,6 @@ export async function confirmMarkdownLeave(controller: MarkdownSaveController, t
       controller.discard(document);
     } },
   });
-  if (outcome !== "completed") throw Error("議事録の編集を保持し、操作を取り消しました。");
+  if (outcome === "cancelled") throw new SavedEditsCancelled();
+  if (outcome !== "completed") throw Error("議事録の保存結果を確認できません。編集を保持しています。");
 }

@@ -6,7 +6,7 @@ import { OptionsModal } from "./options-modal";
 import { IssueNotice, ToastNotice } from "./toast";
 import { useActionConfirmation } from "./confirmation-service";
 import { registerPendingEdits, type VersionedDraft } from "./draft-save";
-import { withConfirmedEdits } from "./confirmed-action";
+import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import { canRetryJob, jobLabel, type AnalysisJob, type VersionState } from "./analysis-state";
 import { minutesConfigured, type MinutesPreferences } from "./minutes-state";
 import { MinutesMarkdownEditor } from "./minutes-markdown-editor";
@@ -22,7 +22,7 @@ type Job = AnalysisJob & { operationId: string };
 /** A single human-owned Markdown body, not a candidate or revision editor. */
 export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, withSavedEdits, visible = true }: {
   meetingId: string; meetingTitle: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
-  withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
+  withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onHeadChanged: () => Promise<void>; visible?: boolean;
 }) {
   const [controller] = useState(() => new MarkdownSaveController(meetingId,
@@ -117,7 +117,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     if (running.current || locked || !isTauri()) return;
     running.current = true; setBusy(true); setError("");
     try { await action(); }
-    catch (cause) { if (alive.current) setError(String(cause)); }
+    catch (cause) { if (alive.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); }
     finally { running.current = false; if (alive.current) setBusy(false); }
   };
   const start = () => run(() => withConfirmedEdits(withSavedEdits, async () => {

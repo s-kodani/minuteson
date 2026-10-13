@@ -3,7 +3,7 @@ import { IconButton } from "./action-icon";
 import { ScopedModal } from "./scoped-modal";
 import { useSettingsModalScope } from "./settings-modal-scope";
 import { useActionConfirmation } from "./confirmation-service";
-import { withConfirmedEdits } from "./confirmed-action";
+import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import { InfoPopover } from "./info-popover";
 import { IssueNotice, ToastNotice } from "./toast";
 import { listen } from "@tauri-apps/api/event";
@@ -18,7 +18,7 @@ import { diarizationConfigured,type DiarizationPreferences } from "./diarization
 type Book={payload:VocabularyEntry[];lockVersion:number};
 export function AudioImportPanel({locked,recordingActive,visible,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
   locked:boolean;recordingActive:boolean;visible:boolean;showNewRecording?:boolean;
-  withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void>;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void|Promise<void>;
+  withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void | "cancelled">;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void|Promise<void>;
 }) {
   const confirm = useActionConfirmation(locked || recordingActive);
   const [snapshot,setSnapshot]=useState<ImportSnapshot|null>(null);
@@ -89,7 +89,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
     try {
       if (open && (terms.length || title)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
       else await change();
-    } catch (cause) { if (mounted.current) setError(String(cause)); } finally { selecting.current=false; }
+    } catch (cause) { if (mounted.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); } finally { selecting.current=false; }
   };
   selectRef.current=select;
   const priorToken=useRef<string|null>(null);

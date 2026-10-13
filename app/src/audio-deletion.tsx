@@ -13,7 +13,7 @@ import { stopAllPlayback } from "./playback-barrier";
 
 export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted, onProtectionChange }: {
   operation: DataOperation; locked: boolean;
-  withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
+  withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onDeleted: (receipt: AudioDeletionReceipt) => Promise<void>;
   onProtectionChange: (protectedNow: boolean) => void;
 }) {

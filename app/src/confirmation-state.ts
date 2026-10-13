@@ -1,3 +1,5 @@
+import { SavedEditsCancelled } from "./confirmed-action.ts";
+
 export type ConfirmationPhase = "choosing" | "running" | "failed";
 export type ConfirmationOutcome = "cancelled" | "completed" | "unconfirmed";
 export type ConfirmationOptions = {
@@ -68,6 +70,7 @@ export class ConfirmationController<Parent, Opener> {
       this.finish("completed");
     } catch (cause) {
       if (this.pending !== pending || !this.snapshot) return;
+      if (cause instanceof SavedEditsCancelled) { this.finish("cancelled"); return; }
       this.publish({ ...this.snapshot, phase: "failed", error: String(cause) });
       try { pending.options.onError?.(cause); } catch { /* preserve the original failure */ }
     }

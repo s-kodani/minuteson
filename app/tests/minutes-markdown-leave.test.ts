@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { MarkdownSaveController, type MarkdownDocument } from "../src/minutes-markdown-state.ts";
 import { confirmMarkdownLeave } from "../src/minutes-markdown-leave.ts";
 import type { ConfirmationOptions } from "../src/confirmation-state.ts";
+import { SavedEditsCancelled } from "../src/confirmed-action.ts";
 const op=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 const initial:MarkdownDocument={meetingId:"m",markdown:"保存済み",lockVersion:1,contentHash:"a".repeat(64),operationId:op(1),updatedAt:1};
 function fixture() {
@@ -16,10 +17,15 @@ test("clean navigation never prompts, reads or writes",async()=>{
 });
 test("leaving requires explicit save or discard; cancellation preserves exact input without a write",async()=>{
   const f=fixture();f.controller.edit("人間の入力\n");let options!:ConfirmationOptions;
-  await assert.rejects(confirmMarkdownLeave(f.controller,"会議",f.read,async o=>{options=o;return "cancelled";}));
+  await assert.rejects(confirmMarkdownLeave(f.controller,"会議",f.read,async o=>{options=o;return "cancelled";}),SavedEditsCancelled);
   assert.equal(f.controller.snapshot().text,"人間の入力\n");assert.equal(f.calls(),0);assert.equal(options.alternativeAction?.label,"編集を破棄して続ける");
   await confirmMarkdownLeave(f.controller,"会議",f.read,async o=>{assert.equal(o.validate!(),true);await o.action();return "completed";});
   assert.equal(f.calls(),1);assert.equal(f.controller.snapshot().dirty,false);
+});
+test("an unconfirmed save remains a failure, not a quiet cancellation",async()=>{
+  const f=fixture();f.controller.edit("入力を保持");
+  await assert.rejects(confirmMarkdownLeave(f.controller,"会議",f.read,async()=>"unconfirmed"),cause=>cause instanceof Error && !(cause instanceof SavedEditsCancelled));
+  assert.equal(f.controller.snapshot().text,"入力を保持");assert.equal(f.calls(),0);
 });
 test("discard reads current saved body and does not save unwanted input",async()=>{
   const f=fixture();f.controller.edit("不要な入力");await confirmMarkdownLeave(f.controller,"会議",f.read,async o=>{await o.alternativeAction!.action();return "completed";});

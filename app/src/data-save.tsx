@@ -14,7 +14,7 @@ import { topOpenModal } from "./modal-state";
 
 export function DataSavePanel({ operation, visible, locked, withSavedEdits, onProtectionChange, onRestored, onShowMeetings }: {
   operation: DataOperation; visible: boolean; locked: boolean;
-  withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
+  withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onProtectionChange: (active: boolean) => void;
   onRestored: (receipt: RestoreReceipt) => Promise<void>;
   onShowMeetings: (ids: string[]) => Promise<void>;

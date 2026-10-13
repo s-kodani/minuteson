@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withConfirmedEdits } from "../src/confirmed-action.ts";
+import { SavedEditsCancelled, withConfirmedEdits } from "../src/confirmed-action.ts";
 test("confirmed action waits for saved edits and runs once", async () => {
   const events: string[] = [];
   await withConfirmedEdits(async action => { events.push("saved"); await action(); }, async () => { events.push("action"); });
@@ -22,6 +22,11 @@ test("operation failure is reported only by the confirmed caller, not the save b
 test("save failure which skips action is not reported as completion", async () => {
   let calls = 0;
   await assert.rejects(withConfirmedEdits(async () => {}, async () => { calls++; }), /変更処理は開始していません/u);
+  assert.equal(calls, 0);
+});
+test("explicit edit cancellation never executes or becomes an unconfirmed save failure", async () => {
+  let calls = 0;
+  await assert.rejects(withConfirmedEdits(async () => "cancelled", async () => { calls++; }), SavedEditsCancelled);
   assert.equal(calls, 0);
 });
 test("propagated save failure stays original and repeated callbacks do not replay", async () => {

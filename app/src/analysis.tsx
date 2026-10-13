@@ -7,7 +7,7 @@ import type { ModalReplacement } from "./common-modal";
 import type { AnalysisFlow } from "./analysis-flow-state";
 import { jobLabel, type AnalysisJob } from "./analysis-state";
 import { useActionConfirmation } from "./confirmation-service";
-import { withConfirmedEdits } from "./confirmed-action";
+import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import type { RegenerationRequest, RegenerationTarget } from "./transcription-regeneration";
 
 /** Meeting actions contain no model settings, candidate review or adoption.
@@ -15,7 +15,7 @@ import type { RegenerationRequest, RegenerationTarget } from "./transcription-re
  */
 export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, recorded, recordingActive, locked, onHeadChanged, withSavedEdits, renderTools }: {
   meetingId: string; meetingTitle: string; hasTranscript?: boolean; recorded: boolean; recordingActive: boolean; locked: boolean;
-  onHeadChanged: () => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
+  onHeadChanged: () => Promise<void>; withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   renderTools?: (tools: ReactNode, review: ModalReplacement | null, persistentViews?: ReactNode) => ReactNode;
 }) {
   const [flow, setFlow] = useState<AnalysisFlow | null>(null), [jobs, setJobs] = useState<AnalysisJob[]>([]);
@@ -64,7 +64,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     if (running.current || locked || recordingActive) return;
     running.current = true; setBusy(true); setError("");
     try { await withConfirmedEdits(withSavedEdits, action); await refreshRef.current(); }
-    catch (cause) { setError(String(cause)); }
+    catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setError(String(cause)); }
     finally { running.current = false; setBusy(false); }
   };
   const active = flow?.stage === "diarization" ? flow.diarizationJob : flow?.transcriptionJob;

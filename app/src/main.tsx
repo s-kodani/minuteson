@@ -42,7 +42,7 @@ import "./recorder-panel.css";
 import { ThemeProvider, ThemeSettingsPanel, ThemeReadNotice, ThemeNotifications, useTheme } from "./theme";
 import { RecordingConfirmationWindow, useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
-import { withConfirmedEdits } from "./confirmed-action";
+import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
 import { appShortcut, overlayOpen } from "./keyboard";
@@ -232,6 +232,7 @@ function MainWindow() {
       };
       await runAfterSaving(() => flushPendingEdits(reason), action, reportPhase);
     } catch (cause) {
+      if (cause instanceof SavedEditsCancelled) return "cancelled" as const;
       setMeetingError(`操作を完了できませんでした。編集内容はこの画面に保持しています: ${String(cause)}`);
     } finally {
       navigating.current = false;
@@ -353,7 +354,7 @@ function MainWindow() {
       if (importNeedsConsent(expected.importing) || dataNeedsConsent(expected.data) || !coveredAnalysis && (expected.activity.analysisBusy || expected.activity.modelPreparationBusy)) {
         await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });
       } else await finish();
-    } catch (cause) { setMeetingError(`終了できませんでした。アプリと保存結果は保持しています: ${String(cause)}`); }
+    } catch (cause) { if (!(cause instanceof SavedEditsCancelled)) setMeetingError(`終了できませんでした。アプリと保存結果は保持しています: ${String(cause)}`); }
     finally { closing.current = false; setClosingBusy(false); }
   };
   useEffect(() => {

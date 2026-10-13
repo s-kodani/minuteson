@@ -12,7 +12,7 @@ type Receipt = { job: RebindingJob | null; active: boolean; cancelled: boolean }
 
 export function JobModelRebinding({ meetingId, job, jobs, locked, recordingActive, withSavedEdits, refresh }: {
   meetingId: string; job: AnalysisJob; jobs: AnalysisJob[]; locked: boolean; recordingActive: boolean;
-  withSavedEdits: (action: () => void | Promise<void>) => Promise<void>; refresh: () => Promise<void>;
+  withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">; refresh: () => Promise<void>;
 }) {
   const key = `${meetingId}/${job.id}`, titleId = useId();
   const [open, setOpen] = useState(false);

@@ -1,8 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { SavedEditsCancelled } from "../src/confirmed-action.ts";
 import { ConfirmationController } from "../src/confirmation-state.ts";
 const options = (action: () => Promise<void>) => ({ title: "削除を確認", target: "固定した対象", message: "削除した入力は復元できません。", confirmLabel: "削除する", action });
 const controller = () => new ConfirmationController<object, object>();
+test("explicit edit cancellation settles as cancelled without reporting completed or unknown work",async()=>{
+  const c=controller();let errors=0;
+  const result=c.request({},null,null,{...options(async()=>{throw new SavedEditsCancelled();}),onError:()=>{errors++;}});
+  await c.execute(c.getSnapshot()!.id);
+  assert.equal(await result,"cancelled");assert.equal(c.getSnapshot(),null);assert.equal(errors,0);
+});
 test("explicit alternative shares validation and prevents primary execution, double acceptance and dismissal while running",async()=>{
   const c=controller();let primary=0,alternative=0,release!:()=>void;
   const result=c.request({},null,null,{...options(async()=>{primary++;}),alternativeAction:{label:"破棄",action:async()=>{alternative++;await new Promise<void>(resolve=>{release=resolve;});}}});

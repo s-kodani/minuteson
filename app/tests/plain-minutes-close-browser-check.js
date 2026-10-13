@@ -20,6 +20,7 @@ async (page) => {
   await dialog().getByRole("button", { name:"確認をキャンセル", exact:true }).click();
   await dialog().waitFor({state:"hidden"});
   check(await finished() === 0 && await saved() === 0 && await input().inputValue() === "# 終了前の人間の入力\n", "quit cancellation lost or implicitly saved human input");
+  check(await page.getByRole("alert").count() === 0, "normal quit cancellation displayed a failure toast");
   results.push("native quit cancellation keeps plain Markdown input without saving or closing");
 
   await review(); await dialog().getByRole("button", { name:"編集を破棄して続ける", exact:true }).click();

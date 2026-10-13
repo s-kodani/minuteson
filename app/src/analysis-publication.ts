@@ -10,7 +10,7 @@ import { toastKey } from "./toast-state";
  * Its brief edit barrier saves open fields; native compare-and-swap rejects
  * changes since confirmation. The worker never clobbers unsaved UI input.
  */
-export function useAnalysisPublication(locked: boolean, saveThenAct: (action: () => Promise<void>) => Promise<void>) {
+export function useAnalysisPublication(locked: boolean, saveThenAct: (action: () => Promise<void>) => Promise<void | "cancelled">) {
   const [error, setError] = useState("");
   const live = useRef({ locked, saveThenAct }); live.current = { locked, saveThenAct };
   useEffect(() => {

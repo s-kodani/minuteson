@@ -12,7 +12,7 @@ import { stopAllPlayback } from "./playback-barrier";
 
 export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted }: {
   operation: DataOperation; locked: boolean;
-  withSavedEdits: (action: () => void | Promise<void>) => Promise<void>;
+  withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onDeleted: (receipt: DeletionReceipt) => Promise<void>;
 }) {
   const latest = useRef({ operation, locked, withSavedEdits, onDeleted }); latest.current = { operation, locked, withSavedEdits, onDeleted };
