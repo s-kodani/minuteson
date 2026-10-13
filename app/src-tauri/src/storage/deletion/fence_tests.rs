@@ -659,7 +659,7 @@ fn deletion_fence_pending_older_database_is_not_migrated_or_recovered() {
         .err()
         .unwrap()
         .to_string()
-        .contains("移行せず保持"));
+        .contains("非対応の旧DB形式"));
     let db = Connection::open(root.join("meetings.sqlite3")).unwrap();
     assert_eq!(
         db.query_row("SELECT count(*) FROM schema_migrations", [], |r| r

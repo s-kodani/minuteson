@@ -80,14 +80,9 @@ fn job_state(f: &Fixture) -> String {
 }
 
 #[test]
-fn history_v27_completed_model_upgrades_without_rewriting_evidence_or_reviving_bodies() {
+fn current_completed_model_reopens_without_rewriting_evidence_or_reviving_bodies() {
     let f = Fixture::new();
     let op = finish(&f);
-    {
-        let db = f.storage.connection.lock().unwrap();
-        intent::historical_header_fixture(&db, &op);
-        crate::storage::edit_recovery::remove_schema_for_test(&db);
-    }
     let saved = fixed(&f, &op);
     let f = f.cold();
     assert_eq!(fixed(&f, &op), saved);
@@ -99,7 +94,7 @@ fn history_v27_completed_model_upgrades_without_rewriting_evidence_or_reviving_b
         crate::storage::MIGRATIONS.len()
     );
     f.storage
-        .create_meeting("MODEL HISTORY IS READABLE AFTER UPGRADE")
+        .create_meeting("MODEL HISTORY IS READABLE AFTER REOPEN")
         .unwrap();
     let f = f.cold();
     assert_eq!(fixed(&f, &op), saved);

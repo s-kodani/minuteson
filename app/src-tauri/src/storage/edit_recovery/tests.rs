@@ -278,7 +278,7 @@ fn retirement_rejects_writes_but_keeps_readable_recovery() {
 }
 
 #[test]
-fn v27_migration_preserves_existing_draft_hash_version_and_undo_chain() {
+fn current_reopen_preserves_existing_draft_hash_version_and_undo_chain() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, base, utterance) = fixture(&storage);
@@ -294,7 +294,6 @@ fn v27_migration_preserves_existing_draft_hash_version_and_undo_chain() {
         .unwrap();
     drop(storage);
     let mut db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
-    remove_schema_for_test(&db);
     let old: (String, String, String) = db
         .query_row(
             "SELECT payload_json,inverse_json,after_hash FROM edit_operations",
@@ -302,8 +301,8 @@ fn v27_migration_preserves_existing_draft_hash_version_and_undo_chain() {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
-    assert_eq!(verify_migration_history(&db).unwrap(), 27);
-    apply_migrations(&mut db).unwrap();
+    assert_eq!(verify_migration_history(&db).unwrap(), MIGRATIONS.len());
+    initialize_database(&mut db).unwrap();
     let new: (String, String, String) = db
         .query_row(
             "SELECT payload_json,inverse_json,after_hash FROM edit_operations",

@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::{apply_migrations, Storage, MIGRATIONS};
+use crate::storage::{initialize_database, Storage, MIGRATIONS};
 
 fn database(version: usize) -> Connection {
     let db = Connection::open_in_memory().unwrap();
@@ -39,7 +39,7 @@ fn empty_scope(version: usize) -> Scope {
 }
 
 #[test]
-fn history_schema_checks_every_known_version_before_and_after_forward_migration() {
+fn history_schema_checks_do_not_admit_old_database_initialization() {
     for version in 22..=MIGRATIONS.len() {
         let mut db = database(version);
         let scope = empty_scope(version);
@@ -48,7 +48,7 @@ fn history_schema_checks_every_known_version_before_and_after_forward_migration(
         verify_rows_absent(&db, &scope, &|| false).unwrap();
         assert_eq!(trusted_history_schema(&db).unwrap(), scope.schema_hash);
         assert_eq!(trusted_schema(&db).is_ok(), version == MIGRATIONS.len());
-        apply_migrations(&mut db).unwrap();
+        assert_eq!(initialize_database(&mut db).is_ok(), version == MIGRATIONS.len());
         scope.validate_format(&db).unwrap();
         verify_rows_absent(&db, &scope, &|| false).unwrap();
         assert_eq!(scope.encode().unwrap(), original);

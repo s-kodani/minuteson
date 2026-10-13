@@ -472,58 +472,6 @@ fn job_attach_failure_retains_durable_job_and_recovery_does_not_enqueue_a_duplic
     assert_eq!(s.list_jobs(&m).unwrap().len(), 1);
 }
 
-#[test]
-fn migration_from_v17_preserves_data_jobs_and_does_not_autostart_historical_recordings() {
-    let root = tempfile::tempdir().unwrap();
-    let (s, m) = fixture(root.path());
-    let prior = s.get_meeting(&m).unwrap().unwrap();
-    let preferences = s.analysis_preferences().unwrap();
-    {
-        let db = s.connection.lock().unwrap();
-        super::imports::remove_import_schema_for_test(&db);
-        db.execute_batch("DROP TABLE analysis_flows; DROP TRIGGER input_snapshot_valid; DROP TRIGGER analysis_parent_committed; DELETE FROM schema_migrations WHERE version=18;").unwrap();
-        let old = MIGRATION_13
-            .split_once("CREATE TRIGGER input_snapshot_valid")
-            .unwrap()
-            .1
-            .split_once("CREATE TRIGGER input_snapshot_fixed_update")
-            .unwrap()
-            .0;
-        db.execute_batch(&format!("CREATE TRIGGER input_snapshot_valid{old}"))
-            .unwrap();
-        let old = MIGRATION_3
-            .split_once("CREATE TRIGGER analysis_parent_committed")
-            .unwrap()
-            .1
-            .split_once("CREATE TRIGGER minutes_parent_hash")
-            .unwrap()
-            .0;
-        db.execute_batch(&format!("CREATE TRIGGER analysis_parent_committed{old}"))
-            .unwrap();
-    }
-    drop(s);
-    let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.get_meeting(&m).unwrap().unwrap(), prior);
-    assert_eq!(
-        s.analysis_preferences().unwrap().payload,
-        preferences.payload
-    );
-    assert!(s.analysis_flow(&m).unwrap().is_none());
-    advance(&s);
-    assert!(s.list_jobs(&m).unwrap().is_empty());
-    let db = s.connection.lock().unwrap();
-    assert_eq!(
-        db.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        MIGRATIONS.len() as i64
-    );
-    assert!(db
-        .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
-        .optional()
-        .unwrap()
-        .is_none());
-}
 
 #[test]
 fn unrelated_candidate_cannot_be_a_fixed_input_without_a_flow_and_original_checks_remain() {

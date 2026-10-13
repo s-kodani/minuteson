@@ -350,13 +350,12 @@ fn paths(sealed: &SealedWorkspace, root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 #[test]
-fn restore_journal_migrates_v21_and_excludes_all_local_recovery_records_from_backup() {
+fn restore_journal_current_reopen_excludes_all_local_recovery_records_from_backup() {
     let f = fixture();
     let before = all_rows(&f.target.connection.lock().unwrap());
-    remove_schema_for_test(&f.target.connection.lock().unwrap());
     assert_eq!(
         verify_migration_history(&f.target.connection.lock().unwrap()).unwrap(),
-        21
+        MIGRATIONS.len()
     );
     let root = f.target.root.clone();
     drop(f.target);

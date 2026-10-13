@@ -44,37 +44,3 @@ fn stored_receipts_keep_meeting_ownership_and_detached_revision_without_external
     assert!(s.exports(&m).unwrap()[0].minutes_revision_id.is_none());
     assert!(!path.exists());
 }
-
-#[test]
-fn v14_database_migrates_without_changing_stored_minutes_drafts_or_heads() {
-    let root = tempfile::tempdir().unwrap();
-    let s = Storage::open(root.path().into()).unwrap();
-    let m = super::super::stored_minutes_fixture::meeting(&s);
-    let id = super::super::stored_minutes_fixture::candidate(&s, &m);
-    s.seed_stored_minutes_head(&m, &id).unwrap();
-    let draft = s.seed_stored_minutes_draft(&m, &id).unwrap();
-    let view = s.load_minutes_content(&m, &id).unwrap();
-    {
-        let db = s.connection.lock().unwrap();
-        super::imports::remove_import_schema_for_test(&db);
-        db.execute_batch("DROP TABLE analysis_flows; DROP TABLE diarization_manual_assignments; DROP TRIGGER job_analysis_result_insert; DROP TABLE vocabulary_snapshots; DROP TABLE vocabulary_entries; DROP TABLE vocabulary_scopes; DROP INDEX processing_jobs_meeting_identity; DROP TABLE export_records; DELETE FROM schema_migrations WHERE version>=15;").unwrap();
-    }
-    drop(s);
-    let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.read_stored_minutes_draft(&m, None).unwrap(), Some(draft));
-    assert_eq!(s.load_minutes_content(&m, &id).unwrap(), view);
-    assert_eq!(
-        s.read_stored_minutes_state(&m).unwrap().current_id,
-        Some(id)
-    );
-    assert!(s.exports(&m).unwrap().is_empty());
-    assert_eq!(
-        s.connection
-            .lock()
-            .unwrap()
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        MIGRATIONS.len() as i64
-    );
-}

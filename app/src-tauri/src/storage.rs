@@ -32,7 +32,7 @@ mod jobs;
 mod markdown_generation_tests;
 mod meeting_playback;
 #[cfg(test)]
-mod migration_update_tests;
+mod initialization_tests;
 mod minutes;
 mod minutes_drafts;
 mod minutes_input;
@@ -293,9 +293,11 @@ impl Storage {
         // Set EXCLUSIVE before *any* access to an existing WAL database so
         // SQLite keeps the wal-index on the heap rather than mmap'ing -shm.
         // Switching after journal_mode has read the DB is too late on reopen.
-        connection.execute_batch(
-            "PRAGMA main.locking_mode = EXCLUSIVE; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
-        )?;
+        connection.execute_batch("PRAGMA main.locking_mode = EXCLUSIVE; PRAGMA foreign_keys = ON;")?;
+        // Refuse old/unknown databases before journal-mode changes, recovery
+        // writes, temporary registries or filesystem cleanup can begin.
+        empty_or_current_database(&connection)?;
+        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;")?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
         #[cfg(target_os = "macos")]
@@ -304,18 +306,10 @@ impl Storage {
         }
         #[cfg(unix)]
         let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
+        initialize_database(&mut connection)?;
         #[cfg(unix)]
         deletion::startup::inspect(&connection, &managed_anchor, &native_models_root)?;
         let pending_deletion = deletion::fence::has_pending(&connection)?;
-        if pending_deletion {
-            if verify_migration_history(&connection)? != MIGRATIONS.len() {
-                return Err(
-                    "未完了の削除があるDBは移行せず保持します。元の対応版で確認してください".into(),
-                );
-            }
-        } else {
-            apply_migrations(&mut connection)?;
-        }
         let deletion_fence = deletion::fence::Fence::open(&connection)?;
         let scratch;
         if !pending_deletion {
@@ -647,20 +641,38 @@ impl Storage {
     }
 }
 
-fn apply_migrations(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
-    // Keep the entire pending upgrade (including first initialization) in one
-    // SQLite transaction. A later SQL/history/commit failure must not leave an
-    // earlier new schema version committed. Startup recovery runs only after
-    // this succeeds; no file, bootstrap or external model is migrated here.
+fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Error>> {
+    let empty: bool = connection.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
+        [], |row| row.get(0),
+    )?;
+    if empty {
+        return Ok(true);
+    }
+    if verify_migration_history(connection)? != MIGRATIONS.len() {
+        return Err("非対応の旧DB形式です。自動更新は行いません。対象を確認して現行形式で作り直してください".into());
+    }
+    Ok(false)
+}
+
+fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>> {
+    if !empty_or_current_database(connection)? {
+        return Ok(());
+    }
+    // These trusted SQL definitions construct a NEW current database only.
+    // No missing suffix is applied to an existing database. Initialization is
+    // atomic, including its schema history, and may be retried after rollback.
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if !empty_or_current_database(&transaction)? {
+        return Ok(());
+    }
     transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
     )?;
-    let applied = verify_migration_history(&transaction)?;
-    for &(version, sql) in MIGRATIONS.iter().skip(applied) {
+    for &(version, sql) in MIGRATIONS {
         transaction.execute_batch(sql).map_err(|error| {
-            format!("保存データの移行（段階{version}）に失敗しました。DB・台帳を削除せず保持して確認してください: {error}")
+            format!("新規DBの初期化（段階{version}）に失敗しました: {error}")
         })?;
         let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
         transaction.execute(
@@ -976,42 +988,6 @@ mod tests {
         assert!(storage.rename_meeting("missing", "name", 0).is_err());
     }
 
-    #[test]
-    fn older_database_is_migrated_without_losing_meetings() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut connection = Connection::open(temp.path().join("meetings.sqlite3")).unwrap();
-        connection.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
-        let transaction = connection.transaction().unwrap();
-        transaction.execute_batch(MIGRATION_1).unwrap();
-        let digest = format!("{:x}", Sha256::digest(MIGRATION_1.as_bytes()));
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations VALUES (1, ?1, 0)",
-                params![digest],
-            )
-            .unwrap();
-        transaction.commit().unwrap();
-        connection.execute("INSERT INTO meetings(id,title,created_at,updated_at) VALUES ('legacy-meeting','移行前の会議',12,34)", []).unwrap();
-        drop(connection);
-
-        let storage = Storage::open(temp.path().to_owned()).unwrap();
-        let old = storage.get_meeting("legacy-meeting").unwrap().unwrap();
-        assert_eq!(
-            (old.title.as_str(), old.created_at, old.updated_at),
-            ("移行前の会議", 12, 34)
-        );
-        let created = storage.create_meeting("移行後の会議").unwrap();
-        let count: i64 = storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, MIGRATIONS.len() as i64);
-        assert_eq!(storage.get_meeting(&created.id).unwrap(), Some(created));
-    }
 
     #[test]
     fn managed_asset_is_hashed_and_tampering_is_detected() {

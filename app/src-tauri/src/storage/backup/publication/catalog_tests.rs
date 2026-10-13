@@ -468,7 +468,7 @@ fn catalog_history_requires_transaction_preserves_distinct_catalogs_with_shared_
 }
 
 #[test]
-fn catalog_history_migration_preserves_v26_rows_settings_and_immutable_unavailable_records_reject_tampering(
+fn catalog_history_current_reopen_preserves_rows_settings_and_immutable_unavailable_records_reject_tampering(
 ) {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -479,9 +479,6 @@ fn catalog_history_migration_preserves_v26_rows_settings_and_immutable_unavailab
     let bundle = Bundle::export(&storage.connection.lock().unwrap(), &|| false).unwrap();
     let preferences =
         serde_json::to_value(storage.analysis_preferences().unwrap().payload).unwrap();
-    crate::storage::model_profiles::portable::history::remove_schema_for_test(
-        &storage.connection.lock().unwrap(),
-    );
     drop(storage);
     let target = Storage::open(root.path().into()).unwrap();
     assert_eq!(target.get_meeting(&meeting.id).unwrap(), Some(meeting));

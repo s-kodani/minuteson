@@ -137,14 +137,13 @@ fn historical_model_metadata_rejects_corrupt_or_missing_records_before_name_reus
     }
 }
 #[test]
-fn historical_model_metadata_v22_migration_preserves_existing_data_and_starts_empty() {
+fn historical_model_metadata_current_reopen_preserves_existing_data_and_empty_history() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = storage.create_meeting("既存会議").unwrap();
-    remove_schema_for_test(&storage.connection.lock().unwrap());
     assert_eq!(
         verify_migration_history(&storage.connection.lock().unwrap()).unwrap(),
-        22
+        MIGRATIONS.len()
     );
     let managed = storage.root.clone();
     drop(storage);

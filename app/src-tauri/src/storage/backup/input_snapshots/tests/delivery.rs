@@ -574,10 +574,9 @@ fn restored_delivery_corrupt_mutable_state_is_not_reseeded_and_writer_drift_is_f
 }
 
 #[test]
-fn restored_delivery_schema_29_upgrade_and_maintenance_preserve_original_proof() {
+fn restored_delivery_current_reopen_and_maintenance_preserve_original_proof() {
     let (_source, _output, root, storage, meeting, owner) = restored();
     let immutable = payload(&storage.connection.lock().unwrap(), &owner);
-    crate::storage::restored_input::remove_schema_for_test(&storage.connection.lock().unwrap());
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
     assert_eq!(

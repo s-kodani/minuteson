@@ -933,6 +933,3 @@ pub(super) fn finish_database_purge(
 
 #[cfg(test)]
 mod history_tests;
-
-#[cfg(all(test, target_os = "macos"))]
-mod history_upgrade_tests;

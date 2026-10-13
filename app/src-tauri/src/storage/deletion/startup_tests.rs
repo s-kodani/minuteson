@@ -111,13 +111,11 @@ fn evidence_database(db: &Connection) -> String {
 }
 
 #[test]
-fn history_v27_completed_meeting_upgrades_without_rewriting_consent_or_fencing_clean_data() {
+fn current_completed_meeting_reopens_without_rewriting_consent_or_fencing_clean_data() {
     let mut f = Fixture::new();
     {
         let db = f.storage().connection.lock().unwrap();
-        intent::historical_completed_fixture(&db, &f.operation);
-        crate::storage::edit_recovery::remove_schema_for_test(&db);
-        assert_eq!(crate::storage::verify_migration_history(&db).unwrap(), 27);
+        assert_eq!(crate::storage::verify_migration_history(&db).unwrap(), crate::storage::MIGRATIONS.len());
     }
     let saved = evidence(f.storage());
     f.cold();
@@ -133,7 +131,7 @@ fn history_v27_completed_meeting_upgrades_without_rewriting_consent_or_fencing_c
     );
     f.kept();
     f.storage()
-        .create_meeting("AFTER VERIFIED UPGRADE")
+        .create_meeting("AFTER VERIFIED REOPEN")
         .unwrap();
     f.cold();
     assert_eq!(evidence(f.storage()), saved);
@@ -153,7 +151,7 @@ fn history_v27_reappearance_preserves_old_database_and_never_migrates_under_old_
     f.reappear(false);
     drop(f.storage.take());
     let error = Storage::open(root.clone()).err().unwrap().to_string();
-    assert!(error.contains("未完了の削除があるDBは移行せず保持"));
+    assert!(error.contains("非対応の旧DB形式"));
     assert_eq!(std::fs::read(&f.file).unwrap(), b"REAPPEARED UNKNOWN");
     assert_eq!(std::fs::read(&f.keep).unwrap(), b"KEEP");
     let db = Connection::open_with_flags(

@@ -141,7 +141,7 @@ fn native_raw_audio_deletion_cold_restart_removes_pcm_but_keeps_documents_and_ra
 }
 
 #[test]
-fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_original_evidence() {
+fn current_completed_audio_reopens_preserving_unavailable_source_and_original_evidence() {
     let mut f = Fixture::new();
     f.documents();
     let lease = owner();
@@ -150,11 +150,6 @@ fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_origin
         .unwrap()
         .completed());
     drop(lease);
-    {
-        let db = f.storage.connection.lock().unwrap();
-        crate::storage::deletion::audio::intent::historical_completed_fixture(&db, &op);
-        crate::storage::edit_recovery::remove_schema_for_test(&db);
-    }
     let saved = fixed(&f, &op);
     reopen(&mut f);
     assert_eq!(fixed(&f, &op), saved);
@@ -171,7 +166,7 @@ fn history_v27_completed_audio_upgrades_preserving_unavailable_source_and_origin
         crate::storage::MIGRATIONS.len()
     );
     f.storage
-        .create_meeting("OTHER MEETING AFTER AUDIO HISTORY UPGRADE")
+        .create_meeting("OTHER MEETING AFTER AUDIO REOPEN")
         .unwrap();
     reopen(&mut f);
     assert_eq!(fixed(&f, &op), saved);

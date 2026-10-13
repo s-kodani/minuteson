@@ -816,15 +816,11 @@ fn profile_application_corrupted_heads_and_rehashed_invalid_component_are_not_si
 }
 
 #[test]
-fn profile_application_v24_migration_and_backup_keep_host_binding_local_but_retain_profile_origin()
+fn profile_application_current_reopen_and_backup_keep_host_binding_local_but_retain_profile_origin()
 {
     let mut f = Fixture::new();
     let index = f.add(Engine::Llama, true, false);
     let before = f.storage.list_meetings().unwrap();
-    {
-        let db = f.storage.connection.lock().unwrap();
-        remove_schema_for_test(&db);
-    }
     let models = f.models();
     let p = &f.packages[index];
     let package = p.id.clone();

@@ -245,54 +245,6 @@ fn import_finalization_and_recovery_cancel_keep_complete_evidence_for_retry() {
     assert_eq!(s.audio_import(&before.id).unwrap().state, "ready");
 }
 
-#[test]
-fn migration_20_preserves_historical_import_metadata_without_selecting_meeting_models() {
-    let root = tempfile::tempdir().unwrap();
-    let s = Storage::open(root.path().into()).unwrap();
-    let (import, base, manifest) = pending(&s, "v19");
-    s.finalize_audio_import(&import.id).unwrap();
-    let meeting = s.get_meeting(&import.meeting_id).unwrap().unwrap();
-    {
-        let db = s.connection.lock().unwrap();
-        crate::storage::backup::ledger::remove_restore_schema_for_test(&db);
-        db.execute_batch("DROP TRIGGER audio_import_options_fixed; DROP TABLE audio_import_options; DELETE FROM schema_migrations WHERE version=20;").unwrap();
-    }
-    drop(s);
-    let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.get_meeting(&import.meeting_id).unwrap().unwrap(), meeting);
-    assert_eq!(
-        s.analysis_flow(&import.meeting_id)
-            .unwrap()
-            .unwrap()
-            .profile,
-        "standard"
-    );
-    assert!(s
-        .vocabulary_book(Some(&import.meeting_id))
-        .unwrap()
-        .payload
-        .is_empty());
-    assert_eq!(
-        format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(base.join("audio.flac")).unwrap())
-        ),
-        manifest.audio.sha256
-    );
-    let db = s.connection.lock().unwrap();
-    let (json, hash): (String, String) = db
-        .query_row(
-            "SELECT options_json,options_hash FROM audio_import_options WHERE import_id=?1",
-            params![import.id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(json.as_bytes())), hash);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&json).unwrap(),
-        serde_json::json!({"profile":"standard","meetingVocabulary":[],"expectedGlobalVersion":null})
-    );
-}
 
 #[test]
 fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff() {
@@ -574,49 +526,6 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
     );
 }
 
-#[test]
-fn v18_import_rows_and_existing_meetings_survive_migration_without_false_verification() {
-    let root = tempfile::tempdir().unwrap();
-    let s = Storage::open(root.path().into()).unwrap();
-    let mut meeting = s.create_meeting("保持").unwrap();
-    meeting.source_type = Some("audio_import".into());
-    {
-        let db = s.connection.lock().unwrap();
-        remove_import_schema_for_test(&db);
-        db.execute(
-            "UPDATE meetings SET source_type='audio_import' WHERE id=?1",
-            params![meeting.id],
-        )
-        .unwrap();
-        db.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,created_at,updated_at) VALUES('legacy',?1,'copying','old.wav',0,0)",params![meeting.id]).unwrap();
-    }
-    drop(s);
-    let s = Storage::open(root.path().into()).unwrap();
-    assert_eq!(s.get_meeting(&meeting.id).unwrap().unwrap(), meeting);
-    let db = s.connection.lock().unwrap();
-    let state: String = db
-        .query_row(
-            "SELECT state FROM audio_imports WHERE id='legacy'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(state, "failed");
-    assert_eq!(
-        db.query_row("SELECT COUNT(*) FROM audio_import_commits", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert!(db
-        .query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, String>(0))
-        .optional()
-        .unwrap()
-        .is_none());
-    drop(db);
-    assert!(s.analysis_flow(&meeting.id).unwrap().is_none());
-    assert!(s.recorded_audio_plan(&meeting.id).is_err());
-}
 
 #[cfg(unix)]
 fn fake_helper(root: &Path) -> Fingerprint {
