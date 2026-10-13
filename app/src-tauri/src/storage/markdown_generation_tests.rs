@@ -195,6 +195,149 @@ fn claim(storage: &Storage, job: &JobSnapshot) {
         job.id
     );
 }
+
+// Only the opt-in real-asset test calls this. Its entire Storage and package
+// are test-owned; no user's meeting, setting or original model is changed.
+pub(crate) fn real_managed_model_markdown_roundtrip(
+    storage: Storage,
+    models: PathBuf,
+    expected_model_hash: &str,
+    label: &str,
+) {
+    let root = storage.root().to_owned();
+    let preferences = storage.minutes_preferences().unwrap();
+    let profiles = storage.model_profiles().unwrap();
+    let engine = &preferences.payload.standard;
+    let input = request(&storage, false);
+    let enqueue = |input: MinutesJobRequest, expected: Option<MarkdownStamp>| {
+        generation::StartRequest {
+            input,
+            executable_path: engine.executable_path.clone().into(),
+            model_path: engine.model_path.clone().into(),
+            threads: engine.threads,
+            context_tokens: engine.context_tokens,
+            prediction_tokens: engine.prediction_tokens,
+            gpu_layers: engine.gpu_layers,
+            seed: engine.seed,
+            profile: "standard".into(),
+            prompt_budget: engine.prompt_budget,
+        }
+        .enqueue_markdown(&storage, expected)
+        .unwrap()
+    };
+    let first = enqueue(input.clone(), None);
+    let (spec, _) = storage.fixed_job_input(&first.id).unwrap();
+    assert!(
+        super::model_profiles::jobs::read(&spec.profile_snapshot)
+            .unwrap()
+            .is_some(),
+        "managed model proof must not be bypassed"
+    );
+    assert_eq!(
+        spec.parameters["generation"]["capacity"]["modelSha256"],
+        expected_model_hash
+    );
+    assert_eq!(
+        spec.parameters["generation"]["capacity"]["maxOutputTokens"],
+        8192
+    );
+    let started = std::time::Instant::now();
+    claim(&storage, &first);
+    assert_eq!(
+        process(&storage, &first.id, &|| false, &|_| {}).unwrap(),
+        Some(input.meeting_id.clone())
+    );
+    let generated = storage
+        .get_minutes_markdown(&input.meeting_id)
+        .unwrap()
+        .unwrap();
+    assert!(!generated.markdown.trim().is_empty());
+    assert_eq!(
+        generated.content_hash,
+        super::minutes_markdown::content_hash(&generated.markdown)
+    );
+    assert_eq!(storage.get_job(&first.id).unwrap().state, "succeeded");
+    assert_eq!(storage.get_job(&first.id).unwrap().output_minutes_id, None);
+    println!(
+        "{label} real managed Markdown generation: {:.3}s; {} bytes",
+        started.elapsed().as_secs_f64(),
+        generated.markdown.len()
+    );
+    let human = save(
+        &storage,
+        &input.meeting_id,
+        Some(generated.stamp()),
+        "# QA human edit\n人間が明示的に保存した点検日\n",
+    );
+    assert_eq!(
+        storage
+            .notification_output(&first.id)
+            .unwrap()
+            .publication_state,
+        "superseded"
+    );
+    let mut again = input.clone();
+    again.operation_id = Uuid::new_v4().to_string();
+    again.expected_meeting_lock_version = storage
+        .get_meeting(&input.meeting_id)
+        .unwrap()
+        .unwrap()
+        .lock_version;
+    let second = enqueue(again, Some(human.stamp()));
+    assert_eq!(
+        storage
+            .get_minutes_markdown(&input.meeting_id)
+            .unwrap()
+            .unwrap(),
+        human,
+        "enqueue cannot overwrite human text"
+    );
+    claim(&storage, &second);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        process(&storage, &second.id, &|| false, &|_| {}).unwrap(),
+        Some(input.meeting_id.clone())
+    );
+    let regenerated = storage
+        .get_minutes_markdown(&input.meeting_id)
+        .unwrap()
+        .unwrap();
+    assert!(regenerated.lock_version > human.lock_version);
+    assert_eq!(storage.get_job(&second.id).unwrap().state, "succeeded");
+    println!(
+        "{label} real managed explicit regeneration: {:.3}s; {} bytes",
+        started.elapsed().as_secs_f64(),
+        regenerated.markdown.len()
+    );
+    for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
+        assert_eq!(
+            storage
+                .connection
+                .lock()
+                .unwrap()
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    assert_eq!(storage.minutes_preferences().unwrap(), preferences);
+    assert_eq!(storage.model_profiles().unwrap(), profiles);
+    drop(storage);
+    let reopened = Storage::open_with_models(root, models).unwrap();
+    assert_eq!(
+        reopened
+            .get_minutes_markdown(&input.meeting_id)
+            .unwrap()
+            .unwrap(),
+        regenerated
+    );
+    assert_eq!(reopened.get_job(&first.id).unwrap().state, "succeeded");
+    assert_eq!(reopened.get_job(&second.id).unwrap().state, "succeeded");
+    assert_eq!(reopened.minutes_preferences().unwrap(), preferences);
+    assert_eq!(reopened.model_profiles().unwrap(), profiles);
+    println!("real managed generation, human edit, explicit overwrite and cold reopen retained; no structured revision or evidence rows");
+}
 // Share one dispatcher instantiation instead of compiling the full generation
 // pipeline again for every synthetic callback type.
 pub(in crate::storage) fn process(

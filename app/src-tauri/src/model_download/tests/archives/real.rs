@@ -3,6 +3,16 @@ use super::*;
 #[test]
 #[ignore = "requires official local assets and explicit permission for a synthetic CPU trial"]
 fn real_llama_catalog_archive_copy_and_cpu_with_reused_assets() {
+    llama_trial("llama-b11533-qwen25-15b-q4km");
+}
+
+#[test]
+#[ignore = "requires official reused assets and explicit synthetic CPU/Markdown generation permission"]
+fn real_qwen05_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets() {
+    llama_trial("llama-b11533-qwen25-05b-q4km");
+}
+
+fn llama_trial(choice: &str) {
     let archive_path =
         PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").expect("official archive path"));
     let model_path =
@@ -11,7 +21,7 @@ fn real_llama_catalog_archive_copy_and_cpu_with_reused_assets() {
         std::env::var("MON_QA_QWEN_LICENSE").expect("fixed official Qwen license path"),
     );
     trial(
-        "llama-b11533-qwen25-15b-q4km",
+        choice,
         &|url| {
             if url.ends_with(".tar.gz") {
                 archive_path.clone()
@@ -164,8 +174,9 @@ fn trial_recipe(
         receipt.report.total_bytes
     );
     let meetings = tempfile::tempdir().unwrap();
-    let storage = crate::storage::Storage::open(meetings.path().into()).unwrap();
     let models = temp.path().canonicalize().unwrap().join("models");
+    let storage =
+        crate::storage::Storage::open_with_models(meetings.path().into(), models.clone()).unwrap();
     let package = id();
     let start = Instant::now();
     place(
@@ -260,5 +271,19 @@ fn trial_recipe(
     println!(
         "test-owned profile applied; original assets, other profile and real meetings untouched"
     );
+    if recipe.manifest.engine == crate::model_inspection::Engine::Llama {
+        let model = recipe
+            .manifest
+            .files
+            .iter()
+            .find(|file| file.role == crate::model_inspection::Role::Llm)
+            .unwrap();
+        crate::storage::markdown_generation_tests::real_managed_model_markdown_roundtrip(
+            storage,
+            models,
+            model.expected_hash.as_deref().unwrap(),
+            choice_id,
+        );
+    }
     // Only test-owned copies are reclaimed by TempDir. Originals stay unchanged.
 }

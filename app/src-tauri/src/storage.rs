@@ -29,7 +29,7 @@ mod generation_tests;
 pub(crate) mod imports;
 mod jobs;
 #[cfg(all(test, unix))]
-mod markdown_generation_tests;
+pub(crate) mod markdown_generation_tests;
 mod meeting_playback;
 #[cfg(test)]
 mod initialization_tests;
