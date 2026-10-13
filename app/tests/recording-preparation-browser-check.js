@@ -54,10 +54,8 @@ async (page,capturePath,detailUI)=>{
   await boot();await page.evaluate(()=>{window.closeFixture.startBeforeCommitFailure=true;});await start().click();await accept().click();await dismissFailure();
   await workspace().getByRole("button",{name:"録音の受付結果を確認",exact:true}).click();
   check(await start().isDisabled()&&await name().isDisabled()&&await count("start_recording")===1&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"missing result was treated as permission to replay");
-  await workspace().getByRole("button",{name:"会議の操作の説明を開く",exact:true}).click();
-  const unknown=page.getByRole("dialog",{name:"会議の操作",exact:true});await unknown.waitFor();
-  check((await unknown.innerText()).includes("保存済みの会議は確認できません")&&(await unknown.innerText()).includes("新しく準備"),"unknown result omitted safe next action");
-  await page.keyboard.press("Escape");await unknown.waitFor({state:"hidden"});
+  const unknown=page.locator('.toast-host').getByRole('alert').filter({hasText:'保存済みの会議は確認できません'});await unknown.waitFor();
+  check((await unknown.innerText()).includes("新しく準備"),"unknown result omitted safe next action in its notification");
   results.push("a missing meeting after uncertain start remains unknown and never auto-retries the same creation/start");
 
   await boot();await page.evaluate(()=>{window.closeFixture.failCaptureInputs=true;});await start().click();
@@ -70,7 +68,7 @@ async (page,capturePath,detailUI)=>{
   results.push("Cmd N follows the same dedicated preparation path without creating an empty meeting");
 
   for(const width of [1280,960,360])for(const theme of ["light","dark"]){
-    await page.setViewportSize({width,height:640});await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);
+    await page.setViewportSize({width,height:640});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);
     const bounds=await workspace().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.parentElement.getBoundingClientRect();return {width:r.width,left:r.left,right:r.right,parentLeft:p.left,parentRight:p.right,overflow:e.scrollWidth>e.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth};});
     check(bounds.width<=760.1&&bounds.left>=bounds.parentLeft&&bounds.right<=bounds.parentRight+1&&!bounds.overflow&&!bounds.pageOverflow,`central preparation overflow: ${JSON.stringify(bounds)}`);

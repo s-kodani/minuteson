@@ -39,34 +39,69 @@ pub(crate) struct MeetingIntervalAudio {
 }
 impl MeetingIntervalAudio {
     pub(crate) fn new(audio: MeetingAudio, start_us: i64, end_us: i64) -> Result<Self, String> {
-        if start_us < 0 || end_us <= start_us || end_us > audio.end_us || end_us > 9_007_199_254_740_991 {
+        if start_us < 0
+            || end_us <= start_us
+            || end_us > audio.end_us
+            || end_us > 9_007_199_254_740_991
+        {
             return Err("Markdownの再生区間が会議音声の範囲外です".into());
         }
         let first_frame = output_frame(start_us)?;
         let last_frame = output_frame(end_us)?;
-        let total_frames = last_frame.checked_sub(first_frame).filter(|v| *v > 0).ok_or("再生区間に音声フレームがありません")?;
-        let mut missing_ranges: Vec<PlaybackMissingRange> = audio.missing_ranges.iter().filter_map(|gap| {
-            let start_frame = gap.start_frame.max(first_frame);
-            let end_frame = gap.end_frame.min(last_frame);
-            (start_frame < end_frame).then(|| PlaybackMissingRange {
-                track_kind: gap.track_kind.clone(), start_us: gap.start_us.max(start_us), end_us: gap.end_us.min(end_us),
-                start_frame: start_frame - first_frame, end_frame: end_frame - first_frame, reason_code: gap.reason_code.clone(),
+        let total_frames = last_frame
+            .checked_sub(first_frame)
+            .filter(|v| *v > 0)
+            .ok_or("再生区間に音声フレームがありません")?;
+        let mut missing_ranges: Vec<PlaybackMissingRange> = audio
+            .missing_ranges
+            .iter()
+            .filter_map(|gap| {
+                let start_frame = gap.start_frame.max(first_frame);
+                let end_frame = gap.end_frame.min(last_frame);
+                (start_frame < end_frame).then(|| PlaybackMissingRange {
+                    track_kind: gap.track_kind.clone(),
+                    start_us: gap.start_us.max(start_us),
+                    end_us: gap.end_us.min(end_us),
+                    start_frame: start_frame - first_frame,
+                    end_frame: end_frame - first_frame,
+                    reason_code: gap.reason_code.clone(),
+                })
             })
-        }).collect();
+            .collect();
         // Clipping can give gaps with different original starts the same
         // relative start. Restore ordering after clipping (also across tracks).
-        missing_ranges.sort_by(|a, b| (a.start_frame, a.end_frame, &a.track_kind)
-            .cmp(&(b.start_frame, b.end_frame, &b.track_kind)));
-        Ok(Self { track_kind: audio.track_kind.clone(), audio, first_frame, start_us, end_us, total_frames, missing_ranges })
+        missing_ranges.sort_by(|a, b| {
+            (a.start_frame, a.end_frame, &a.track_kind).cmp(&(
+                b.start_frame,
+                b.end_frame,
+                &b.track_kind,
+            ))
+        });
+        Ok(Self {
+            track_kind: audio.track_kind.clone(),
+            audio,
+            first_frame,
+            start_us,
+            end_us,
+            total_frames,
+            missing_ranges,
+        })
     }
     pub(crate) fn readable_frames(&self, offset: u64, frames: u64) -> Result<u64, String> {
-        if frames == 0 || offset.checked_add(frames).is_none_or(|end| end > self.total_frames) {
+        if frames == 0
+            || offset
+                .checked_add(frames)
+                .is_none_or(|end| end > self.total_frames)
+        {
             return Err("Markdown区間の読出し範囲が不正です".into());
         }
-        self.audio.readable_frames(self.first_frame + offset, frames)
+        self.audio
+            .readable_frames(self.first_frame + offset, frames)
     }
     pub(crate) fn read_pcm(&mut self, offset: u64, frames: u64) -> Result<Vec<u8>, String> {
-        if self.readable_frames(offset, frames)? != frames { return Err("Markdown区間の読出しが欠損区間を横断しています".into()); }
+        if self.readable_frames(offset, frames)? != frames {
+            return Err("Markdown区間の読出しが欠損区間を横断しています".into());
+        }
         self.audio.read_pcm(self.first_frame + offset, frames)
     }
 }

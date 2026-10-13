@@ -74,17 +74,16 @@ async page => {
 
     await page.goto("http://127.0.0.1:1420/?window=recorder"); await page.waitForFunction(() => !!window.closeFixture); await page.setViewportSize({ width: 360, height: 116 });
     await page.evaluate(() => window.closeFixture.recordChanged({ phase: "recording", sessionId: crypto.randomUUID(), meetingId: crypto.randomUUID() })); await set(1, true, 1);
-    await page.locator(".mini-input-notice").waitFor(); await page.waitForFunction(() => ["microphone", "system"].every(input => window.closeFixture.queueState.lanes[input][0].delivery.rendered));
+    await page.waitForFunction(()=>document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState==="connected");await page.waitForTimeout(650);
+    check(await calls("receive_recording_input_notice")===0&&await calls("render_recording_input_notice")===0&&await calls("close_recording_input_notice")===0,"mini consumed its unshown queue");
     await page.screenshot({ path: "input-queue-mini-360x116.png" });
     const bounds=await page.locator(".mini-shell").evaluate(e=>({height:e.clientHeight,scrollHeight:e.scrollHeight,width:e.clientWidth,scrollWidth:e.scrollWidth,rows:[...e.children].map(child=>({class:child.className,height:child.getBoundingClientRect().height,top:child.getBoundingClientRect().top,width:child.getBoundingClientRect().width}))}));
     check(bounds.scrollHeight <= bounds.height + 1 && bounds.scrollWidth <= bounds.width + 1, `queued mini notice overflowed 360x116: ${JSON.stringify(bounds)}`);
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "loss metadata disappeared");
     check(await page.locator('[data-input-kind="microphone"] > span').isVisible() && (await page.locator('[data-input-kind="microphone"]').getAttribute("title")).includes("通知履歴の一部"), "loss warning hidden by compact ellipsis");
-    results.push("independent microphone/system rendering and retained loss indication fit the native mini geometry");
-    await page.locator(".mini-input-notice").getByRole("button", { name: "入力通知を閉じる", exact: true }).click(); await page.waitForFunction(() => ["microphone", "system"].every(input => window.closeFixture.queueState.lanes[input][0]?.delivery.sequence === 2));
-    await page.waitForFunction(() => ["microphone", "system"].every(input => window.closeFixture.queueState.lanes[input][0].delivery.rendered));
-    check((await page.locator(".mini-input-notice").innerText()).includes("復帰"), "independent recoveries lost");
-    results.push("mini close advances each confirmed lane independently to its recovery");
+    results.push("independent input telemetry and retained loss indication fit the native mini geometry");
+    check(await page.evaluate(()=>["microphone","system"].every(input=>window.closeFixture.queueState.lanes[input].length===2&&window.closeFixture.queueState.lanes[input].every(n=>!n.delivery.rendered&&!n.delivery.receiveId))),"mini changed pending interruption or recovery evidence");
+    results.push("mini leaves both pending lanes and their render evidence untouched for main presentation");
     const reads = await calls("get_recording_input_status"); await page.evaluate(() => { window.closeFixture.failInputStatus = true; }); await page.waitForFunction(() => document.querySelector('[data-input-kind="microphone"]')?.dataset.inputState === "unknown");
     check(await page.locator('[data-input-kind="microphone"]').getAttribute("data-notice-history-lost") === "true", "read failure cleared retained history loss");
     check(await calls("get_recording_input_status") > reads, "read failure stopped polling");

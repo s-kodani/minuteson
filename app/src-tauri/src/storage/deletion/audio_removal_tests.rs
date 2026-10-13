@@ -218,9 +218,8 @@ fn audio_removal_preserves_all_text_rows_manifests_directories_external_and_neig
     drop(db);
     assert!(f
         .storage
-        .read_stored_minutes_state(&f.meeting)
+        .get_minutes_markdown(&f.meeting)
         .unwrap()
-        .current_id
         .is_some());
     assert!(keep_unstarted(&f.storage, &op, &lease, &|| false).is_err());
     assert!(run(&f.storage, &op, &lease, &|| false)

@@ -138,7 +138,6 @@ impl FixedWorkspace {
                 database: &self.database,
                 root: &root,
                 meeting: &meeting,
-                input: old_spec.input_analysis_id.as_deref(),
                 entries: &entries,
                 cancelled,
             };

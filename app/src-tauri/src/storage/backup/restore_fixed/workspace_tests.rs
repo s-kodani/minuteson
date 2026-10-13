@@ -58,15 +58,7 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = fixture(&storage, "workspace");
     let original_draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
-    let original_minutes = storage
-        .read_stored_minutes_state(&meeting)
-        .unwrap()
-        .current_id
-        .unwrap();
-    let original_content = storage
-        .load_minutes_content(&meeting, &original_minutes)
-        .unwrap()
-        .unwrap();
+    let original_content = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     let source = read(&storage, output.path());
     let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
         false
@@ -89,27 +81,12 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
         database.canonicalize().unwrap().to_str().unwrap()
     );
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
-    let new_minutes = ids
-        .get("minutes_revisions", &meeting, &original_minutes)
-        .unwrap();
     let tx = workspace.database.transaction().unwrap();
-    let rebuilt =
-        super::super::super::super::minutes::read_content(&tx, &new_meeting, &new_minutes)
-            .unwrap()
-            .unwrap();
-    assert_eq!(
-        rebuilt.content.items[0].body,
-        original_content.content.items[0].body
-    );
-    assert_eq!(
-        rebuilt.content.evidence[0].quote_text,
-        original_content.content.evidence[0].quote_text
-    );
-    assert_eq!(
-        rebuilt.content.evidence[0].start_us,
-        original_content.content.evidence[0].start_us
-    );
-    assert_ne!(rebuilt.content_hash, original_content.content_hash);
+    let rebuilt = crate::storage::minutes_markdown::read(&tx, &new_meeting)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rebuilt.markdown, original_content.markdown);
+    assert_eq!(rebuilt.content_hash, original_content.content_hash);
     let original_audio = storage.recorded_audio_plan(&meeting).unwrap();
     let audio =
         super::super::super::super::transcription::read_audio_plan(&tx, &new_meeting).unwrap();
@@ -190,18 +167,15 @@ fn file_backed_workspace_rebuilds_fixed_inputs_in_dependency_order_and_preserves
             .unwrap(),
         0
     );
-    // Deliberately unsealed: native checkpoints have not yet been reconstructed.
-    assert_eq!(
-        super::super::super::validate_database(&mut workspace.database, &|| false).unwrap_err(),
-        "処理の再開情報が変更されています"
-    );
+    // This current human-Markdown fixture has no pending worker checkpoint.
+    super::super::super::validate_database(&mut workspace.database, &|| false).unwrap();
     assert_eq!(
         storage.load_transcript_draft(&meeting).unwrap().unwrap(),
         original_draft
     );
     assert_eq!(
         storage
-            .load_minutes_content(&meeting, &original_minutes)
+            .get_minutes_markdown(&meeting)
             .unwrap()
             .unwrap()
             .content_hash,
@@ -372,7 +346,7 @@ fn cancellation_and_changed_verified_audio_remove_only_the_owned_workspace() {
 }
 
 #[test]
-fn every_meeting_is_reconstructed_without_cross_meeting_audio_or_evidence() {
+fn every_meeting_is_reconstructed_without_cross_meeting_audio_or_markdown() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -413,21 +387,13 @@ fn every_meeting_is_reconstructed_without_cross_meeting_audio_or_evidence() {
             serde_json::from_slice(&std::fs::read(workspace.stage.path().join(&path)).unwrap())
                 .unwrap();
         assert_eq!(manifest.meeting_id, meeting);
-        let current = storage
-            .read_stored_minutes_state(original)
-            .unwrap()
-            .current_id
-            .unwrap();
-        let revision = ids.get("minutes_revisions", original, &current).unwrap();
+        let source_body = storage.get_minutes_markdown(original).unwrap().unwrap();
         let tx = workspace.database.transaction().unwrap();
-        let content = super::super::super::super::minutes::read_content(&tx, &meeting, &revision)
+        let content = crate::storage::minutes_markdown::read(&tx, &meeting)
             .unwrap()
             .unwrap();
-        assert!(!content.content.evidence.is_empty());
-        for evidence in &content.content.evidence {
-            let owner:String=tx.query_row("SELECT a.meeting_id FROM analysis_revisions a JOIN utterances u ON u.analysis_revision_id=a.id WHERE a.id=?1 AND u.id=?2",params![evidence.analysis_revision_id,evidence.utterance_id],|r|r.get(0)).unwrap();
-            assert_eq!(owner, meeting);
-        }
+        assert_eq!(content.meeting_id, meeting);
+        assert_eq!(content.markdown, source_body.markdown);
         tx.commit().unwrap();
     }
     assert_eq!(storage.list_meetings().unwrap().len(), 2);

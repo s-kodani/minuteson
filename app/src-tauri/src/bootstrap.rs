@@ -780,6 +780,11 @@ impl Bootstrap {
 #[cfg(test)]
 pub(crate) fn set_test_root(config: &Path, data: &Path, root: &Path) {
     let b = Bootstrap::open(config, data).unwrap();
+    // A fresh bootstrap has no durable record until current storage is opened
+    // and initialized. This is fixture setup, not adoption of an old database.
+    let initial = Storage::open(b.root().to_path_buf()).unwrap();
+    b.initialize(&initial).unwrap();
+    drop(initial);
     let mut state = b.state.lock().unwrap();
     let mut record = state.loaded.as_ref().unwrap().record.clone();
     record.current = Root::inspect(root).unwrap();

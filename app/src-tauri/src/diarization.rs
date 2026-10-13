@@ -74,6 +74,7 @@ impl StartRequest {
     }
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct RetryRequest {
@@ -83,6 +84,7 @@ pub(crate) struct RetryRequest {
     pub expected_spec_hash: String,
 }
 
+#[cfg(test)]
 impl RetryRequest {
     pub(crate) fn enqueue(self, storage: &Storage) -> Result<JobSnapshot, String> {
         let job = storage.get_job(&self.job_id)?;

@@ -481,18 +481,11 @@ fn compatibility_restart_interrupts_pending_intent_without_running_or_deleting_m
 }
 
 #[test]
-fn compatibility_v23_upgrade_keeps_placement_and_backup_omits_host_runtime_trials() {
+fn compatibility_current_restart_keeps_placement_and_backup_omits_host_runtime_trials() {
     let f = fixture(Engine::Llama, None);
     let meeting = f.storage.list_meetings().unwrap();
     drop(f.storage);
-    let db = rusqlite::Connection::open(f.meetings.path().join("meetings.sqlite3")).unwrap();
-    crate::storage::model_profiles::remove_schema_for_test(&db);
-    db.execute_batch(
-        "DROP TABLE model_compatibility_checks; DELETE FROM schema_migrations WHERE version=24;",
-    )
-    .unwrap();
-    drop(db);
-    let reopened = Storage::open(f.meetings.path().into()).unwrap();
+    let reopened = Storage::open_with_models(f.meetings.path().into(), f.models.clone()).unwrap();
     assert_eq!(reopened.list_meetings().unwrap(), meeting);
     assert!(reopened
         .list_model_placements()

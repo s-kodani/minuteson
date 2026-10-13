@@ -166,9 +166,7 @@ fn step(
         "transcription" => {
             if let Some(job) = &flow.transcription_job {
                 if matches!(job.state.as_str(), "failed" | "cancelled") {
-                    if let Some(next) = storage.flow_retry(job)? {
-                        return save("transcription", flow.plan.clone(), Some(&next), None);
-                    }
+                    return save("attention", flow.plan.clone(), Some(job), None);
                 }
                 if job.state == "succeeded" {
                     return save("diarization", flow.plan.clone(), Some(job), None);
@@ -193,14 +191,12 @@ fn step(
         "diarization" => {
             if let Some(job) = &flow.diarization_job {
                 if matches!(job.state.as_str(), "failed" | "cancelled") {
-                    if let Some(next) = storage.flow_retry(job)? {
-                        return save(
-                            "diarization",
-                            flow.plan.clone(),
-                            flow.transcription_job.as_ref(),
-                            Some(&next),
-                        );
-                    }
+                    return save(
+                        "attention",
+                        flow.plan.clone(),
+                        flow.transcription_job.as_ref(),
+                        Some(job),
+                    );
                 }
                 if job.state == "succeeded" {
                     // Regeneration waits for the main window's edit barrier.

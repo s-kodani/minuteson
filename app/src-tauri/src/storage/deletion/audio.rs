@@ -48,6 +48,7 @@ pub(crate) struct Entry {
 pub(crate) struct Retained {
     pub analysis_revisions: u64,
     pub utterances: u64,
+    /// Current Markdown documents; no historical structured minutes are counted.
     pub minutes_revisions: u64,
     pub drafts: u64,
     pub edit_operations: u64,
@@ -237,7 +238,7 @@ impl Snapshot {
         Ok(Retained {
             analysis_revisions: rows("analysis_revisions")?,
             utterances: rows("utterances")?,
-            minutes_revisions: rows("minutes_revisions")?,
+            minutes_revisions: rows("minutes_markdown")?,
             drafts: rows("working_drafts")?,
             edit_operations: rows("edit_operations")?,
             evidence_links: rows("evidence_links")?,
@@ -498,7 +499,7 @@ impl Census {
         let retained = Retained {
             analysis_revisions: rows("analysis_revisions")?,
             utterances: rows("utterances")?,
-            minutes_revisions: rows("minutes_revisions")?,
+            minutes_revisions: rows("minutes_markdown")?,
             drafts: rows("working_drafts")?,
             edit_operations: rows("edit_operations")?,
             evidence_links: rows("evidence_links")?,

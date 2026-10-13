@@ -100,33 +100,69 @@ struct Census {
 impl Storage {
     // Metadata only, not a token, file hash check or permission request. Native
     // preparation still verifies every managed source and rechecks the census.
-    pub(crate) fn meeting_audio_summary(&self, meeting: &str) -> Result<MeetingAudioSummary, String> {
+    pub(crate) fn meeting_audio_summary(
+        &self,
+        meeting: &str,
+    ) -> Result<MeetingAudioSummary, String> {
         let census = self.meeting_audio_census(meeting)?;
-        if census.end > 9_007_199_254_740_991 { return Err("会議音声の時間が範囲外です".into()); }
+        if census.end > 9_007_199_254_740_991 {
+            return Err("会議音声の時間が範囲外です".into());
+        }
         let available = |kind: &str| {
             let matching: Vec<_> = census.tracks.iter().filter(|t| t.kind == kind).collect();
-            matching.len() == 1 && matching[0].state == "ready" && !matching[0].chunks.is_empty()
+            matching.len() == 1
+                && matching[0].state == "ready"
+                && !matching[0].chunks.is_empty()
                 && matching[0].chunks.iter().all(|c| c.ready)
         };
         let mut modes = Vec::new();
-        if available("mic") { modes.push(MeetingPlaybackMode::Mic); }
-        if available("system") { modes.push(MeetingPlaybackMode::System); }
-        if available("mic") && available("system") { modes.push(MeetingPlaybackMode::Both); }
-        if available("imported") { modes.push(MeetingPlaybackMode::Imported); }
-        Ok(MeetingAudioSummary { schema_version: 1, duration_us: census.end, modes })
+        if available("mic") {
+            modes.push(MeetingPlaybackMode::Mic);
+        }
+        if available("system") {
+            modes.push(MeetingPlaybackMode::System);
+        }
+        if available("mic") && available("system") {
+            modes.push(MeetingPlaybackMode::Both);
+        }
+        if available("imported") {
+            modes.push(MeetingPlaybackMode::Imported);
+        }
+        Ok(MeetingAudioSummary {
+            schema_version: 1,
+            duration_us: census.end,
+            modes,
+        })
     }
 
-    pub(crate) fn prepare_meeting_interval_cancellable(&self, request: &MeetingIntervalRequest,
-        cancelled: &impl Fn() -> bool) -> Result<MeetingIntervalAudio, String> {
-        if request.start_us < 0 || request.end_us <= request.start_us || request.end_us > request.expected_duration_us
-            || request.expected_duration_us <= 0 || request.expected_duration_us > 9_007_199_254_740_991 {
+    pub(crate) fn prepare_meeting_interval_cancellable(
+        &self,
+        request: &MeetingIntervalRequest,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<MeetingIntervalAudio, String> {
+        if request.start_us < 0
+            || request.end_us <= request.start_us
+            || request.end_us > request.expected_duration_us
+            || request.expected_duration_us <= 0
+            || request.expected_duration_us > 9_007_199_254_740_991
+        {
             return Err("Markdownの再生区間・確認済み音声時間が不正です".into());
         }
-        let audio = self.prepare_meeting_audio_cancellable(&MeetingPlaybackRequest {
-            meeting_id: request.meeting_id.clone(), mode: request.mode,
-        }, cancelled)?;
-        if audio.end_us != request.expected_duration_us { return Err("確認後に会議音声の時間が変更されました。区間を確認し直してください".into()); }
-        if cancelled() { return Err("会議音声の準備を中止しました".into()); }
+        let audio = self.prepare_meeting_audio_cancellable(
+            &MeetingPlaybackRequest {
+                meeting_id: request.meeting_id.clone(),
+                mode: request.mode,
+            },
+            cancelled,
+        )?;
+        if audio.end_us != request.expected_duration_us {
+            return Err(
+                "確認後に会議音声の時間が変更されました。区間を確認し直してください".into(),
+            );
+        }
+        if cancelled() {
+            return Err("会議音声の準備を中止しました".into());
+        }
         MeetingIntervalAudio::new(audio, request.start_us, request.end_us)
     }
     #[cfg(test)]

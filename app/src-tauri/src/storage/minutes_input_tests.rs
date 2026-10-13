@@ -257,7 +257,6 @@ fn added_and_merged_speakers_materialize_fixed_inputs_without_rewriting_old_refe
     assert_eq!(storage.load_minutes_input(&after.id).unwrap(), fixed);
 }
 
-
 #[test]
 fn input_update_detection_tracks_content_not_draft_versions_and_handles_no_draft() {
     let root = tempfile::tempdir().unwrap();
@@ -761,54 +760,4 @@ fn snapshot_revalidates_draft_ids_even_when_modified_json_has_matching_hash() {
             0
         );
     }
-}
-
-#[test]
-fn minutes_evidence_can_reference_hidden_fixed_input_after_source_reanalysis() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().to_owned()).unwrap();
-    let (request, original, _) = fixture(&storage);
-    let job = enqueue(&storage, request.clone());
-    let fixed = storage.load_minutes_input(&job.id).unwrap();
-    let evidence = &fixed.analysis.utterances[0];
-    let db = storage.connection.lock().unwrap();
-    db.execute("INSERT INTO minutes_revisions (id,meeting_id,input_analysis_id,revision_no,publication_state,generated_document_json,effective_document_json,document_schema_version,input_content_hash,content_hash,model_snapshot_json,template_version,created_at) VALUES ('minutes',?1,?2,1,'candidate','{}','{}',1,?3,?4,'{}','standard-v1',0)",params![request.meeting_id,fixed.analysis.id,fixed.analysis.content_hash,"0".repeat(64)]).unwrap();
-    db.execute("INSERT INTO minutes_items (id,minutes_revision_id,analysis_revision_id,kind,order_no,body,source_type) VALUES ('item','minutes',?1,'decision',0,'点検日を確定','engine')",params![fixed.analysis.id]).unwrap();
-    assert!(db.execute("INSERT INTO evidence_links (id,minutes_revision_id,minutes_item_id,analysis_revision_id,utterance_id,quote_text,start_us,end_us,source_type,verification_state) VALUES ('wrong','minutes','item',?1,?2,'原版',?3,?4,'engine','unverified')",params![fixed.analysis.id,original.utterances[0].id,evidence.start_us,evidence.end_us]).is_err());
-    db.execute("INSERT INTO evidence_links (id,minutes_revision_id,minutes_item_id,analysis_revision_id,utterance_id,quote_text,start_us,end_us,source_type,verification_state) VALUES ('evidence','minutes','item',?1,?2,?3,?4,?5,'engine','unverified')",params![fixed.analysis.id,evidence.id,evidence.effective_text,evidence.start_us,evidence.end_us]).unwrap();
-    drop(db);
-    let lock = storage
-        .get_meeting(&request.meeting_id)
-        .unwrap()
-        .unwrap()
-        .lock_version;
-    storage
-        .seed_stored_minutes_head(&request.meeting_id, "minutes")
-        .unwrap();
-    assert!(storage.verify_minutes_content_hash("minutes").unwrap());
-    let mut next_input = input();
-    next_input.utterances[0].text = "再解析の別内容".into();
-    let next = storage
-        .create_analysis_candidate(&request.meeting_id, next_input)
-        .unwrap();
-    let versions = storage.analysis_versions(&request.meeting_id).unwrap();
-    storage
-        .adopt_analysis(super::super::analysis_ui::AdoptRequest {
-            meeting_id: request.meeting_id.clone(),
-            revision_id: next.clone(),
-            expected_content_hash: versions
-                .versions
-                .iter()
-                .find(|v| v.id == next)
-                .unwrap()
-                .content_hash
-                .clone(),
-            expected_meeting_lock_version: versions.meeting_lock_version,
-            expected_draft: versions.draft,
-            confirm_replacing_previous: false,
-        })
-        .unwrap();
-    assert_eq!(storage.load_minutes_input(&job.id).unwrap(), fixed);
-    assert!(storage.minutes_input_updated(&job.id).unwrap());
-    assert!(storage.verify_minutes_content_hash("minutes").unwrap());
 }

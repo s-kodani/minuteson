@@ -31,7 +31,7 @@ async page=>{
     await page.evaluate(()=>{const f=window.closeFixture;f.holdWrites=false;f.pendingWrites.splice(0).forEach(resolve=>resolve());});await page.waitForTimeout(650);check(await count()===stopped,"stop retained write polling");results.push("stopping clears the write claim and a late read cannot resurrect saving");
     await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording"}));await set(1440,1440);await page.evaluate(()=>window.closeFixture.refreshWrites=true);
     for(const [width,theme] of [[1280,"light"],[960,"dark"],[360,"dark"]]){
-      await page.setViewportSize({width,height:900});await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);await states("written","written");await panel().scrollIntoViewIfNeeded();
+      await page.setViewportSize({width,height:900});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await states("written","written");await panel().scrollIntoViewIfNeeded();
       check(await panel().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&document.documentElement.scrollWidth<=innerWidth+1),`write display overflow ${width}`);
       await page.screenshot({path:`recording-writes-${width}-${theme}.png`,fullPage:true});results.push(`write evidence fits ${width}px ${theme}`);
     }

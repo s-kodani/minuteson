@@ -1,5 +1,5 @@
-//! Startup collection is explicit ownership reconciliation, never discovery by
-//! filename. Reads do not collect, and attention can be retried or left intact.
+//! Background collection is ownership reconciliation, never discovery by
+//! filename. Live writers and unverified ownership always retain their files.
 use serde::Serialize;
 use std::path::Path;
 #[cfg(target_os = "macos")]
@@ -53,10 +53,13 @@ impl Ownership {
     pub(super) fn checking(&self) -> bool {
         self.snapshot.phase == "checking"
     }
+    pub(super) fn retry_revision(&self) -> Option<u64> {
+        (self.snapshot.phase == "attention").then_some(self.snapshot.revision)
+    }
     pub(super) fn require_clear(&self) -> Result<(), String> {
         if self.blocked() {
             return Err(
-                "以前のテスト音声の所有と回収を確認してください。録音は開始していません".into(),
+                "一時テスト音声をバックグラウンドで整理しています。安全に解放できるまで録音は開始できません。少し待って再試行してください".into(),
             );
         }
         Ok(())
@@ -156,16 +159,18 @@ mod tests {
         let mut owner = Ownership::default();
         owner.configure(fixture.path()).unwrap();
         assert!(owner.blocked());
+        assert_eq!(owner.retry_revision(), None);
         for _ in 0..3 {
             assert_eq!(owner.snapshot().phase, "checking");
             assert!(path.exists());
         }
         assert_eq!(owner.reconcile().phase, "clear");
+        assert_eq!(owner.retry_revision(), None);
         assert!(!path.exists());
         assert!(!owner.blocked());
     }
     #[test]
-    fn unknown_payload_stays_visible_and_retry_rejects_stale_revision() {
+    fn unknown_payload_is_retained_and_background_retry_rejects_stale_revision() {
         let fixture = tempfile::tempdir().unwrap();
         let registry = crate::capture_test::journal::Registry::open(fixture.path()).unwrap();
         let area = registry
@@ -180,17 +185,20 @@ mod tests {
         owner.configure(fixture.path()).unwrap();
         let status = owner.reconcile();
         assert_eq!(status.phase, "attention");
+        assert_eq!(owner.retry_revision(), Some(status.revision));
         assert_eq!(status.run_id.as_deref(), Some(id.as_str()));
         assert!(owner.require_clear().is_err());
         assert!(owner.require_retry(status.revision - 1).is_err());
         assert!(path.exists());
         owner.require_retry(status.revision).unwrap();
         assert_eq!(owner.reconcile().phase, "attention");
+        assert_ne!(owner.retry_revision(), Some(status.revision));
         assert!(owner.require_retry(status.revision).is_err());
         // Explicit fixture repair, never a production deletion fallback.
         std::fs::remove_file(path.join("unregistered")).unwrap();
         assert_eq!(owner.reconcile().phase, "clear");
         assert!(!path.exists());
+        assert_eq!(owner.retry_revision(), None);
     }
     #[test]
     fn untrusted_root_does_not_abort_or_reset_the_application_and_cannot_admit_capture() {

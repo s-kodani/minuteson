@@ -135,7 +135,6 @@ impl FixedWorkspace {
                 database: &self.database,
                 root: &root,
                 meeting: &meeting,
-                input: old_spec.input_analysis_id.as_deref(),
                 entries: &entries,
                 cancelled,
             };
@@ -262,10 +261,6 @@ fn replay(
         cancelled,
     )
 }
-
-#[cfg(all(test, unix))]
-#[path = "generation_tests.rs"]
-mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "markdown_tests.rs"]

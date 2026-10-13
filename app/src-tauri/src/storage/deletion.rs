@@ -3,9 +3,9 @@
 #[cfg(unix)]
 pub(crate) mod audio;
 #[cfg(unix)]
-pub(crate) mod automatic;
-#[cfg(unix)]
 mod audio_supersession;
+#[cfg(unix)]
+pub(crate) mod automatic;
 #[cfg(unix)]
 mod completion;
 mod database;

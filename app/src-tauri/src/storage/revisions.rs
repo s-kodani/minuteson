@@ -149,24 +149,6 @@ impl Storage {
     }
 
     #[allow(dead_code)]
-    pub fn verify_minutes_content_hash(&self, revision_id: &str) -> Result<bool, String> {
-        let mut connection = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|error| error.to_string())?;
-        let expected: Option<String> = transaction.query_row(
-            "SELECT content_hash FROM minutes_revisions WHERE id = ?1 AND publication_state = 'committed'",
-            params![revision_id],
-            |row| row.get(0),
-        ).optional().map_err(|error| error.to_string())?;
-        let expected = expected.ok_or("確定済み議事録版が見つかりません")?;
-        Ok(expected == minutes_content_hash(&transaction, revision_id)?)
-    }
-
-    #[allow(dead_code)]
     pub fn restore_previous_analysis(
         &self,
         meeting_id: &str,
@@ -236,7 +218,6 @@ impl Storage {
             meeting_lock_version: lock_version + 1,
         })
     }
-
 }
 
 pub(super) fn analysis_content_hash(
@@ -251,22 +232,6 @@ pub(super) fn analysis_content_hash(
         ("segments", "SELECT id, track_id, speaker_id, start_us, end_us, overlap_group_id, confidence FROM speaker_segments WHERE analysis_revision_id = ?1 ORDER BY id"),
         ("utterances", "SELECT id, track_id, lineage_id, sequence, start_us, end_us, recognized_text, effective_text, attribution_state, confidence FROM utterances WHERE analysis_revision_id = ?1 ORDER BY sequence, id"),
         ("assignments", "SELECT utterance_id, speaker_id, role, assignment_source FROM utterance_speakers WHERE analysis_revision_id = ?1 ORDER BY utterance_id, speaker_id"),
-    ] {
-        hash_rows(transaction, &mut hasher, marker, sql, params![revision_id])?;
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-pub(super) fn minutes_content_hash(
-    transaction: &Transaction<'_>,
-    revision_id: &str,
-) -> Result<String, String> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"mon-minutes-content-v1");
-    for (marker, sql) in [
-        ("revision", "SELECT meeting_id, input_analysis_id, parent_revision_id, revision_no, parent_content_hash, generated_document_json, effective_document_json, document_schema_version, input_content_hash, model_snapshot_json, template_version FROM minutes_revisions WHERE id = ?1"),
-        ("items", "SELECT id, analysis_revision_id, kind, order_no, body, assignee_name, assignee_speaker_id, due_date, due_text, source_type FROM minutes_items WHERE minutes_revision_id = ?1 ORDER BY order_no, id"),
-        ("evidence", "SELECT id, minutes_item_id, analysis_revision_id, utterance_id, quote_text, start_us, end_us, source_type, verification_state FROM evidence_links WHERE minutes_revision_id = ?1 ORDER BY id"),
     ] {
         hash_rows(transaction, &mut hasher, marker, sql, params![revision_id])?;
     }
@@ -409,5 +374,4 @@ mod tests {
         let switched_back = storage.restore_previous_analysis(&meeting.id, 4).unwrap();
         assert_eq!(switched_back.id, "analysis-3");
     }
-
 }

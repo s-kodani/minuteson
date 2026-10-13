@@ -2,6 +2,7 @@
 async page => {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const editor = page.getByRole("region", {name:"文字起こし編集",exact:true});
+  await page.getByRole("button", {name:"会議A",exact:true}).click();
   await page.getByRole("button", {name:"再生設定",exact:true}).click();
   const modal = page.getByRole("dialog", {name:"再生設定",exact:true});
   await modal.waitFor();

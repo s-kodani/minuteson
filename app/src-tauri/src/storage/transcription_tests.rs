@@ -397,7 +397,6 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
     );
 }
 
-
 #[test]
 fn retry_preflight_rejects_changed_files_and_checkpoint_without_new_job() {
     for change in ["source", "model", "result", "checkpoint", "meeting", "hash"] {

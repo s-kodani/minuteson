@@ -120,9 +120,8 @@ fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_
     assert_eq!(std::fs::read(&f.path).unwrap(), b"PRIVATE AUDIO BODY");
     assert_eq!(
         f.storage
-            .read_stored_minutes_state(&f.meeting)
+            .get_minutes_markdown(&f.meeting)
             .unwrap()
-            .current_id
             .is_some(),
         true
     );

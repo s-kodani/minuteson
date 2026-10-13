@@ -143,15 +143,42 @@ fn obsolete_backup_versions_are_rejected_before_staging_without_changing_existin
 }
 
 #[test]
-fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_without_host_paths() {
+fn archive_preserves_audio_options_text_markdown_and_model_metadata_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let id = meeting(&storage, "import");
-    let revision = super::super::super::stored_minutes_fixture::candidate(&storage, &id);
-    storage
-        .seed_stored_minutes_head(&id, &revision)
+    let source = storage.load_current_analysis(&id).unwrap().unwrap();
+    let draft = storage.load_transcript_draft(&id).unwrap().unwrap();
+    let engine = crate::storage::markdown_generation_tests::engine(root.path(), "normal");
+    let model_hash = engine.model.sha256.clone();
+    let generated = crate::generation::markdown_job::enqueue_synthetic(
+        &storage,
+        crate::storage::MinutesJobRequest {
+            meeting_id: id.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected_analysis_id: source.id,
+            expected_content_hash: source.content_hash,
+            expected_meeting_lock_version: storage.get_meeting(&id).unwrap().unwrap().lock_version,
+            expected_draft: Some(crate::storage::DraftStamp {
+                id: draft.id,
+                lock_version: draft.lock_version,
+            }),
+        },
+        engine,
+        "standard",
+        2400,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        storage.acquire_local_inference_job().unwrap().unwrap().id,
+        generated.id
+    );
+    crate::storage::markdown_generation_tests::process(&storage, &generated.id, &|| false, &|_| {})
+        .unwrap()
         .unwrap();
+    let markdown = storage.get_minutes_markdown(&id).unwrap().unwrap();
     storage
         .save_analysis_preferences(
             0,
@@ -167,21 +194,34 @@ fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_withou
     let (path, receipt) = write(&storage, output.path());
     let archive = verified(&path, output.path());
     assert_eq!(receipt.meeting_count, 1);
-    assert_eq!(receipt.asset_count, 3);
+    assert!(receipt.asset_count >= 3);
+    assert_eq!(receipt.asset_count, archive.manifest.entries.len() - 1);
     assert_eq!(receipt.sha256, digest_file(&path, &|| false).unwrap().1);
     assert_eq!(archive.manifest.encryption, Encryption::None);
     assert_eq!(archive.manifest.hash_basis, HashBasis::SourceIdentity);
-    assert_eq!(archive.manifest.file_references.len(), 2);
+    // The committed transcript carries two model references and the current
+    // Markdown job carries two more; none includes source-machine paths.
+    assert_eq!(archive.manifest.file_references.len(), 4);
+    for (name, sha256) in [
+        ("model.gguf", "b".repeat(64)),
+        ("llama.exe", "c".repeat(64)),
+    ] {
+        assert!(archive
+            .manifest
+            .file_references
+            .iter()
+            .any(|r| r.name == name && r.sha256 == sha256));
+    }
     assert!(archive
         .manifest
         .file_references
         .iter()
-        .any(|r| r.name == "model.gguf" && r.sha256 == "b".repeat(64)));
+        .any(|r| r.name == "model.gguf" && r.sha256 == model_hash));
     assert!(archive
         .manifest
         .file_references
         .iter()
-        .any(|r| r.name == "llama.exe" && r.role == "executable"));
+        .any(|r| r.name == "llama-completion" && r.role == "executable"));
     let bytes = std::fs::read(&path).unwrap();
     assert!(!bytes
         .windows(b"source-machine".len())
@@ -194,7 +234,12 @@ fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_withou
             r.get(0)
         })
         .unwrap();
-    assert_eq!(serde_json::from_str::<ImportOptions>(&config).unwrap().expected_global_version, None);
+    assert_eq!(
+        serde_json::from_str::<ImportOptions>(&config)
+            .unwrap()
+            .expected_global_version,
+        None
+    );
     assert!(!config.contains("profile"));
     assert_eq!(
         archive
@@ -210,7 +255,18 @@ fn archive_preserves_audio_options_text_fixed_evidence_and_model_metadata_withou
             .query_row("SELECT COUNT(*) FROM evidence_links", [], |r| r
                 .get::<_, i64>(0))
             .unwrap(),
-        1
+        0
+    );
+    assert_eq!(
+        archive
+            .database
+            .query_row(
+                "SELECT markdown FROM minutes_markdown WHERE meeting_id=?1",
+                [&id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        markdown.markdown
     );
     for entry in &archive.manifest.entries[1..] {
         if entry.transform == Transform::Identity {

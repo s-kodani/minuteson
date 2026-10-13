@@ -11,7 +11,7 @@ test("meeting title precedes tabs and all fixed chrome participates in dock sizi
 test("meeting actions align with tabs in normal flow and wrapped navigation is measured", () => {
   const main=source("main.tsx"), css=source("prototype-alignment.css");
   assert.match(main,/className="meeting-detail-actions" ref=\{setMeetingActionsHost\}/);
-  assert.match(main,/triggerHost=\{detail \? meetingActionsHost : null\}/);
+  assert.match(main,/triggerHost=\{meetingActionsHost\}/);
   assert.match(main,/navigation\?\.getBoundingClientRect\(\)\.height/);
   assert.match(css,/\.meeting-detail-navigation \{[^}]*align-items:center; flex-wrap:wrap; gap:8px 16px;/);
   assert.match(css,/\.meeting-detail-navigation>\.meeting-detail-tabs \{ flex:1 1 162px;/);
@@ -158,11 +158,12 @@ test("workspace search fields override inherited input fonts and retain consiste
 });
 
 
-test("minutes settings group portaled management with reload and generation without touching actions", () => {
+test("minutes actions remain direct without an operations modal", () => {
   const css=source("minutes-markdown-editor.css"), minutes=source("minutes.tsx");
-  assert.match(minutes,/<div className="plain-minutes-option-actions">/);
-  assert.match(css,/\.plain-minutes-option-actions,\.confirmation-actions \{ display:flex; align-items:center; flex-wrap:wrap; gap:12px;/);
-  assert.match(css,/\.plain-minutes-options-body \{ display:grid; gap:20px;/);
+  assert.doesNotMatch(minutes,/OptionsModal|plain-minutes-option-actions|plain-minutes-options-body/);
+  assert.match(minutes,/className="plain-minutes-primary-actions"/);
+  assert.match(css,/\.confirmation-actions \{ display:flex; align-items:center; flex-wrap:wrap; gap:12px;/);
+  assert.doesNotMatch(css,/plain-minutes-option-actions|plain-minutes-options-body/);
   assert.doesNotMatch(minutes,/save_minutes_preferences|engine-numbers|executablePath.*<input/);
 });
 

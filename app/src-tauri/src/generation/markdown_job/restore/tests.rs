@@ -54,9 +54,6 @@ impl Assets for MemoryAssets {
         self.target.insert(id.clone(), bytes.to_vec());
         Ok((id, format!("{:x}", Sha256::digest(bytes))))
     }
-    fn map(&mut self, _: &str, _: &str) -> Result<String, String> {
-        panic!("Markdown does not map utterance/evidence IDs");
-    }
 }
 struct Fixture {
     old_input: MinutesInput,
@@ -100,7 +97,7 @@ impl Fixture {
 }
 const EXACT:&str=" \r\n# 点検日\n自然文のutteranceや /Users/fictional は保持\n[区間](audio:00:00:00.100001-00:00:00.799999)\n";
 fn fixture(long: bool, pending: bool, queued: bool) -> Fixture {
-    let mut old_input = crate::minutes_document::tests::input();
+    let mut old_input = crate::storage::current_minutes_fixture::input();
     if long {
         old_input.analysis.utterances[0].effective_text = "点検日について確認する。".repeat(150);
     }

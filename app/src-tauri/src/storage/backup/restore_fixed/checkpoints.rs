@@ -28,54 +28,6 @@ impl FixedData<'_, '_> {
         )
     }
 
-    pub(in crate::storage::backup) fn generation_items(
-        &self,
-        meeting: &str,
-        input: &str,
-        bytes: &[u8],
-    ) -> Result<Vec<u8>, String> {
-        if bytes.len() > 2 * 1024 * 1024 {
-            return Err("生成項目が容量上限を超えています".into());
-        }
-        self.ids.get("analysis_revisions", meeting, input)?;
-        let mut items: Vec<crate::minutes_document::GeneratedItem> =
-            serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        if items.len() > 10_000 {
-            return Err("生成項目数が上限を超えています".into());
-        }
-        for item in &mut items {
-            if let Some(id) = &mut item.assignee_speaker_id {
-                self.fixed_member("speakers", meeting, input, id)?;
-                *id = self.ids.get("speakers", meeting, id)?;
-            }
-            for id in &mut item.evidence_utterance_ids {
-                self.fixed_member("utterances", meeting, input, id)?;
-                *id = self.ids.get("utterances", meeting, id)?;
-            }
-        }
-        let result = serde_json::to_vec(&items).map_err(|e| e.to_string())?;
-        if result.len() > 2 * 1024 * 1024 {
-            return Err("再構成した生成項目が容量上限を超えています".into());
-        }
-        Ok(result)
-    }
-
-    fn fixed_member(
-        &self,
-        domain: &str,
-        meeting: &str,
-        input: &str,
-        id: &str,
-    ) -> Result<(), String> {
-        if !matches!(domain, "speakers" | "utterances") {
-            return Err("固定参照の種別が不正です".into());
-        }
-        let exists:bool=self.ids.source().database.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {domain} e JOIN analysis_revisions a ON a.id=e.analysis_revision_id WHERE e.id=?1 AND a.id=?2 AND a.meeting_id=?3)"),params![id,input,meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if !exists {
-            return Err("生成結果の参照が固定した会議・解析版と一致しません".into());
-        }
-        Ok(())
-    }
     pub(in crate::storage::backup) fn checkpoint(
         &self,
         meeting: &str,

@@ -397,7 +397,6 @@ pub(in crate::storage) fn pause_after_first(storage: &Storage, job: &str) {
     assert_eq!(storage.get_job(job).unwrap().state, "paused");
 }
 
-
 #[test]
 fn fixed_speaker_count_is_applied_to_each_explicit_track_without_a_quality_claim() {
     let root = tempfile::tempdir().unwrap();

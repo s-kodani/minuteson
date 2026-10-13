@@ -82,7 +82,7 @@ async page=>{
     await report({rms:0.25,peak:0.5},{rms:0,peak:0});
     await page.evaluate(()=>{window.closeFixture.refreshInputLevels=true;});
     for(const width of [1280,960,360])for(const theme of ["light","dark"]){
-      await page.setViewportSize({width,height:640});await page.getByRole("banner").getByRole("combobox",{name:"表示テーマ",exact:true}).selectOption(theme);
+      await page.setViewportSize({width,height:640});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
       await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);
       await waitStates("measured","measured");await panel().locator('.recording-track-status').scrollIntoViewIfNeeded();
       check(await panel().getByRole("meter").count()===2,"independent level meters disappeared");

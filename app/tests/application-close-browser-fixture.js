@@ -75,15 +75,7 @@ mockIPC(async (command, args) => {
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
   if (command === "get_recording_snapshot") {if(f.failRecordingSnapshot)throw Error("模擬録音状態取得失敗");return clone(f.recording);}
-  if(command==="get_capture_test_recovery"){
-    if(f.recoveryReadFailure)throw Error("模擬テスト回復状態読戻し失敗");return clone(f.captureRecovery);
-  }
-  if(command==="retry_capture_test_recovery"){
-    if(args.expectedRevision!==f.captureRecovery.revision||f.captureRecovery.phase!=="attention"||f.captureTest)throw Error("模擬回復状態変更／現在のテストあり");
-    f.captureRecovery={...f.captureRecovery,revision:f.captureRecovery.revision+1,...(f.recoveryRetryKeepsAttention?{}:{phase:"clear",runId:null,errorMessage:null})};
-    const result=clone(f.captureRecovery);if(f.recoveryRetryHoldAck)await new Promise(resolve=>f.recoveryPendingReplies.push(resolve));
-    if(f.recoveryRetryLost)throw Error("模擬回収応答喪失");return result;
-  }
+  if(["get_capture_test_recovery","retry_capture_test_recovery"].includes(command))throw Error("removed cleanup UI command");
   if(command==="get_capture_test_snapshot"){
     if(f.testReadFailure)throw Error("模擬テスト状態読戻し失敗");
     if(args?.runId&&args.runId!==f.captureTest?.runId)throw Error("模擬テスト所有変更");return clone(f.captureTest);

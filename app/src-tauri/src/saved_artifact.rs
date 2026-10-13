@@ -9,7 +9,6 @@ pub(crate) enum Role {
     GenerationPrompt,
     GenerationSchema,
     GenerationRaw,
-    GenerationItems,
 }
 
 impl Role {
@@ -41,5 +40,4 @@ pub(crate) trait RestoreAssets {
         hash: &str,
         bytes: &[u8],
     ) -> Result<(String, String), String>;
-    fn map(&mut self, domain: &str, id: &str) -> Result<String, String>;
 }

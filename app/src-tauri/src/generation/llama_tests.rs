@@ -315,35 +315,16 @@ fn real_llama_completion_runs_local_schema_constrained_json() {
         seed: 1,
     };
     let dir = tempfile::tempdir().unwrap();
-    let mut input = crate::minutes_document::tests::input();
-    input.analysis.utterances[0].effective_text = "点検日を確認することに決まりました。".into();
-    let ids = vec![input.analysis.utterances[0].id.clone()];
-    let mut schema = crate::generation::result::schema(&input, &ids).unwrap();
-    // A one-item synthetic protocol test, not a recall/quality evaluation.
-    schema["properties"]["items"]["minItems"] = json!(1);
-    schema["properties"]["items"]["maxItems"] = json!(1);
+    let schema = crate::generation::markdown::schema();
     let result = run_unit(
-        &config,
-        dir.path(),
-        "会議の明示的な決定事項1件だけをJSONで抽出してください。担当者・期限は推測せずnullにしてください。根拠IDには入力の発言IDを使い、schemaVersionは1です。",
-        "発言ID: utterance。発言: 点検日を確認することに決まりました。担当者名・話者ID・日付・期限の表現はすべてnullで返してください。",
-        &schema,
-        Duration::from_secs(180),
-        &|| false,
-    )
-    .unwrap()
-    .unwrap();
-    let document = crate::generation::result::document(result, &input, &ids).unwrap();
-    assert_eq!(document.items.len(), 1);
-    assert_eq!(document.evidence[0].utterance_id, ids[0]);
-    assert_eq!(
-        document.evidence[0].quote_text,
-        input.analysis.utterances[0].effective_text
-    );
-    assert!(document
-        .markdown(&input)
+        &config, dir.path(), crate::generation::markdown::system(),
+        "点検日を確認することに決まりました。短いMarkdown議事録をJSONのmarkdownフィールドに返してください。",
+        &schema, Duration::from_secs(180), &|| false,
+    ).unwrap().unwrap();
+    assert!(!crate::generation::markdown::text(result)
         .unwrap()
-        .contains("発言ID: utterance"));
+        .trim()
+        .is_empty());
     assert!(dir.path().join("result.json").is_file());
     println!(
         "real llama.cpp constrained JSON: CLI SHA {}, model SHA {}, CPU only, context {}",

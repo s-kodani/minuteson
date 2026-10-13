@@ -473,6 +473,17 @@ fn validate_database_contents(
     db: &mut Connection,
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
+    for table in ["minutes_revisions", "minutes_items", "evidence_links"] {
+        check_cancelled(cancelled)?;
+        let retired: bool = db
+            .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        if retired {
+            return Err("旧形式の構造化議事録を含むデータには対応していません".into());
+        }
+    }
     input_snapshots::validate_database(db, cancelled)?;
     // Validate native selections and imported, unavailable catalog history.
     super::model_profiles::portable::history::Bundle::export(db, cancelled)?;
@@ -493,10 +504,7 @@ fn validate_database_contents(
         return Err("DBスナップショットの参照または構造が破損しています".into());
     }
     let tx = db.transaction().map_err(|e| e.to_string())?;
-    for (table, kind) in [
-        ("analysis_revisions", "解析"),
-        ("minutes_revisions", "議事録"),
-    ] {
+    for (table, kind) in [("analysis_revisions", "解析")] {
         let mut statement = tx
             .prepare(&format!("SELECT id,content_hash FROM {table} ORDER BY id"))
             .map_err(|e| e.to_string())?;
@@ -505,11 +513,7 @@ fn validate_database_contents(
             check_cancelled(cancelled)?;
             let id: String = row.get(0).map_err(|e| e.to_string())?;
             let expected: String = row.get(1).map_err(|e| e.to_string())?;
-            let actual = if table == "analysis_revisions" {
-                super::revisions::analysis_content_hash(&tx, &id)?
-            } else {
-                super::revisions::minutes_content_hash(&tx, &id)?
-            };
+            let actual = super::revisions::analysis_content_hash(&tx, &id)?;
             if expected != actual {
                 return Err(format!("{kind}版の内容ハッシュが一致しません"));
             }
@@ -528,26 +532,7 @@ fn validate_database_contents(
                 .ok_or("保存済み下書きが見つかりません")?;
             super::drafts::validate_payload(&tx, &base, draft.payload)?;
         } else {
-            let base: String = row.get(3).map_err(|e| e.to_string())?;
-            let json: String = row.get(4).map_err(|e| e.to_string())?;
-            let hash: String = row.get(5).map_err(|e| e.to_string())?;
-            let schema: i64 = row.get(6).map_err(|e| e.to_string())?;
-            if schema != 1
-                || json.len() > 2 * 1024 * 1024
-                || super::minutes_drafts::hash(&json) != hash
-            {
-                return Err("議事録下書きの形式・内容ハッシュが不正です".into());
-            }
-            // Archived inactive drafts are durable too. UI load intentionally
-            // hides revisions outside the two heads, so read the fixed base here.
-            let (analysis, hash, document): (String,String,String) = tx.query_row(
-                "SELECT input_analysis_id,input_content_hash,effective_document_json FROM minutes_revisions WHERE id=?1 AND meeting_id=?2 AND publication_state='committed'",
-                params![base,meeting], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-            ).map_err(|e| e.to_string())?;
-            let input = super::minutes_input::read_snapshot(&tx, &meeting, &analysis, &hash)?;
-            let payload = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            let base = serde_json::from_str(&document).map_err(|e| e.to_string())?;
-            super::minutes_drafts::validate(&payload, &base, &input)?;
+            return Err("旧形式の議事録下書きには対応していません".into());
         }
     }
     let mut statement = tx
@@ -588,11 +573,10 @@ fn validate_database_contents(
         let before: String = row.get(5).map_err(|e| e.to_string())?;
         let after: String = row.get(6).map_err(|e| e.to_string())?;
         let current: String = row.get(7).map_err(|e| e.to_string())?;
-        let hash = if kind == "transcript" {
-            super::drafts::draft_hash
-        } else {
-            super::minutes_drafts::hash
-        };
+        if kind != "transcript" {
+            return Err("旧形式の議事録編集履歴には対応していません".into());
+        }
+        let hash = super::drafts::draft_hash;
         if hash(&payload) != after || hash(&inverse) != before {
             return Err("保存済み編集履歴の内容が変更されています".into());
         }

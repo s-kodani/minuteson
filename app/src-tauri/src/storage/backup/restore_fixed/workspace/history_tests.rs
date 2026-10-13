@@ -12,48 +12,107 @@ struct Fixture {
 fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stale_human_edits() {
     for later_edit in [false, true] {
         let mut f = fixture(true);
-        let base = f.storage.load_current_analysis(&f.meeting).unwrap().unwrap();
-        let draft = f.storage.create_transcript_draft(&f.meeting, &base.id).unwrap();
+        let base = f
+            .storage
+            .load_current_analysis(&f.meeting)
+            .unwrap()
+            .unwrap();
+        let draft = f
+            .storage
+            .create_transcript_draft(&f.meeting, &base.id)
+            .unwrap();
         let request = crate::storage::analysis_flows::regeneration::Request {
-            meeting_id: f.meeting.clone(), operation_id: Uuid::new_v4().to_string(),
+            meeting_id: f.meeting.clone(),
+            operation_id: Uuid::new_v4().to_string(),
             expected: f.storage.regeneration_admission(&f.meeting).unwrap(),
         };
-        f.storage.regenerate_analysis(&request, &||false).unwrap();
-        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        f.storage.regenerate_analysis(&request, &|| false).unwrap();
+        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
         let trans = f.storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::transcription::process(&f.storage, &trans.id, &||false, &|_|{}).unwrap().unwrap();
-        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        crate::transcription::process(&f.storage, &trans.id, &|| false, &|_| {})
+            .unwrap()
+            .unwrap();
+        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
         let diar = f.storage.acquire_local_inference_job().unwrap().unwrap();
-        crate::diarization::process(&f.storage, &diar.id, &||false, &|_|{}).unwrap().unwrap();
-        crate::analysis_flow::advance(&f.storage, &||false, &|_|{}).unwrap();
+        crate::diarization::process(&f.storage, &diar.id, &|| false, &|_| {})
+            .unwrap()
+            .unwrap();
+        crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
         if later_edit {
             let mut payload = draft.payload.clone();
-            payload.utterances.push(crate::storage::drafts::UtteranceEdit {
-                utterance_id: base.utterances[0].id.clone(), effective_text:"後続の手動修正".into(), speaker_ids:vec![],
-            });
-            f.storage.save_transcript_draft(&draft.id, draft.lock_version, payload).unwrap();
+            payload
+                .utterances
+                .push(crate::storage::drafts::UtteranceEdit {
+                    utterance_id: base.utterances[0].id.clone(),
+                    effective_text: "後続の手動修正".into(),
+                    speaker_ids: vec![],
+                });
+            f.storage
+                .save_transcript_draft(&draft.id, draft.lock_version, payload)
+                .unwrap();
         }
         f.flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
         assert!(f.flow.ready_to_publish);
-        let output = tempfile::tempdir().unwrap(); let source = read(&f, output.path());
-        let ids = ids(&source, output.path()); let fixed = FixedData::new(&ids, output.path(), &||false).unwrap();
-        let mut work = prepared(&fixed, output.path()).with_processing_history(&fixed, &||false).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let source = read(&f, output.path());
+        let ids = ids(&source, output.path());
+        let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
+        let mut work = prepared(&fixed, output.path())
+            .with_processing_history(&fixed, &|| false)
+            .unwrap();
         let meeting = ids.get("meetings", "", &f.meeting).unwrap();
-        let flow = crate::storage::analysis_flows::read_flow(&work.database, &meeting).unwrap().unwrap();
-        assert_eq!(flow.stage,"attention"); assert!(!flow.ready_to_publish);
+        let flow = crate::storage::analysis_flows::read_flow(&work.database, &meeting)
+            .unwrap()
+            .unwrap();
+        assert_eq!(flow.stage, "attention");
+        assert!(!flow.ready_to_publish);
         let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
         let target = plan.replacement.unwrap();
-        assert_eq!(target.analysis_id, ids.get("analysis_revisions", &f.meeting, &base.id).unwrap());
-        let stamp = target.draft.unwrap(); assert_eq!(stamp.id, ids.get("working_drafts", &f.meeting, &draft.id).unwrap());
-        assert_eq!(stamp.lock_version,draft.lock_version);
-        let saved_version:i64 = work.database.query_row("SELECT lock_version FROM working_drafts WHERE id=?1",params![stamp.id],|r|r.get(0)).unwrap();
-        assert_eq!(saved_version,draft.lock_version+i64::from(later_edit));
-        let head:String=work.database.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1",params![meeting],|r|r.get(0)).unwrap();
-        assert_eq!(head,target.analysis_id);
-        crate::storage::backup::validate_database(&mut work.database, &||false).unwrap();
+        assert_eq!(
+            target.analysis_id,
+            ids.get("analysis_revisions", &f.meeting, &base.id).unwrap()
+        );
+        let stamp = target.draft.unwrap();
+        assert_eq!(
+            stamp.id,
+            ids.get("working_drafts", &f.meeting, &draft.id).unwrap()
+        );
+        assert_eq!(stamp.lock_version, draft.lock_version);
+        let saved_version: i64 = work
+            .database
+            .query_row(
+                "SELECT lock_version FROM working_drafts WHERE id=?1",
+                params![stamp.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved_version, draft.lock_version + i64::from(later_edit));
+        let head: String = work
+            .database
+            .query_row(
+                "SELECT current_analysis_id FROM meetings WHERE id=?1",
+                params![meeting],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(head, target.analysis_id);
+        crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
         drop(work);
-        crate::storage::backup::restore_fixed::workspace::seal::SealedWorkspace::prepare(&fixed, output.path(), &||false).unwrap().verify(&||false).unwrap();
-        assert_eq!(f.storage.load_current_analysis(&f.meeting).unwrap().unwrap(),base);
+        crate::storage::backup::restore_fixed::workspace::seal::SealedWorkspace::prepare(
+            &fixed,
+            output.path(),
+            &|| false,
+        )
+        .unwrap()
+        .verify(&|| false)
+        .unwrap();
+        assert_eq!(
+            f.storage
+                .load_current_analysis(&f.meeting)
+                .unwrap()
+                .unwrap(),
+            base
+        );
     }
 }
 fn fixture(complete: bool) -> Fixture {
@@ -172,12 +231,30 @@ fn processing_history_restores_completed_flow_operation_plan_hash_and_published_
     .unwrap());
     tx.commit().unwrap();
     crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
-    assert_eq!(f
-        .storage
-        .load_current_analysis(&f.meeting)
-        .unwrap()
-        .unwrap().id, f.flow.diarization_job.as_ref().unwrap().output_analysis_id.as_deref().unwrap());
-    assert_eq!(work.database.query_row("SELECT current_analysis_id FROM meetings WHERE id=?1", params![meeting], |r| r.get::<_, String>(0)).unwrap(), *candidate);
+    assert_eq!(
+        f.storage
+            .load_current_analysis(&f.meeting)
+            .unwrap()
+            .unwrap()
+            .id,
+        f.flow
+            .diarization_job
+            .as_ref()
+            .unwrap()
+            .output_analysis_id
+            .as_deref()
+            .unwrap()
+    );
+    assert_eq!(
+        work.database
+            .query_row(
+                "SELECT current_analysis_id FROM meetings WHERE id=?1",
+                params![meeting],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        *candidate
+    );
     assert_eq!(
         f.storage.analysis_flow(&f.meeting).unwrap().unwrap().plan,
         f.flow.plan
@@ -251,10 +328,11 @@ fn persisted_ids_replay_native_speech_generation_history_and_files_after_restart
         "sherpa-cli",
         "seg.onnx",
         "emb.onnx",
-        "llama-completion",
-        "model.gguf",
     ] {
         std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    for name in ["llama-completion", "model.gguf"] {
+        std::fs::remove_file(f.root.path().join("markdown-worker").join(name)).unwrap();
     }
     let first = build(&ids, output.path());
     let expected: Vec<_> = portable::tables(&first.database)
@@ -384,10 +462,11 @@ fn restore_seal_native_speech_generation_history_and_missing_assets_without_mode
         "sherpa-cli",
         "seg.onnx",
         "emb.onnx",
-        "llama-completion",
-        "model.gguf",
     ] {
         std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    for name in ["llama-completion", "model.gguf"] {
+        std::fs::remove_file(f.root.path().join("markdown-worker").join(name)).unwrap();
     }
     let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
     let db = sealed.connection();
@@ -468,10 +547,11 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
         "sherpa-cli",
         "seg.onnx",
         "emb.onnx",
-        "llama-completion",
-        "model.gguf",
     ] {
         std::fs::remove_file(f.root.path().join(name)).unwrap();
+    }
+    for name in ["llama-completion", "model.gguf"] {
+        std::fs::remove_file(f.root.path().join("markdown-worker").join(name)).unwrap();
     }
     let sealed = SealedWorkspace::prepare(&fixed, output.path(), &|| false).unwrap();
     let before = all_rows(&existing.storage.connection.lock().unwrap());
@@ -538,7 +618,7 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
         .is_some());
     assert!(existing
         .storage
-        .read_stored_minutes_draft(&meeting, None)
+        .get_minutes_markdown(&meeting)
         .unwrap()
         .is_some());
     assert!(existing
@@ -553,10 +633,7 @@ fn restore_publication_native_history_preserves_existing_edits_files_and_reopens
     let reopened = Storage::open(root).unwrap();
     assert_eq!(reopened.list_meetings().unwrap().len(), 2);
     assert!(reopened.load_current_analysis(&meeting).unwrap().is_some());
-    assert!(reopened
-        .read_stored_minutes_draft(&meeting, None)
-        .unwrap()
-        .is_some());
+    assert!(reopened.get_minutes_markdown(&meeting).unwrap().is_some());
     assert!(reopened.acquire_local_inference_job().unwrap().is_none());
     assert!(matches!(
         RestoreIds::prepare_for_batch(
@@ -683,7 +760,14 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
         .output_analysis_id
         .as_ref()
         .unwrap();
-    assert_eq!(f.storage.load_current_analysis(&f.meeting).unwrap().unwrap().id, *candidate);
+    assert_eq!(
+        f.storage
+            .load_current_analysis(&f.meeting)
+            .unwrap()
+            .unwrap()
+            .id,
+        *candidate
+    );
     let draft = f
         .storage
         .create_transcript_draft(&f.meeting, candidate)
@@ -709,75 +793,59 @@ fn exported_fixture() -> (Fixture, tempfile::TempDir, PathBuf) {
             lock_version: draft.lock_version,
         }),
     };
-    let engine = crate::generation::stored_fixture::engine(f.root.path(), false);
-    let job = crate::generation::stored_fixture::seed_job(&f.storage, request, engine, "standard", 2400, 4).unwrap();
-    let revision = crate::generation::stored_fixture::seed_outputs(&f.storage, &job, false, false).unwrap();
-    f.storage
-        .seed_stored_minutes_head(&f.meeting, &revision)
+    let model_root = f.root.path().join("markdown-worker");
+    std::fs::create_dir(&model_root).unwrap();
+    let job = crate::generation::markdown_job::enqueue_synthetic(
+        &f.storage,
+        request,
+        crate::storage::markdown_generation_tests::engine(&model_root, "normal"),
+        "standard",
+        2400,
+        None,
+    )
+    .unwrap();
+    f.storage.acquire_local_inference_job().unwrap().unwrap();
+    crate::storage::markdown_generation_tests::process(&f.storage, &job.id, &|| false, &|_| {})
+        .unwrap()
         .unwrap();
-    let draft = f
+    let body = f.storage.get_minutes_markdown(&f.meeting).unwrap().unwrap();
+    let saved = f
         .storage
-        .seed_stored_minutes_draft(&f.meeting, &revision)
-        .unwrap();
-    let mut payload = draft.payload;
-    payload
-        .blocks
-        .push(crate::minutes_document::Block::Paragraph {
-            item_id: None,
-            content: vec![crate::minutes_document::Inline::text(
-                "出力時だけの手動追記",
-            )],
-        });
-    f.storage
-        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
+        .save_minutes_markdown(crate::storage::minutes_markdown::SaveMarkdownRequest {
+            meeting_id: f.meeting.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected: Some(body.stamp()),
+            markdown: format!("{}\n出力時だけの手動追記", body.markdown),
+        })
         .unwrap();
     let outside = tempfile::tempdir().unwrap();
     let path = outside.path().join("保存済み議事録.md");
-    // Seed past receipts as data; the removed structured writer must not be
-    // restored just to generate a backup fixture. Current export IO is covered
-    // separately by plain-Markdown production tests.
-    let stored = f
-        .storage
-        .read_stored_minutes_draft(&f.meeting, None)
-        .unwrap()
-        .unwrap();
-    let output = b"historical externally saved Markdown\n";
-    std::fs::write(&path, output).unwrap();
-    f.storage.seed_stored_export_receipt(
-        &f.meeting,
-        &revision,
-        &stored,
-        &path,
-        "succeeded",
-        output,
+    let prepare = || {
+        f.storage
+            .prepare_markdown_export(crate::storage::markdown_exports::MarkdownExportRequest {
+                meeting_id: f.meeting.clone(),
+                operation_id: Uuid::new_v4().to_string(),
+                expected: saved.stamp(),
+            })
+            .unwrap()
+    };
+    f.storage.write_markdown_export(prepare(), &path).unwrap();
+    assert_eq!(
+        f.storage
+            .write_markdown_export(prepare(), &outside.path().join("missing/blocked.md"))
+            .unwrap()
+            .state,
+        "failed"
     );
-    let failure = f.storage.seed_stored_export_receipt(
-        &f.meeting,
-        &revision,
-        &stored,
-        &f.root.path().join("blocked.md"),
-        "failed",
-        output,
-    );
-    assert_eq!(failure.state, "failed");
-    assert!(!f.root.path().join("blocked.md").exists());
-    // External files may be edited or disappear after export. Restore never
-    // opens them and must not treat old evidence as new-ID/current-draft bytes.
+    assert_eq!(f.storage.exports(&f.meeting).unwrap().len(), 2);
     std::fs::write(&path, b"external edit").unwrap();
-    let draft = f
-        .storage
-        .read_stored_minutes_draft(&f.meeting, None)
-        .unwrap()
-        .unwrap();
-    let mut payload = draft.payload;
-    payload
-        .blocks
-        .push(crate::minutes_document::Block::Paragraph {
-            item_id: None,
-            content: vec![crate::minutes_document::Inline::text("出力後の追加編集")],
-        });
     f.storage
-        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
+        .save_minutes_markdown(crate::storage::minutes_markdown::SaveMarkdownRequest {
+            meeting_id: f.meeting.clone(),
+            operation_id: Uuid::new_v4().to_string(),
+            expected: Some(saved.stamp()),
+            markdown: format!("{}\n出力後の追加編集", saved.markdown),
+        })
         .unwrap();
     (f, outside, path)
 }
@@ -788,7 +856,7 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
     let (f, _outside, path) = exported_fixture();
     let output = tempfile::tempdir().unwrap();
     let original = f.storage.exports(&f.meeting).unwrap();
-    let draft = f.storage.read_stored_minutes_draft(&f.meeting, None).unwrap();
+    let draft = f.storage.get_minutes_markdown(&f.meeting).unwrap();
     let source = read(&f, output.path());
     let ids = ids(&source, output.path());
     let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
@@ -828,10 +896,7 @@ fn processing_history_keeps_external_export_evidence_and_new_references_without_
     }
     crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
-    assert_eq!(
-        f.storage.read_stored_minutes_draft(&f.meeting, None).unwrap(),
-        draft
-    );
+    assert_eq!(f.storage.get_minutes_markdown(&f.meeting).unwrap(), draft);
     assert_eq!(f.storage.exports(&f.meeting).unwrap().len(), 2);
 }
 
@@ -865,8 +930,7 @@ fn restore_provenance_native_completed_speech_generation_and_export_keep_normal_
         "processing_jobs",
         "job_checkpoints",
         "analysis_revisions",
-        "minutes_revisions",
-        "evidence_links",
+        "working_drafts",
         "export_records",
         "operation",
     ] {
@@ -1045,35 +1109,6 @@ fn processing_history_preserves_unlinked_root_job_after_a_lost_handoff_without_a
 }
 
 #[test]
-fn processing_history_keeps_detached_revision_and_historical_deleted_draft_export_metadata() {
-    let (f, _outside, path) = exported_fixture();
-    let output = tempfile::tempdir().unwrap();
-    let source = read(&f, output.path());
-    let historical = Uuid::new_v4().to_string();
-    source_writer(&source,output.path()).execute("UPDATE export_records SET minutes_revision_id=NULL,source_draft_id=?1,source_draft_lock_version=7",params![historical]).unwrap();
-    let ids = ids(&source, output.path());
-    let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let mut work = prepared(&fixed, output.path())
-        .with_processing_history(&fixed, &|| false)
-        .unwrap();
-    let mapped = ids.get("working_drafts", &f.meeting, &historical).unwrap();
-    let count: i64 = work.database.query_row("SELECT count(*) FROM export_records WHERE minutes_revision_id IS NULL AND source_draft_id=?1 AND source_draft_lock_version=7",params![mapped],|r|r.get(0)).unwrap();
-    assert_eq!(count, 2);
-    assert_eq!(
-        work.database
-            .query_row(
-                "SELECT count(*) FROM working_drafts WHERE id=?1",
-                params![mapped],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
-    crate::storage::backup::validate_database(&mut work.database, &|| false).unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
-}
-
-#[test]
 fn processing_history_rejects_bad_export_hash_path_draft_kind_or_unsettled_state() {
     let (f, _outside, path) = exported_fixture();
     let output = tempfile::tempdir().unwrap();
@@ -1103,7 +1138,8 @@ fn processing_history_rejects_bad_export_hash_path_draft_kind_or_unsettled_state
                     .unwrap();
             }
             "draft" => {
-                writer.execute("UPDATE export_records SET source_draft_id=(SELECT id FROM working_drafts WHERE target_kind='transcript' LIMIT 1)",[]).unwrap();
+                // One successful and one failed export are both retained.
+                assert_eq!(writer.execute("UPDATE export_records SET source_draft_id=(SELECT id FROM working_drafts WHERE target_kind='transcript' LIMIT 1),source_draft_lock_version=(SELECT lock_version FROM working_drafts WHERE target_kind='transcript' LIMIT 1)",[]).unwrap(),2);
             }
             "writing" => {
                 writer

@@ -37,9 +37,11 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     if(!target.isConnected||target.matches(":disabled"))return;
     target.focus({preventScroll:true});opener.current=null;
   },[snapshot?.revision,requestBusy,origin]);
-  const request=async(quit=false)=>{
+  const request=async(quit=false,source?:HTMLElement)=>{
     if(requesting.current)return;requesting.current=true;setRequestBusy(true);setError("");setRequestResolved(false);
-    opener.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
+    // macOS mouse activation does not necessarily focus its button. Keep
+    // the actual initiating control, not whichever field happened to be active.
+    opener.current=source??(document.activeElement instanceof HTMLElement?document.activeElement:null);
     try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit}));if(mounted.current)setRequestResolved(true);}
     catch(cause){if(mounted.current)setError(String(cause));if(quit)throw cause;}
     finally{requesting.current=false;if(mounted.current)setRequestBusy(false);}

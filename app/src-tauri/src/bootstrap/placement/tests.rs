@@ -550,7 +550,10 @@ fn placement_current_shared_app_parent_keeps_models_control_and_meeting() {
         std::fs::read(old.join("models/package/model.bin")).unwrap(),
         b"retain model"
     );
-    assert_eq!(std::fs::read(storage.root().join(&relative)).unwrap(), b"current audio");
+    assert_eq!(
+        std::fs::read(storage.root().join(&relative)).unwrap(),
+        b"current audio"
+    );
     assert!(!target.join("models").exists());
     assert!(!target.join(NAME).exists());
     assert_eq!(b.view().unwrap().meeting_root, old.join("data"));

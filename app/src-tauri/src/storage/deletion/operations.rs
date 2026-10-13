@@ -428,7 +428,11 @@ impl Prepared {
                     stage_hint: e.stage_hint.clone(),
                     // Directory proof size is filesystem metadata, not file
                     // content bytes. Keep its identity proof server-side.
-                    bytes: if e.directory { None } else { e.proof.as_ref().map(|p| p.size) },
+                    bytes: if e.directory {
+                        None
+                    } else {
+                        e.proof.as_ref().map(|p| p.size)
+                    },
                 })
                 .collect(),
         })

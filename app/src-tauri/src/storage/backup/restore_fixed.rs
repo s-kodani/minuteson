@@ -213,27 +213,7 @@ impl<'p, 's> FixedData<'p, 's> {
                     }
                 }
             }
-            "minutes_revisions" => {
-                let meeting: String = self
-                    .ids
-                    .source()
-                    .database
-                    .query_row(
-                        "SELECT meeting_id FROM minutes_revisions WHERE rowid=?1",
-                        params![rowid],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                for name in ["generated_document_json", "effective_document_json"] {
-                    let mut document: crate::minutes_document::MinutesContent =
-                        serde_json::from_str(row_text(&row, column(name)?)?)
-                            .map_err(|e| e.to_string())?;
-                    self.ids.minutes(&meeting, &mut document)?;
-                    row[column(name)?] = SqlValue::Text(
-                        serde_json::to_string(&document).map_err(|e| e.to_string())?,
-                    );
-                }
-            }
+            "minutes_revisions" => return Err("旧形式の構造化議事録には対応していません".into()),
             "audio_import_options" => {
                 let meeting:String=self.ids.source().database.query_row("SELECT i.meeting_id FROM audio_import_options o JOIN audio_imports i ON i.id=o.import_id WHERE o.rowid=?1",params![rowid],|r|r.get(0)).map_err(|e|e.to_string())?;
                 let value = self.import_options(
@@ -326,7 +306,7 @@ impl<'p, 's> FixedData<'p, 's> {
                 let meeting:String=row.get(1).map_err(|e|e.to_string())?;
                 let kind:String=row.get(2).map_err(|e|e.to_string())?;
                 let text:String=row.get(3).map_err(|e|e.to_string())?;
-                let old_hash=match kind.as_str() {"transcript"=>super::super::drafts::draft_hash(&text),"minutes"=>super::super::minutes_drafts::hash(&text),_=>return Err("復元下書きの種別が不正です".into())};
+                let old_hash=match kind.as_str() {"transcript"=>super::super::drafts::draft_hash(&text),"minutes"=>return Err("旧形式の議事録下書きには対応していません".into()),_=>return Err("復元下書きの種別が不正です".into())};
                 let (_,new_hash)=ids.draft_json(&kind,&meeting,&text)?;
                 result.remember("working_drafts",&meeting,&id,&old_hash,&new_hash)?;
             }
@@ -701,7 +681,7 @@ impl<'p, 's> FixedData<'p, 's> {
         meeting: &str,
         id: &str,
     ) -> Result<String, String> {
-        if !matches!(domain, "analysis_revisions" | "minutes_revisions") {
+        if domain != "analysis_revisions" {
             return Err("復元版の種別が不正です".into());
         }
         let old: String = self
@@ -725,11 +705,7 @@ impl<'p, 's> FixedData<'p, 's> {
         if !owned {
             return Err("再構成版の会議所属が一致しません".into());
         }
-        let new = if domain == "analysis_revisions" {
-            super::super::revisions::analysis_content_hash(target, &new_id)?
-        } else {
-            super::super::revisions::minutes_content_hash(target, &new_id)?
-        };
+        let new = super::super::revisions::analysis_content_hash(target, &new_id)?;
         self.remember(domain, meeting, id, &old, &new)?;
         Ok(new)
     }

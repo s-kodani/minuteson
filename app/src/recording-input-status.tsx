@@ -1,11 +1,11 @@
 import {invoke,isTauri} from "@tauri-apps/api/core";
-import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from "react";
+import {createContext,useContext,useEffect,useState,type ReactNode} from "react";
 import {useRecordingSession} from "./session";
 import {InputLevelClock} from "./input-level-state";
 import {RecordingInputSession,inputLabel,type InputKind,type VisibleInput,type InputNotice} from "./recording-input-state";
 import {RecordingInputReceipts,type NoticeAttempt,type NoticeReception} from "./recording-input-receipts";
 import {RecordingInputQueue,type QueueAttempt} from "./recording-input-queue";
-import {ToastNotice,IssueNotice,toasts,noticeElementVisible} from "./toast";
+import {ToastNotice,IssueNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
 import {InputJournalSession,journalMessage,type JournalView} from "./input-journal-state";
 import "./recording-input-status.css";
@@ -29,6 +29,10 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     const journalView=(at:number)=>({...journal.read(at),ready:journalReplied||!Number.isFinite(at)||at-journalStarted>=1000});
     const paint=()=>{
       if(disposed)return;const at=now(),raw=failed?unknown():session.read(at),queued=session.queued();
+      // The mini panel presents telemetry only. Do not receive or acknowledge
+      // events it cannot show: unreceived events can still reach the main
+      // window when it is opened, with native ownership/lease checks intact.
+      if(windowLabel==="recorder"){setView({...empty(),owner,...raw,notices:[],loss:session.loss(),journal:journalView(at)});return;}
       if(queued){const attempts=queue.observe(raw.notices,at);setView({owner,...raw,...queue.read(at),loss:session.loss(),journal:journalView(at),dismiss:input=>{if(!disposed){queue.dismiss(input);paint();}},rendered:(id,generation)=>{if(!disposed){queue.rendered(id,generation,now());paint();}}});for(const attempt of attempts)void deliver(attempt);}
       else{const attempts=receipts.observe(raw.notices,at);setView({owner,...raw,...receipts.read(at),loss:session.loss(),journal:journalView(at),dismiss:input=>{if(!disposed){receipts.dismiss(input);paint();}},rendered:()=>{}});for(const attempt of attempts)void receive(attempt);}
     };
@@ -75,24 +79,9 @@ export function RecordingCompactInputs({owner}:{owner:string|null}){return <span
 export function RecordingJournalCompactStatus({owner}:{owner:string|null}){const view=useContext(Context),journal=view.owner===owner&&owner?view.journal:null;return journal?.ready&&journal.state!=="confirmed"?<span className="mini-journal-status" data-journal-state={journal.state} title={journalMessage(journal)} aria-label={journalMessage(journal)}>入力履歴:{journal.state==="pending"?"書込待ち":journal.state==="failed"||journal.state==="invalid"?"保存要確認":"確認不可"}</span>:null;}
 const message=(notice:InputNotice)=>notice.input==="microphone"?(notice.kind==="interrupted"?"マイクの取得が中断しました。選択した機器と権限を確認してください。":"同じマイクの取得が復帰しました。欠損範囲は保存後に確認します。"):
   (notice.kind==="interrupted"?"PC音声の取得が中断しました。取得対象と権限を確認してください。":"同じ対象のPC音声取得が復帰しました。欠損範囲は保存後に確認します。");
-export function RecordingInputNotice({windowLabel}:{windowLabel:"main"|"recorder"}){
+export function RecordingInputNotice({windowLabel}:{windowLabel:"main"}){
   const view=useContext(Context),notice=(input:InputKind)=>view.notices.find(n=>n.input===input&&n.target===windowLabel)??null;
   const microphone=notice("microphone"),system=notice("system"),closeMicrophone=()=>view.dismiss("microphone"),closeSystem=()=>view.dismiss("system");
-  const mini=useRef<HTMLDivElement>(null);
-  const stamp=view.notices.map(n=>`${n.id}:${n.delivery?.generation??0}`).join("|");
-  useEffect(()=>{if(windowLabel!=="recorder")return;let stopped=false,frame=0,timer=0;const check=()=>{frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{if(stopped)return;if(noticeElementVisible(mini.current))for(const n of view.notices)if(n.delivery)view.rendered(n.id,n.delivery.generation);timer=window.setTimeout(check,250);});});};check();return()=>{stopped=true;cancelAnimationFrame(frame);clearTimeout(timer);};},[windowLabel,stamp]);
-  // Failed/stale reads hide presentation without inventing render proof.
-  // Queued unshown events remain eligible under a new recorder generation;
-  // confirmed events and legacy lifetime receipts are not replayed.
-  if(windowLabel==="main"){
     const entries:[InputKind,InputNotice|null,()=>void][]=[["microphone",microphone,closeMicrophone],["system",system,closeSystem]];
     return <>{entries.map(([input,n,close])=><ToastNotice key={input} scope={view.owner??"recording-input"} type={`${input}-status`} message={n?`${n.delivery?"録音中の履歴：":""}${message(n)}`:""} level={n?.kind==="interrupted"?"warning":"info"} important={n?.kind==="interrupted"} eventId={n?.delivery?`${n.id}:${n.delivery.generation}`:n?.id} onClose={close} onRendered={n?.delivery?()=>view.rendered(n.id,n.delivery!.generation):undefined}/>)}{(["microphone","system"]as InputKind[]).map(input=><ToastNotice key={`${input}-loss`} scope={view.owner??"recording-input"} type={`${input}-history-loss`} message={view.loss[input]>0?`${input==="microphone"?"マイク":"PC音声"}の通知履歴の一部を保持できません。現在の取得状態と保存後の欠損範囲を確認してください。`:""} level="warning" important eventId={`${input}:${view.loss[input]}`}/>)}</>;
-  }
-  const current=[microphone,system].filter((n):n is InputNotice=>!!n),waiting=(["microphone","system"] as InputKind[]).filter(input=>view.reception[input]==="unconfirmed");
-  if(!current.length&&!waiting.length)return null;
-  const pending=waiting.map(input=>`${input==="microphone"?"マイク":"PC"}通知待ち`).join(" / ");
-  if(!current.length)return <div className="mini-input-receipt-pending" role="status" title="通知の受付結果を確認中です。取得や保存の成功を示す状態ではありません。">{pending}</div>;
-  const short=[pending,...current.map(n=>`${n.input==="microphone"?"マイク":"PC音声"}${n.kind==="interrupted"?"中断":"復帰"}`)].filter(Boolean).join(" / ");
-  const warning=current.some(n=>n.kind==="interrupted"),aria=current.length===2?"入力通知を閉じる":microphone?"マイク通知を閉じる":"PC音声通知を閉じる";
-  return <div ref={mini} className="mini-input-notice"><span role={warning?"alert":"status"} title={current.map(message).join(" ")+(waiting.length?" 通知の受付結果を確認中です。":"")}>{short}{waiting.length?"。":warning?"。詳細はメイン画面へ。":"。欠損範囲は保存後に確認。"}</span><button type="button" className="text-button" aria-label={aria} onClick={()=>{if(noticeElementVisible(mini.current))for(const n of current)if(n.delivery)view.rendered(n.id,n.delivery.generation);closeMicrophone();closeSystem();}}>×</button></div>;
 }

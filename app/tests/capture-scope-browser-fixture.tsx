@@ -19,6 +19,10 @@ mockIPC(async command=>{
 });
 function Fixture(){
   const [meeting,setMeeting]=useState("meeting-one"),[enabled,setEnabled]=useState(true),[locked,setLocked]=useState(false);
+  // Simulate state arriving while the real modal is open; test-only controls
+  // outside the modal are deliberately inert and cannot be clicked through it.
+  f.toggleLocked=()=>setLocked(value=>!value);
+  f.toggleMeeting=()=>setMeeting(value=>value==="meeting-one"?"meeting-two":"meeting-one");
   const control=useCaptureScope(enabled,meeting);
   return <main className="status-card" style={{maxWidth:760,margin:"24px auto"}}>
     <h1>録音の取得範囲</h1><CaptureApplicationSelection control={control} locked={locked||!enabled}/>

@@ -1,5 +1,5 @@
 export interface RegenerationTarget {
-  target: { analysisId: string; contentHash: string; draft: { id: string; contentHash: string; lockVersion: number } | null };
+  target: { analysisId: string; contentHash: string; draft: { id: string; contentHash: string; lockVersion: number } | null } | null;
   flow: { id: string; lockVersion: number } | null;
 }
 export interface RegenerationRequest {

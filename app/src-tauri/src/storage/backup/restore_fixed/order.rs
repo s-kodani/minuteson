@@ -20,7 +20,7 @@ impl FixedData<'_, '_> {
              CREATE TABLE hash_order(position INTEGER PRIMARY KEY,domain TEXT NOT NULL,meeting TEXT NOT NULL,old_id TEXT NOT NULL,UNIQUE(domain,meeting,old_id));"
         ).map_err(|e|e.to_string())?;
         let source = &self.ids.source().database;
-        for domain in ["analysis_revisions", "processing_jobs", "minutes_revisions"] {
+        for domain in ["analysis_revisions", "processing_jobs"] {
             let mut query = source
                 .prepare(&format!("SELECT meeting_id,id FROM {domain}"))
                 .map_err(|e| e.to_string())?;
@@ -42,8 +42,6 @@ impl FixedData<'_, '_> {
         for (child,parent,sql) in [
             ("analysis_revisions","analysis_revisions","SELECT meeting_id,id,parent_revision_id FROM analysis_revisions WHERE parent_revision_id IS NOT NULL"),
             ("analysis_revisions","analysis_revisions","SELECT meeting_id,analysis_id,source_analysis_id FROM analysis_input_snapshots"),
-            ("minutes_revisions","minutes_revisions","SELECT meeting_id,id,parent_revision_id FROM minutes_revisions WHERE parent_revision_id IS NOT NULL"),
-            ("minutes_revisions","analysis_revisions","SELECT meeting_id,id,input_analysis_id FROM minutes_revisions"),
             ("processing_jobs","processing_jobs","SELECT meeting_id,id,retry_of_job_id FROM processing_jobs WHERE retry_of_job_id IS NOT NULL"),
             ("processing_jobs","analysis_revisions","SELECT meeting_id,id,input_analysis_id FROM processing_jobs WHERE input_analysis_id IS NOT NULL"),
         ] {

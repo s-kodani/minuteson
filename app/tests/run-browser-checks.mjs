@@ -38,9 +38,9 @@ const suites = [
   ["data-layout", "data-save-browser-fixture.js", "data-save-layout-browser-check.js"],
   ["data-action", "data-save-browser-fixture.js", "data-action-confirmation-browser-check.js"],
   ["move", "data-save-browser-fixture.js", "storage-move-browser-check.js"],
-  ["model-review", "model-deletion-browser-fixture.js", "model-deletion-browser-check.js"],
-  ["model-rebinding", "model-rebinding-browser-fixture.js", "model-rebinding-browser-check.js"],
-  ["info-production", "theme-browser-fixture.js", "info-production-browser-check.js"],
+  // Model deletion/rebinding dialogs were retired with maintenance UI.
+  // Current download/selection and hidden cleanup have their own suites.
+  ["info-production", "browser-fixture.js", "info-production-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
   ["recorder-panel", null, "recorder-panel-browser-check.js"],
@@ -69,10 +69,11 @@ const suites = [
   ["meeting-audio", "browser-fixture.js", "meeting-audio-browser-check.js"],
   ["meeting-missing", "browser-fixture.js", "meeting-missing-browser-check.js"],
   ["playback-speakers", "browser-fixture.js", "playback-speaker-browser-check.js"],
-  ["estimated-speakers", "browser-fixture.js", "estimated-speaker-colors-browser-check.js"],
+  // Estimated-segment review and manual merges were removed from the product.
   ["playback-cancellation", "browser-fixture.js", "playback-cancellation-browser-check.js"],
-  ["display-follow", "browser-fixture.js", "display-follow-browser-check.js"],
-  ["keyboard", "browser-fixture.js", "keyboard-browser-check.js"],
+  ["playback-highlights", "browser-fixture.js", "current-playback-highlights-browser-check.js"],
+  // Advanced persisted Undo/bulk editor shortcuts were removed. Visible
+  // individual editing, IME and keyboard focus are covered by keyboard-primary.
   ["toast-production", "browser-fixture.js", "toast-production-browser-check.js"],
   ["theme-toast", "theme-browser-fixture.js", "theme-toast-browser-check.js"],
   ["import-toast", "import-browser-fixture.js", "import-toast-browser-check.js"],
@@ -93,6 +94,7 @@ const suites = [
 if (!suites.length || selected && suites.length !== selected.size) throw Error("Unknown or empty suite selection");
 mkdirSync(output, { recursive: true });
 let total = 0;
+const failures = [], continueOnFailure = args.includes("--continue-on-failure");
 const indexRoute = new RegExp(localPort(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/.source));
 const entryScript = /<script type="module" src="\/src\/main\.tsx[^"]*"><\/script>/u;
 const readiness = {
@@ -114,20 +116,26 @@ for (const [name, fixture, source] of suites) {
   // The browser daemon's cwd can differ from this runner's cwd. Always route
   // generated captures to the explicit output directory, not the repo root.
   const capturePrefix = JSON.stringify(resolve(output, name + "-"));
-  // Explicit drivers for the production workspace: real tab/summary clicks,
+  // Explicit drivers for the production workspace: real row-menu clicks,
   // never forcing hidden controls visible or replacing the application's UI.
-  const detailsDriver = `const openDetails=async selector=>{const details=page.locator(selector);await details.waitFor({state:"attached"});if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();};const waitSpeakerLayout=()=>page.waitForFunction(()=>{const panel=document.querySelector(".workspace-panel-shell");return !panel||panel.dataset.narrow===String(matchMedia("(max-width: 1119px)").matches);});const detailUI={openMeetingRow:async(title="既存会議")=>{const row=page.locator(".meeting-table tbody tr").filter({has:page.locator(".meeting-name").filter({hasText:title})}).first();await row.waitFor();const actions=row.locator(".meeting-row-actions");const trigger=actions.locator(":scope > button");if(await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();},openMeetingTools:()=>openDetails(".meeting-workspace-tools"),openTranscriptTools:async()=>{await openDetails(".transcript-workspace-tools");await detailUI.openSpeakerPanel();for(const selector of [".speaker-name-tools",".speaker-merge-tools"]){for(const details of await page.locator(selector).all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();}await detailUI.closeSpeakerPanel();for(const details of await page.locator(".utterance-edit-tools").all())if(!await details.evaluate(e=>e.open))await details.locator(":scope > summary").click();},openSpeakerPanel:async()=>{await waitSpeakerLayout();const button=page.getByRole("button",{name:"話者一覧を開く",exact:true});if(await button.isVisible()&&await button.getAttribute("aria-expanded")!=="true")await button.click();},closeSpeakerPanel:async()=>{await waitSpeakerLayout();const dialog=page.locator(".workspace-drawer[open]");if(await dialog.count())await dialog.getByRole("button",{name:"話者一覧を閉じる",exact:true}).click();},openDiarization:async()=>{const tools=page.locator(".speaker-diarization-tools");if(await tools.count()){await detailUI.openSpeakerPanel();await openDetails(".speaker-diarization-tools");}},openMinutes:async()=>{await page.getByRole("tab",{name:"議事録",exact:true}).click();await openDetails(".minutes-workspace-tools");}};`;
+  const detailsDriver = `const detailUI={openMeetingRow:async(title="既存会議")=>{const row=page.locator(".meeting-table tbody tr").filter({has:page.locator(".meeting-name").filter({hasText:title})}).first();await row.waitFor();const actions=row.locator(".meeting-row-actions");const trigger=actions.locator(":scope > button");if(await trigger.getAttribute("aria-expanded")!=="true")await trigger.click();}};`;
   const code = `async page=>{await page.goto("about:blank");await page.unrouteAll();await page.context().unrouteAll();page.setDefaultTimeout(10000);await page.setViewportSize({width:1200,height:900});${setup}${ready}const capturePath=path=>${capturePrefix}+path.split(/[\\/]/u).at(-1);${detailsDriver}detailUI.applyMinutesTheme=theme=>(${applyMinutesFixtureTheme.toString()})(page,theme);detailUI.applyPlaybackTheme=theme=>(${applyPlaybackFixtureTheme.toString()})(page,theme);const screenshot=page.screenshot.bind(page);page.screenshot=options=>screenshot({...options,path:capturePath(options.path)});try{return await (${check})(page,capturePath,detailUI);}finally{page.screenshot=screenshot;}}`;
   const wrapper = cli.endsWith(".sh");
   const run = spawnSync(wrapper ? cli : process.execPath, [...(wrapper ? [] : [cli]), `-s=${session}`, "run-code", code], { cwd: output, encoding: "utf8", env: { ...process.env, NO_UPDATE_NOTIFIER: "1" }, maxBuffer: 8 * 1024 * 1024 });
   const log = (run.stdout ?? "") + (run.stderr ?? "");
   writeFileSync(resolve(output, `${name}.log`), log);
   const match = /^### Result\r?\n([^\r\n]+)/m.exec(log);
-  if (run.status !== 0 || !match) { process.stderr.write(`${name}: FAILED (${run.error ?? "see " + resolve(output, `${name}.log`)})\n`); process.exit(1); }
+  if (run.status !== 0 || !match) {
+    process.stderr.write(`${name}: FAILED (${run.error ?? "see " + resolve(output, `${name}.log`)})\n`);
+    failures.push(name);
+    if (!continueOnFailure) process.exit(1);
+    continue;
+  }
   const result = JSON.parse(match[1]), count = Array.isArray(result) ? result.length : result.passed ?? result.cases;
   if (!Number.isSafeInteger(count) || count < 1) throw Error(`${name}: invalid result count`);
   if (Array.isArray(result.results) && result.results.length !== count) throw Error(`${name}: result/count mismatch`);
   total += count;
   process.stdout.write(`${name}: ${count} passed\n`);
 }
-process.stdout.write(`TOTAL: ${total} cases in ${suites.length} suites\n`);
+process.stdout.write(`TOTAL: ${total} cases in ${suites.length - failures.length} passed suites\n`);
+if (failures.length) { process.stderr.write(`FAILED SUITES: ${failures.join(", ")}\n`); process.exitCode = 1; }

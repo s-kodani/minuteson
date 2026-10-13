@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::stored_minutes_fixture as minutes_fixture;
+use crate::storage::current_minutes_fixture as minutes_fixture;
 use std::cell::Cell;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
@@ -168,26 +168,25 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, b"fixture audio").unwrap();
     storage.connection.lock().unwrap().execute("UPDATE file_assets SET relative_path=?1,size_bytes=13,content_hash=?2 WHERE id='asset'", params![relative, digest(b"fixture audio")]).unwrap();
-    let minutes = minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &minutes)
-        .unwrap();
-    let draft = storage.seed_stored_minutes_draft(&meeting, &minutes).unwrap();
-    let mut payload = draft.payload;
-    payload
-        .blocks
-        .push(crate::minutes_document::Block::Paragraph {
-            item_id: None,
-            content: vec![crate::minutes_document::Inline::text(
-                "移動後にも保持する編集",
-            )],
+    minutes_fixture::candidate(&storage, &meeting);
+    minutes_fixture::save(&storage, &meeting, "# 移動後にも保持する編集\n");
+    let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
+    draft
+        .payload
+        .utterances
+        .push(crate::storage::drafts::UtteranceEdit {
+            utterance_id: storage
+                .load_current_analysis(&meeting)
+                .unwrap()
+                .unwrap()
+                .utterances[0]
+                .id
+                .clone(),
+            effective_text: "文字起こしの編集".into(),
+            speaker_ids: vec![],
         });
     storage
-        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
-        .unwrap();
-    let next = minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &next)
+        .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
     let saved = storage.prepare_relocation_snapshot(&|| false).unwrap();
     assert_eq!(
@@ -203,7 +202,7 @@ fn native_image_preserves_revisions_inactive_drafts_edits_and_local_model_condit
         .any(|t| t.name == "edit_operations" && t.rows > 0));
     assert!(rows
         .iter()
-        .any(|t| t.name == "minutes_revisions" && t.rows == 2));
+        .any(|t| t.name == "minutes_markdown" && t.rows == 1));
 }
 
 #[test]

@@ -99,10 +99,7 @@ bridge.invoke=async(cmd,args={})=>{
     data.plainCalls.push({cmd,args:copy(args)});const job=data.jobs.find(j=>j.id===args.jobId);if(!job)throw Error("job missing");
     job.state={pause_analysis_job:"paused",resume_analysis_job:"queued",cancel_analysis_job:"cancelled"}[cmd];data.emitPlain("analysis-job-changed");return copy(job);
   }
-  if(cmd==="retry_minutes_generation"){
-    data.plainCalls.push({cmd,args:copy(args)});const parent=data.jobs.find(j=>j.id===args.request.jobId);if(!parent)throw Error("parent missing");
-    const job={...copy(parent),id:`plain-job-${data.jobs.length+1}`,state:"queued",errorCode:null,operationId:args.request.operationId,attempt:parent.attempt+1,retryOfJobId:parent.id};data.jobs.push(job);data.emitPlain("analysis-job-changed");return copy(job);
-  }
+  if(cmd==="retry_minutes_generation")throw Error("removed failure retry command");
   if(/^(get_minutes_(versions|preview|draft|evidence_source|transcript_page|exports)|save_minutes_draft|adopt_minutes_candidate|restore_minutes_version|start_minutes_generation|prepare_minutes_)/.test(cmd))throw Error(`obsolete minutes command: ${cmd}`);
   return originalInvoke(cmd,args);
 };

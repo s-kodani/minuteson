@@ -74,5 +74,14 @@ async page => {
   await page.waitForFunction(()=>!document.querySelector('.nav-item[aria-label="設定"]')?.disabled);
   check(await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="regenerate_transcription").length)===unknownBefore+1,"unreadable acceptance minted or resent generation");
   results.push("unknown acceptance retains the original request; recovered readback proves acceptance without a second start");
-  await closeTools();return {passed:results.length,results};
+  await closeTools();
+  await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
+  await page.evaluate(()=>{const f=window.monBrowserFixture;f.seedRegeneration();f.currentId=null;f.candidateVisible=false;f.draft=null;f.jobs=[];f.preferences.payload.standard.threads=6;f.analysisFlow={...f.analysisFlow,stage:"attention",errorMessage:"模擬の初回生成失敗",transcriptionJob:{id:"first-failed",kind:"transcription",state:"failed"}};f.regenerationLostResponse=true;});
+  await page.getByRole("button",{name:"会議A",exact:true}).click();await openTools();
+  await tools().getByRole("button",{name:"文字起こしを生成",exact:true}).click();
+  await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).click();
+  await page.waitForFunction(()=>window.monBrowserFixture.analysisFlow.stage==="transcription");
+  check(await page.evaluate(()=>{const f=window.monBrowserFixture,starts=f.calls.filter(c=>c.command==="regenerate_transcription");return starts.length===1&&starts[0].args.request.expected.target===null&&!f.analysisFlow.replacementRequested&&f.regenerationGlobalThreads===6&&!f.calls.some(c=>c.command==="retry_transcription");}),"failed first generation cannot start fresh or lost response duplicated admission");
+  results.push("failed first transcription without saved text starts fresh using global settings, with lost-ack readback and no old-job retry");
+  return {passed:results.length,results};
 }

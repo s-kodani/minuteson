@@ -129,9 +129,8 @@ fn native_raw_audio_deletion_cold_restart_removes_pcm_but_keeps_documents_and_ra
     assert!(unknown.is_file());
     assert!(f
         .storage
-        .read_stored_minutes_state(&f.meeting)
+        .get_minutes_markdown(&f.meeting)
         .unwrap()
-        .current_id
         .is_some());
     drop(lease);
     reopen(&mut f);
@@ -219,9 +218,8 @@ fn completion_changes_only_availability_retains_every_history_and_releases_hot_f
     drop(db);
     assert!(f
         .storage
-        .read_stored_minutes_state(&f.meeting)
+        .get_minutes_markdown(&f.meeting)
         .unwrap()
-        .current_id
         .is_some());
     assert!(finish(&f.storage, &op, &lease, &|| false)
         .unwrap()
@@ -399,7 +397,7 @@ fn completion_allows_later_text_edits_generation_and_nonaudio_assets_without_new
         .rename_meeting(&f.meeting, "EDITED", meeting.lock_version)
         .unwrap();
     let new = f.file("documents/new.md", Some("text/markdown"));
-    let candidate = crate::storage::stored_minutes_fixture::candidate(&f.storage, &f.meeting);
+    let candidate = crate::storage::current_minutes_fixture::candidate(&f.storage, &f.meeting);
     assert!(!candidate.is_empty());
     assert!(new.is_file());
     assert!(finish(&f.storage, &op, &lease, &|| false)

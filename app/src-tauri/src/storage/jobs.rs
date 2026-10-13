@@ -154,17 +154,7 @@ impl Storage {
                     super::revisions::analysis_content_hash(&tx, id)?,
                 )
             }
-            "minutes_generation" => {
-                let id = job
-                    .output_minutes_id
-                    .as_deref()
-                    .ok_or("保存結果の議事録版がありません")?;
-                (
-                    id,
-                    "minutes_revisions",
-                    super::revisions::minutes_content_hash(&tx, id)?,
-                )
-            }
+            "minutes_generation" => return Err("旧形式の議事録生成結果には対応していません".into()),
             _ => return Err("通知対象の処理種別が不正です".into()),
         };
         // Table name comes only from the fixed match above, never caller input.
@@ -512,13 +502,13 @@ impl Storage {
         let mut query = connection.prepare(
             "WITH ranked AS (
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY meeting_id, kind ORDER BY created_at DESC, rowid DESC) AS position
-                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation')
+                FROM processing_jobs WHERE kind IN ('transcription', 'diarization', 'minutes_generation') AND (kind != 'minutes_generation' OR json_extract(parameters_json,'$.generation.schemaVersion') = 7)
             )
             SELECT j.id, j.meeting_id, j.kind, j.state, j.operation_id, j.input_hash, j.spec_hash,
                 j.completed_units, j.total_units, j.error_code, j.created_at, j.updated_at,
                 j.output_analysis_id, j.pause_reason, j.retry_of_job_id, j.attempt, j.output_minutes_id, m.title
             FROM processing_jobs j JOIN meetings m ON m.id = j.meeting_id
-            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation') AND (
+            WHERE j.kind IN ('transcription', 'diarization', 'minutes_generation') AND (j.kind != 'minutes_generation' OR json_extract(j.parameters_json,'$.generation.schemaVersion') = 7) AND (
                 j.state IN ('queued', 'running', 'pausing', 'paused', 'interrupted')
                 OR j.id IN (SELECT id FROM ranked WHERE position = 1)
                 OR j.id IN (SELECT value FROM json_each(?1))
@@ -1265,6 +1255,9 @@ mod tests {
         for kind in [JobKind::Diarization, JobKind::MinutesGeneration] {
             let mut spec = audio_job(&meeting.id, kind.as_str());
             spec.kind = kind;
+            if spec.kind == JobKind::MinutesGeneration {
+                spec.parameters = json!({"generation":{"schemaVersion":7}});
+            }
             spec.input_analysis_id = Some("notification-input".into());
             spec.input_hash = committed.content_hash.clone();
             let job = storage.enqueue_job(spec).unwrap();

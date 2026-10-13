@@ -171,11 +171,20 @@ impl PlaybackStore {
         self.insert_prepared(info, PreparedPlayback::Meeting(audio))
     }
 
-    pub(crate) fn insert_interval(&self, audio: MeetingIntervalAudio) -> Result<PlaybackInfo, String> {
+    pub(crate) fn insert_interval(
+        &self,
+        audio: MeetingIntervalAudio,
+    ) -> Result<PlaybackInfo, String> {
         let info = PlaybackInfo {
-            token: Uuid::new_v4().to_string(), sample_rate: meeting::MEETING_RATE, channels: 1,
-            total_frames: audio.total_frames, start_us: audio.start_us, end_us: audio.end_us,
-            track_kind: audio.track_kind.clone(), alignment: "unverified".into(), missing_ranges: audio.missing_ranges.clone(),
+            token: Uuid::new_v4().to_string(),
+            sample_rate: meeting::MEETING_RATE,
+            channels: 1,
+            total_frames: audio.total_frames,
+            start_us: audio.start_us,
+            end_us: audio.end_us,
+            track_kind: audio.track_kind.clone(),
+            alignment: "unverified".into(),
+            missing_ranges: audio.missing_ranges.clone(),
         };
         self.insert_prepared(info, PreparedPlayback::Interval(audio))
     }

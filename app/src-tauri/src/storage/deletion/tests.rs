@@ -1,5 +1,5 @@
 use super::database::*;
-use crate::storage::{stored_minutes_fixture as minutes_fixture, Storage};
+use crate::storage::{current_minutes_fixture as minutes_fixture, Storage};
 use rusqlite::{config::DbConfig, params, Connection};
 use std::cell::Cell;
 
@@ -198,27 +198,7 @@ impl Fixture {
     pub(super) fn at(root: tempfile::TempDir) -> Self {
         let storage = Storage::open(root.path().into()).unwrap();
         let meeting = minutes_fixture::meeting(&storage);
-        for i in 0..3 {
-            let candidate = minutes_fixture::candidate(&storage, &meeting);
-            if i < 2 {
-                storage
-                    .seed_stored_minutes_head(&meeting, &candidate)
-                    .unwrap();
-                let draft = storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
-                let mut payload = draft.payload.clone();
-                payload
-                    .blocks
-                    .push(crate::minutes_document::Block::Paragraph {
-                        item_id: None,
-                        content: vec![crate::minutes_document::Inline::text(
-                            "削除対象の手動編集全文",
-                        )],
-                    });
-                storage
-                    .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
-                    .unwrap();
-            }
-        }
+        minutes_fixture::save(&storage, &meeting, "# 削除対象の手動編集全文\n");
         let other = storage.create_meeting("対象外会議を保持").unwrap().id;
         {
             let db = storage.connection.lock().unwrap();
@@ -282,19 +262,19 @@ fn count(db: &Connection, name: &str) -> i64 {
 }
 
 #[test]
-fn deletion_scope_counts_public_previous_candidate_internal_drafts_evidence_and_fixed_jobs_without_copying_text(
-) {
+fn deletion_scope_counts_current_markdown_transcript_and_vocabulary_without_copying_text() {
     let f = Fixture::new();
     let scope = f.scope();
     let rows = |name| scope.tables.iter().find(|t| t.name == name).unwrap().rows;
     assert_eq!(rows("meetings"), 1);
-    assert_eq!(rows("minutes_revisions"), 3);
-    assert_eq!(rows("processing_jobs"), 3);
-    assert!(rows("analysis_revisions") >= 2);
-    assert_eq!(rows("job_checkpoints"), 3);
-    assert_eq!(rows("working_drafts"), 3);
-    assert_eq!(rows("edit_operations"), 2);
-    assert!(rows("evidence_links") > 0);
+    assert_eq!(rows("minutes_markdown"), 1);
+    assert_eq!(rows("minutes_revisions"), 0);
+    assert_eq!(rows("processing_jobs"), 0);
+    assert_eq!(rows("analysis_revisions"), 1);
+    assert_eq!(rows("job_checkpoints"), 0);
+    assert_eq!(rows("working_drafts"), 1);
+    assert_eq!(rows("edit_operations"), 0);
+    assert_eq!(rows("evidence_links"), 0);
     assert!(rows("utterances") > 0);
     assert_eq!(rows("vocabulary_entries"), 1);
     let manifest = scope.encode().unwrap();
@@ -327,6 +307,7 @@ fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_mo
     for name in [
         "analysis_revisions",
         "minutes_revisions",
+        "minutes_markdown",
         "working_drafts",
         "edit_operations",
         "processing_jobs",
@@ -448,7 +429,7 @@ fn deletion_missing_consent_wrong_operation_and_changed_durable_hash_remove_no_r
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
     assert!(erase_confirmed_rows(&db, &operation, &scope, &|| false).is_err());
-    assert_eq!(count(&db, "minutes_revisions"), 3);
+    assert_eq!(count(&db, "minutes_markdown"), 1);
     assert_eq!(count(&db, "meetings"), 2);
 }
 
@@ -475,7 +456,7 @@ fn deletion_cancel_after_partial_sql_work_rolls_back_rows_heads_and_receipt_and_
         .unwrap());
     assert!(db
         .execute(
-            "DELETE FROM minutes_revisions WHERE publication_state='committed'",
+            "DELETE FROM analysis_revisions WHERE publication_state='committed'",
             []
         )
         .is_err());
@@ -529,6 +510,7 @@ fn deletion_scope_refuses_cross_meeting_retry_references_without_widening_its_ta
     // retry guard; the deletion closure must independently refuse it.
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .unwrap();
+    db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('owned-retry-parent',?1,'transcription','cancelled','owned-retry-parent',?2,'{}','{}',?2,0,0)",params![f.meeting,"a".repeat(64)]).unwrap();
     db.execute("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,retry_of_job_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) SELECT 'other-retry',?1,kind,'cancelled','other-operation',id,input_hash,profile_snapshot_json,parameters_json,spec_hash,0,0 FROM processing_jobs LIMIT 1",params![f.other]).unwrap();
     db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .unwrap();
@@ -771,7 +753,7 @@ fn deletion_dependency_order_removes_retry_leaves_before_parents() {
             .find(|t| t.name == "processing_jobs")
             .unwrap()
             .rows,
-        6
+        3
     );
     let operation = f.consent(&scope);
     let db = f.storage.connection.lock().unwrap();

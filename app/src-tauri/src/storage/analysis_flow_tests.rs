@@ -84,7 +84,8 @@ fn imported_meeting_uses_global_settings_not_import_profile() {
         meeting_vocabulary: vec![],
         expected_global_version: Some(0),
     };
-    let (import, _, _) = super::super::imports::tests::pending_configured(&s, "global-import", &options);
+    let (import, _, _) =
+        super::super::imports::tests::pending_configured(&s, "global-import", &options);
     s.finalize_audio_import(&import.id).unwrap();
     let m = import.meeting_id;
     advance(&s);
@@ -152,8 +153,7 @@ fn imported_audio_saves_utterances_and_freezes_explicit_minutes_input() {
 }
 
 #[test]
-fn automatic_flow_freezes_job_conditions_and_saves_utterances_without_adoption()
-{
+fn automatic_flow_freezes_job_conditions_and_saves_utterances_without_adoption() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
     let first = s.ensure_analysis_flow(&m).unwrap();
@@ -230,7 +230,13 @@ fn initial_utterance_publication_rolls_back_stage_and_revision_when_head_write_f
     assert_eq!(unchanged.lock_version, flow.lock_version);
     assert!(s.load_current_analysis(&m).unwrap().is_none());
     let db = s.connection.lock().unwrap();
-    let publication: String = db.query_row("SELECT publication_state FROM analysis_revisions WHERE id=?1", params![output], |row| row.get(0)).unwrap();
+    let publication: String = db
+        .query_row(
+            "SELECT publication_state FROM analysis_revisions WHERE id=?1",
+            params![output],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!(publication, "candidate");
     db.execute_batch("DROP TRIGGER reject_test_head").unwrap();
     drop(db);
@@ -239,7 +245,7 @@ fn initial_utterance_publication_rolls_back_stage_and_revision_when_head_write_f
 }
 
 #[test]
-fn failed_diarization_retries_only_that_stage_and_keeps_successful_text() {
+fn failed_diarization_keeps_saved_input_and_requires_a_fresh_global_generation() {
     let root = tempfile::tempdir().unwrap();
     let (s, m) = fixture(root.path());
     s.ensure_analysis_flow(&m).unwrap();
@@ -272,23 +278,24 @@ fn failed_diarization_retries_only_that_stage_and_keeps_successful_text() {
         "点検日です"
     );
     std::fs::remove_file(root.path().join("fail-diarization")).unwrap();
-    let next = diarization::RetryRequest {
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "attention");
+    let next = crate::storage::analysis_flows::regeneration::Request {
         meeting_id: m.clone(),
-        job_id: job.id,
-        operation_id: "user-retry".into(),
-        expected_spec_hash: job.spec_hash,
-    }
-    .enqueue(&s)
-    .unwrap();
+        operation_id: Uuid::new_v4().to_string(),
+        expected: s.regeneration_admission(&m).unwrap(),
+    };
+    s.regenerate_analysis(&next, &|| false).unwrap();
     advance(&s);
-    assert_eq!(
+    transcribe(&s);
+    advance(&s);
+    assert_ne!(
         s.analysis_flow(&m)
             .unwrap()
             .unwrap()
             .diarization_job
             .unwrap()
             .id,
-        next.id
+        job.id
     );
     let output = diarize(&s);
     advance(&s);
@@ -300,8 +307,14 @@ fn failed_diarization_retries_only_that_stage_and_keeps_successful_text() {
             .iter()
             .filter(|j| j.kind == "transcription")
             .count(),
-        1
+        2
     );
+    assert_eq!(s.get_job(&job.id).unwrap().state, "failed");
+    assert!(s
+        .list_jobs(&m)
+        .unwrap()
+        .iter()
+        .all(|j| j.retry_of_job_id.is_none()));
 }
 
 #[test]
@@ -471,7 +484,6 @@ fn job_attach_failure_retains_durable_job_and_recovery_does_not_enqueue_a_duplic
     );
     assert_eq!(s.list_jobs(&m).unwrap().len(), 1);
 }
-
 
 #[test]
 fn unrelated_candidate_cannot_be_a_fixed_input_without_a_flow_and_original_checks_remain() {

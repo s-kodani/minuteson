@@ -280,6 +280,20 @@ impl CaptureTests {
             .name("mon-test-audio-recovery".into())
             .spawn(move || {
                 let _ = Self::recover(&handle, None);
+                // Cleanup belongs to the native controller, not a UI panel.
+                // Retrying only an attention revision retains the same owned
+                // targets and never kills a live writer or scans by filename.
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    let retry = handle.state::<Self>().lock().ok().and_then(|state| {
+                        (!state.closing && state.current.is_none())
+                            .then(|| state.ownership.retry_revision())
+                            .flatten()
+                    });
+                    if let Some(revision) = retry {
+                        let _ = Self::recover(&handle, Some(revision));
+                    }
+                }
             })
         {
             app.state::<Self>()

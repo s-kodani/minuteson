@@ -7,7 +7,6 @@ pub(super) struct WorkspaceAssets<'a, 'p, 's, C> {
     pub(super) database: &'a Connection,
     pub(super) root: &'a Path,
     pub(super) meeting: &'a str,
-    pub(super) input: Option<&'a str>,
     pub(super) entries: &'a BTreeMap<&'a str, &'a archive::Entry>,
     pub(super) cancelled: &'a C,
 }
@@ -135,17 +134,5 @@ impl<C: Fn() -> bool> Assets for WorkspaceAssets<'_, '_, '_, C> {
             return Err("再構成した途中成果物の登録先がありません".into());
         }
         Ok((new_id, new_hash))
-    }
-    fn map(&mut self, domain: &str, id: &str) -> Result<String, String> {
-        check_cancelled(self.cancelled)?;
-        if !matches!(domain, "speakers" | "utterances") {
-            return Err("生成参照の種別が不正です".into());
-        }
-        let input = self.input.ok_or("途中成果物の固定入力がありません")?;
-        let exists:bool=self.fixed.ids.source().database.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {domain} e JOIN analysis_revisions a ON a.id=e.analysis_revision_id WHERE e.id=?1 AND a.id=?2 AND a.meeting_id=?3)"),params![id,input,self.meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if !exists {
-            return Err("途中成果物の参照が固定した会議・入力と一致しません".into());
-        }
-        self.fixed.ids.get(domain, self.meeting, id)
     }
 }

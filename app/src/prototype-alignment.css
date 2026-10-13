@@ -64,12 +64,7 @@ button:disabled { opacity:.5; }
 .meeting-list .analysis-actions { margin:0; }
 .meeting-list .deletion-trigger { background:transparent; color:var(--danger-text); border-color:transparent; }
 .import-entry { padding:0 0 18px; border:0; border-radius:0; margin-bottom:0; }
-.landing-tools { margin:0 0 18px; }
-.content:has(>.landing-tools) { display:flex; flex-direction:column; }
-.content>.landing-tools { order:1; margin-top:24px; }
 .draft-meeting-tools[hidden] { display:none; }
-.landing-tools>.workspace-tools-body { max-height:none; }
-.landing-tools>summary { display:list-item; }
 .content:has(>.theme-settings) { max-width:824px; margin-inline:auto; }
 .meeting-detail-status>strong { font-size:22px; font-weight:650; }
 .meeting-detail-status { padding:18px 28px 12px; background:var(--surface); max-height:20dvh; }

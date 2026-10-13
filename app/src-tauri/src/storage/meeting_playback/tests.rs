@@ -504,5 +504,5 @@ fn request_never_accepts_paths_unknown_fields_or_unknown_modes() {
     }
 }
 
-mod missing_tests;
 mod markdown_interval;
+mod missing_tests;

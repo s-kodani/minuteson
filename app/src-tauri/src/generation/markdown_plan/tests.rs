@@ -1,5 +1,5 @@
 use super::*;
-use crate::minutes_document::tests::input;
+use crate::storage::current_minutes_fixture::input;
 
 #[test]
 fn plain_prompts_partition_every_utf8_byte_without_ids_and_keep_fractional_times() {

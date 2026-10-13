@@ -3,7 +3,6 @@
 use super::archive::VerifiedArchive;
 use super::portable::{self, Table};
 use super::*;
-use crate::minutes_document::{Block, Inline, MinutesContent};
 use rusqlite::types::Value;
 use std::collections::BTreeMap;
 
@@ -818,12 +817,7 @@ impl RestoreIds<'_> {
                 }
                 i64::from(payload.schema_version)
             } else {
-                let payload: MinutesContent =
-                    serde_json::from_str(&current).map_err(|e| e.to_string())?;
-                if payload.schema_version != 1 {
-                    return Err("復元下書きの形式が不正です".into());
-                }
-                i64::from(payload.schema_version)
+                return Err("旧形式の議事録下書きには対応していません".into());
             };
             if payload_schema != schema || draft_hash(&kind, &current)? != hash {
                 return Err("復元下書きのハッシュ・形式が不正です".into());
@@ -874,12 +868,7 @@ impl RestoreIds<'_> {
                 self.transcript(meeting, &mut payload)?;
                 serde_json::to_string(&payload).map_err(|e| e.to_string())?
             }
-            "minutes" => {
-                let mut payload: MinutesContent =
-                    serde_json::from_str(text).map_err(|e| e.to_string())?;
-                self.minutes(meeting, &mut payload)?;
-                serde_json::to_string(&payload).map_err(|e| e.to_string())?
-            }
+            "minutes" => return Err("旧形式の議事録下書きには対応していません".into()),
             _ => return Err("未知の復元下書きです".into()),
         };
         if text.len() > MAX_DRAFT_BYTES {
@@ -1025,25 +1014,7 @@ impl RestoreIds<'_> {
                         self.transcript(&meeting, &mut payload)?;
                     }
                 } else {
-                    let mut content: MinutesContent =
-                        serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                    if phase == 0 {
-                        for item in &content.items {
-                            self.reserve(&item.id)?;
-                        }
-                        for evidence in &content.evidence {
-                            self.reserve(&evidence.id)?;
-                        }
-                    } else if phase == 1 {
-                        for item in &content.items {
-                            self.declare("minutes_items", &meeting, &item.id)?;
-                        }
-                        for evidence in &content.evidence {
-                            self.declare("evidence_links", &meeting, &evidence.id)?;
-                        }
-                    } else {
-                        self.minutes(&meeting, &mut content)?;
-                    }
+                    return Err("旧形式の議事録文書には対応していません".into());
                 }
             }
         }
@@ -1104,87 +1075,12 @@ impl RestoreIds<'_> {
         }
         Ok(())
     }
-
-    pub(super) fn minutes(
-        &self,
-        meeting: &str,
-        content: &mut MinutesContent,
-    ) -> Result<(), String> {
-        let mut mapped = content.clone();
-        self.minutes_inner(meeting, &mut mapped)?;
-        *content = mapped;
-        Ok(())
-    }
-
-    fn minutes_inner(&self, meeting: &str, content: &mut MinutesContent) -> Result<(), String> {
-        let item = |id: &mut Option<String>| -> Result<(), String> {
-            if let Some(old) = id {
-                *old = self.get("minutes_items", meeting, old)?;
-            }
-            Ok(())
-        };
-        let inline = |parts: &mut Vec<Inline>| -> Result<(), String> {
-            for part in parts {
-                if let Inline::Evidence {
-                    minutes_item_id,
-                    evidence_link_id,
-                } = part
-                {
-                    *minutes_item_id = self.get("minutes_items", meeting, minutes_item_id)?;
-                    *evidence_link_id = self.get("evidence_links", meeting, evidence_link_id)?;
-                }
-            }
-            Ok(())
-        };
-        for block in &mut content.blocks {
-            match block {
-                Block::Heading {
-                    item_id, content, ..
-                }
-                | Block::Paragraph { item_id, content } => {
-                    item(item_id)?;
-                    inline(content)?;
-                }
-                Block::List { items, .. } => {
-                    for row in items {
-                        item(&mut row.item_id)?;
-                        inline(&mut row.content)?;
-                    }
-                }
-                Block::Table { headers, rows } => {
-                    for header in headers {
-                        inline(header)?;
-                    }
-                    for row in rows {
-                        item(&mut row.item_id)?;
-                        for cell in &mut row.cells {
-                            inline(cell)?;
-                        }
-                    }
-                }
-            }
-        }
-        for i in &mut content.items {
-            i.id = self.get("minutes_items", meeting, &i.id)?;
-            if let Some(id) = &mut i.assignee_speaker_id {
-                *id = self.get("speakers", meeting, id)?;
-            }
-        }
-        for e in &mut content.evidence {
-            e.id = self.get("evidence_links", meeting, &e.id)?;
-            e.minutes_item_id = self.get("minutes_items", meeting, &e.minutes_item_id)?;
-            e.analysis_revision_id =
-                self.get("analysis_revisions", meeting, &e.analysis_revision_id)?;
-            e.utterance_id = self.get("utterances", meeting, &e.utterance_id)?;
-        }
-        Ok(())
-    }
 }
 
 fn draft_hash(kind: &str, text: &str) -> Result<String, String> {
     match kind {
         "transcript" => Ok(super::super::drafts::draft_hash(text)),
-        "minutes" => Ok(super::super::minutes_drafts::hash(text)),
+        "minutes" => Err("旧形式の議事録下書きには対応していません".into()),
         _ => Err("未知の復元下書きです".into()),
     }
 }

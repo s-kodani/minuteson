@@ -94,7 +94,10 @@ fn bootstrap_unregistered_old_layout_is_not_adopted_or_converted() {
     drop(old);
     let before = std::fs::read(f.legacy.join("meetings.sqlite3")).unwrap();
     assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
-    assert_eq!(std::fs::read(f.legacy.join("meetings.sqlite3")).unwrap(), before);
+    assert_eq!(
+        std::fs::read(f.legacy.join("meetings.sqlite3")).unwrap(),
+        before
+    );
     assert!(!f.legacy.join("data").exists());
     assert_eq!(
         std::fs::read(f.legacy.join("meetings/audio/record.flac")).unwrap(),
@@ -554,7 +557,11 @@ fn bootstrap_uninitialized_legacy_empty_database_is_not_silently_populated_with_
 
 #[test]
 fn bootstrap_old_schema_and_missing_current_relocation_capability_are_rejected_before_open() {
-    for (version, origin) in [(1, Origin::Default), (1, Origin::Relocated), (2, Origin::Relocated)] {
+    for (version, origin) in [
+        (1, Origin::Default),
+        (1, Origin::Relocated),
+        (2, Origin::Relocated),
+    ] {
         let f = Fixture::new();
         let (b, s) = f.start();
         let original = s.create_meeting("current data remains").unwrap();
@@ -570,9 +577,15 @@ fn bootstrap_old_schema_and_missing_current_relocation_capability_are_rejected_b
         let database = std::fs::read(root.join("meetings.sqlite3")).unwrap();
         assert!(Bootstrap::open(&f.config, &f.legacy).is_err());
         assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), config);
-        assert_eq!(std::fs::read(root.join("meetings.sqlite3")).unwrap(), database);
+        assert_eq!(
+            std::fs::read(root.join("meetings.sqlite3")).unwrap(),
+            database
+        );
         assert!(!f.target.exists());
-        assert_eq!(Storage::open(root).unwrap().list_meetings().unwrap(), vec![original]);
+        assert_eq!(
+            Storage::open(root).unwrap().list_meetings().unwrap(),
+            vec![original]
+        );
     }
 }
 

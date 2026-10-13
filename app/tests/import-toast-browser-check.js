@@ -37,7 +37,9 @@ async page => {
   await modal.getByRole("button", { name: "閉じる", exact: true }).click(); await modal.waitFor({ state: "hidden" });
   await host.getByRole("alert").filter({ hasText: "復号失敗" }).waitFor();
   await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
-  check(await page.getByLabel("音声の取り込みの要対応状態", { exact: true }).isVisible() && await calls("start_audio_import") === 0, "dismissal resolved failed receipt or admitted import");
+  check(await page.getByLabel("音声の取り込みの要対応状態", { exact: true }).count()===0 &&
+    await page.evaluate(()=>window.monImportFixture.import.phase==="failed"&&window.monImportFixture.import.errorMessage.includes("復号失敗")) && await calls("start_audio_import") === 0,
+    "dismissal cleared canonical failure, restored a removed inline banner or admitted import");
   results.push("modal failure preserves cause and input; closing shows important toast, whose dismissal retains issue without commands");
 
   await boot(); await open(); await modal.getByRole("button", { name: "閉じる", exact: true }).click();

@@ -76,7 +76,11 @@ fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
         .unwrap();
     MinutesJobRequest {
         meeting_id: f.meeting.clone(),
-        operation_id: if op == "managed-minutes" { Uuid::new_v4().to_string() } else { op.into() },
+        operation_id: if op == "managed-minutes" {
+            Uuid::new_v4().to_string()
+        } else {
+            op.into()
+        },
         expected_analysis_id: a.id,
         expected_content_hash: a.content_hash,
         expected_meeting_lock_version: f
@@ -85,10 +89,14 @@ fn request(f: &Fixture, op: &str) -> MinutesJobRequest {
             .unwrap()
             .unwrap()
             .lock_version,
-        expected_draft: f.storage.load_transcript_draft(&f.meeting).unwrap().map(|d| crate::storage::DraftStamp {
-            id: d.id,
-            lock_version: d.lock_version,
-        }),
+        expected_draft: f
+            .storage
+            .load_transcript_draft(&f.meeting)
+            .unwrap()
+            .map(|d| crate::storage::DraftStamp {
+                id: d.id,
+                lock_version: d.lock_version,
+            }),
     }
 }
 fn tracks(f: &Fixture) -> Vec<crate::diarization::TrackSettings> {
@@ -121,8 +129,15 @@ fn enqueue_all(f: &Fixture) -> Vec<JobSnapshot> {
     )
     .unwrap();
     let (l, b) = llama(f);
-    let m = crate::generation::markdown_job::enqueue_synthetic(&f.storage, request(f, "managed-minutes"), l, "standard", b, None)
-        .unwrap();
+    let m = crate::generation::markdown_job::enqueue_synthetic(
+        &f.storage,
+        request(f, "managed-minutes"),
+        l,
+        "standard",
+        b,
+        None,
+    )
+    .unwrap();
     vec![w, d, m]
 }
 
@@ -315,7 +330,10 @@ fn managed_jobs_transaction_gate_rejects_removed_or_forged_proof_and_head_change
         let count = f.count("analysis_input_snapshots");
         let produced = std::cell::Cell::new(false);
         let result = if kind == "generation" {
-            let target = serde_json::from_value(p.as_object_mut().unwrap().remove("markdownTarget").unwrap()).unwrap();
+            let target = serde_json::from_value(
+                p.as_object_mut().unwrap().remove("markdownTarget").unwrap(),
+            )
+            .unwrap();
             let mut request = request(&f, "late-minutes");
             request.operation_id = Uuid::new_v4().to_string();
             f.storage
@@ -330,8 +348,13 @@ fn managed_jobs_transaction_gate_rejects_removed_or_forged_proof_and_head_change
                     Ok((p, spec.total_units.unwrap()))
                 })
         };
-        assert!(produced.get(), "must reach snapshot production, not an earlier ID/target guard");
-        assert!(result.unwrap_err().contains("管理モデルの構成版が変わっています"));
+        assert!(
+            produced.get(),
+            "must reach snapshot production, not an earlier ID/target guard"
+        );
+        assert!(result
+            .unwrap_err()
+            .contains("管理モデルの構成版が変わっています"));
         assert_eq!(f.count("analysis_input_snapshots"), count);
     }
 }

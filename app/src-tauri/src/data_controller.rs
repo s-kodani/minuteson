@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use uuid::Uuid;
 
-mod dialog;
 #[cfg(unix)]
 mod automatic;
+mod dialog;
 #[cfg(unix)]
 pub(crate) mod partial_recording;
 mod work;

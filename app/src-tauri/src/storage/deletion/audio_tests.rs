@@ -1,5 +1,7 @@
 use super::*;
-use crate::storage::{analysis::tests as analysis_fixture, stored_minutes_fixture as minutes_fixture};
+use crate::storage::{
+    analysis::tests as analysis_fixture, current_minutes_fixture as minutes_fixture,
+};
 use std::{cell::Cell, path::PathBuf};
 
 pub(crate) struct Fixture {
@@ -194,15 +196,11 @@ impl Fixture {
         self.storage
             .create_transcript_draft(&self.meeting, &analysis)
             .unwrap();
-        for _ in 0..2 {
-            let candidate = minutes_fixture::candidate(&self.storage, &self.meeting);
-            self.storage
-                .seed_stored_minutes_head(&self.meeting, &candidate)
-                .unwrap();
-            self.storage
-                .seed_stored_minutes_draft(&self.meeting, &candidate)
-                .unwrap();
-        }
+        minutes_fixture::save(
+            &self.storage,
+            &self.meeting,
+            "# 音声削除後も保持する人間本文\n",
+        );
     }
 }
 
@@ -244,13 +242,17 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
         (preview.tracks[0].chunks, preview.tracks[0].duration_us),
         (1, 1_000_000)
     );
-    assert_eq!(preview.retained.minutes_revisions, 2);
-    // Each generated minutes input keeps its own fixed analysis snapshot.
-    assert_eq!(preview.retained.analysis_revisions, 3);
-    assert_eq!(preview.retained.utterances, 3);
-    assert_eq!(preview.retained.drafts, 3);
-    assert_eq!(preview.retained.jobs, 2);
-    assert!(preview.retained.evidence_links > 0);
+    assert_eq!(preview.retained.minutes_revisions, 1);
+    assert_eq!(preview.retained.analysis_revisions, 1);
+    assert_eq!(preview.retained.utterances, 1);
+    assert_eq!(preview.retained.drafts, 1);
+    assert_eq!(preview.retained.jobs, 0);
+    assert_eq!(preview.retained.evidence_links, 0);
+    assert!(f
+        .storage
+        .get_minutes_markdown(&f.meeting)
+        .unwrap()
+        .is_some());
     assert_eq!(preview.retained.external_export_records, 1);
     assert_eq!(
         entry(&preview, "manifest.json").disposition,
@@ -273,9 +275,8 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
     assert_eq!(f.storage.list_meetings().unwrap().len(), 2);
     assert_eq!(
         f.storage
-            .read_stored_minutes_state(&f.meeting)
+            .get_minutes_markdown(&f.meeting)
             .unwrap()
-            .current_id
             .is_some(),
         true
     );

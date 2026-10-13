@@ -31,11 +31,19 @@ test("modal entry points share primary actions while fields keep one stable body
   assert.match(editor,/createPortal\(actions, actionsHost\)/);
 });
 
-test("minutes comparison replaces settings without introducing a second native dialog", () => {
+test("plain minutes use direct controls without an operations dialog", () => {
   const panel=source("minutes.tsx"), modal=source("options-modal.tsx");
   assert.match(modal,/replacement=\{replacement\}/);
-  assert.match(panel,/<OptionsModal label="議事録の操作"/);
+  assert.doesNotMatch(panel,/OptionsModal|議事録の操作|retry_minutes_generation/);
+  assert.match(panel,/>議事録を生成<\/button>/);
   assert.doesNotMatch(panel,/replacement=|MinutesDocument|setPreview|直前版|候補を採用/);
+});
+
+test("meeting management is available only in detail, never as a list footer", () => {
+  const view=source("main.tsx");
+  assert.match(view,/const renderMeetingTools = .*=> !detail \? null : <OptionsModal/);
+  assert.doesNotMatch(view,/renderMeetingTools\(null, null\)|landing-tools/);
+  assert.match(view,/<RowMenu label=\{`\$\{meeting.title\}の操作`\}/);
 });
 
 

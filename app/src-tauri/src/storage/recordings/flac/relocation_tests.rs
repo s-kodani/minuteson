@@ -31,6 +31,11 @@ fn failed() -> Fixture {
     f
 }
 fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -> Storage {
+    // Register the current fixture explicitly; production never adopts an
+    // unregistered pre-bootstrap DB as a legacy default root.
+    if !config.join("bootstrap.json").exists() {
+        crate::bootstrap::set_test_root(config, &config.join("fixture-app-data"), storage.root());
+    }
     let bootstrap = Bootstrap::open(config, legacy).unwrap();
     assert_eq!(bootstrap.root(), storage.root());
     bootstrap.initialize(&storage).unwrap();

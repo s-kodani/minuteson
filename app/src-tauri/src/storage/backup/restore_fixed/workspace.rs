@@ -432,36 +432,7 @@ impl FixedWorkspace {
                     self.database.execute("UPDATE processing_jobs SET input_hash=?1,profile_snapshot_json=?2,parameters_json=?3,spec_hash=?4 WHERE id=?5",params![spec.input_hash,spec.profile_snapshot.to_string(),spec.parameters.to_string(),hash,id]).map_err(|e|e.to_string())?;
                 }
                 "minutes_revisions" => {
-                    let (input,input_hash,parent,parent_hash):(String,String,Option<String>,Option<String>)=fixed.ids.source().database.query_row("SELECT input_analysis_id,input_content_hash,parent_revision_id,parent_content_hash FROM minutes_revisions WHERE id=?1 AND meeting_id=?2",params![step.old_id,step.meeting],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
-                    let input_hash =
-                        fixed.resolve("analysis_revisions", &step.meeting, &input, &input_hash)?;
-                    let parent_hash = parent
-                        .as_deref()
-                        .map(|p| {
-                            fixed.resolve(
-                                "minutes_revisions",
-                                &step.meeting,
-                                p,
-                                parent_hash
-                                    .as_deref()
-                                    .ok_or("親議事録ハッシュがありません")?,
-                            )
-                        })
-                        .transpose()?;
-                    let tx = self.database.transaction().map_err(|e| e.to_string())?;
-                    tx.execute("UPDATE minutes_revisions SET input_content_hash=?1,parent_content_hash=?2 WHERE id=?3",params![input_hash,parent_hash,id]).map_err(|e|e.to_string())?;
-                    let hash = fixed.remember_revision(
-                        &tx,
-                        "minutes_revisions",
-                        &step.meeting,
-                        &step.old_id,
-                    )?;
-                    tx.execute(
-                        "UPDATE minutes_revisions SET content_hash=?1 WHERE id=?2",
-                        params![hash, id],
-                    )
-                    .map_err(|e| e.to_string())?;
-                    tx.commit().map_err(|e| e.to_string())?;
+                    return Err("旧形式の構造化議事録には対応していません".into())
                 }
                 _ => return Err("未知の固定データ再構成段階です".into()),
             }

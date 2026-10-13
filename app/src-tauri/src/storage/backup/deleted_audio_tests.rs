@@ -242,11 +242,7 @@ fn deleted_audio_historical_read_still_requires_ready_manifest_and_saved_source_
 fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_without_source_bodies()
 {
     let (_root, storage, meeting) = fixture();
-    let candidate = crate::storage::stored_minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &candidate)
-        .unwrap();
-    storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
+    crate::storage::current_minutes_fixture::candidate(&storage, &meeting);
     let neighbor = tests::meeting(&storage, "neighbor-audio-import");
     let output = tempfile::tempdir().unwrap();
     let db = storage.connection.lock().unwrap();
@@ -264,9 +260,10 @@ fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_wit
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let history: (i64,i64,i64,i64,i64) = db.query_row("SELECT (SELECT count(*) FROM working_drafts WHERE meeting_id=?1),(SELECT count(*) FROM audio_imports WHERE meeting_id=?1),(SELECT count(*) FROM audio_import_commits WHERE meeting_id=?1),(SELECT count(*) FROM minutes_revisions WHERE meeting_id=?1),(SELECT count(*) FROM evidence_links e JOIN minutes_revisions m ON m.id=e.minutes_revision_id WHERE m.meeting_id=?1)", [&meeting], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
-    assert!(history.3 > 0 && history.4 > 0);
+    let history: (i64,i64,i64,i64) = db.query_row("SELECT (SELECT count(*) FROM working_drafts WHERE meeting_id=?1),(SELECT count(*) FROM audio_imports WHERE meeting_id=?1),(SELECT count(*) FROM audio_import_commits WHERE meeting_id=?1),(SELECT count(*) FROM minutes_markdown WHERE meeting_id=?1)", [&meeting], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert!(history.3 > 0);
     drop(db);
+    let markdown = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     deleted(&storage, &meeting);
     let (archive, receipt) = write(&storage, output.path());
     assert_eq!(archive.manifest.format_version, 3);
@@ -298,7 +295,18 @@ fn deleted_audio_archive_preserves_text_drafts_references_and_import_history_wit
             .unwrap(),
         text
     );
-    assert_eq!(archive.database.query_row("SELECT (SELECT count(*) FROM working_drafts WHERE meeting_id=?1),(SELECT count(*) FROM audio_imports WHERE meeting_id=?1),(SELECT count(*) FROM audio_import_commits WHERE meeting_id=?1),(SELECT count(*) FROM minutes_revisions WHERE meeting_id=?1),(SELECT count(*) FROM evidence_links e JOIN minutes_revisions m ON m.id=e.minutes_revision_id WHERE m.meeting_id=?1)", [&meeting], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?))).unwrap(), history);
+    assert_eq!(archive.database.query_row("SELECT (SELECT count(*) FROM working_drafts WHERE meeting_id=?1),(SELECT count(*) FROM audio_imports WHERE meeting_id=?1),(SELECT count(*) FROM audio_import_commits WHERE meeting_id=?1),(SELECT count(*) FROM minutes_markdown WHERE meeting_id=?1)", [&meeting], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).unwrap(), history);
+    assert_eq!(
+        archive
+            .database
+            .query_row(
+                "SELECT markdown FROM minutes_markdown WHERE meeting_id=?1",
+                [&meeting],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        markdown.markdown
+    );
     let available: bool = archive.database.query_row("SELECT EXISTS(SELECT 1 FROM file_assets WHERE meeting_id=?1 AND media_type LIKE 'audio/%' AND state!='missing') OR EXISTS(SELECT 1 FROM audio_tracks WHERE meeting_id=?1 AND state!='failed') OR EXISTS(SELECT 1 FROM audio_chunks WHERE meeting_id=?1 AND state!='missing')", [&meeting], |r|r.get(0)).unwrap();
     assert!(!available);
     assert_eq!(

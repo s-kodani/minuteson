@@ -55,7 +55,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
     let draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
     let request = crate::storage::MinutesJobRequest {
         meeting_id: meeting.clone(),
-        operation_id: "deleted-generated-minutes".into(),
+        operation_id: Uuid::new_v4().to_string(),
         expected_analysis_id: analysis.id.clone(),
         expected_content_hash: analysis.content_hash.clone(),
         expected_meeting_lock_version: storage.get_meeting(&meeting).unwrap().unwrap().lock_version,
@@ -64,20 +64,24 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
             lock_version: draft.lock_version,
         }),
     };
-    let generation = crate::generation::stored_fixture::seed_job(
+    let generation = crate::generation::markdown_job::enqueue_synthetic(
         &storage,
         request,
-        crate::generation::stored_fixture::engine(root.path(), false),
+        crate::storage::markdown_generation_tests::engine(root.path(), "normal"),
         "standard",
         2400,
-        4,
+        None,
     )
     .unwrap();
-    let candidate = crate::generation::stored_fixture::seed_outputs(&storage, &generation, false, false).unwrap();
-    storage
-        .seed_stored_minutes_head(&meeting, &candidate)
-        .unwrap();
-    storage.seed_stored_minutes_draft(&meeting, &candidate).unwrap();
+    storage.acquire_local_inference_job().unwrap().unwrap();
+    crate::storage::markdown_generation_tests::process(
+        &storage,
+        &generation.id,
+        &|| false,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
     let segmentation = root.path().join("segmentation.onnx");
     let embedding = root.path().join("embedding.onnx");
     std::fs::write(&segmentation, b"owned segmentation").unwrap();
@@ -127,15 +131,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .finish_job(&diarization.id, 0, "cancelled", None)
         .unwrap();
     let neighbor = tests::meeting(&storage, "available-workspace-neighbor");
-    let old_minutes = storage
-        .read_stored_minutes_state(&meeting)
-        .unwrap()
-        .current_id
-        .unwrap();
-    let old_content = storage
-        .load_minutes_content(&meeting, &old_minutes)
-        .unwrap()
-        .unwrap();
+    let old_content = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     let old_plan = storage.recorded_audio_plan(&meeting).unwrap();
     deleted(&storage, &meeting);
     let output = tempfile::tempdir().unwrap();
@@ -179,23 +175,16 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         );
         assert_ne!(plan.tracks[0].id, old_plan.tracks[0].id);
     }
-    let new_minutes = ids
-        .get("minutes_revisions", &meeting, &old_minutes)
+    let db = Connection::open(sealed.root_path().unwrap().join("fixed.sqlite3")).unwrap();
+    let restored: String = db
+        .query_row(
+            "SELECT markdown FROM minutes_markdown WHERE meeting_id=?1",
+            [&new_meeting],
+            |r| r.get(0),
+        )
         .unwrap();
-    let mut db = Connection::open(sealed.root_path().unwrap().join("fixed.sqlite3")).unwrap();
-    let tx = db.transaction().unwrap();
-    let content = crate::storage::minutes::read_content(&tx, &new_meeting, &new_minutes)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        content.content.items[0].body,
-        old_content.content.items[0].body
-    );
-    assert_eq!(
-        content.content.evidence[0].quote_text,
-        old_content.content.evidence[0].quote_text
-    );
-    drop(tx);
+    assert_eq!(restored, old_content.markdown);
+    drop(db);
     let target = Storage::open(root.path().join("target")).unwrap();
     assert!(matches!(
         target.publish_restore(&sealed, &ids, &|| false).unwrap(),
@@ -211,23 +200,16 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         .load_transcript_draft(&new_meeting)
         .unwrap()
         .is_some());
-    assert!(target
-        .read_stored_minutes_draft(&new_meeting, Some(&new_minutes))
-        .unwrap()
-        .is_some());
+    assert_eq!(
+        target
+            .get_minutes_markdown(&new_meeting)
+            .unwrap()
+            .unwrap()
+            .markdown,
+        old_content.markdown
+    );
     let mut db = target.connection.lock().unwrap();
     let tx = db.transaction().unwrap();
-    let published = crate::storage::minutes::read_content(&tx, &new_meeting, &new_minutes)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        published.content.items[0].body,
-        old_content.content.items[0].body
-    );
-    assert_eq!(
-        published.content.evidence[0].quote_text,
-        old_content.content.evidence[0].quote_text
-    );
     assert_eq!(tx.query_row("SELECT count(*) FROM maintenance_operations WHERE kind='delete_assets' AND state='completed'", [], |r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(tx.query_row("SELECT count(*) FROM restore_omitted_assets WHERE meeting_id=?1 AND reason='recreatable_pcm'", [&new_meeting], |r|r.get::<_,i64>(0)).unwrap(),0);
     drop(tx);

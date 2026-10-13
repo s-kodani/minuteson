@@ -1,6 +1,7 @@
 use super::*;
 use crate::storage::draft_splits::{SplitPart, UtteranceSplit};
 use crate::storage::drafts::{ManualSpeaker, UtteranceEdit};
+use serde_json::json;
 use std::cell::Cell;
 
 pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) -> String {
@@ -44,20 +45,8 @@ pub(in crate::storage::backup) fn fixture(storage: &Storage, operation: &str) ->
     storage
         .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
-    let revision = super::super::super::stored_minutes_fixture::candidate(storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &revision)
-        .unwrap();
-    let mut minutes = storage.seed_stored_minutes_draft(&meeting, &revision).unwrap();
-    for text in ["手動追記1", "手動追記2"] {
-        minutes.payload.blocks.push(Block::Paragraph {
-            item_id: None,
-            content: vec![Inline::text(text)],
-        });
-        minutes = storage
-            .seed_stored_minutes_edit(&minutes.id, minutes.lock_version, minutes.payload)
-            .unwrap();
-    }
+    super::super::super::current_minutes_fixture::candidate(storage, &meeting);
+
     meeting
 }
 
@@ -226,8 +215,7 @@ fn all_relational_ids_are_new_and_scoped_while_sources_and_live_data_stay_unchan
 }
 
 #[test]
-fn drafts_splits_undo_and_rich_document_references_share_the_new_identity_without_text_replacement()
-{
+fn transcript_drafts_splits_and_undo_share_new_identity_without_text_replacement() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -275,79 +263,6 @@ fn drafts_splits_undo_and_rich_document_references_share_the_new_identity_withou
         mapped.utterance_splits[0].parts[0].speaker_ids[0],
         mapped.manual_speakers[0].id
     );
-    let json: String = source
-        .database
-        .query_row(
-            "SELECT payload_json FROM edit_operations LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut history: TranscriptDraftPayload = serde_json::from_str(&json).unwrap();
-    plan.transcript(&meeting, &mut history).unwrap();
-    assert_eq!(history, mapped);
-    let json: String = source
-        .database
-        .query_row(
-            "SELECT effective_document_json FROM minutes_revisions WHERE meeting_id=?1 LIMIT 1",
-            params![meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut content: MinutesContent = serde_json::from_str(&json).unwrap();
-    let old_content = content.clone();
-    let inline = Inline::Evidence {
-        minutes_item_id: content.items[0].id.clone(),
-        evidence_link_id: content.evidence[0].id.clone(),
-    };
-    // Exercise all rich-text containers, not just the generated paragraph.
-    content.blocks = vec![
-        Block::Heading {
-            level: 1,
-            item_id: Some(content.items[0].id.clone()),
-            content: vec![Inline::text(&content.items[0].id), inline.clone()],
-        },
-        Block::List {
-            ordered: false,
-            items: vec![crate::minutes_document::TextBlock {
-                item_id: Some(content.items[0].id.clone()),
-                content: vec![inline.clone()],
-            }],
-        },
-        Block::Table {
-            headers: vec![vec![inline.clone()]],
-            rows: vec![crate::minutes_document::TableRow {
-                item_id: Some(content.items[0].id.clone()),
-                cells: vec![vec![inline]],
-            }],
-        },
-    ];
-    plan.minutes(&meeting, &mut content).unwrap();
-    assert_ne!(content.items[0].id, old_content.items[0].id);
-    assert_eq!(content.items[0].body, old_content.items[0].body);
-    assert_eq!(
-        content.evidence[0].quote_text,
-        old_content.evidence[0].quote_text
-    );
-    assert_eq!(content.evidence[0].minutes_item_id, content.items[0].id);
-    if let Block::Heading {
-        item_id,
-        content: parts,
-        ..
-    } = &content.blocks[0]
-    {
-        assert_eq!(item_id.as_ref(), Some(&content.items[0].id));
-        assert_eq!(parts[0], Inline::text(&old_content.items[0].id));
-        assert_eq!(
-            parts[1],
-            Inline::Evidence {
-                minutes_item_id: content.items[0].id.clone(),
-                evidence_link_id: content.evidence[0].id.clone()
-            }
-        );
-    } else {
-        panic!("heading missing");
-    }
     let (before, after): (String, String) = source
         .database
         .query_row(
@@ -411,7 +326,7 @@ fn cancellation_and_invalid_batch_remove_only_owned_planning_files() {
 }
 
 #[test]
-fn typed_document_references_from_other_meetings_are_rejected_including_manual_edits() {
+fn transcript_references_from_other_meetings_are_rejected_including_manual_edits() {
     let root = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -434,35 +349,30 @@ fn typed_document_references_from_other_meetings_are_rejected_including_manual_e
     let before = payload.clone();
     assert!(plan.transcript(&a, &mut payload).is_err());
     assert_eq!(payload, before);
-    let text: String = source
-        .database
-        .query_row(
-            "SELECT effective_document_json FROM minutes_revisions WHERE meeting_id=?1",
-            params![a],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let mut content: MinutesContent = serde_json::from_str(&text).unwrap();
-    content.evidence[0].analysis_revision_id =
-        storage.load_current_analysis(&b).unwrap().unwrap().id;
-    let before = content.clone();
-    assert!(plan.minutes(&a, &mut content).is_err());
-    assert_eq!(content, before);
     assert_eq!(storage.list_meetings().unwrap().len(), 2);
 }
 
 #[test]
-fn private_plan_rejects_all_four_dependency_cycles_without_modifying_live_data() {
-    for domain in [
-        "analysis_revisions",
-        "minutes_revisions",
-        "processing_jobs",
-        "audio_tracks",
-    ] {
+fn private_plan_rejects_current_dependency_cycles_without_modifying_live_data() {
+    for domain in ["analysis_revisions", "processing_jobs", "audio_tracks"] {
         let root = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
         let meeting = fixture(&storage, "import");
+        if domain == "processing_jobs" {
+            storage
+                .enqueue_job(crate::storage::JobSpec {
+                    meeting_id: meeting.clone(),
+                    operation_id: Uuid::new_v4().to_string(),
+                    kind: crate::storage::JobKind::Transcription,
+                    input_analysis_id: None,
+                    input_hash: "a".repeat(64),
+                    profile_snapshot: json!({"fixture":true}),
+                    parameters: json!({"cycle":true}),
+                    total_units: Some(1),
+                })
+                .unwrap();
+        }
         let source = read(&storage, output.path());
         // Mutate only the operation-owned validation copy to model rehashed input.
         source
@@ -470,7 +380,7 @@ fn private_plan_rejects_all_four_dependency_cycles_without_modifying_live_data()
             .execute_batch("PRAGMA query_only=OFF;")
             .unwrap();
         match domain {
-            "analysis_revisions" | "minutes_revisions" => {
+            "analysis_revisions" => {
                 source
                     .database
                     .execute(&format!("UPDATE {domain} SET parent_revision_id=id"), [])
@@ -575,7 +485,7 @@ fn a_long_parent_chain_is_planned_iteratively_and_every_parent_precedes_its_chil
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(count, 3_002);
+    assert_eq!(count, 3_001);
     assert_eq!(storage.list_meetings().unwrap().len(), 1);
 }
 
@@ -688,7 +598,7 @@ fn rebuilding_drafts_and_undo_preserves_the_chain_and_text_with_new_reference_ha
         assert_eq!(previous, Some(hash));
         counts.insert(kind, count);
     }
-    assert_eq!(counts.get("minutes"), Some(&2));
+    assert_eq!(counts.get("minutes"), None);
     assert_eq!(counts.get("transcript"), Some(&1));
     assert!(plan.draft_row("processing_jobs", 1).is_err());
     assert!(plan.draft_json("unknown", "", "{}").is_err());
@@ -700,7 +610,18 @@ fn modified_draft_hash_and_broken_undo_chain_are_rejected_before_planning() {
         let root = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
-        fixture(&storage, "import");
+        let meeting = fixture(&storage, "import");
+        if corruption == "chain" {
+            // An empty history is a valid current snapshot. A broken retained
+            // chain needs at least two real saves before removing its first.
+            let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
+            draft.payload.manual_speakers[0]
+                .label
+                .push_str(" 二回目の改名");
+            storage
+                .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
+                .unwrap();
+        }
         let source = read(&storage, output.path());
         source
             .database
@@ -711,7 +632,7 @@ fn modified_draft_hash_and_broken_undo_chain_are_rejected_before_planning() {
             "payload"=>"UPDATE edit_operations SET after_hash=replace(hex(zeroblob(32)),'0','f')",
             "inverse"=>"UPDATE edit_operations SET before_hash=replace(hex(zeroblob(32)),'0','f')",
             "sequence"=>"UPDATE edit_operations SET sequence=sequence+100",
-            _=>"DELETE FROM edit_operations WHERE sequence=1 AND draft_id IN (SELECT id FROM working_drafts WHERE target_kind='minutes')",
+            _=>"DELETE FROM edit_operations WHERE sequence=(SELECT min(sequence) FROM edit_operations) AND draft_id IN (SELECT id FROM working_drafts WHERE target_kind='transcript')",
         };
         source.database.execute(sql, []).unwrap();
         source

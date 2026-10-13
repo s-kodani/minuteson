@@ -128,10 +128,7 @@ impl Aliases {
         let Some(record) = self.records.get(operation) else {
             return Ok(false);
         };
-        if !self.cold
-            || record.kind != "delete_meeting"
-            || record.state != "completed"
-        {
+        if !self.cold || record.kind != "delete_meeting" || record.state != "completed" {
             return Ok(false);
         }
         self.matches_root(db, operation, root, database, current)

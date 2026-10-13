@@ -289,44 +289,6 @@ fn rebuild_jobs(fixed: &FixedData<'_, '_>, target: &Connection) {
     }
 }
 
-fn rebuild_minutes(fixed: &FixedData<'_, '_>, target: &mut Connection) {
-    for id in strings(
-        &fixed.ids.source().database,
-        "SELECT id FROM minutes_revisions ORDER BY meeting_id,revision_no",
-    ) {
-        let (meeting,input,input_hash,parent,parent_hash):(String,String,String,Option<String>,Option<String>)=fixed.ids.source().database.query_row("SELECT meeting_id,input_analysis_id,input_content_hash,parent_revision_id,parent_content_hash FROM minutes_revisions WHERE id=?1",params![id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
-        let new_id = fixed.ids.get("minutes_revisions", &meeting, &id).unwrap();
-        let input_hash = fixed
-            .resolve("analysis_revisions", &meeting, &input, &input_hash)
-            .unwrap();
-        let parent_hash = parent.as_deref().map(|p| {
-            fixed
-                .resolve(
-                    "minutes_revisions",
-                    &meeting,
-                    p,
-                    parent_hash.as_deref().unwrap(),
-                )
-                .unwrap()
-        });
-        let tx = target.transaction().unwrap();
-        tx.execute(
-            "UPDATE minutes_revisions SET input_content_hash=?1,parent_content_hash=?2 WHERE id=?3",
-            params![input_hash, parent_hash, new_id],
-        )
-        .unwrap();
-        let hash = fixed
-            .remember_revision(&tx, "minutes_revisions", &meeting, &id)
-            .unwrap();
-        tx.execute(
-            "UPDATE minutes_revisions SET content_hash=?1 WHERE id=?2",
-            params![hash, new_id],
-        )
-        .unwrap();
-        tx.commit().unwrap();
-    }
-}
-
 #[test]
 fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_text() {
     let root = tempfile::tempdir().unwrap();
@@ -334,15 +296,7 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
     let storage = Storage::open(root.path().into()).unwrap();
     let meeting = fixture(&storage, "fixed");
     let original_draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
-    let minutes_id = storage
-        .read_stored_minutes_state(&meeting)
-        .unwrap()
-        .current_id
-        .unwrap();
-    let original_minutes = storage
-        .load_minutes_content(&meeting, &minutes_id)
-        .unwrap()
-        .unwrap();
+    let original_minutes = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
     let source = read(&storage, output.path());
     let ids = RestoreIds::prepare(&source, output.path(), &Uuid::new_v4().to_string(), &|| {
         false
@@ -367,35 +321,14 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
     }
     rebuild_analyses(&fixed, &mut target);
     rebuild_jobs(&fixed, &target);
-    rebuild_minutes(&fixed, &mut target);
     super::super::validate_database(&mut target, &|| false).unwrap();
     let new_meeting = ids.get("meetings", "", &meeting).unwrap();
     let tx = target.transaction().unwrap();
-    let new_minutes = super::super::super::minutes::read_content(
-        &tx,
-        &new_meeting,
-        &ids.get("minutes_revisions", &meeting, &original_minutes.id)
-            .unwrap(),
-    )
-    .unwrap()
-    .unwrap();
-    assert_ne!(new_minutes.content_hash, original_minutes.content_hash);
-    assert_eq!(
-        new_minutes.content.items[0].body,
-        original_minutes.content.items[0].body
-    );
-    assert_eq!(
-        new_minutes.content.evidence[0].quote_text,
-        original_minutes.content.evidence[0].quote_text
-    );
-    assert_eq!(
-        new_minutes.content.evidence[0].start_us,
-        original_minutes.content.evidence[0].start_us
-    );
-    assert_eq!(
-        new_minutes.content.evidence[0].end_us,
-        original_minutes.content.evidence[0].end_us
-    );
+    let new_minutes = crate::storage::minutes_markdown::read(&tx, &new_meeting)
+        .unwrap()
+        .unwrap();
+    assert_eq!(new_minutes.content_hash, original_minutes.content_hash);
+    assert_eq!(new_minutes.markdown, original_minutes.markdown);
     for id in strings(
         &tx,
         "SELECT id FROM processing_jobs WHERE kind='diarization'",
@@ -451,7 +384,7 @@ fn typed_fixed_data_rebuilds_native_inputs_and_hashes_without_changing_audio_or_
     );
     assert_eq!(
         storage
-            .load_minutes_content(&meeting, &minutes_id)
+            .get_minutes_markdown(&meeting)
             .unwrap()
             .unwrap()
             .content_hash,
@@ -704,7 +637,7 @@ fn hash_registry_is_private_cancellable_and_resolves_exact_historical_draft_hash
     .is_err());
     assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), before);
     let fixed = FixedData::new(&ids, output.path(), &|| false).unwrap();
-    let (draft,kind,text,hash):(String,String,String,String)=source.database.query_row("SELECT d.id,d.target_kind,e.inverse_json,e.before_hash FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.target_kind='minutes' ORDER BY e.sequence LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    let (draft,kind,text,hash):(String,String,String,String)=source.database.query_row("SELECT d.id,d.target_kind,e.payload_json,e.after_hash FROM edit_operations e JOIN working_drafts d ON d.id=e.draft_id WHERE d.target_kind='transcript' ORDER BY e.sequence LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     let (json, new) = ids.draft_json(&kind, &meeting, &text).unwrap();
     assert_eq!(
         fixed

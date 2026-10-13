@@ -20,7 +20,6 @@ mod input_status;
 mod local_engine;
 #[cfg(target_os = "macos")]
 mod macos_menu;
-mod minutes_document;
 mod model_application;
 #[cfg(target_os = "macos")]
 mod model_bundled_runtime;
@@ -90,8 +89,6 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
-
-
 
 #[tauri::command]
 fn cancel_model_inspection(window: WebviewWindow, token: String) -> Result<(), String> {
@@ -381,7 +378,6 @@ async fn check_model_compatibility(
     .map_err(|e| e.to_string())?
 }
 
-
 #[tauri::command]
 fn get_audio_import(window: WebviewWindow) -> Result<import_controller::Snapshot, String> {
     if window.label() != "main" {
@@ -550,11 +546,6 @@ fn get_audio_deletion_paths(
 fn review_storage_move(window: WebviewWindow) -> Result<data_controller::Snapshot, String> {
     DataController::review_move(&data_app(&window)?)
 }
-
-
-
-
-
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -739,11 +730,6 @@ fn get_analysis_versions(
     window.state::<Storage>().analysis_versions(&meeting_id)
 }
 
-
-
-
-
-
 #[tauri::command]
 async fn start_markdown_minutes_generation(
     window: WebviewWindow,
@@ -766,7 +752,6 @@ fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
     }
     Ok(window.app_handle().clone())
 }
-
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -889,15 +874,6 @@ async fn save_minutes_markdown(
     Ok(document)
 }
 
-
-
-
-
-
-
-
-
-
 #[tauri::command]
 fn get_analysis_flow(
     window: WebviewWindow,
@@ -911,40 +887,80 @@ fn get_analysis_flow(
 }
 
 #[tauri::command]
-async fn get_transcription_regeneration_target(window: WebviewWindow, meeting_id: String) -> Result<storage::analysis_flows::regeneration::Admission, String> {
-    if window.label() != "main" { return Err("文字起こしの再生成はメイン画面から操作してください".into()); }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().regeneration_admission(&meeting_id)).await.map_err(|e|e.to_string())?
-}
-#[tauri::command]
-async fn regenerate_transcription(window: WebviewWindow, request: storage::analysis_flows::regeneration::Request) -> Result<storage::analysis_flows::AnalysisFlow, String> {
-    if window.label() != "main" { return Err("文字起こしの再生成はメイン画面から操作してください".into()); }
+async fn get_transcription_regeneration_target(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::analysis_flows::regeneration::Admission, String> {
+    if window.label() != "main" {
+        return Err("文字起こしの再生成はメイン画面から操作してください".into());
+    }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(flow) = app.state::<Storage>().regeneration_replay(&request)? { return Ok(flow); }
+        app.state::<Storage>().regeneration_admission(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn regenerate_transcription(
+    window: WebviewWindow,
+    request: storage::analysis_flows::regeneration::Request,
+) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" {
+        return Err("文字起こしの再生成はメイン画面から操作してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(flow) = app.state::<Storage>().regeneration_replay(&request)? {
+            return Ok(flow);
+        }
         let flow = AnalysisController::with_model_preparation(&app, &|| false, |lease| {
             app.state::<capture_test::CaptureTests>().require_empty()?;
-            app.state::<Storage>().regenerate_analysis(&request, &|| lease.cancelled())
+            app.state::<Storage>()
+                .regenerate_analysis(&request, &|| lease.cancelled())
         })?;
         let _ = app.emit("analysis-flow-changed", flow.clone());
         Ok(flow)
-    }).await.map_err(|e|e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn get_ready_analysis_flows(window: WebviewWindow) -> Result<Vec<storage::analysis_flows::AnalysisFlow>, String> {
-    if window.label() != "main" { return Err("文字起こしの保存はメイン画面から操作してください".into()); }
+async fn get_ready_analysis_flows(
+    window: WebviewWindow,
+) -> Result<Vec<storage::analysis_flows::AnalysisFlow>, String> {
+    if window.label() != "main" {
+        return Err("文字起こしの保存はメイン画面から操作してください".into());
+    }
     let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().ready_analysis_flows()).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().ready_analysis_flows())
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn publish_regenerated_transcription(window: WebviewWindow, meeting_id: String, flow_id: String, expected_lock_version: i64) -> Result<storage::analysis_flows::AnalysisFlow, String> {
-    if window.label() != "main" { return Err("文字起こしの保存はメイン画面から操作してください".into()); }
+async fn publish_regenerated_transcription(
+    window: WebviewWindow,
+    meeting_id: String,
+    flow_id: String,
+    expected_lock_version: i64,
+) -> Result<storage::analysis_flows::AnalysisFlow, String> {
+    if window.label() != "main" {
+        return Err("文字起こしの保存はメイン画面から操作してください".into());
+    }
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = app.state::<Storage>().publish_regenerated_flow(&meeting_id, &flow_id, expected_lock_version);
-        if let Ok(Some(flow)) = app.state::<Storage>().analysis_flow(&meeting_id) { let _ = app.emit("analysis-flow-changed", flow); }
+        let result = app.state::<Storage>().publish_regenerated_flow(
+            &meeting_id,
+            &flow_id,
+            expected_lock_version,
+        );
+        if let Ok(Some(flow)) = app.state::<Storage>().analysis_flow(&meeting_id) {
+            let _ = app.emit("analysis-flow-changed", flow);
+        }
         result
-    }).await.map_err(|e|e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -986,25 +1002,6 @@ fn continue_analysis_flow(
         .map_err(|e| e.to_string())?;
     AnalysisController::kick(window.app_handle())?;
     Ok(flow)
-}
-
-
-#[tauri::command]
-async fn retry_diarization(
-    window: WebviewWindow,
-    request: diarization::RetryRequest,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can retry diarization".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1060,39 +1057,6 @@ async fn get_analysis_notification_output(
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<Storage>().notification_output(&job_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn retry_transcription(
-    window: WebviewWindow,
-    request: transcription::RetryRequest,
-) -> Result<storage::JobSnapshot, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can retry analysis".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn retry_minutes_generation(
-    window: WebviewWindow,
-    request: generation::RetryRequest,
-) -> Result<storage::JobSnapshot, String> {
-    let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let job = request.enqueue(&app.state::<Storage>())?;
-        AnalysisController::kick(&app)?;
-        Ok(job)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1155,8 +1119,6 @@ async fn cancel_analysis_job(
     .map_err(|e| e.to_string())?
 }
 
-
-
 #[tauri::command]
 fn register_playback_preparation(
     window: WebviewWindow,
@@ -1197,8 +1159,6 @@ fn finish_playback_preparation(
         .acknowledge(&preparation_id, &playback_token)
 }
 
-
-
 #[tauri::command]
 async fn prepare_meeting_playback(
     window: WebviewWindow,
@@ -1222,22 +1182,35 @@ async fn prepare_meeting_playback(
 }
 
 #[tauri::command]
-async fn get_meeting_audio_summary(window: WebviewWindow, meeting_id: String) -> Result<storage::MeetingAudioSummary, String> {
+async fn get_meeting_audio_summary(
+    window: WebviewWindow,
+    meeting_id: String,
+) -> Result<storage::MeetingAudioSummary, String> {
     let app = minutes_app(&window)?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().meeting_audio_summary(&meeting_id))
-        .await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Storage>().meeting_audio_summary(&meeting_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn prepare_markdown_interval_playback(window: WebviewWindow, request: storage::MeetingIntervalRequest,
-    preparation_id: String) -> Result<PlaybackInfo, String> {
+async fn prepare_markdown_interval_playback(
+    window: WebviewWindow,
+    request: storage::MeetingIntervalRequest,
+    preparation_id: String,
+) -> Result<PlaybackInfo, String> {
     let app = minutes_app(&window)?;
     let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         guard.check()?;
-        let audio = app.state::<Storage>().prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
+        let audio = app
+            .state::<Storage>()
+            .prepare_meeting_interval_cancellable(&request, &|| guard.cancelled())?;
         guard.publish(|| app.state::<PlaybackStore>().insert_interval(audio))
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1422,36 +1395,6 @@ async fn get_capture_test_snapshot(
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<capture_test::CaptureTests>()
             .snapshot(run_id.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-async fn get_capture_test_recovery(
-    window: WebviewWindow,
-) -> Result<capture_test::recovery::Snapshot, String> {
-    if window.label() != "main" {
-        return Err("テスト音声の回復はメイン画面から確認してください".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        app.state::<capture_test::CaptureTests>()
-            .recovery_snapshot()
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-async fn retry_capture_test_recovery(
-    window: WebviewWindow,
-    expected_revision: u64,
-) -> Result<capture_test::recovery::Snapshot, String> {
-    if window.label() != "main" {
-        return Err("テスト音声の回復はメイン画面から操作してください".into());
-    }
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        capture_test::CaptureTests::recover(&app, Some(expected_revision))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1885,18 +1828,6 @@ fn open_main_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_meeting(
-    window: WebviewWindow,
-    storage: State<'_, Storage>,
-    title: String,
-) -> Result<Meeting, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can create meetings".into());
-    }
-    storage.create_meeting(&title)
-}
-
-#[tauri::command]
 fn list_meetings(
     window: WebviewWindow,
     storage: State<'_, Storage>,
@@ -1970,10 +1901,6 @@ fn begin_transcript_draft(
     storage.create_transcript_draft(&meeting_id, &analysis_id)
 }
 
-
-
-
-
 #[tauri::command]
 fn save_transcript_draft(
     window: WebviewWindow,
@@ -1987,7 +1914,6 @@ fn save_transcript_draft(
     }
     storage.save_transcript_draft(&draft_id, expected_lock_version, payload)
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2157,8 +2083,6 @@ pub fn run() {
                 render_recording_input_notice,
                 close_recording_input_notice,
                 get_capture_test_snapshot,
-                get_capture_test_recovery,
-                retry_capture_test_recovery,
                 start_capture_test,
                 cancel_capture_test,
                 discard_capture_test,
@@ -2182,7 +2106,6 @@ pub fn run() {
                 recorder_operation_notices::dismiss_recorder_operation_notice,
                 recorder_info::show_recorder_info,
                 recorder_info::close_recorder_info,
-                create_meeting,
                 list_meetings,
                 get_meeting,
                 rename_meeting,
@@ -2208,7 +2131,6 @@ pub fn run() {
                 publish_regenerated_transcription,
                 start_analysis_flow,
                 continue_analysis_flow,
-                retry_diarization,
                 get_diarization_tracks,
                 start_markdown_minutes_generation,
                 get_minutes_markdown,
@@ -2220,8 +2142,6 @@ pub fn run() {
                 get_analysis_jobs,
                 get_analysis_notification_jobs,
                 get_analysis_notification_output,
-                retry_transcription,
-                retry_minutes_generation,
                 pause_analysis_job,
                 resume_analysis_job,
                 cancel_analysis_job,

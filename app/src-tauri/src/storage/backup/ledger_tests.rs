@@ -8,7 +8,6 @@ fn read(storage: &Storage, output: &Path) -> archive::VerifiedArchive {
     archive::read(&mut File::open(path).unwrap(), output, &|| false).unwrap()
 }
 
-
 #[test]
 fn restore_ledger_reservation_survives_reopen_and_same_plan_never_duplicates_or_touches_existing_meetings(
 ) {

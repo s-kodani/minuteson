@@ -44,7 +44,10 @@ async (page) => {
 
   await page.setViewportSize({ width: 960, height: 720 }); await page.evaluate(() => window.infoFixture.setAnchor(48, 80)); await open();
   const before = await popup().boundingBox(); await page.evaluate(() => window.infoFixture.setAnchor(160, 120));
-  await page.waitForFunction(() => Number.parseFloat(document.querySelector(".info-popover:popover-open").style.left) > 250);
+  await page.waitForFunction(({ x, y }) => {
+    const r = document.querySelector(".info-popover:popover-open")?.getBoundingClientRect();
+    return r && r.x > x && r.y > y;
+  }, before);
   const after = await popup().boundingBox(); check(after.x > before.x && after.y > before.y, "anchor update left popup behind");
   await page.setViewportSize({ width: 400, height: 350 });
   await page.waitForFunction(() => { const e = document.querySelector(".info-popover:popover-open"), r = e?.getBoundingClientRect(); return r && r.right <= document.documentElement.clientWidth - 7.9 && r.bottom <= document.documentElement.clientHeight - 7.9; });
@@ -61,7 +64,10 @@ async (page) => {
   check(await modal.getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "help stole confirmation focus");
   await open("確認内の補足"); await close("確認内の補足"); check(await modal.isVisible(), "Escape closed parent confirmation");
   check((await modal.innerText()).includes("削除したデータは復元できません"), "irreversible warning hidden in help");
-  await open("確認内の補足"); await modal.getByRole("textbox", { name: "確認の入力" }).click(); await popup("確認内の補足").waitFor({ state: "hidden" });
+  // The input below the trigger is legitimately covered by its help popup.
+  // Click the exposed modal heading before interacting with that input.
+  await open("確認内の補足"); await modal.getByRole("heading", { name:"対象の変更確認",exact:true }).click(); await popup("確認内の補足").waitFor({ state: "hidden" });
+  await modal.getByRole("textbox", { name: "確認の入力" }).click();
   check(await modal.isVisible(), "outside help click closed parent modal");
   await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" });
   results.push("confirmation takes precedence; nested help Escape/outside close only help and retain visible loss warning");

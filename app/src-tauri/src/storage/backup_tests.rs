@@ -25,10 +25,10 @@ fn rows(db: &Connection, table: &str) -> Vec<Vec<Value>> {
 }
 
 #[test]
-fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_vocabulary() {
+fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = super::super::stored_minutes_fixture::meeting(&storage);
+    let meeting = super::super::current_minutes_fixture::meeting(&storage);
     // Existing analysis fixture uses a fake path/hash. Materialize real managed
     // bytes without changing revision provenance, then include a second asset.
     let relative = format!("meetings/{meeting}/audio/original.caf");
@@ -40,44 +40,24 @@ fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_
         params![relative, 13, format!("{:x}", Sha256::digest(b"fixture audio"))],
     ).unwrap();
     asset(&storage, &meeting, b"second asset");
-    let first = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &first)
-        .unwrap();
-    let archived_draft = storage.seed_stored_minutes_draft(&meeting, &first).unwrap();
-    let mut archived_payload = archived_draft.payload;
-    archived_payload
-        .blocks
-        .push(crate::minutes_document::Block::Paragraph {
-            item_id: None,
-            content: vec![crate::minutes_document::Inline::text("古い版の未採用編集")],
+    let body = super::super::current_minutes_fixture::save(&storage, &meeting, "# 保持する追記\n");
+    let mut draft = storage.load_transcript_draft(&meeting).unwrap().unwrap();
+    draft
+        .payload
+        .utterances
+        .push(crate::storage::drafts::UtteranceEdit {
+            utterance_id: storage
+                .load_current_analysis(&meeting)
+                .unwrap()
+                .unwrap()
+                .utterances[0]
+                .id
+                .clone(),
+            effective_text: "保存済みの文字起こし編集".into(),
+            speaker_ids: vec![],
         });
     storage
-        .seed_stored_minutes_edit(
-            &archived_draft.id,
-            archived_draft.lock_version,
-            archived_payload,
-        )
-        .unwrap();
-    let second = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &second)
-        .unwrap();
-    let third = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
-    storage
-        .seed_stored_minutes_head(&meeting, &third)
-        .unwrap();
-    let candidate = super::super::stored_minutes_fixture::candidate(&storage, &meeting);
-    let draft = storage.seed_stored_minutes_draft(&meeting, &third).unwrap();
-    let mut payload = draft.payload;
-    payload
-        .blocks
-        .push(crate::minutes_document::Block::Paragraph {
-            item_id: None,
-            content: vec![crate::minutes_document::Inline::text("保持する追記")],
-        });
-    storage
-        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
+        .save_transcript_draft(&draft.id, draft.lock_version, draft.payload)
         .unwrap();
     let entry = VocabularyEntry {
         id: Uuid::new_v4().to_string(),
@@ -112,38 +92,27 @@ fn wal_snapshot_preserves_all_rows_heads_candidates_evidence_drafts_history_and_
     for table in tables {
         assert_eq!(rows(&original, &table), rows(&saved, &table), "{table}");
     }
-    let heads: (String, String) = saved
+    let markdown: String = saved
         .query_row(
-            "SELECT current_minutes_id,previous_minutes_id FROM meetings WHERE id=?1",
-            params![meeting],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(heads, (third, second));
-    let active: bool = saved
-        .query_row(
-            "SELECT active FROM working_drafts WHERE id=?1",
-            params![archived_draft.id],
+            "SELECT markdown FROM minutes_markdown WHERE meeting_id=?1",
+            [&meeting],
             |r| r.get(0),
         )
         .unwrap();
-    assert!(!active);
+    assert_eq!(markdown, body.markdown);
     assert_eq!(
         saved
-            .query_row(
-                "SELECT publication_state FROM minutes_revisions WHERE id=?1",
-                params![candidate],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap(),
-        "candidate"
-    );
-    assert!(
-        saved
-            .query_row("SELECT COUNT(*) FROM evidence_links", [], |r| r
+            .query_row("SELECT count(*) FROM minutes_revisions", [], |r| r
                 .get::<_, i64>(0))
-            .unwrap()
-            >= 4
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        saved
+            .query_row("SELECT count(*) FROM evidence_links", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
     );
     drop(original);
     drop(saved);

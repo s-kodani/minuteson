@@ -22,7 +22,6 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   const completed = useRef<string | null>(null), running = useRef(false);
-  const retryOperations = useRef(new Map<string, string>());
   const regeneration = useRef<RegenerationRequest | null>(null);
   const confirm = useActionConfirmation(false);
   const alive = useRef(true);
@@ -70,13 +69,12 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const active = flow?.stage === "diarization" ? flow.diarizationJob : flow?.transcriptionJob;
   const pending = !!flow && ["pending", "transcription", "diarization"].includes(flow.stage);
   const action = !flow ? () => invoke<void>("start_analysis_flow", { meetingId }) : () => invoke<void>("continue_analysis_flow", { meetingId, expectedLockVersion: flow.lockVersion });
-  const failed = jobs.find(job => job.id === active?.id && ["failed", "cancelled"].includes(job.state));
   const submitRegeneration = async (request: RegenerationRequest) => {
     try { await invoke("regenerate_transcription", { request }); regeneration.current = null; }
     catch (cause) {
       try {
         const saved = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
-        if (saved?.id === request.operationId && saved.meetingId === meetingId && saved.replacementRequested) {
+        if (saved?.id === request.operationId && saved.meetingId === meetingId) {
           regeneration.current = null; return;
         }
         // The pre-confirmation flow still owns this meeting: admission never
@@ -91,7 +89,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     // Read back the accepted flow before considering any new generation.
     if (regeneration.current) {
       const accepted = await invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId });
-      if (accepted?.id === regeneration.current.operationId && accepted.replacementRequested) {
+      if (accepted?.id === regeneration.current.operationId) {
         regeneration.current = null; return;
       }
       await submitRegeneration(regeneration.current); return;
@@ -107,18 +105,10 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
       },
     });
   });
-  const retry = async () => {
-    if (!failed) return;
-    const operationId = retryOperations.current.get(failed.id) ?? crypto.randomUUID();
-    retryOperations.current.set(failed.id, operationId);
-    await invoke(failed.kind === "diarization" ? "retry_diarization" : "retry_transcription", { request: { meetingId, jobId: failed.id, operationId, expectedSpecHash: failed.specHash } });
-    if (flow?.stage === "attention") await invoke("continue_analysis_flow", { meetingId, expectedLockVersion: flow.lockVersion });
-  };
   const tools = <section className="analysis-card" aria-label="文字起こし操作">
     <h2>文字起こし</h2><p>全体設定のモデルを使います。完了した結果は発言一覧に保存します。</p>
-    {!hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void run(action)}>{flow ? "文字起こしを再開" : "文字起こしを開始"}</button>}
+    {!hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(action))}>文字起こしを生成</button>}
     {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" disabled={locked || busy || recordingActive || !recorded || pending} onClick={() => void regenerate()}>文字起こしを再生成</button>}
-    {failed && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(retry)}>再試行</button>}
     {active && ["paused", "interrupted"].includes(active.state) && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(() => invoke("resume_analysis_job", { jobId: active.id }))}>再開</button>}
   </section>;
   return <>

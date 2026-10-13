@@ -8,6 +8,7 @@ async (page, capturePath, detailUI) => {
   const row=editor.getByRole("article",{name:"00:00:00の発言行",exact:true});
   const settings=page.getByRole("dialog",{name:"再生設定",exact:true});
   const mode=settings.getByRole("combobox",{name:"会議全体の再生トラック",exact:true});
+  const error=()=>page.locator('.toast-host').getByRole('alert').filter({hasText:'音声を再生できません'});
   const count=command=>page.evaluate(command=>window.monBrowserFixture.calls.filter(c=>c.command===command).length,command);
   const boot=async patch=>{
     await page.reload();await page.waitForFunction(()=>!!window.monBrowserFixture);
@@ -56,22 +57,22 @@ async (page, capturePath, detailUI) => {
   check(await count("read_playback_chunk")===0&&await count("finish_playback_preparation")===0,"late cancelled worker was adopted");
   results.push("native cancellation acknowledgement alone never releases the global barrier; the actual preparation must terminate");
 
-  await boot({losePrepare:true});await start.click();await player.getByRole("alert").waitFor();await released();
+  await boot({losePrepare:true});await start.click();await error().waitFor();await released();
   check(await count("cancel_playback_preparation")>=1&&await count("finish_playback_preparation")===0&&await count("read_playback_chunk")===0&&await count("close_playback")===0,"lost prepare response did not close by ID or fabricated a token");
   results.push("a lost preparation reply closes its published native audio by reserved ID without guessing a playback token");
 
-  await boot({loseReceipt:true});await start.click();await player.getByRole("alert").waitFor();await released();
+  await boot({loseReceipt:true});await start.click();await error().waitFor();await released();
   const receipt=await page.evaluate(()=>{const c=window.monBrowserFixture.calls;return {ack:c.find(c=>c.command==="finish_playback_preparation"),close:c.find(c=>c.command==="close_playback")};});
   check(receipt.ack.args.playbackToken===receipt.close.args.token&&await count("read_playback_chunk")===0,"lost receipt was apparent success or leaked known audio");
   results.push("lost receipt acknowledgement closes the known exact token even when native ownership was already transferred");
 
-  await boot({losePrepare:true,failCancel:true});await start.click();await player.getByRole("alert").waitFor();await barrier();await settled();
+  await boot({losePrepare:true,failCancel:true});await start.click();await error().waitFor();await barrier();await settled();
   check(await page.evaluate(()=>window.cancelBarrierState)==="rejected"&&await page.evaluate(()=>Object.keys(window.monBrowserFixture.meetingAudio.sessions).length)===1,"failed cleanup allowed data operations or forgot native ownership");
   await page.evaluate(()=>window.monBrowserFixture.preparation.failCancel=false);await barrier();await settled();await released();
   check(await page.evaluate(()=>window.cancelBarrierState)==="fulfilled"&&await count("read_playback_chunk")===0,"explicit cleanup retry failed or played audio");
   results.push("failed cancellation retains native ownership and rejects the data barrier; explicit retry later releases it");
 
-  await boot({loseReceipt:true,failClose:true});await start.click();await player.getByRole("alert").waitFor();await barrier();await settled();
+  await boot({loseReceipt:true,failClose:true});await start.click();await error().waitFor();await barrier();await settled();
   check(await page.evaluate(()=>window.cancelBarrierState)==="rejected"&&await page.evaluate(()=>Object.keys(window.monBrowserFixture.meetingAudio.sessions).length)===1,"failed known-token close was swallowed by the barrier");
   await page.evaluate(()=>window.monBrowserFixture.preparation.failClose=false);await barrier();await settled();await released();
   check(await page.evaluate(()=>window.cancelBarrierState)==="fulfilled"&&await count("read_playback_chunk")===0,"known-token retry did not release or replayed");

@@ -6,7 +6,7 @@ async page=>{
   const selected=async()=>JSON.parse(await page.locator('[aria-label="選択した取得条件"]').innerText());
   const ready=()=>page.waitForFunction(()=>!document.querySelector('[aria-label="録音するアプリ"]')?.hasAttribute("disabled"));
   const key=pid=>page.evaluate(pid=>JSON.stringify([pid,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).bundleIdentifier,window.scopeFixture.catalog.applications.find(a=>a.pid===pid).launchTimeUs]),pid);
-  await page.getByText("録音の詳細設定",{exact:true}).click();
+  await page.getByRole("button",{name:"録音の詳細設定",exact:true}).click();
   check((await selected()).mode==="system"&&await page.evaluate(()=>window.scopeFixture.calls.length===0),"default global scope unexpectedly enumerated or captured");
   results.push("global default requires no application enumeration or capture");
   await scope().selectOption("application");await ready();
@@ -17,9 +17,11 @@ async page=>{
   await page.evaluate(()=>{window.scopeFixture.catalog.applications[0].launchTimeUs++;});await refresh().click();await ready();
   check(await selected()===null&&(await app().locator("option:checked").innerText()).includes("終了・再起動"),"restarted process was silently adopted");
   results.push("same PID and bundle with new process start requires renewed explicit selection");
-  await app().selectOption(await key(123));await page.getByRole("button",{name:"確認状態を切替",exact:true}).click();
+  await app().selectOption(await key(123));await page.evaluate(()=>window.scopeFixture.toggleLocked());
+  await page.waitForFunction(()=>document.querySelector('[aria-label="録音するアプリ"]')?.disabled);
   check(await scope().isDisabled()&&await app().isDisabled()&&await refresh().isDisabled(),"confirmation did not freeze scope controls");
-  await page.getByRole("button",{name:"確認状態を切替",exact:true}).click();
+  await page.evaluate(()=>window.scopeFixture.toggleLocked());
+  await ready();
   results.push("scope and target controls are immutable while confirmation is locked");
   const before=await app().inputValue();await page.evaluate(()=>{window.scopeFixture.failed=true;});await refresh().click();
   await page.getByRole("alert").waitFor();check(await selected()===null&&await app().inputValue()===before,"metadata failure substituted scope or target");
@@ -35,7 +37,7 @@ async page=>{
   results.push("permission-needed metadata gives manual guidance without fabricating input or choosing an alternate");
   await app().selectOption(await key(456));await page.evaluate(()=>{window.scopeFixture.hold=true;});await refresh().click();await page.waitForFunction(()=>window.scopeFixture.pending.length===1);
   await page.evaluate(()=>{window.scopeFixture.catalog.applications=[];});
-  await page.getByRole("button",{name:"会議を切替",exact:true}).click();await page.waitForFunction(()=>window.scopeFixture.pending.length===2);
+  await page.evaluate(()=>window.scopeFixture.toggleMeeting());await page.waitForFunction(()=>window.scopeFixture.pending.length===2);
   await page.evaluate(()=>{window.scopeFixture.pending.pop()();});await ready();check(await selected()===null,"changed meeting selected a vanished app");
   await page.evaluate(()=>{window.scopeFixture.hold=false;window.scopeFixture.pending.splice(0).forEach(resolve=>resolve());});
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));

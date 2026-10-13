@@ -6,7 +6,7 @@ async (page,capturePath) => {
   const dialog=()=>page.locator("dialog[open]");
   const meetings=()=>page.locator(".sidebar").getByRole("button",{name:"会議一覧",exact:true});
   const open=async()=>{await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await panel().getByRole("button",{name:"議事録を編集",exact:true}).waitFor();};
-  const options=async()=>{await panel().getByRole("button",{name:"議事録の操作",exact:true}).click();await dialog().getByRole("heading",{name:"議事録の操作",exact:true}).waitFor();};
+  const generate=()=>panel().getByRole("button",{name:"議事録を生成",exact:true}).click();
   const dismiss=async()=>{await dialog().locator(":scope > .common-modal-dismiss-row > [data-dialog-cancel]").click();};
   await page.setViewportSize({width:1280,height:820});await open();
   await panel().getByRole("heading",{name:"点検会議",exact:true}).waitFor();
@@ -41,16 +41,16 @@ async (page,capturePath) => {
   await input().fill("# 応答待ち中の追記\n");await page.evaluate(()=>window.__mon.plainMode="success");await panel().getByRole("button",{name:"保存を再試行",exact:true}).click();await panel().getByRole("status").filter({hasText:"未保存"}).waitFor();
   check(await input().inputValue()==="# 応答待ち中の追記\n","lost success displaced later human input");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   results.push("lost success recovery acknowledges original save while newer human input remains unsaved until explicit save");
-  await options();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();
+  await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();
   check((await dialog().innerText()).includes("旧版は保存しません"),"replacement consequences missing");await dialog().getByRole("button",{name:"確認をキャンセル",exact:true}).click();check(await count("start_markdown_minutes_generation")===0,"cancelled regeneration ran");
-  await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();
-  await dialog().getByRole("heading",{name:"議事録の操作",exact:true}).waitFor();await dismiss();
+  await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();
+  await dialog().waitFor({state:"hidden"});
   await page.evaluate(()=>window.__mon.completePlain());await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   await panel().getByRole("button",{name:"議事録のプレビューを表示",exact:true}).click();await panel().getByRole("heading",{name:"生成された議事録",exact:true}).waitFor();
   check(await count("start_markdown_minutes_generation")===1,"regeneration duplicated admission");
   check(await page.evaluate(()=>{const call=window.__mon.plainCalls.find(c=>c.cmd==="start_markdown_minutes_generation");return call.args.expected.lockVersion===5&&call.args.request.input.expectedAnalysisId==="analysis";}),"generation did not freeze human target and current transcription");
   results.push("regeneration explicitly confirms replacement, enqueues Markdown worker once and previews result without candidate adoption");
-  await options();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().getByRole("heading",{name:"議事録の操作",exact:true}).waitFor();await dismiss();
+  await generate();await dialog().getByRole("heading",{name:"議事録を再生成",exact:true}).waitFor();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().waitFor({state:"hidden"});
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 生成中の人間の保存\n");await panel().getByRole("button",{name:"保存",exact:true}).click();await panel().getByRole("status").filter({hasText:"保存済み"}).waitFor();
   await page.evaluate(()=>window.__mon.completePlain());
   check(await input().inputValue()==="# 生成中の人間の保存\n"&&await page.evaluate(()=>window.__mon.jobs.at(-1).state==="failed"),"late generation displaced human save");
@@ -58,6 +58,13 @@ async (page,capturePath) => {
   await page.evaluate(()=>{window.__mon.emitPlain("analysis-version-changed");window.__mon.emitPlain("model-profile-changed");});
   await panel().getByRole("button",{name:"議事録のプレビューを表示",exact:true}).click();await panel().getByRole("heading",{name:"生成中の人間の保存",exact:true}).waitFor();check(await count("start_markdown_minutes_generation")===2,"source/model hint triggered automatic regeneration");
   results.push("source and model changes refresh state, never automatically regenerate the human document");
+  const failedId=await page.evaluate(()=>window.__mon.jobs.at(-1).id);
+  await page.evaluate(()=>{window.__mon.pref.payload.standard.modelPath="/synthetic/current-global-after-failure.gguf";window.__mon.emitPlain("model-profile-changed");});
+  check(await panel().getByRole("button",{name:"再試行",exact:true}).count()===0&&await panel().getByRole("button",{name:"議事録の操作",exact:true}).count()===0,"failed job retry/options remain");
+  await generate();await dialog().getByRole("button",{name:"議事録を再生成",exact:true}).click();await dialog().waitFor({state:"hidden"});
+  check(await page.evaluate(failedId=>{const data=window.__mon,newJob=data.jobs.at(-1),oldJob=data.jobs.find(job=>job.id===failedId),call=data.plainCalls.filter(c=>c.cmd==="start_markdown_minutes_generation").at(-1);return newJob.id!==failedId&&newJob.attempt===1&&newJob.retryOfJobId===null&&oldJob.state==="failed"&&call.args.request.modelPath==="/synthetic/current-global-after-failure.gguf"&&!data.plainCalls.some(c=>c.cmd==="retry_minutes_generation");},failedId),"generation after failure reused old job/model or mutated failure history");
+  await page.evaluate(()=>window.__mon.completePlain());await panel().getByRole("heading",{name:"生成された議事録",exact:true}).waitFor();
+  results.push("same generate button starts a fresh attempt with current global model after failure, without retrying old job");
   for(const theme of ["light","dark"])for(const width of [1280,360]){
     await page.setViewportSize({width,height:820});await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"plain production panel overflows horizontally");

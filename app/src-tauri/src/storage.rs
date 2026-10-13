@@ -15,6 +15,8 @@ mod analysis_ui;
 #[allow(dead_code)]
 pub(crate) mod backup;
 mod capture_preferences;
+#[cfg(test)]
+pub(crate) mod current_minutes_fixture;
 #[allow(dead_code)] // Shared deletion admission and user confirmation follow.
 pub(crate) mod deletion;
 mod diarization;
@@ -23,23 +25,19 @@ mod draft_splits;
 mod drafts;
 pub(crate) mod edit_recovery;
 mod exports;
-pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 mod generation_tests;
 pub(crate) mod imports;
+#[cfg(test)]
+mod initialization_tests;
 mod jobs;
+pub(crate) mod markdown_exports;
 #[cfg(all(test, unix))]
 pub(crate) mod markdown_generation_tests;
 mod meeting_playback;
-#[cfg(test)]
-mod initialization_tests;
-mod minutes;
-mod minutes_drafts;
 mod minutes_input;
 pub(crate) mod minutes_markdown;
 mod minutes_preferences;
-#[cfg(test)]
-mod stored_minutes_fixture;
 mod model_checks;
 mod model_metadata;
 mod model_placements;
@@ -73,10 +71,9 @@ pub(crate) use exports::ExportRecord;
 pub(crate) use jobs::{
     retry_source_permitted, JobKind, JobSnapshot, JobSpec, NotificationJob, NotificationOutput,
 };
-pub(crate) use meeting_playback::{MeetingPlaybackRequest, MeetingIntervalRequest, MeetingAudioSummary};
-pub(crate) use minutes::MinutesView;
-#[cfg(test)]
-pub(crate) use minutes_drafts::MinutesDraft;
+pub(crate) use meeting_playback::{
+    MeetingAudioSummary, MeetingIntervalRequest, MeetingPlaybackRequest,
+};
 pub(crate) use minutes_input::{MinutesInput, MinutesJobRequest};
 pub(crate) use minutes_preferences::{MinutesPreferences, MinutesPreferencesSnapshot};
 pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
@@ -293,11 +290,14 @@ impl Storage {
         // Set EXCLUSIVE before *any* access to an existing WAL database so
         // SQLite keeps the wal-index on the heap rather than mmap'ing -shm.
         // Switching after journal_mode has read the DB is too late on reopen.
-        connection.execute_batch("PRAGMA main.locking_mode = EXCLUSIVE; PRAGMA foreign_keys = ON;")?;
+        connection
+            .execute_batch("PRAGMA main.locking_mode = EXCLUSIVE; PRAGMA foreign_keys = ON;")?;
         // Refuse old/unknown databases before journal-mode changes, recovery
         // writes, temporary registries or filesystem cleanup can begin.
         empty_or_current_database(&connection)?;
-        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;")?;
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; BEGIN IMMEDIATE; COMMIT;",
+        )?;
         #[cfg(unix)]
         let mut managed_anchor = deletion::fs::RootAnchor::bind(root_directory)?;
         #[cfg(target_os = "macos")]
@@ -644,7 +644,8 @@ impl Storage {
 fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Error>> {
     let empty: bool = connection.query_row(
         "SELECT NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
-        [], |row| row.get(0),
+        [],
+        |row| row.get(0),
     )?;
     if empty {
         return Ok(true);
@@ -671,9 +672,9 @@ fn initialize_database(connection: &mut Connection) -> Result<(), Box<dyn Error>
         "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
     )?;
     for &(version, sql) in MIGRATIONS {
-        transaction.execute_batch(sql).map_err(|error| {
-            format!("新規DBの初期化（段階{version}）に失敗しました: {error}")
-        })?;
+        transaction
+            .execute_batch(sql)
+            .map_err(|error| format!("新規DBの初期化（段階{version}）に失敗しました: {error}"))?;
         let digest = format!("{:x}", Sha256::digest(sql.as_bytes()));
         transaction.execute(
             "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?1, ?2, ?3)",
@@ -987,7 +988,6 @@ mod tests {
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         assert!(storage.rename_meeting("missing", "name", 0).is_err());
     }
-
 
     #[test]
     fn managed_asset_is_hashed_and_tampering_is_detected() {

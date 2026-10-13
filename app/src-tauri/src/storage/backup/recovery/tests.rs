@@ -111,7 +111,11 @@ fn recovery_old_ownership_schema_is_rejected_without_adopting_or_losing_areas() 
     assert_eq!(std::fs::read(&journal).unwrap(), before);
     assert_eq!(std::fs::read(path.join("unknown")).unwrap(), b"unknown");
     let db = Connection::open(&journal).unwrap();
-    assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ import { toastKey, type ToastInput } from "../src/toast-state";
 import "../src/style.css";
 import "../src/prototype-alignment.css";
 
-declare global { interface Window { toastFixture: { keys: Set<string>; show: (input: ToastInput) => void; clear: () => void; issue: (message: string) => void; changeScope: () => void; detach: () => void; retryCalls: number; unsafeCommands: number; actionCalls: number; showAction: () => void; debugState?: () => unknown } } }
+declare global { interface Window { toastFixture: { keys: Set<string>; show: (input: ToastInput) => void; clear: () => void; issue: (message: string) => void; issueMessage?: () => string; changeScope: () => void; detach: () => void; retryCalls: number; unsafeCommands: number; actionCalls: number; showAction: () => void; debugState?: () => unknown } } }
 function Fixture() {
   const [counts, setCounts] = useState({ receipts: 0, retries: 0, actions: 0 });
   const [dark, setDark] = useState(false);
@@ -19,6 +19,8 @@ function Fixture() {
   const trigger = useRef<HTMLButtonElement>(null);
   window.toastFixture ??= { keys: new Set(), show: () => {}, clear: () => {}, issue: setError, changeScope: () => {}, detach: () => {}, retryCalls: 0, unsafeCommands: 0, actionCalls: 0, showAction: () => {} };
   const fixture = window.toastFixture;
+  fixture.issueMessage = () => error;
+  const retry = () => { fixture.retryCalls++; setCounts(c => ({ ...c, retries: c.retries + 1 })); setError(""); };
   fixture.debugState = () => ({ pauses: [...Reflect.get(toasts, "pauses")], entries: [...Reflect.get(toasts, "entries").values()].map(e => ({ key: e.toast.key, pauses: [...e.pauses], remaining: e.remaining, started: e.started })) });
   fixture.keys.add(toastKey(scope, "save"));
   fixture.changeScope = () => { setError(""); setScope("other-meeting"); };
@@ -47,7 +49,7 @@ function Fixture() {
       <button type="button" onClick={() => fixture.clear()}>通知をクリア</button>
       <button type="button" onClick={() => setDark(value => !value)}>検証テーマを切り替え</button>
       <output aria-label="通知の検証カウンター">確認 {counts.receipts} · 再試行 {counts.retries} · 取り消し {counts.actions} · 危険な操作 0</output>
-      {mounted && <IssueNotice scope={scope} type="save" label="保存に失敗" message={error} action={{ kind: "retry", label: "保存を再試行", run: () => { fixture.retryCalls++; setCounts(c => ({ ...c, retries: c.retries + 1 })); setError(""); } }}><button type="button" onClick={() => { fixture.retryCalls++; setCounts(c => ({ ...c, retries: c.retries + 1 })); setError(""); }}>画面から保存を再試行</button></IssueNotice>}
+      {mounted && <><IssueNotice scope={scope} type="save" label="保存に失敗" message={error} action={{ kind: "retry", label: "保存を再試行", run: retry }} />{error&&<button type="button" onClick={retry}>画面から保存を再試行</button>}</>}
       <button type="button" ref={trigger} onClick={() => setOpen(true)}>変更の確認を開く</button>
       <CommonModal open={open} onDismiss={() => setOpen(false)} restoreTarget={() => trigger.current} aria-labelledby="toast-modal-title"><h2 id="toast-modal-title">変更の確認</h2><p>実ファイルは変更しません。</p></CommonModal>
       {Array.from({ length: 40 }, (_, index) => <p key={index}>本文 {index}: 本文だけをスクロールしても通知は固定位置に表示します。</p>)}

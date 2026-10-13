@@ -245,7 +245,6 @@ fn import_finalization_and_recovery_cancel_keep_complete_evidence_for_retry() {
     assert_eq!(s.audio_import(&before.id).unwrap().state, "ready");
 }
 
-
 #[test]
 fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff() {
     for valid_hash in [false, true] {
@@ -525,7 +524,6 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
         64000 * 2 * 8 + 44 + 128 * 1024 * 1024
     );
 }
-
 
 #[cfg(unix)]
 fn fake_helper(root: &Path) -> Fingerprint {

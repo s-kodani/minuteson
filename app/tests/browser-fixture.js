@@ -27,7 +27,7 @@ const fixture = window.monBrowserFixture = { calls: [], failSave: false, failPla
     { id: "job-failed", kind: "transcription", state: "failed", completedUnits: 2, totalUnits: 3, errorCode: "engine_failed", outputAnalysisId: null, pauseReason: null, specHash: "b".repeat(64), retryOfJobId: null, attempt: 1 }],
   currentId: analysis.id, previousId: null, candidateVisible: true, candidate, archivedDrafts: {},
 };
-const currentAnalysis = () => fixture.currentId === analysis.id ? analysis : fixture.candidate;
+const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
 fixture.recovery = recoveryFixture({ drafts: () => [fixture.draft,...Object.values(fixture.archivedDrafts)],current: () => fixture.draft });
 const recoveredSeed = sessionStorage.getItem("MON_TRANSCRIPT_RECOVERY_FIXTURE");
 if(recoveredSeed) { sessionStorage.removeItem("MON_TRANSCRIPT_RECOVERY_FIXTURE"); const seed = JSON.parse(recoveredSeed); Object.assign(fixture,seed.fixture); fixture.recovery.records = seed.records; if(seed.utterances) analysis.utterances = seed.utterances; }
@@ -43,6 +43,9 @@ fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payloa
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.emitUiPreferences = () => emit("ui-preferences-changed",fixture.uiPreferences?.lockVersion??0);
 fixture.setUtterances = utterances => { analysis.utterances = structuredClone(utterances); };
+fixture.seedLongMeetingList = () => {
+  meetings.push(...Array.from({length:30},(_,index)=>({...structuredClone(meetings[0]),id:`list-fixture-${index}`,title:`一覧スクロール確認 ${index+1}`})));
+};
 fixture.setSpeakers = speakers => { analysis.speakers = structuredClone(speakers); };
 fixture.seedRegeneration = () => {
   fixture.jobs = []; fixture.regenerationMissingModels=false; fixture.regenerationReadFail=false;
@@ -50,7 +53,7 @@ fixture.seedRegeneration = () => {
 };
 fixture.regenerationTarget = async () => {
   const draft = await stampFixtureDraft(fixture.draft);
-  return {target:{analysisId:fixture.currentId,contentHash:currentAnalysis().contentHash,draft:draft?{id:draft.id,contentHash:draft.contentHash,lockVersion:draft.lockVersion}:null},flow:fixture.analysisFlow?{id:fixture.analysisFlow.id,lockVersion:fixture.analysisFlow.lockVersion}:null};
+  return {target:fixture.currentId?{analysisId:fixture.currentId,contentHash:currentAnalysis().contentHash,draft:draft?{id:draft.id,contentHash:draft.contentHash,lockVersion:draft.lockVersion}:null}:null,flow:fixture.analysisFlow?{id:fixture.analysisFlow.id,lockVersion:fixture.analysisFlow.lockVersion}:null};
 };
 fixture.finishRegeneration = async () => {
   fixture.analysisFlow={...fixture.analysisFlow,stage:"diarization",lockVersion:3,readyToPublish:true,
@@ -154,7 +157,7 @@ mockIPC(async (command, args) => {
       if(fixture.regenerationMissingModels)throw Error("設定のローカルAIでモデルを導入してください");
       if(JSON.stringify(request.expected)!==JSON.stringify(await fixture.regenerationTarget()))throw Error("確認後に文字起こしが変わりました");
       fixture.regenerationRequest=structuredClone(request);fixture.regenerationGlobalThreads=fixture.preferences.payload.standard.threads;
-      fixture.analysisFlow={id:request.operationId,meetingId:request.meetingId,stage:"transcription",lockVersion:0,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:true,readyToPublish:false};
+      fixture.analysisFlow={id:request.operationId,meetingId:request.meetingId,stage:"transcription",lockVersion:0,transcriptionJob:null,diarizationJob:null,errorMessage:null,replacementRequested:request.expected.target!==null,readyToPublish:false};
       if(fixture.regenerationLostResponse){fixture.regenerationLostResponse=false;fixture.regenerationReadFail=!!fixture.regenerationUnreadable;throw Error("模擬再生成受付応答喪失");}
       return structuredClone(fixture.analysisFlow);
     }

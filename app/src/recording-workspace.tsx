@@ -11,7 +11,7 @@ import {overlayOpen} from "./keyboard";
 
 export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
-  onTitle:(title:string)=>void;onStart:()=>void;onStop:()=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
+  onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
   inputs:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
@@ -57,7 +57,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     {preparation?.submitted&&<button type="button" className="secondary" disabled={locked} onClick={onConfirmResult}>録音の受付結果を確認</button>}
     <div className="card-actions">
       <button type="button" disabled={!canStart} onClick={onStart}>録音を開始</button>
-      {active&&<button type="button" className="stop-button" disabled={!canStop} onClick={onStop}>録音を終了</button>}
+      {active&&<button type="button" className="stop-button" disabled={!canStop} onClick={event=>onStop(event.currentTarget)}>録音を終了</button>}
     </div>
     {notices}
   </section>;

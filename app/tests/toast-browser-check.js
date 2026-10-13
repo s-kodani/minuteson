@@ -24,19 +24,21 @@ async page => {
 
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
   await page.waitForTimeout(4500); check(await host.getByRole("alert").isVisible(), "important save error automatically expired");
+  await host.getByRole("button", { name: "エラー通知の詳細の説明を開く", exact: true }).click();
+  const details = page.getByRole("dialog", { name: "エラー通知の詳細", exact: true }); await details.waitFor();
+  check((await details.innerText()).includes("容量が不足"), "notification explanation lost the actual cause"); await page.keyboard.press("Escape");
   await host.getByRole("button", { name: "エラー通知を閉じる", exact: true }).click();
-  check(await page.getByLabel("保存に失敗の要対応状態", { exact: true }).isVisible() && await page.getByRole("button", { name: "画面から保存を再試行", exact: true }).isEnabled(), "dismissing error cleared its issue or retry");
+  check(await page.getByLabel("保存に失敗の要対応状態", { exact: true }).count()===0 && await page.evaluate(()=>window.toastFixture.issueMessage().includes("容量が不足")) && await page.getByRole("button", { name: "画面から保存を再試行", exact: true }).isEnabled(), "dismissing error cleared its issue or retry, or restored an inline banner");
   check(await input.inputValue() === "編集中の点検日" && await page.evaluate(() => window.toastFixture.retryCalls) === 0, "notification close changed input or retried saving");
-  await page.getByRole("button", { name: "保存に失敗の説明を開く", exact: true }).click();
-  const details = page.getByRole("dialog", { name: "保存に失敗", exact: true }); await details.waitFor();
-  check((await details.innerText()).includes("容量が不足"), "issue explanation lost the actual cause"); await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "画面から保存を再試行", exact: true }).click();
-  await page.getByLabel("保存に失敗の要対応状態", { exact: true }).waitFor({ state: "hidden" });
-  results.push("important errors persist; dismissing preserves issue, explanation, retry and local input without issuing commands");
+  await page.waitForFunction(()=>window.toastFixture.issueMessage()==="");
+  await page.waitForFunction(()=>!document.querySelector('.toast-host .toast-card'));
+  results.push("important errors expose their actual cause; dismissal preserves canonical issue, retry and input without an inline banner or command");
 
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();
   await host.getByRole("button", { name: "保存を再試行", exact: true }).click();
   await host.getByRole("alert").waitFor({ state: "hidden" });
+  await page.waitForFunction(()=>!document.querySelector('.toast-host .toast-card'));
   check(await page.evaluate(() => window.toastFixture.retryCalls) === 2, "explicit notification retry was not exactly once");
   results.push("explicit safe retry resolves both notification and issue only after the originating controller resolves the problem");
   await page.getByRole("button", { name: "保存失敗を通知", exact: true }).click(); await host.getByRole("alert").waitFor();

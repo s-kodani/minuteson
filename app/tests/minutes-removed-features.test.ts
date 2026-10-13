@@ -7,11 +7,11 @@ const obsoleteCommands = ["start_minutes_generation","get_minutes_exports","expo
 test("obsolete minutes operations have no native handler, registration or client dispatch", () => {
   const native=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
   const player=readFileSync(new URL("../src/transcript-audio.tsx",import.meta.url),"utf8");
-  for(const command of obsoleteCommands) {
+  for(const command of [...obsoleteCommands,"retry_minutes_generation","retry_transcription","get_capture_test_recovery","retry_capture_test_recovery"]) {
     assert.doesNotMatch(native,new RegExp("\\b"+command+"\\b"),command);
     assert.ok(!player.includes('"'+command+'"'),command);
   }
-  for(const command of ["get_minutes_markdown","save_minutes_markdown","start_markdown_minutes_generation","retry_minutes_generation",
+  for(const command of ["get_minutes_markdown","save_minutes_markdown","start_markdown_minutes_generation",
     "export_plain_minutes_markdown","get_plain_minutes_export_status","prepare_markdown_interval_playback"]) {
     assert.match(native,new RegExp("async fn "+command+"\\("),command);
     assert.match(native,new RegExp("^\\s+"+command+",$","m"),command);
@@ -45,17 +45,15 @@ test("legacy draft edits, adoption and version restoration are deleted from nati
   const root=new URL("../src-tauri/src/",import.meta.url);
   assert.equal(existsSync(new URL("storage/minutes_ui.rs",root)),false);
   assert.equal(existsSync(new URL("storage/minutes_ui_tests.rs",root)),false);
-  const drafts=readFileSync(new URL("storage/minutes_drafts.rs",root),"utf8");
+  assert.equal(existsSync(new URL("storage/minutes_drafts.rs",root)),false);
   const revisions=readFileSync(new URL("storage/revisions.rs",root),"utf8");
-  assert.doesNotMatch(drafts,/fn (?:create_minutes_draft|save_minutes_draft|undo_minutes_edit|switch|persist)\b|\.execute\(/);
   assert.doesNotMatch(revisions,/fn (?:commit_minutes_candidate|commit_minutes_inner|restore_previous_minutes|restore_minutes_inner)\b|struct CommittedMinutes\b/);
   // ASR revision publication is a separate, still required operation.
   assert.match(revisions,/fn commit_analysis_inner\(/);
   const modules=readFileSync(new URL("storage.rs",root),"utf8");
-  assert.match(modules,/#\[cfg\(test\)\]\nmod stored_minutes_fixture;/);
+  assert.match(modules,/#\[cfg\(test\)\]\npub\(crate\) mod current_minutes_fixture;/);
   assert.doesNotMatch(modules,/mod minutes_ui;|MinutesAdoptRequest|MinutesVersionState|CommittedMinutes/);
-  const fixture=readFileSync(new URL("storage/stored_minutes_fixture.rs",root),"utf8");
-  assert.doesNotMatch(fixture,/fn (?:undo|restore|adopt|save_minutes|create_minutes)/);
+  assert.equal(existsSync(new URL("storage/stored_minutes_fixture.rs",root)),false);
 });
 test("structured minutes export is removed and only exact Markdown publishing remains",()=>{
   const root=new URL("../src-tauri/src/",import.meta.url);
@@ -76,12 +74,9 @@ test("structured worker execution and candidate publication are removed from the
   assert.doesNotMatch(worker,/fn (?:run_task|run_merge|save_items|save_task_output|enqueue_version|enqueue_previous|enqueue_legacy|enqueue_prompt_v3)\b|llama::run_unit|finish_minutes_candidate/);
   assert.match(worker,/if !markdown_job::is_markdown\(&spec\)/);
   assert.match(worker,/markdown_job::process\(storage, job_id, stopping, progress\)/);
-  assert.match(worker,/#\[cfg\(test\)\]\npub\(crate\) mod stored_fixture;/);
-  const seed=readFileSync(new URL("generation/stored_fixture.rs",root),"utf8");
-  assert.doesNotMatch(seed,/llama::run_unit|std::process|Command::|RetryRequest|retry_preflight/);
-  const storage=readFileSync(new URL("storage/minutes.rs",root),"utf8");
-  assert.doesNotMatch(storage,/finish_minutes_candidate|INSERT INTO minutes_revisions|INSERT INTO minutes_items|INSERT INTO evidence_links/);
-  assert.match(storage,/fn read_content\(/);
+  assert.equal(existsSync(new URL("generation/stored_fixture.rs",root)),false);
+  assert.doesNotMatch(worker,/mod adaptive;|mod merge;|mod plan;|mod result;|struct Parameters|struct Checkpoint/);
+  for(const path of ["storage/minutes.rs","storage/minutes_drafts.rs","minutes_document.rs","storage/stored_minutes_fixture.rs"]) assert.equal(existsSync(new URL(path,root)),false,path);
   const admission=readFileSync(new URL("storage/minutes_input.rs",root),"utf8");
   for(const name of ["enqueue_minutes_job","enqueue_minutes_job_configured"])
     assert.match(admission,new RegExp("#\\[cfg\\(test\\)\\]\\n    pub\\(crate\\) fn "+name+"\\("));
@@ -93,7 +88,5 @@ test("opening plain minutes never migrates or publishes a removed structured doc
   const getter=storage.slice(storage.indexOf("pub(crate) fn get_minutes_markdown("),storage.indexOf("pub(crate) fn save_minutes_markdown("));
   assert.match(getter,/read\(&db, meeting\)/);
   assert.doesNotMatch(getter,/transaction|require_data_writable|\.execute|save\(/);
-  const document=readFileSync(new URL("minutes_document.rs",root),"utf8");
-  assert.doesNotMatch(document,/plain_markdown|audio_links/);
-  assert.match(document,/#\[cfg\(test\)\]\n    pub\(crate\) fn markdown\(/);
+  assert.equal(existsSync(new URL("minutes_document.rs",root)),false);
 });

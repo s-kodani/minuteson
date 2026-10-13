@@ -17,5 +17,3 @@
 .mini-shell .mini-bottom .text-button { background:transparent; border-color:transparent; }
 .mini-shell .mini-bottom .info-trigger span { font-size:16px; }
 .mini-shell .mini-close.icon-button { position:absolute; top:10px; right:14px; width:28px; min-width:28px; height:32px; min-height:32px; padding:0; border-radius:8px; background:transparent; border-color:transparent; color:var(--secondary-text); }
-.mini-shell .mini-input-notice { margin-top:4px; }
-.mini-shell .mini-input-notice button { min-width:24px; min-height:24px; }

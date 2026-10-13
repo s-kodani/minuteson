@@ -2,6 +2,9 @@
 async page => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   await page.reload(); await page.waitForFunction(() => !!window.monBrowserFixture);
+  await page.evaluate(()=>window.monBrowserFixture.seedLongMeetingList());
+  await page.getByRole("button",{name:"再読込",exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.meeting-table tbody tr').length===32);
   const header = page.getByRole("banner"), workspace = page.getByRole("main", { name: "会議ワークスペース", exact: true });
   const recording = header.getByLabel("共通録音状態", { exact: true });
   const nav = page.getByRole("navigation", { name: "メインナビゲーション", exact: true });
@@ -55,7 +58,6 @@ async page => {
   await nav.getByRole("button",{name:"会議一覧",exact:true}).click();
   await page.locator(".meeting-name").first().click();
   const editor = page.getByRole("region", { name: "文字起こし編集", exact: true }), text = editor.getByRole("textbox", { name: "00:00:00の発言", exact: true });
-  await editor.getByRole("button", { name: "編集を開始", exact: true }).click();
   await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await page.evaluate(() => { window.monBrowserFixture.failSave = true; }); await text.fill("未保存の点検日を保持します。");
   await text.evaluate(e => { window.monBrowserFixture.headerEditNode = e; }); await open().click();
@@ -65,16 +67,17 @@ async page => {
   await page.evaluate(() => { window.monBrowserFixture.failSave = false; });
   await editor.getByRole("button", { name: "保存を再試行", exact: true }).click();
   await page.waitForFunction(() => window.monBrowserFixture.draft.payload.utterances.some(u => u.effective_text === "未保存の点検日を保持します。"));
+  await editor.getByRole("button", { name: "00:00:00の発言を編集", exact: true }).click();
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 700; });
   await text.fill("遅い保存中も点検日を保持します。"); await open().click();
   await update({ ...session, revision: ++session.revision, sessionId: "different-synthetic-session" });
   await page.getByRole("alert").filter({ hasText: "録音の対象が変更" }).waitFor();
-  check(await page.locator(".meeting-title-row h1").innerText() === "会議A" && await text.inputValue() === "遅い保存中も点検日を保持します。", "changed recording was adopted after a delayed flush");
+  check(await page.locator(".meeting-title-row h1").innerText() === "会議A" && await editor.getByRole("button",{name:"00:00:00の発言を編集",exact:true}).innerText() === "遅い保存中も点検日を保持します。", "changed recording was adopted or acknowledged text was lost after a delayed flush");
   results.push("a recording session changed during edit flushing refuses the old navigation target without losing input");
   await page.evaluate(() => { window.monBrowserFixture.persistenceDelayMs = 0; });
   await page.setViewportSize({ width: 960, height: 640 });
   for (const theme of ["light", "dark"]) {
-    await header.getByRole("combobox", { name: "表示テーマ", exact: true }).selectOption(theme);
+    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     await page.waitForFunction(t => document.documentElement.dataset.theme === t, theme);
     await workspace.evaluate(e => { e.scrollTop = e.scrollHeight; });
     await page.screenshot({ path: `workspace-header-${theme}-960.png` });

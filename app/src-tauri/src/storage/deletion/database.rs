@@ -23,6 +23,7 @@ const TARGETS: &[(&str, &str)] = &[
     ),
     ("working_drafts", "meeting_id=?1"),
     ("export_records", "meeting_id=?1"),
+    ("minutes_markdown", "meeting_id=?1"),
     (
         "evidence_links",
         "minutes_revision_id IN (SELECT id FROM minutes_revisions WHERE meeting_id=?1)",

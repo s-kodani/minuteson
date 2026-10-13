@@ -47,6 +47,14 @@ export function InfoPopover({ label, children, details }: { label: string; child
     place(); closeButton.current?.focus({ preventScroll: true });
     const escape = (event: KeyboardEvent) => {
       if (appShortcut(event) === "cancel") { event.preventDefault(); event.stopImmediatePropagation(); close(true); }
+      else if (event.key === "Tab" && !event.isComposing && event.keyCode !== 229 && !event.altKey && !event.ctrlKey && !event.metaKey && element.contains(document.activeElement)) {
+        // macOS WebKit can skip links during native Tab navigation. Preserve
+        // document order inside this non-modal popup without trapping its ends.
+        const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]")]
+          .filter(node => node.tabIndex >= 0 && node.getClientRects().length && !node.closest("[hidden],[inert]") && getComputedStyle(node).visibility === "visible");
+        const at = targets.indexOf(document.activeElement as HTMLElement), next = at + (event.shiftKey ? -1 : 1);
+        if (at >= 0 && next >= 0 && next < targets.length) { event.preventDefault(); event.stopImmediatePropagation(); targets[next].focus({ preventScroll:true }); }
+      }
     };
     const outside = (event: MouseEvent) => {
       const path = event.composedPath();

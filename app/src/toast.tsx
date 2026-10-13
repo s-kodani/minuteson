@@ -179,8 +179,10 @@ export function ToastHost({ docked = false }: { docked?: boolean }) {
     };
     if (document.activeElement instanceof HTMLElement) previous.current = document.activeElement;
     const visibility = () => toasts.pauseAll("hidden", document.hidden);
-    const hover = () => {
-      const hovered = !!host.current?.matches(":hover");
+    const hover = (event: PointerEvent) => {
+      // WebKit can retain :hover on a display:contents ancestor after a
+      // modal closes. The actual pointer path must release that stale pause.
+      const hovered = !!host.current && event.composedPath().includes(host.current);
       if (reading.current.hover !== hovered) pauseStack("hover", hovered);
     };
     const modal = () => {

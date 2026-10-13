@@ -44,5 +44,17 @@ async (page,capturePath)=>{
   check(await page.locator('.theme-settings select').count()===1,"settings should retain only the theme selector");
   check(await page.locator('.toast-host .toast-body p').filter({hasText:/操作を実行中|編集の保存を確認中/}).count()===0,"settings navigation shows a routine progress toast");
   results.push("settings keeps its theme selector without the removed reading panel or routine navigation notifications");
+  await page.locator('.sidebar').getByRole("button",{name:"会議一覧",exact:true}).click();
+  await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();
+  check(await page.locator('.content .landing-tools').count()===0&&await page.getByRole("button",{name:"会議管理・録音・解析操作",exact:true}).count()===0&&await page.getByRole("button",{name:"その他の操作",exact:true}).count()===0,"meeting-list footer management trigger remains");
+  check(await page.locator('.meeting-table').isVisible(),"removing footer hid meeting list");
+  check(await page.getByRole("dialog",{name:"会議管理・録音・解析操作",exact:true}).count()===0,"meeting-list management dialog remains mounted");
+  const row=page.locator('.meeting-table tbody tr').filter({hasText:"会議名を簡単に変更"});
+  await row.getByRole("button",{name:"会議名を簡単に変更の操作",exact:true}).click();
+  await page.getByRole("menuitem",{name:"開く",exact:true}).waitFor();
+  check(await page.getByRole("menuitem",{name:"会議名を簡単に変更を削除",exact:true}).count()===1,"per-meeting deletion menu was removed with footer");
+  await page.keyboard.press("Escape");
+  await page.screenshot({path:capturePath("meeting-list-no-footer.png")});
+  results.push("meeting list has no footer ellipsis or management dialog; per-meeting table remains available");
   return {passed:results.length,results};
 }

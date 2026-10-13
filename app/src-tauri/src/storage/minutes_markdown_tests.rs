@@ -382,17 +382,6 @@ fn request(meeting: &str, expected: Option<MarkdownStamp>, text: &str) -> SaveMa
         markdown: text.into(),
     }
 }
-fn removed_document_fixture(storage: &Storage) -> (String, String) {
-    let (source, job, content) = super::super::minutes::tests::fixture(storage, 1);
-    let revision = storage
-        .seed_stored_candidate_for_job(&job.id, 1, content)
-        .unwrap();
-    storage
-        .seed_stored_minutes_head(&source.meeting_id, &revision)
-        .unwrap();
-    (source.meeting_id, revision)
-}
-
 #[test]
 fn current_preview_and_generation_target_are_read_only() {
     let root = tempfile::tempdir().unwrap();
@@ -428,55 +417,6 @@ fn current_preview_and_generation_target_are_read_only() {
     .check(&db, &meeting)
     .is_err());
     assert_eq!(db.total_changes(), before);
-}
-
-#[test]
-fn removed_documents_are_not_converted_or_required_for_current_human_editing() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, base) = removed_document_fixture(&storage);
-    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
-    {
-        let db = storage.connection.lock().unwrap();
-        db.execute(
-            "UPDATE working_drafts SET content_hash=?1 WHERE id=?2",
-            params!["b".repeat(64), draft.id],
-        )
-        .unwrap();
-        db.execute_batch("PRAGMA query_only=ON;").unwrap();
-    }
-    let before = storage.connection.lock().unwrap().total_changes();
-    assert_eq!(storage.get_minutes_markdown(&meeting).unwrap(), None);
-    {
-        let db = storage.connection.lock().unwrap();
-        GenerationTarget {
-            schema_version: 1,
-            expected: None,
-        }
-        .check(&db, &meeting)
-        .unwrap();
-        assert_eq!(db.total_changes(), before);
-        assert!(db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM minutes_revisions WHERE id=?1)",
-                [&base],
-                |r| r.get::<_, bool>(0)
-            )
-            .unwrap());
-        db.execute_batch("PRAGMA query_only=OFF;").unwrap();
-    }
-    let text = "# 人間の本文\n[区間](audio:00:00:00.100001-00:00:00.799999)\n";
-    let saved = storage
-        .save_minutes_markdown(request(&meeting, None, text))
-        .unwrap();
-    assert_eq!(saved.markdown, text);
-    assert_eq!(saved.lock_version, 1);
-    drop(storage);
-    let reopened = Storage::open(root.path().into()).unwrap();
-    assert_eq!(
-        reopened.get_minutes_markdown(&meeting).unwrap(),
-        Some(saved)
-    );
 }
 
 #[test]

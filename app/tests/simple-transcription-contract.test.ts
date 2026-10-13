@@ -9,7 +9,7 @@ test("meeting UI has no candidates, model preferences or global editing options"
   assert.doesNotMatch(view, /adopt_analysis|restore_analysis|save_analysis_preferences|save_diarization_preferences|undo_transcript_edit|splitUtterance|mergeSpeaker|TranscriptRecovery|DiarizationPanel|文字起こしの編集オプション|編集オプション/);
   assert.match(source("analysis.tsx"), /start_analysis_flow.*meetingId/);
   assert.match(source("analysis.tsx"), /await flushPendingEdits\("transcription"\)/);
-  assert.match(source("analysis.tsx"), /retryOperations.current.set\(failed.id, operationId\)/);
+  assert.doesNotMatch(source("analysis.tsx"),/retryOperations|retry_transcription|retry_diarization|>再試行<\/button>/);
 });
 test("removed editing and candidate commands are not exposed by the application", () => {
   const ipc = native("lib.rs");
