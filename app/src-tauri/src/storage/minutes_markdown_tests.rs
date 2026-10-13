@@ -1,5 +1,4 @@
 use super::*;
-use crate::minutes_document::{Block, Inline};
 
 fn generation_source(storage: &Storage) -> super::super::minutes_input::MinutesJobRequest {
     let meeting = super::super::analysis::tests::saved_meeting(storage);
@@ -351,7 +350,7 @@ fn generation_commit_failure_rolls_back_body_and_success_after_both_sql_updates(
 }
 
 #[test]
-fn duplicate_generation_target_and_unread_existing_minutes_do_not_enqueue_or_publish() {
+fn duplicate_generation_target_does_not_enqueue() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
     let source = generation_source(&storage);
@@ -370,51 +369,6 @@ fn duplicate_generation_target_and_unread_existing_minutes_do_not_enqueue_or_pub
         )
         .is_err());
     assert!(storage.list_jobs(&source.meeting_id).unwrap().is_empty());
-    // The saved-meeting fixture has a fixed recording-start operation ID.
-    // Use an independent synthetic DB, not a second recording with that ID.
-    let legacy_root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(legacy_root.path().into()).unwrap();
-    let (legacy_meeting, _) = legacy(&storage);
-    let existing = storage.get_meeting(&legacy_meeting).unwrap().unwrap();
-    let versions = storage.analysis_versions(&legacy_meeting).unwrap();
-    let version = versions
-        .versions
-        .iter()
-        .find(|v| Some(&v.id) == versions.current_id.as_ref())
-        .unwrap();
-    let request = super::super::minutes_input::MinutesJobRequest {
-        meeting_id: legacy_meeting,
-        operation_id: Uuid::new_v4().to_string(),
-        expected_analysis_id: version.id.clone(),
-        expected_content_hash: version.content_hash.clone(),
-        expected_meeting_lock_version: existing.lock_version,
-        expected_draft: versions.draft,
-    };
-    assert!(storage
-        .enqueue_markdown_minutes_job_configured(
-            request.clone(),
-            serde_json::json!({}),
-            GenerationTarget {
-                schema_version: 1,
-                expected: None
-            },
-            |_| Ok((serde_json::json!({}), Some(1)))
-        )
-        .unwrap_err()
-        .contains("読み込"));
-    assert!(
-        storage
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM minutes_markdown WHERE meeting_id=?1)",
-                [request.meeting_id],
-                |r| r.get::<_, bool>(0)
-            )
-            .unwrap()
-            == false
-    );
 }
 
 fn meeting(storage: &Storage) -> String {
@@ -428,20 +382,101 @@ fn request(meeting: &str, expected: Option<MarkdownStamp>, text: &str) -> SaveMa
         markdown: text.into(),
     }
 }
-fn legacy(storage: &Storage) -> (String, String) {
+fn removed_document_fixture(storage: &Storage) -> (String, String) {
     let (source, job, content) = super::super::minutes::tests::fixture(storage, 1);
     let revision = storage
         .seed_stored_candidate_for_job(&job.id, 1, content)
         .unwrap();
-    let lock = storage
-        .get_meeting(&source.meeting_id)
-        .unwrap()
-        .unwrap()
-        .lock_version;
     storage
         .seed_stored_minutes_head(&source.meeting_id, &revision)
         .unwrap();
     (source.meeting_id, revision)
+}
+
+#[test]
+fn current_preview_and_generation_target_are_read_only() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = meeting(&storage);
+    let body = storage
+        .save_minutes_markdown(request(&meeting, None, "# 保存本文\n"))
+        .unwrap();
+    let before = {
+        let db = storage.connection.lock().unwrap();
+        db.execute_batch("PRAGMA query_only=ON;").unwrap();
+        db.total_changes()
+    };
+    assert_eq!(
+        storage.get_minutes_markdown(&meeting).unwrap(),
+        Some(body.clone())
+    );
+    assert_eq!(
+        storage.get_minutes_markdown("missing-meeting").unwrap(),
+        None
+    );
+    let db = storage.connection.lock().unwrap();
+    GenerationTarget {
+        schema_version: 1,
+        expected: Some(body.stamp()),
+    }
+    .check(&db, &meeting)
+    .unwrap();
+    assert!(GenerationTarget {
+        schema_version: 1,
+        expected: None
+    }
+    .check(&db, &meeting)
+    .is_err());
+    assert_eq!(db.total_changes(), before);
+}
+
+#[test]
+fn removed_documents_are_not_converted_or_required_for_current_human_editing() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let (meeting, base) = removed_document_fixture(&storage);
+    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
+    {
+        let db = storage.connection.lock().unwrap();
+        db.execute(
+            "UPDATE working_drafts SET content_hash=?1 WHERE id=?2",
+            params!["b".repeat(64), draft.id],
+        )
+        .unwrap();
+        db.execute_batch("PRAGMA query_only=ON;").unwrap();
+    }
+    let before = storage.connection.lock().unwrap().total_changes();
+    assert_eq!(storage.get_minutes_markdown(&meeting).unwrap(), None);
+    {
+        let db = storage.connection.lock().unwrap();
+        GenerationTarget {
+            schema_version: 1,
+            expected: None,
+        }
+        .check(&db, &meeting)
+        .unwrap();
+        assert_eq!(db.total_changes(), before);
+        assert!(db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM minutes_revisions WHERE id=?1)",
+                [&base],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap());
+        db.execute_batch("PRAGMA query_only=OFF;").unwrap();
+    }
+    let text = "# 人間の本文\n[区間](audio:00:00:00.100001-00:00:00.799999)\n";
+    let saved = storage
+        .save_minutes_markdown(request(&meeting, None, text))
+        .unwrap();
+    assert_eq!(saved.markdown, text);
+    assert_eq!(saved.lock_version, 1);
+    drop(storage);
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert_eq!(
+        reopened.get_minutes_markdown(&meeting).unwrap(),
+        Some(saved)
+    );
 }
 
 #[test]
@@ -734,169 +769,6 @@ fn tampered_hash_is_rejected_by_read_save_and_document_validation() {
 }
 
 #[test]
-fn first_read_imports_current_effective_draft_without_source_ids_and_reopen_keeps_human_text() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, base) = legacy(&storage);
-    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
-    let mut payload = draft.payload;
-    payload.blocks.push(Block::Paragraph {
-        item_id: None,
-        content: vec![Inline::text("人間の保存済み追記")],
-    });
-    storage
-        .seed_stored_minutes_edit(&draft.id, draft.lock_version, payload)
-        .unwrap();
-    let before = storage
-        .load_minutes_content(&meeting, &base)
-        .unwrap()
-        .unwrap();
-    let job_id = storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row::<String, _, _>(
-            "SELECT id FROM processing_jobs WHERE output_minutes_id=?1",
-            [&base],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let input = storage.load_minutes_input(&job_id).unwrap();
-    let legacy_hash = before.content_hash;
-    drop(storage);
-    let reopened = Storage::open(root.path().into()).unwrap();
-    let migrated = reopened.get_minutes_markdown(&meeting).unwrap().unwrap();
-    assert!(migrated.markdown.contains("人間の保存済み追記"));
-    assert!(migrated.markdown.contains("](audio:"));
-    assert!(!migrated.markdown.contains("[^根拠"));
-    assert!(!migrated.markdown.contains(&input.analysis.id));
-    assert_eq!(
-        reopened
-            .load_minutes_content(&meeting, &base)
-            .unwrap()
-            .unwrap()
-            .content_hash,
-        legacy_hash
-    );
-    let edited = reopened
-        .save_minutes_markdown(request(
-            &meeting,
-            Some(migrated.stamp()),
-            "人間だけが管理する新本文",
-        ))
-        .unwrap();
-    drop(reopened);
-    let twice = Storage::open(root.path().into()).unwrap();
-    assert_eq!(twice.get_minutes_markdown(&meeting).unwrap(), Some(edited));
-}
-
-#[test]
-fn failed_import_does_not_partially_migrate_or_delete_existing_documents() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, base) = legacy(&storage);
-    let draft = storage.seed_stored_minutes_draft(&meeting, &base).unwrap();
-    storage
-        .connection
-        .lock()
-        .unwrap()
-        .execute(
-            "UPDATE working_drafts SET content_hash=?1 WHERE id=?2",
-            params!["b".repeat(64), draft.id],
-        )
-        .unwrap();
-    drop(storage);
-    let reopened = Storage::open(root.path().into()).unwrap();
-    assert!(reopened.get_minutes_markdown(&meeting).is_err());
-    let unrelated = reopened.create_meeting("別の会議は利用できる").unwrap().id;
-    let kept = reopened
-        .save_minutes_markdown(request(&unrelated, None, "別会議の人間の本文"))
-        .unwrap();
-    assert_eq!(
-        reopened.get_minutes_markdown(&unrelated).unwrap(),
-        Some(kept)
-    );
-    drop(reopened);
-    let db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
-    assert_eq!(
-        db.query_row::<i64, _, _>(
-            "SELECT COUNT(*) FROM minutes_markdown WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0)
-        )
-        .unwrap(),
-        0
-    );
-    assert!(db
-        .query_row::<bool, _, _>(
-            "SELECT EXISTS(SELECT 1 FROM minutes_revisions WHERE id=?1 AND meeting_id=?2)",
-            params![base, meeting],
-            |r| r.get(0)
-        )
-        .unwrap());
-}
-
-#[test]
-fn schema_30_upgrade_imports_effective_text_once_and_preserves_source() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, base) = legacy(&storage);
-    let before = storage
-        .load_minutes_content(&meeting, &base)
-        .unwrap()
-        .unwrap();
-    {
-        // Construct the previous trusted schema in this private fixture only.
-        let db = storage.connection.lock().unwrap();
-        assert_eq!(
-            db.query_row::<i64, _, _>("SELECT COUNT(*) FROM minutes_markdown", [], |r| r.get(0))
-                .unwrap(),
-            0
-        );
-        db.execute_batch(
-            "DROP TABLE minutes_markdown; DELETE FROM schema_migrations WHERE version=31;",
-        )
-        .unwrap();
-        assert_eq!(super::super::verify_migration_history(&db).unwrap(), 30);
-    }
-    drop(storage);
-    let upgraded = Storage::open(root.path().into()).unwrap();
-    let body = upgraded.get_minutes_markdown(&meeting).unwrap().unwrap();
-    assert_eq!(body.lock_version, 1);
-    assert!(!body.markdown.is_empty());
-    assert_eq!(
-        upgraded
-            .load_minutes_content(&meeting, &base)
-            .unwrap()
-            .unwrap()
-            .content_hash,
-        before.content_hash
-    );
-    assert_eq!(
-        super::super::verify_migration_history(&upgraded.connection.lock().unwrap()).unwrap(),
-        31
-    );
-    drop(upgraded);
-    let again = Storage::open(root.path().into()).unwrap();
-    assert_eq!(again.get_minutes_markdown(&meeting).unwrap(), Some(body));
-}
-
-#[test]
-fn exact_fractional_intervals_replace_legacy_evidence_without_utterance_metadata() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (_request, job, mut content) = super::super::minutes::tests::fixture(&storage, 1);
-    let input = storage.load_minutes_input(&job.id).unwrap();
-    content.evidence[0].start_us = 100_001;
-    content.evidence[0].end_us = 799_999;
-    let markdown = content.plain_markdown(&input).unwrap();
-    assert!(markdown.contains("](audio:00:00:00.100001-00:00:00.799999)"));
-    assert!(!markdown.contains("[^根拠"));
-    assert!(!markdown.contains(&content.evidence[0].utterance_id));
-    assert!(!markdown.contains(&content.evidence[0].analysis_revision_id));
-}
-
-#[test]
 fn malformed_retry_base_hash_and_lock_overflow_are_not_accepted() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
@@ -928,44 +800,5 @@ fn malformed_retry_base_hash_and_lock_overflow_are_not_accepted() {
     assert_eq!(
         storage.get_minutes_markdown(&meeting).unwrap(),
         Some(ceiling)
-    );
-}
-
-#[test]
-fn absent_base_cannot_overwrite_unread_saved_legacy_minutes() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let (meeting, base) = legacy(&storage);
-    let original = storage
-        .load_minutes_content(&meeting, &base)
-        .unwrap()
-        .unwrap();
-    assert!(storage
-        .save_minutes_markdown(request(&meeting, None, "既存本文を見ずに上書き"))
-        .unwrap_err()
-        .contains("読み込"));
-    assert_eq!(
-        read(&storage.connection.lock().unwrap(), &meeting).unwrap(),
-        None
-    );
-    assert_eq!(
-        storage
-            .load_minutes_content(&meeting, &base)
-            .unwrap()
-            .unwrap()
-            .content_hash,
-        original.content_hash
-    );
-    let imported = storage.get_minutes_markdown(&meeting).unwrap().unwrap();
-    let edited = storage
-        .save_minutes_markdown(request(
-            &meeting,
-            Some(imported.stamp()),
-            "確認後の人間の編集",
-        ))
-        .unwrap();
-    assert_eq!(
-        storage.get_minutes_markdown(&meeting).unwrap(),
-        Some(edited)
     );
 }

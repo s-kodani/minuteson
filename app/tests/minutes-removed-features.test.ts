@@ -86,3 +86,14 @@ test("structured worker execution and candidate publication are removed from the
   for(const name of ["enqueue_minutes_job","enqueue_minutes_job_configured"])
     assert.match(admission,new RegExp("#\\[cfg\\(test\\)\\]\\n    pub\\(crate\\) fn "+name+"\\("));
 });
+test("opening plain minutes never migrates or publishes a removed structured document",()=>{
+  const root=new URL("../src-tauri/src/",import.meta.url);
+  const storage=readFileSync(new URL("storage/minutes_markdown.rs",root),"utf8");
+  assert.doesNotMatch(storage,/import_current_document|require_read_current|plain_markdown|minutes_drafts::|minutes::read_content|current_minutes_id/);
+  const getter=storage.slice(storage.indexOf("pub(crate) fn get_minutes_markdown("),storage.indexOf("pub(crate) fn save_minutes_markdown("));
+  assert.match(getter,/read\(&db, meeting\)/);
+  assert.doesNotMatch(getter,/transaction|require_data_writable|\.execute|save\(/);
+  const document=readFileSync(new URL("minutes_document.rs",root),"utf8");
+  assert.doesNotMatch(document,/plain_markdown|audio_links/);
+  assert.match(document,/#\[cfg\(test\)\]\n    pub\(crate\) fn markdown\(/);
+});

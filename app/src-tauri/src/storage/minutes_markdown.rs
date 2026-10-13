@@ -62,15 +62,8 @@ impl GenerationTarget {
         if read(db, meeting)?.as_ref().map(MarkdownDocument::stamp) != self.expected {
             return Err("生成の確認後に議事録が更新されています。人間の編集を保持します".into());
         }
-        require_read_current(db, meeting)
+        Ok(())
     }
-}
-
-fn require_read_current(db: &Connection, meeting: &str) -> Result<(), String> {
-    if read(db,meeting)?.is_none() && db.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND current_minutes_id IS NOT NULL)",[meeting],|r|r.get::<_,bool>(0)).map_err(|e|e.to_string())? {
-        return Err("保存済み議事録を読み込んでから保存してください。入力は保持してください".into());
-    }
-    Ok(())
 }
 
 pub(super) fn uuid(value: &str) -> bool {
@@ -206,61 +199,6 @@ pub(crate) fn save(
     read(tx, &request.meeting_id)?.ok_or_else(|| "保存した議事録本文が見つかりません".into())
 }
 
-/// Migrate only a meeting's currently effective content, including its saved
-/// draft. Existing source data is preserved, never initialized/deleted. Once a
-/// Markdown row exists, later reads must not replace subsequent human editing.
-/// An unopened invalid legacy document must not prevent app/recording startup.
-fn import_current_document(
-    db: &mut Connection,
-    meeting: &str,
-) -> Result<Option<MarkdownDocument>, String> {
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    if let Some(document) = read(&tx, meeting)? {
-        return Ok(Some(document));
-    }
-    let base: Option<String> = tx
-        .query_row(
-            "SELECT current_minutes_id FROM meetings WHERE id=?1",
-            [meeting],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .flatten();
-    let Some(base) = base else {
-        return Ok(None);
-    };
-    let view = super::minutes::read_content(&tx, &meeting, &base)?
-        .ok_or("移行する議事録が見つかりません")?;
-    let draft = super::minutes_drafts::load(&tx, &meeting, None)?;
-    if draft.as_ref().is_some_and(|d| d.base_minutes_id != base) {
-        return Err("議事録移行の下書きと現在版が一致しません".into());
-    }
-    let input = super::minutes_input::read_snapshot(
-        &tx,
-        &meeting,
-        &view.input_analysis_id,
-        &view.input_content_hash,
-    )?;
-    let markdown = draft
-        .as_ref()
-        .map_or(&view.content, |d| &d.payload)
-        .plain_markdown(&input)?;
-    let document = save(
-        &tx,
-        &SaveMarkdownRequest {
-            meeting_id: meeting.into(),
-            operation_id: Uuid::new_v4().to_string(),
-            expected: None,
-            markdown,
-        },
-    )?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(Some(document))
-}
-
 impl Storage {
     /// Publish the sole Markdown body and job success in one transaction. No
     /// candidate, old-body backup, item/evidence projection or draft is made.
@@ -328,19 +266,13 @@ impl Storage {
         &self,
         meeting: &str,
     ) -> Result<Option<MarkdownDocument>, String> {
-        let mut db = self
+        let db = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        if let Some(document) = read(&db, meeting)? {
-            return Ok(Some(document));
-        }
-        let has_legacy: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND current_minutes_id IS NOT NULL)",[meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if !has_legacy {
-            return Ok(None);
-        }
-        self.require_data_writable()?;
-        import_current_document(&mut db, meeting)
+        // Opening the preview only reads the current Markdown. It never
+        // converts or publishes content from a removed document format.
+        read(&db, meeting)
     }
 
     pub(crate) fn save_minutes_markdown(
@@ -356,10 +288,6 @@ impl Storage {
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        // A missing new-format row is not proof that this meeting has no
-        // existing saved minutes. Require their verified first read before a
-        // native caller can claim an absent base and overwrite them.
-        require_read_current(&tx, &request.meeting_id)?;
         let document = save(&tx, &request)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(document)
