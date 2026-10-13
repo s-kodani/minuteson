@@ -20,7 +20,7 @@ async (page, capturePath = path => path) => {
       else { if (!e.dismissed) { e.revision++; e.dismissed = true; } value = snapshot(); }
     } else if (command === "get_recording_snapshot") { if (failSession && label === "recorder") error = "合成録音状態の接続失敗"; else value = recording; }
     else if (command === "get_recording_confirmation") value = { revision: 0, id: null, phase: "idle", sessionId: null, meetingId: null, meetingTitle: null, origin: null, preparing: false, quitAfterSave: false, errorMessage: null };
-    else if (command === "get_ui_preferences") { if (failTheme && label === "recorder") error = "合成表示設定の読込失敗"; else value = { id: "ui_preferences", lockVersion: 1, payload: { schemaVersion: 2, theme: "dark", textSize: 20, followPlayback: false } }; }
+    else if (command === "get_ui_preferences") { if (failTheme && label === "recorder") error = "合成表示設定の読込失敗"; else value = { id: "ui_preferences", lockVersion: 1, payload: { schemaVersion: 1, theme: "dark" } }; }
     else if (command === "get_recorder_info") value = false;
     else if (command === "open_main_window") { if (failOpen) error = failure; else value = null; }
     else if (command === "show_recorder_info") value = true;
@@ -33,7 +33,7 @@ async (page, capturePath = path => path) => {
     await route.fulfill({ response, body });
   });
   const main = await context.newPage(), info = await context.newPage();
-  const toast = () => main.locator(".toast-card").filter({ hasText: "録音パネルのウィンドウ操作で要対応" });
+  const toast = () => main.locator(".toast-card").filter({ hasText: "録音パネルのウィンドウ操作：" });
   const open = () => page.getByRole("button", { name: "メインを開く", exact: true });
   const marker = () => page.getByRole("button", { name: "録音パネルの説明を開く", exact: true });
   const waitMarker = () => page.waitForFunction(() => document.querySelector(".recorder-info-trigger button")?.dataset.helpError === "true");

@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { isTheme, isTextSize, readingPreferences, resolveTheme, ThemeController } from "./theme-state";
+import { isTheme, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
 import { IssueStatus, ToastNotice } from "./toast";
 
@@ -10,7 +10,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [controller] = useState(() => new ThemeController({
     read: () => invoke("get_ui_preferences"),
     save: (expectedLockVersion, theme) => invoke("save_ui_preferences", { expectedLockVersion, payload: { schemaVersion: 1, theme } }),
-    savePayload: (expectedLockVersion, payload) => invoke("save_ui_preferences", { expectedLockVersion,payload }),
   }));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [osDark, setOsDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -22,8 +21,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
   const theme = resolveTheme(state.snapshot?.payload.theme ?? "system", osDark);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
-  const { textSize } = readingPreferences(state.snapshot?.payload);
-  useEffect(() => { document.documentElement.style.setProperty("--reading-font-size",`${textSize}px`); }, [textSize]);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -47,22 +44,10 @@ export function ThemeSelection({ locked = false, compact = false, describedBy }:
   const { controller, state } = useTheme();
   const id = useId();
   return <label className={compact ? "theme-quick" : "theme-choice"} htmlFor={id}>{compact ? "表示テーマ" : "テーマ"}
-    <select id={id} aria-describedby={describedBy} value={state.pendingTheme ?? state.snapshot?.payload.theme ?? "system"} disabled={locked || state.busy || state.uncertain || !!state.pendingDisplay || !state.snapshot || !isTauri()} onChange={event => { if (isTheme(event.target.value)) void controller.change(event.target.value); }}>
+    <select id={id} aria-describedby={describedBy} value={state.pendingTheme ?? state.snapshot?.payload.theme ?? "system"} disabled={locked || state.busy || state.uncertain || !state.snapshot || !isTauri()} onChange={event => { if (isTheme(event.target.value)) void controller.change(event.target.value); }}>
       <option value="system">システム</option><option value="light">ライト</option><option value="dark">ダーク</option>
     </select>
   </label>;
-}
-export function TextSizeSelection({ locked = false }: { locked?: boolean }) {
-  const { controller,state } = useTheme();
-  const selected={...readingPreferences(state.snapshot?.payload),...state.pendingDisplay};
-  return <label className="text-size-choice">本文の文字サイズ<select value={selected.textSize} disabled={locked || state.busy || state.uncertain || !!state.pendingPreferences || !state.snapshot || !isTauri()} onChange={event=>{
-    const textSize=Number(event.target.value);if(isTextSize(textSize))void controller.changeDisplay({textSize});
-  }}><option value="13">小 13px</option><option value="15">標準 15px</option><option value="18">大 18px</option><option value="20">特大 20px</option></select></label>;
-}
-export function PlaybackFollowingSelection({ locked = false }: { locked?: boolean }) {
-  const {controller,state}=useTheme();
-  const selected={...readingPreferences(state.snapshot?.payload),...state.pendingDisplay};
-  return <label className="playback-follow-choice"><input type="checkbox" checked={selected.followPlayback} disabled={locked||state.busy||state.uncertain||!!state.pendingPreferences||!state.snapshot||!isTauri()} onChange={event=>void controller.changeDisplay({followPlayback:event.target.checked})}/>再生位置に追従</label>;
 }
 export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolean; compact?: boolean }) {
   const { controller, state } = useTheme();
@@ -70,9 +55,8 @@ export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolea
     <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
     <ThemeSelection locked={locked} />
     <IssueStatus label="表示設定の読込・保存" message={state.error} />
-    {(state.pendingTheme || state.pendingDisplay) && !state.busy && <div className="analysis-actions">
+    {state.pendingTheme && !state.busy && <div className="analysis-actions">
       {state.pendingTheme && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
-      {state.pendingDisplay && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>文字サイズ・追従設定の保存を再試行</button>}
     </div>}
   </section>;
 }
@@ -83,7 +67,7 @@ export function ThemeNotifications({ locked }: { locked: boolean }) {
   const notice = state.notice;
   const retrySave = !state.uncertain && state.pendingPreferences;
   return <><ToastNotice scope="ui-preferences" type="result" message={notice?.message} level={notice?.level} eventId={notice ? String(notice.id) : undefined} onClose={() => { if (notice) controller.clearNotice(notice.id); }} />
-    <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? state.pendingTheme ? "テーマの保存を再試行" : "文字サイズ・追従設定の保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
+    <ToastNotice scope="ui-preferences" type="operation" level="error" message={state.error ? `表示設定の読込・保存: ${state.error}` : ""} action={{ kind: "retry", label: retrySave ? "テーマの保存を再試行" : "表示設定の結果を確認", disabled: locked || state.busy || !isTauri(), run: async () => { if (locked) return; const current = controller.getSnapshot(); if (!current.uncertain && current.pendingPreferences) await controller.retry(); else await controller.refresh(); } }} />
   </>;
 }
 export function ThemeReadNotice({ compact = false }: { compact?: boolean }) {

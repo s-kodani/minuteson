@@ -418,7 +418,7 @@ fn deletion_relocation_cutover_rejects_changed_owned_image_before_retirement_or_
 }
 
 #[test]
-fn restore_rebinding_v3_upgrade_preserves_installed_history_and_meeting_data() {
+fn restore_rebinding_current_reopen_preserves_installed_history_and_meeting_data() {
     let f = Fixture::new();
     let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
     f.intent(&s);
@@ -435,7 +435,6 @@ fn restore_rebinding_v3_upgrade_preserves_installed_history_and_meeting_data() {
             r.get(0)
         })
         .unwrap();
-    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings; PRAGMA user_version=3;").unwrap();
     drop(db);
     let target = Storage::open(f.target.clone()).unwrap();
     assert_eq!(target.previous_storage_history().unwrap().len(), 1);

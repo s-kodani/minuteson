@@ -24,57 +24,68 @@ fn restore_rebinding_missing_current_binding_table_is_not_adopted_as_v3_or_recre
 }
 
 #[test]
-fn history_install_v2_registry_upgrade_preserves_meetings_and_original_keep_receipt() {
-    let root = tempfile::tempdir().unwrap();
-    let s = Storage::open(root.path().into()).unwrap();
-    let meeting = s.create_meeting("existing v2 root").unwrap();
-    let stage = s.backup_stage().unwrap();
-    let path = stage.path().to_owned();
-    std::fs::write(path.join("unknown"), b"keep existing v2 body").unwrap();
-    drop(stage);
-    let id = s.recovery_listing().unwrap().items[0].operation_id.clone();
-    let mut keep = s
-        .prepare_recovery(
-            crate::storage::backup::recovery::Source::Scratch,
-            &id,
-            &|| false,
-        )
-        .unwrap();
-    keep.resolve(&s, &keep.preview().confirmation_id, true, &|| false)
-        .unwrap();
-    drop(keep);
-    let db = Connection::open(s.root.join(".mon-scratch.sqlite3")).unwrap();
-    let receipt: String = db
-        .query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings; DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history; PRAGMA user_version=2;").unwrap();
-    drop(db);
-    drop(s);
-    let reopened = Storage::open(root.path().into()).unwrap();
-    assert_eq!(
-        reopened.get_meeting(&meeting.id).unwrap().unwrap().id,
-        meeting.id
-    );
-    assert_eq!(
-        std::fs::read(path.join("unknown")).unwrap(),
-        b"keep existing v2 body"
-    );
-    assert!(reopened.recovery_listing().unwrap().items[0].retained);
-    let db = Connection::open(reopened.root.join(".mon-scratch.sqlite3")).unwrap();
-    assert_eq!(
-        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+fn old_registry_versions_two_and_three_are_rejected_without_rewriting_keep_receipts() {
+    for version in [2, 3] {
+        let root = tempfile::tempdir().unwrap();
+        let s = Storage::open(root.path().into()).unwrap();
+        s.create_meeting("current root").unwrap();
+        let stage = s.backup_stage().unwrap();
+        let path = stage.path().to_owned();
+        std::fs::write(path.join("unknown"), b"keep owned body").unwrap();
+        drop(stage);
+        let id = s.recovery_listing().unwrap().items[0].operation_id.clone();
+        let mut keep = s
+            .prepare_recovery(
+                crate::storage::backup::recovery::Source::Scratch,
+                &id,
+                &|| false,
+            )
+            .unwrap();
+        keep.resolve(&s, &keep.preview().confirmation_id, true, &|| false)
+            .unwrap();
+        drop(keep);
+        let journal = s.root.join(".mon-scratch.sqlite3");
+        drop(s);
+        let db = Connection::open(&journal).unwrap();
+        let receipt: String = db
+            .query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings;").unwrap();
+        if version == 2 {
+            db.execute_batch("DROP TRIGGER relocation_history_fixed; DROP TRIGGER relocation_history_retained; DROP TABLE relocation_history;").unwrap();
+        }
+        db.pragma_update(None, "user_version", version).unwrap();
+        drop(db);
+        let before = std::fs::read(&journal).unwrap();
+        assert!(Storage::open(root.path().into()).is_err());
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
+        assert_eq!(
+            std::fs::read(path.join("unknown")).unwrap(),
+            b"keep owned body"
+        );
+        let db = Connection::open(&journal).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+        assert_eq!(
+            db.query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
+                r.get::<_, String>(0)
+            })
             .unwrap(),
-        4
-    );
-    assert_eq!(
-        db.query_row("SELECT receipt_json FROM recovery_decisions", [], |r| {
-            r.get::<_, String>(0)
-        })
-        .unwrap(),
-        receipt
-    );
+            receipt
+        );
+        assert!(!db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1)",
+                ["relocation_restore_bindings"],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap());
+    }
 }
 
 #[test]

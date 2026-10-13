@@ -9,7 +9,7 @@ import { DraftSaveQueue, registerPendingEdits } from "./draft-save";
 import { SpeakerLabel, SpeakerLabels } from "./speaker-label";
 import { WorkspacePanel } from "./workspace-panel";
 import { useTranscriptAudio } from "./transcript-audio";
-import { usePlaybackFollowing } from "./playback-following";
+import { usePlaybackHighlights } from "./playback-highlights";
 import { useTranscriptTrackKinds } from "./transcript-track-kinds-hook";
 import { appShortcut, overlayOpen } from "./keyboard";
 import { canonicalPayload, projectTranscript, filterUtterances, activeSpeakers, addSpeaker, assignSpeakers, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
@@ -64,11 +64,9 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
   const speakers = view ? activeSpeakers(view, snapshot.payload) : [];
   const filtered = useMemo(() => view ? filterUtterances(view, speakerFilter, query) : [], [view, speakerFilter, query]);
   const shown = retainedTextRows(view?.utterances ?? [], filtered, page, PAGE_SIZE, Object.keys(texts)).rows;
-  const followPort = useRef<HTMLDivElement>(null);
   const tracks = useTranscriptTrackKinds(meetingId, analysis?.id ?? null);
-  const following = usePlaybackFollowing({ meetingId, analysisId: analysis?.id ?? null, rows: filtered, page, pageSize: PAGE_SIZE, setPage,
-    editing: !!Object.keys(texts).length || !!nameEditor || adding || snapshot.saving || snapshot.dirty || busy || loading,
-    active: visible && !locked, port: followPort, trackKinds: tracks.kinds, highlightRows: shown });
+  const playingIds = usePlaybackHighlights({ meetingId, analysisId: analysis?.id ?? null, rows: shown,
+    active: visible && !locked, trackKinds: tracks.kinds });
   const disabled = locked || loading || busy;
   const editable = !disabled && !!analysis;
   // Restore only after React has replaced the editor and unlocked its row.
@@ -178,7 +176,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
       <div className="transcript-main">
         <div className="transcript-actions"><h2>発言一覧</h2><span role="status">{snapshot.error ? "保存要確認" : snapshot.saving || busy ? "保存中" : Object.keys(texts).length || nameEditor || snapshot.dirty ? "編集中" : "保存済み"}</span></div>
         <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
-        <div ref={followPort} {...following.handlers} className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>{shown.map(utterance => <article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${following.playingIds.has(utterance.id) ? " utterance-playing" : ""}`} aria-current={following.playingIds.has(utterance.id) ? "true" : undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space" onKeyDown={event => {
+        <div className="utterance-list" role="region" aria-label="発言本文" tabIndex={0}>{shown.map(utterance => <article key={utterance.id} data-utterance-id={utterance.id} className={`utterance-row${playingIds.has(utterance.id) ? " utterance-playing" : ""}`} aria-current={playingIds.has(utterance.id) ? "true" : undefined} tabIndex={0} aria-label={`${timeLabel(utterance.startUs)}の発言行`} aria-keyshortcuts="Space" onKeyDown={event => {
           if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen() || disabled || audio.preparing) return;
           event.preventDefault(); if (audio.selected === utterance.id && audio.available) audio.toggle(); else play(utterance);
         }}>
@@ -199,7 +197,7 @@ export function TranscriptEditor({ meetingId, meetingTitle, locked = false, play
           </OptionsModal>
         </article>)}</div>
         {!filtered.length && <p>条件に一致する発言はありません。</p>}
-        {filtered.length > PAGE_SIZE && <div className="transcript-pages"><IconButton label="前へ" icon="previous" disabled={!page} onClick={() => { following.suspend(); setPage(value => value - 1); }} /><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><IconButton label="次へ" icon="next" disabled={(page + 1) * PAGE_SIZE >= filtered.length} onClick={() => { following.suspend(); setPage(value => value + 1); }} /></div>}
+        {filtered.length > PAGE_SIZE && <div className="transcript-pages"><IconButton label="前へ" icon="previous" disabled={!page} onClick={() => setPage(value => value - 1)} /><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><IconButton label="次へ" icon="next" disabled={(page + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(value => value + 1)} /></div>}
       </div>
     </div>}
     <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存" message={snapshot.error || error} toastMessage="文字起こしを保存できません。入力は保持しています" action={snapshot.error ? { kind: "retry", label: "文字起こし保存を再試行", disabled, run: retry } : undefined} />

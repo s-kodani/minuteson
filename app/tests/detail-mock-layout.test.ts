@@ -118,7 +118,7 @@ test("mixed action rows and select fields align without removing wrapping or che
   assert.match(css,/\.action-error:has\(>button\) \{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;/);
   assert.match(css,/\.vocabulary-list \.analysis-actions label \{ gap:8px;/);
   assert.match(css,/\.transcript-main>\.transcript-actions:first-child \{ min-height:32px;/);
-  assert.match(css,/\.meeting-audio-settings-fields>\.playback-follow-choice \{ display:flex; align-items:center; gap:8px;/);
+  assert.doesNotMatch(css,/playback-follow-choice|text-size-choice/);
   assert.match(css,/\.import-term label:has\(>input\[type=checkbox\]\) \{ flex-direction:row; align-items:center; gap:8px;/);
 });
 
@@ -135,7 +135,7 @@ test("secondary settings and vocabulary fields retain space between neighboring 
   assert.match(css,/\.vocabulary-list article \{ display:grid; gap:12px;/);
   assert.match(css,/\.vocabulary-list label \{ min-width:0; gap:8px;/);
   assert.match(css,/\.vocabulary-list article>\.analysis-actions \{ margin:0; align-items:center;/);
-  assert.match(css,/\.options-dialog-content>:is\(p,\.analysis-actions,\.prompt-label,\.analysis-settings\),[\s\S]*?\{ margin-block:0; \}/);
+  assert.match(css,/\.options-dialog-content>:is\(p,\.analysis-actions,\.prompt-label,\.analysis-settings\) \{ margin-block:0; \}/);
   assert.match(css,/input\[type=file\]::file-selector-button \{ margin-right:12px;/);
   assert.match(css,/\.model-download-settings label:has\(>input\[type=file\]\) \{ display:grid; gap:8px; margin-block:0;/);
   assert.match(css,/\.model-download \[aria-label="未確定のモデル取得操作"\] \{ display:flex; align-items:center; flex-wrap:wrap; gap:10px;/);
@@ -180,7 +180,7 @@ test("reading surfaces reserve scrollbar clearance and short controls have no ne
   const css=source("prototype-alignment.css");
   assert.match(css,/\.meeting-detail-content \.utterance-list \{ padding-right:8px; scrollbar-gutter:stable;/);
   assert.match(css,/\.meeting-detail-content \.transcript-search \{ align-items:center; gap:8px 12px; max-height:none; overflow:visible;/);
-  assert.match(css,/\.playback-follow-status \{ max-height:none; overflow:visible; padding-block:8px;/);
+  assert.doesNotMatch(css,/playback-follow-status/);
   assert.match(css,/\.info-popover-head \{ align-items:center;/);
   assert.match(css,/\.info-popover \.info-popover-head h3 \{ margin:0;/);
 });

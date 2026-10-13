@@ -306,10 +306,6 @@ select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .meeting-audio-details label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .meeting-audio-details select { max-width:100%; }
 .meeting-audio-details p { margin:4px 0; line-height:1.6; overflow-wrap:anywhere; }
-.text-size-choice { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block:8px; font-size:13px; }
-.playback-follow-choice { display:flex; align-items:center; gap:8px; margin-block:8px; font-size:13px; }
-.playback-follow-status { flex:none; display:flex; align-items:center; flex-wrap:wrap; gap:8px; max-height:15dvh; overflow:auto; font-size:12px; color:var(--muted); }
-.playback-follow-status button { font-size:12px; padding:4px 8px; }
 @media (min-width:761px) {
   /* Idle actions share the caption row, leaving the transcript its scroll area. */
   .meeting-playback-dock:has(.meeting-audio-actions):not(:has(.audio-player)) { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:16px; }

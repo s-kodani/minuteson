@@ -1,4 +1,4 @@
-async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}`) => {
+async (page, capturePath = path => path) => {
   const context = page.context(), results = [], calls = [];
   const check = (ok, message) => { if (!ok) throw Error(message); };
   const recording = { revision: 1, phase: "recording", elapsedMs: 45000, microphoneConnected: true, systemAudioConnected: true, meetingId: "synthetic", sessionId: "00000000-0000-4000-8000-000000000001", errorMessage: null };
@@ -12,7 +12,7 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     else if (command === "publish_recorder_operation_notice") { const e = operations.find(e => e.source === args.source); check(label === "recorder" && e?.revision === args.expectedRevision, "bad operation relay"); if (e.message !== args.message) { e.revision++; e.message = args.message; e.eventId = args.message ? `${e.source}:${e.revision}` : null; e.dismissed = false; } value = { schemaVersion: 1, entries: operations }; }
     else if (command === "get_recording_snapshot") value = recording;
     else if (command === "get_recording_confirmation") value = { revision: 0, id: null, phase: "idle", sessionId: null, meetingId: null, meetingTitle: null, origin: null, preparing: false, quitAfterSave: false, errorMessage: null };
-    else if (command === "get_ui_preferences") value = { id: "ui_preferences", lockVersion: 1, payload: { schemaVersion: 2, theme: "dark", textSize: 20, followPlayback: false } };
+    else if (command === "get_ui_preferences") value = { id: "ui_preferences", lockVersion: 1, payload: { schemaVersion: 1, theme: "dark" } };
     else if (command === "get_recorder_info") value = badRead ? { forged: true } : visible;
     else if (command === "show_recorder_info") { check(label === "recorder", "wrong show role"); visible = true; value = true; if (lostShow) { lostShow = false; error = "合成表示応答喪失"; } }
     else if (command === "close_recorder_info") { check(["recorder", "recorder-info"].includes(label), "wrong close role"); if (failClose) error = "合成close失敗"; else { visible = false; value = false; } }
@@ -45,17 +45,17 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     await popup.setViewportSize({ width: 360, height: 340 });
     await popup.goto("http://127.0.0.1:1420/?window=recorder-info");
     const close = popup.getByRole("button", { name: "録音パネルの説明を閉じる", exact: true });
-    await close.waitFor(); await popup.waitForFunction(() => document.documentElement.dataset.theme === "dark" && getComputedStyle(document.documentElement).getPropertyValue("--reading-font-size").trim() === "20px");
+    await close.waitFor(); await popup.waitForFunction(() => document.documentElement.dataset.theme === "dark" && getComputedStyle(document.querySelector(".recorder-info-window")).fontSize === "15px");
     await popup.evaluate(() => window.dispatchEvent(new Event("focus")));
     check(await close.evaluate(element => element === document.activeElement), "initial focus not close");
     check(await popup.getByRole("dialog").getAttribute("aria-modal") === "false", "help became confirmation");
     check((await popup.getByRole("dialog").innerText()).includes("文字起こし・話者分離は録音終了後"), "missing analysis explanation");
-    check(await popup.getByRole("dialog").evaluate(e => document.documentElement.scrollWidth <= innerWidth && e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight > e.clientHeight && getComputedStyle(e).overflowY === "auto"), "large text not vertically scrollable or horizontal clipping");
-    await popup.screenshot({ path: capturePath("recorder-info-dark-20.png") });
+    check(await popup.getByRole("dialog").evaluate(e => document.documentElement.scrollWidth <= innerWidth && e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight > e.clientHeight && getComputedStyle(e).overflowY === "auto"), "help is not vertically scrollable or is horizontally clipped");
+    await popup.screenshot({ path: capturePath("recorder-info-dark-15.png") });
     await popup.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector(".recorder-info-trigger button")?.getAttribute("aria-expanded") === "false");
     check(calls.filter(c => c.command === "close_recorder_info").length === 1, "Escape not single close");
-    results.push("separate nonmodal help follows dark/20px settings, close focus, scroll and Escape");
+    results.push("separate nonmodal help uses the dark theme and fixed 15px text, close focus, scroll and Escape");
 
     lostShow = true; await trigger.click();
     await page.getByRole("alert").filter({ hasText: "合成表示応答喪失" }).waitFor();

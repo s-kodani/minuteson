@@ -3,7 +3,6 @@ import { OptionsModal } from "./options-modal";
 import { createPortal } from "react-dom";
 import { useTranscriptAudio } from "./transcript-audio";
 import { meetingPlaybackLabel, meetingPlaybackModes, type MeetingPlaybackMode } from "./meeting-playback-state";
-import { TextSizeSelection, PlaybackFollowingSelection } from "./theme";
 
 export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
   meetingId: string; sourceType: "recording" | "audio_import"; locked: boolean; host: HTMLElement | null;
@@ -22,8 +21,6 @@ export function MeetingAudioControls({ meetingId, sourceType, locked, host }: {
         setMode(next);
         if (audio.selected) void audio.startMeeting(next, true);
       }}>{modes.map(value => <option key={value} value={value}>{meetingPlaybackLabel(value)}</option>)}</select></label>
-      <TextSizeSelection locked={locked} />
-      <PlaybackFollowingSelection locked={locked} />
       <button type="button" className="small-secondary" disabled={locked || audio.preparing} onClick={() => void audio.startMeeting(mode, false, false)}>会議全体の音声に戻す</button>
       <p>切替は会議全体の再生に適用します。発言の時刻や議事録の区間を選ぶと、その区間へ切り替わります。</p>
     </div></OptionsModal>

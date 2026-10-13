@@ -94,8 +94,8 @@ fn recovery_incomplete_retry_is_attention_not_success_and_keeps_unknown_files() 
 }
 
 #[test]
-fn recovery_legacy_ownership_schema_upgrades_atomically_without_adopting_or_losing_areas() {
-    let (root, storage, id, path) = fixture();
+fn recovery_old_ownership_schema_is_rejected_without_adopting_or_losing_areas() {
+    let (root, storage, _id, path) = fixture();
     drop(storage);
     let journal = root.path().join(".mon-scratch.sqlite3");
     let db = Connection::open(&journal).unwrap();
@@ -106,24 +106,12 @@ fn recovery_legacy_ownership_schema_upgrades_atomically_without_adopting_or_losi
     db.execute_batch("DROP TABLE recovery_decisions; PRAGMA user_version=0;")
         .unwrap();
     drop(db);
-    let reopened = Storage::open(root.path().into()).unwrap();
+    let before = std::fs::read(&journal).unwrap();
+    assert!(Storage::open(root.path().into()).is_err());
+    assert_eq!(std::fs::read(&journal).unwrap(), before);
     assert_eq!(std::fs::read(path.join("unknown")).unwrap(), b"unknown");
-    assert_eq!(
-        reopened.recovery_listing().unwrap().items[0].operation_id,
-        id
-    );
-    let mut review = reopened
-        .prepare_recovery(Source::Scratch, &id, &|| false)
-        .unwrap();
-    assert_eq!(
-        review
-            .resolve(&reopened, &review.preview().confirmation_id, true, &|| {
-                false
-            })
-            .unwrap()
-            .outcome,
-        Outcome::Retained
-    );
+    let db = Connection::open(&journal).unwrap();
+    assert_eq!(db.query_row("PRAGMA user_version", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
 }
 
 #[test]

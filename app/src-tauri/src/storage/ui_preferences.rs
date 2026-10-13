@@ -21,12 +21,6 @@ pub(crate) enum UiPreferences {
         schema_version: u8,
         theme: Theme,
     },
-    V2 {
-        schema_version: u8,
-        theme: Theme,
-        text_size: u8,
-        follow_playback: bool,
-    },
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -49,12 +43,7 @@ fn validate(payload: &UiPreferences) -> Result<(), String> {
         UiPreferences::V1 {
             schema_version: 1, ..
         } => Ok(()),
-        UiPreferences::V2 {
-            schema_version: 2,
-            text_size,
-            ..
-        } if [13, 15, 18, 20].contains(text_size) => Ok(()),
-        _ => Err("表示設定の形式版または文字サイズに対応していません".into()),
+        _ => Err("テーマ設定の形式版に対応していません".into()),
     }
 }
 fn load(db: &Connection) -> Result<UiPreferencesSnapshot, String> {
@@ -113,11 +102,6 @@ impl Storage {
         let current = load(&tx)?;
         if expected_version != current.lock_version {
             return Err("表示設定が変更されています。保存済み設定を再読込してください".into());
-        }
-        if matches!(current.payload, UiPreferences::V2 { .. })
-            && matches!(payload, UiPreferences::V1 { .. })
-        {
-            return Err("文字サイズ・追従設定を旧形式のテーマ設定で上書きできません".into());
         }
         if current.payload == payload {
             return Ok(current);

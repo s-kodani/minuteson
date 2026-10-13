@@ -212,16 +212,13 @@ impl Registry {
             Identity::read(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)?;
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-        let previous_schema = schema(&expected)?;
         expected
             .execute_batch(review::SCHEMA)
             .map_err(|e| e.to_string())?;
-        let version_two_schema = schema(&expected)?;
         #[cfg(target_os = "macos")]
         expected
             .execute_batch(history::SCHEMA)
             .map_err(|e| e.to_string())?;
-        let version_three_schema = schema(&expected)?;
         #[cfg(target_os = "macos")]
         expected
             .execute_batch(binding::SCHEMA)
@@ -231,17 +228,9 @@ impl Registry {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        let upgrade_old = !new && version == 0 && schema(&db)? == previous_schema;
-        let upgrade_two =
-            cfg!(target_os = "macos") && !new && version == 2 && schema(&db)? == version_two_schema;
-        let upgrade_three = cfg!(target_os = "macos")
-            && !new
-            && version == 3
-            && schema(&db)? == version_three_schema;
-        let upgrade = upgrade_old || upgrade_two || upgrade_three;
         // Inspect existing SQL before changing its journaling settings. Even an
         // empty file without a saved root proof is not adopted as ours.
-        if !new && !upgrade && (version != local_version() || schema(&db)? != expected_schema) {
+        if !new && (version != local_version() || schema(&db)? != expected_schema) {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
         db.busy_timeout(std::time::Duration::from_secs(5))
@@ -266,7 +255,7 @@ impl Registry {
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
-        if !upgrade && schema(&db)? != expected_schema {
+        if schema(&db)? != expected_schema {
             return Err("一時領域台帳のSQL定義が不正です。既存ファイルを保持します".into());
         }
         let (json, sha): (String, String) = db
@@ -280,31 +269,6 @@ impl Registry {
         let saved: Identity = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         if saved != root_identity {
             return Err("一時領域の保存先実体が変更されています。コピーを保持します".into());
-        }
-        // Upgrade only an exact known schema with the original root proof.
-        // This is local metadata, not a meeting-DB or archive-format migration.
-        if upgrade {
-            if !root_identity.matches(&directory(root)?)
-                || !file_identity
-                    .matches(&std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?)
-            {
-                return Err("台帳の移行前に保存先が変更されています".into());
-            }
-            let tx = db.transaction().map_err(|e| e.to_string())?;
-            if upgrade_old {
-                tx.execute_batch(review::SCHEMA)
-                    .map_err(|e| e.to_string())?;
-            }
-            if upgrade_three {
-                #[cfg(target_os = "macos")]
-                tx.execute_batch(binding::SCHEMA)
-                    .map_err(|e| e.to_string())?;
-            } else {
-                history_schema(&tx)?;
-            }
-            tx.pragma_update(None, "user_version", local_version())
-                .map_err(|e| e.to_string())?;
-            tx.commit().map_err(|e| e.to_string())?;
         }
         let registry = Arc::new(Self {
             root: root.into(),

@@ -421,11 +421,10 @@ button:disabled { opacity:.5; }
 @media(forced-colors:active) {
   .theme-choice select,.common-modal select,.audio-controls select,.capture-input-selection select,.model-selection-row select { -webkit-appearance:auto; appearance:auto; background-image:none; }
 }
-.common-modal .playback-follow-choice input[type=checkbox],.vocabulary-list input[type=checkbox] { margin:0; flex:none; }
+.vocabulary-list input[type=checkbox] { margin:0; flex:none; }
 .meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
 .meeting-detail-content .minutes-card>.card-head { gap:12px; }
 .transcript-main>.transcript-actions:first-child { min-height:32px; }
-.meeting-audio-settings-fields>.playback-follow-choice { display:flex; align-items:center; gap:8px; }
 .import-term label:has(>input[type=checkbox]) { flex-direction:row; align-items:center; gap:8px; }
 .model-application-dialog label:has(>input[type=checkbox]),.common-modal .import-checkbox { display:flex; align-items:flex-start; gap:8px; }
 .model-application-dialog label>input[type=checkbox],.common-modal .import-checkbox>input[type=checkbox] { flex:none; margin:5px 0 0; }
@@ -448,8 +447,7 @@ button:disabled { opacity:.5; }
 .vocabulary-list :is(input:not([type=checkbox]),textarea) { min-width:0; max-width:100%; padding:9px 12px; font-size:13px; line-height:20px; }
 .vocabulary-list input:not([type=checkbox]) { min-height:40px; }
 .vocabulary-list article>.analysis-actions { margin:0; align-items:center; }
-.options-dialog-content>:is(p,.analysis-actions,.prompt-label,.analysis-settings),
-.options-dialog-content>.text-size-choice,.options-dialog-content>.playback-follow-choice { margin-block:0; }
+.options-dialog-content>:is(p,.analysis-actions,.prompt-label,.analysis-settings) { margin-block:0; }
 .model-download-settings label:has(>input[type=file]) { display:grid; gap:8px; margin-block:0; }
 .model-download-settings input[type=file] { min-width:0; max-width:100%; font-size:13px; }
 .model-download-settings input[type=file]::file-selector-button { margin-right:12px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font:inherit; }
@@ -464,8 +462,6 @@ button:disabled { opacity:.5; }
 .utterance-meta .assigned-speakers { margin:0; align-items:center; }
 .meeting-detail-content .utterance-list { padding-right:8px; scrollbar-gutter:stable; }
 .meeting-detail-content .transcript-search { align-items:center; gap:8px 12px; max-height:none; overflow:visible; }
-.playback-follow-status { max-height:none; overflow:visible; padding-block:8px; }
-.playback-follow-status>span { min-width:0; overflow-wrap:anywhere; }
 /* Import is a settings form too: one scroll boundary, clearly spaced groups. */
 .common-modal.import-dialog { width:min(720px,calc(100% - 48px)); max-width:720px; }
 .import-dialog>.common-modal-body:not([hidden]) { display:grid; gap:16px; min-width:0; }
