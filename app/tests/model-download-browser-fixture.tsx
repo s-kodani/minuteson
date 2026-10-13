@@ -36,7 +36,12 @@ const hybridChoices = whisperVariants.map(variant => {
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
 f.profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
 f.entries = [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
-f.settings = { executablePath: "", modelPath: "", vadModelPath: null, threads: 2, useGpu: false };
+f.settingsByEngine = {
+  "whisper.cpp": { executablePath: "", modelPath: "", vadModelPath: null, threads: 2, useGpu: false },
+  "sherpa-onnx": { executablePath: "", segmentationModelPath: "", embeddingModelPath: "", runtimeLibraryPaths: [], threads: 2, clusterThresholdMilli: 500, windowShiftMilli: 10000, minDurationOnMs: 300, minDurationOffMs: 500 },
+  "llama.cpp": { executablePath: "", modelPath: "", threads: 2, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 },
+};
+const componentRoles = { "whisper.cpp": ["asr"], "sherpa-onnx": ["segmentation", "speaker_embedding"], "llama.cpp": ["llm"] };
 (window as any).isTauri = true; mockWindows("main");
 f.definition = JSON.stringify({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成取得素材", modelVersion: "1", quantization: null, licenseRef: "synthetic fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: "a".repeat(64) }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: "b".repeat(64) }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
 async function reviewed(definition: string): Promise<DownloadReview> {
@@ -68,14 +73,22 @@ mockIPC(async (command, args) => {
   }
   if (command === "preview_model_profile_application") {
     const entry = f.entries.find((item: any) => item.packageId === args.packageId), profile = f.profiles.find((item: any) => item.name === args.profile);
-    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: 0, before: { engine: entry.engine, settings: structuredClone(f.settings) }, after: { engine: entry.engine, settings: { ...f.settings, executablePath: "/synthetic/cli", modelPath: "/synthetic/model" } }, reviewDigest: "b".repeat(64) };
+    const before = structuredClone(f.settingsByEngine[entry.engine]), after = structuredClone(before);
+    after.executablePath = `/synthetic/${entry.packageId}/cli`;
+    if (entry.engine === "sherpa-onnx") {
+      after.segmentationModelPath = `/synthetic/${entry.packageId}/segmentation.onnx`;
+      after.embeddingModelPath = `/synthetic/${entry.packageId}/embedding.onnx`;
+      after.runtimeLibraryPaths = [`/synthetic/${entry.packageId}/runtime.dylib`];
+    } else after.modelPath = `/synthetic/${entry.packageId}/model`;
+    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: 0, before: { engine: entry.engine, settings: before }, after: { engine: entry.engine, settings: after }, reviewDigest: "b".repeat(64) };
   }
   if (command === "apply_model_profile_application") {
     const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);
     if (profile.profileVersion !== preview.expectedProfileVersion || profile.id !== preview.expectedProfileId) throw Error("模擬設定競合");
     profile.id = args.token; profile.profileVersion++;
-    profile.components = [{ roles: ["asr"], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
-    f.settings = structuredClone(preview.after.settings);
+    profile.components = [...profile.components.filter((item: any) => item.engine !== entry.engine), { roles: componentRoles[entry.engine as keyof typeof componentRoles], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
+    profile.configurationComplete = profile.components.length === 3;
+    f.settingsByEngine[entry.engine] = structuredClone(preview.after.settings);
     if (f.mode === "applyLost") throw Error("模擬選択保存応答喪失");
     return structuredClone(profile);
   }

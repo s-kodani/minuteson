@@ -45,8 +45,8 @@ impl TokenLimits {
 }
 impl Capacity {
     pub(crate) fn reviewed(model: &Fingerprint) -> Result<Self, String> {
-        // Official fixed revision 91cad51170dc346986eccefdc2dd33a9da36ead9:
-        // https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/README.md
+        // Official model cards and fixed revisions are reviewed per catalog
+        // entry. Capacity binds exact model bytes, including quantization.
         let choices: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../../../model-catalog/macos.json"))
                 .map_err(|_| "モデル選択情報を読み取れません")?;
@@ -200,6 +200,47 @@ mod tests {
         );
         e.model.size -= 1;
         assert!(Capacity::reviewed(&e.model).is_err());
+    }
+    #[test]
+    fn all_catalog_llms_bind_independent_exact_bytes_and_never_exceed_output_caps() {
+        let choices: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../../model-catalog/macos.json")).unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for choice in choices
+            .iter()
+            .filter(|c| c["recipe"]["manifest"]["engine"] == "llama.cpp")
+        {
+            let file = choice["recipe"]["manifest"]["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["role"] == "llm")
+                .unwrap();
+            let mut e = engine();
+            e.model.sha256 = file["expectedHash"].as_str().unwrap().into();
+            e.model.size = file["expectedSize"].as_u64().unwrap();
+            assert!(seen.insert(e.model.sha256.clone()));
+            e.context_tokens = 32768;
+            let capacity = Capacity::reviewed(&e.model).unwrap();
+            assert_eq!(capacity.max_output_tokens, 8192);
+            assert_eq!(
+                capacity
+                    .execution(&e, "system", "短い入力")
+                    .unwrap()
+                    .prediction_tokens,
+                8192
+            );
+            assert!(
+                capacity
+                    .execution(&e, "system", &"x".repeat(27000))
+                    .unwrap()
+                    .prediction_tokens
+                    < 8192
+            );
+            e.model.size += 1;
+            assert!(Capacity::reviewed(&e.model).is_err());
+        }
+        assert_eq!(seen.len(), 3);
     }
     #[test]
     fn model_input_limit_is_independent_of_context_and_output_limits() {

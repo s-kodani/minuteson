@@ -97,10 +97,10 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 2);
+        assert_eq!(choices.len(), 5);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
-            assert!(ids.insert(choice.id));
+            assert!(ids.insert(choice.id.clone()));
             let recipe = Recipe::parse(choice.definition.as_bytes()).unwrap();
             if let Some(limits) = &choice.token_limits {
                 let file = recipe
@@ -125,15 +125,27 @@ mod tests {
                 );
             }
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
-            let (expected, notices) = match recipe.manifest.engine {
-                crate::model_inspection::Engine::Llama => (
-                    "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba",
-                    2,
-                ),
-                crate::model_inspection::Engine::Sherpa => (
-                    "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8",
-                    5,
-                ),
+            let expected = match choice.id.as_str() {
+                "llama-b11533-qwen25-15b-q4km" => {
+                    "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
+                }
+                "sherpa-1138-pyannote3-eres2net-base" => {
+                    "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8"
+                }
+                "llama-b11533-qwen25-05b-q4km" => {
+                    "36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"
+                }
+                "llama-b11533-qwen25-15b-q8" => {
+                    "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221"
+                }
+                "sherpa-1138-pyannote3-int8-eres2net-base" => {
+                    "7295993aa83e948a5f3fd36ca26992e7a9833a7a90208148b0d6bf3306064350"
+                }
+                _ => panic!("unverified catalog choice"),
+            };
+            let notices = match recipe.manifest.engine {
+                crate::model_inspection::Engine::Llama => 2,
+                crate::model_inspection::Engine::Sherpa => 5,
                 _ => panic!("unverified catalog engine"),
             };
             assert_eq!(choice.review.recipe_hash, expected);
