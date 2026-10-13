@@ -3,8 +3,6 @@ use super::*;
 use crate::analysis_worker::{data_maintenance::DataMaintenanceLease, AnalysisController};
 use crate::storage::deletion::{completion, operations, renewal};
 
-#[path = "historical_renewal_tests.rs"]
-mod historical_renewal_tests;
 #[path = "root_renewal_tests.rs"]
 mod root_renewal_tests;
 
@@ -82,6 +80,71 @@ fn finish(f: &Fixture, r: &mut Receipt) {
         std::fs::read(f.storage.root().parent().unwrap().join("models/model.gguf")).unwrap(),
         b"KEEP MODEL"
     );
+}
+
+#[test]
+fn rootless_renewal_uses_current_v3_and_rejects_noncurrent_audit_versions_without_conversion() {
+    let base = tempfile::tempdir().unwrap();
+    let storage = Storage::open(base.path().join("root")).unwrap();
+    let meeting = storage.create_meeting("EMPTY CURRENT MEETING").unwrap();
+    let keep = storage.create_meeting("KEEP CURRENT MEETING").unwrap();
+    let census =
+        crate::storage::deletion::files::Census::capture(&storage, &meeting.id, &|| false).unwrap();
+    assert!(census.manifest().entries.is_empty());
+    let operation = uuid::Uuid::new_v4().to_string();
+    let prepared =
+        crate::storage::deletion::intent::prepare(&storage, &operation, &census, &|| false)
+            .unwrap();
+    let reviewed = Reviewed::confirm(&census, false).unwrap();
+    let mut receipt = start(&storage, &prepared, &reviewed, &|| false).unwrap();
+    let view = renewal::Review::capture(&storage, &receipt, &|| false).unwrap();
+    assert!(view.manifest().reservation_roots.is_empty());
+    renewal::accept(&storage, &mut receipt, &view, false, &lease(), &|| false).unwrap();
+    let audit = receipt
+        .progress
+        .confirmation
+        .as_ref()
+        .unwrap()
+        .operation_id
+        .clone();
+    let saved: String = storage
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
+            [&audit],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let current: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(current["version"], 3);
+    assert_eq!(renewal::audit_source(&saved).unwrap(), operation);
+    let tail = saved.strip_prefix("{\"version\":3,").unwrap();
+    for version in [0, 1, 2, 5] {
+        let unsupported = format!("{{\"version\":{version},{tail}");
+        assert!(renewal::audit_source(&unsupported).is_err());
+    }
+    run(&storage, &mut receipt, &|| false).unwrap();
+    let mut completed = completion::start(&storage, &receipt, &|| false).unwrap();
+    completion::run(&storage, &mut completed, &|| false).unwrap();
+    let root = storage.root().to_owned();
+    drop(storage);
+    let reopened = Storage::open(root).unwrap();
+    assert!(!reopened.data_write_blocked());
+    assert_eq!(reopened.get_meeting(&keep.id).unwrap().unwrap(), keep);
+    assert!(reopened.get_meeting(&meeting.id).unwrap().is_none());
+    let after: String = reopened
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
+            [&audit],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, saved);
 }
 
 #[test]

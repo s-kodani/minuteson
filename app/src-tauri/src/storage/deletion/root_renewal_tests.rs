@@ -297,41 +297,48 @@ fn root_renewal_second_generation_handles_another_reserved_rename_without_expand
 }
 
 #[test]
-fn root_renewal_lineage_refuses_forgotten_roots_unrelated_operation_or_arbitrary_plan_index() {
+fn current_v3_renewal_chain_retains_all_reserved_names_and_requires_fresh_consent_on_reappearance()
+{
     let f = Fixture::new();
-    let (mut r, reserved) = paused_root(&f, "renamed");
-    std::fs::write(reserved.join("unknown"), b"KEEP LINEAGE").unwrap();
-    let v = review(&f, &r);
-    renewal::verify_root_lineage(2, &r.manifest, &r.progress, v.manifest(), &f.operation).unwrap();
-    for path in [
-        format!("meetings/.mon-delete-{}-0", f.operation),
-        format!("meetings/.mon-delete-{}-2", f.other),
-    ] {
-        let mut forged = v.manifest().clone();
-        forged.reservation_roots = vec![path];
-        assert!(
-            renewal::verify_root_lineage(2, &r.manifest, &r.progress, &forged, &f.operation)
-                .is_err()
-        );
-    }
+    let (mut r, reserved) = paused_root(&f, "staged");
+    let original = snapshot(&f);
+    std::fs::remove_dir(&reserved).unwrap();
+    std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
+    std::fs::write(&f.file, b"CURRENT LOGICAL AUDIO").unwrap();
     accept(&f, &mut r, true);
-    let current = review(&f, &r);
-    let mut forgotten = current.manifest().clone();
-    forgotten.reservation_roots.clear();
-    forgotten.version = 1;
-    assert!(
-        renewal::verify_root_lineage(1, &r.manifest, &r.progress, &forgotten, &f.operation)
-            .is_err()
-    );
-    assert!(
-        renewal::verify_root_lineage(2, &r.manifest, &r.progress, &forgotten, &f.operation)
-            .is_err()
-    );
+    let first_roots = r.manifest.reservation_roots.clone();
+    let relative = reserved
+        .strip_prefix(f.storage.root())
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(first_roots.iter().any(|p| p == relative));
+    std::fs::write(f.file.parent().unwrap().join("extra"), b"SECOND SCOPE").unwrap();
+    accept(&f, &mut r, true);
+    assert!(first_roots
+        .iter()
+        .all(|p| r.manifest.reservation_roots.contains(p)));
+    assert_eq!(r.progress.confirmation.as_ref().unwrap().generation, 2);
+    let db = f.storage.connection.lock().unwrap();
+    let versions: Vec<u32> = db.prepare("SELECT json_extract(target_manifest_json,'$.version') FROM maintenance_operations WHERE kind='delete_meeting' AND json_extract(progress_json,'$.confirmationRecorded')=1 ORDER BY id")
+        .unwrap().query_map([], |row| row.get(0))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(versions, vec![3, 3]);
+    drop(db);
+    std::fs::create_dir(&reserved).unwrap();
+    std::fs::write(reserved.join("late"), b"CURRENT REAPPEARED UNKNOWN").unwrap();
+    let progress = r.progress_json().unwrap();
+    assert!(run(&f.storage, &mut r, &|| false).is_err());
+    assert_eq!(r.progress_json().unwrap(), progress);
     assert_eq!(
-        std::fs::read(reserved.join("unknown")).unwrap(),
-        b"KEEP LINEAGE"
+        std::fs::read(reserved.join("late")).unwrap(),
+        b"CURRENT REAPPEARED UNKNOWN"
     );
+    accept(&f, &mut r, true);
     f.unaffected();
+    finish(&f, &mut r);
+    assert!(!reserved.exists());
+    assert_eq!(snapshot(&f), original);
 }
 
 #[test]

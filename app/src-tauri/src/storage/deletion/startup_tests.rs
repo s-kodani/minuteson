@@ -661,15 +661,15 @@ fn deletion_startup_unowned_copied_history_stays_fenced_without_adopting_origina
 }
 
 #[test]
-fn deletion_startup_old_v1_scope_switches_recover_historical_reserved_names_after_completion() {
+fn deletion_startup_current_v3_scope_switch_keeps_reserved_names_after_completion() {
     let mut f = Fixture::new();
     let storage = f.storage();
-    let meeting = storage.create_meeting("LEGACY").unwrap().id;
+    let meeting = storage.create_meeting("CURRENT RECONFIRMATION").unwrap().id;
     let file = storage
         .root()
         .join(format!("meetings/{meeting}/audio/input.flac"));
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(&file, b"LEGACY SOURCE").unwrap();
+    std::fs::write(&file, b"CURRENT SOURCE").unwrap();
     storage
         .register_ready_meeting_asset(
             &meeting,
@@ -697,8 +697,13 @@ fn deletion_startup_old_v1_scope_switches_recover_historical_reserved_names_afte
     assert!(stop.get());
     std::fs::remove_dir(&reserved).unwrap();
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(&file, b"NEW LEGACY TREE").unwrap();
-    files = renewal::seed_historical_record_for_test(storage, &files, 1, &[]).unwrap();
+    std::fs::write(&file, b"NEW CURRENT TREE").unwrap();
+    let review = renewal::Review::capture(storage, &files, &|| false).unwrap();
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &|| false)
+        .unwrap();
+    renewal::accept(storage, &mut files, &review, true, &lease, &|| false).unwrap();
+    drop(lease);
     removal::run(storage, &mut files, &|| false).unwrap();
     let mut complete = completion::start(storage, &files, &|| false).unwrap();
     completion::run(storage, &mut complete, &|| false).unwrap();

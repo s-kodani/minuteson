@@ -86,6 +86,13 @@ struct Record {
     observations: intent::Intent,
 }
 impl Record {
+    fn decode(json: &str) -> Result<Self, String> {
+        let record: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        if !matches!(record.version, 3 | 4) || record.encode()? != json {
+            return Err("再確認記録が現行形式と一致しません".into());
+        }
+        Ok(record)
+    }
     fn encode(&self) -> Result<String, String> {
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
         if json.len() > 65536 {
@@ -147,11 +154,9 @@ fn active_plan(
         {
             return Err("残りの削除範囲の固定確認記録を検証できません".into());
         }
-        let record: Record = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if !matches!(record.version, 1 | 2 | 3 | 4)
-            || record.source_operation != original.operation()
+        let record = Record::decode(&json)?;
+        if record.source_operation != original.operation()
             || record.source_intent_hash != source_hash
-            || record.encode()? != json
             || reference.generation
                 != record
                     .previous_progress
@@ -216,20 +221,9 @@ fn active_plan(
         {
             return Err("元のDB範囲・起動時実体を再確認で変更できません".into());
         }
-        if matches!(record.version, 3 | 4) {
-            if observations.manifest.reservation_roots
-                != historical.iter().cloned().collect::<Vec<_>>()
-            {
-                return Err("旧形式を含む確認履歴の予約範囲を忘れたり追加できません".into());
-            }
-        } else {
-            verify_root_lineage(
-                record.version,
-                &manifest,
-                &record.previous_progress,
-                &observations.manifest,
-                original.operation(),
-            )?;
+        if observations.manifest.reservation_roots != historical.iter().cloned().collect::<Vec<_>>()
+        {
+            return Err("確認履歴の予約範囲を忘れたり追加できません".into());
         }
         manifest = observations.manifest;
         audits.push(reference.clone());
@@ -257,11 +251,9 @@ pub(super) fn audit_references(
     Ok(active_plan(db, original, progress, &|| false)?.2)
 }
 pub(super) fn audit_source(json: &str) -> Result<String, String> {
-    let record: Record = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if !matches!(record.version, 1 | 2 | 3 | 4)
-        || record.encode()? != json
-        || !uuid::Uuid::parse_str(&record.source_operation)
-            .is_ok_and(|id| id.to_string() == record.source_operation)
+    let record = Record::decode(json)?;
+    if !uuid::Uuid::parse_str(&record.source_operation)
+        .is_ok_and(|id| id.to_string() == record.source_operation)
     {
         return Err("再確認履歴の元の操作が不正です".into());
     }
@@ -275,26 +267,6 @@ fn extend_roots(historical: &mut BTreeSet<String>, roots: Vec<String>) -> Result
         Ok(())
     }
 }
-pub(super) fn verify_root_lineage(
-    version: u32,
-    previous: &Manifest,
-    progress: &Progress,
-    next: &Manifest,
-    operation: &str,
-) -> Result<(), String> {
-    previous.validate_roots()?;
-    next.validate_roots()?;
-    let roots = progress.reconfirmation_roots(previous, operation)?;
-    if !matches!(version, 1 | 2)
-        || (version == 1
-            && (!next.reservation_roots.is_empty() || !previous.reservation_roots.is_empty()))
-        || (version == 2 && next.reservation_roots != roots)
-    {
-        return Err("元の計画から導けない予約ルートや範囲の忘却は採用できません".into());
-    }
-    Ok(())
-}
-
 pub(super) struct Review {
     operation: String,
     source_hash: String,
@@ -525,8 +497,6 @@ fn accept_inner(
             review.manifest().database.clone(),
         ) {
             4
-        } else if review.manifest().reservation_roots.is_empty() {
-            1
         } else {
             3
         },
@@ -639,66 +609,6 @@ pub(super) fn accept_database_observed(
         check,
         event,
     )
-}
-
-// Reconstruct real old-format audit evidence in synthetic fixtures only.
-// Unlike production reconfirmation, v1 omitted old siblings and v2 retained
-// only the immediate plan's names. Never rewrite an existing immutable record.
-#[cfg(test)]
-pub(super) fn seed_historical_record_for_test(
-    storage: &Storage,
-    receipt: &removal::Receipt,
-    version: u32,
-    roots: &[String],
-) -> Result<removal::Receipt, String> {
-    let db = storage
-        .connection
-        .lock()
-        .map_err(|_| "DBロックを取得できません")?;
-    let census = receipt.current_census(storage, &db, &|| false, roots)?;
-    let observations = Observations::capture(&census)?;
-    let original = receipt.confirmed();
-    let record = Record {
-        version,
-        source_operation: original.operation().into(),
-        source_intent_hash: original.intent_hash()?,
-        previous_progress: receipt.progress.clone(),
-        previous_database_phase: receipt.progress.database_phase,
-        observations: observations.header.clone(),
-    };
-    let json = record.encode()?;
-    let reference = Reference {
-        operation_id: uuid::Uuid::new_v4().to_string(),
-        intent_hash: hash(json.as_bytes()),
-        generation: receipt
-            .progress
-            .confirmation
-            .as_ref()
-            .map_or(1, |r| r.generation + 1),
-    };
-    let consent = now_ms()?.max(receipt.progress.consent_at());
-    let next = Progress::renewed(
-        original,
-        census.manifest(),
-        reference.clone(),
-        true,
-        consent,
-        receipt.progress.database_phase,
-    )?;
-    let _writer = super::fence::write_removal(storage, &db, receipt, &|| false)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    tx.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES(?1,'delete_meeting','prepared',?2,?3,?4,?5,?4,?4)", params![reference.operation_id,json,reference.intent_hash,consent,AUDIT_PROGRESS]).map_err(|e| e.to_string())?;
-    observations.store_paths(&tx, &reference.operation_id, &|| false, &|_| {})?;
-    tx.execute(
-        "UPDATE maintenance_operations SET state='completed' WHERE id=?1",
-        params![reference.operation_id],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute("UPDATE maintenance_operations SET progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![original.operation(),next.encode()?,consent]).map_err(|e|e.to_string())?;
-    let saved = removal::Receipt::load(&tx, original.operation(), &|| false)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(saved)
 }
 
 #[cfg(test)]
