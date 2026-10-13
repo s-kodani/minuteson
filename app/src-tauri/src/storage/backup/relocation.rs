@@ -723,7 +723,7 @@ pub(crate) fn verify_placed_image_with_controls(
         }
     }
     let mut db = read_only(&root.join("meetings.sqlite3"))?;
-    validate_placed_database(&mut db, cancelled)?;
+    validate_database(&mut db, cancelled)?;
     if census(&db, cancelled)? != (expected.schema_hash.clone(), expected.tables.clone())
         || assets(&db, &copied)? != expected.assets
     {

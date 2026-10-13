@@ -287,7 +287,6 @@ impl Bootstrap {
             .map_err(|e| e.to_string())?;
         let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
         expected.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-        let legacy_schema = schema(&expected)?;
         expected
             .execute_batch(activation::ADMISSION_SCHEMA)
             .map_err(|e| e.to_string())?;
@@ -295,10 +294,7 @@ impl Bootstrap {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if !new
-            && !((version == 1 && schema(&db)? == legacy_schema)
-                || (version == 2 && schema(&db)? == expected_schema))
-        {
+        if !new && (version != 2 || schema(&db)? != expected_schema) {
             return Err("配置台帳の形式・版が変更されています".into());
         }
         let manifest = match snapshot_manifest {
@@ -415,15 +411,9 @@ impl Bootstrap {
             return Err("配置完了の記録と所有・進行の記録が一致しません".into());
         }
         if !new {
-            // Only a known schema and the exact saved intent/manifest/nodes may
-            // be opened for writes or upgraded; retain legacy owner evidence.
+            // Only the current schema and exact saved intent/manifest/nodes
+            // may be opened for writes. No old-ledger conversion is performed.
             db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE;").map_err(|e|e.to_string())?;
-            if version == 1 {
-                db.execute_batch(activation::ADMISSION_SCHEMA)
-                    .map_err(|e| e.to_string())?;
-                db.execute_batch("PRAGMA user_version=2;")
-                    .map_err(|e| e.to_string())?;
-            }
             db.execute_batch("COMMIT;").map_err(|e| e.to_string())?;
             file.sync_all().map_err(|e| e.to_string())?;
             self.directory.sync_all().map_err(|e| e.to_string())?;

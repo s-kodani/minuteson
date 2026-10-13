@@ -42,48 +42,36 @@ fn native_tables(db: &Connection) -> (String, Vec<Table>) {
 }
 
 #[test]
-fn history_placed_database_inspects_exact_v27_without_migrating_or_relaxing_new_snapshots() {
+fn placed_current_database_is_validated_without_migration_and_keeps_cancellation() {
     let f = Fixture::new();
     let mut db = f.storage.connection.lock().unwrap();
-    crate::storage::edit_recovery::remove_schema_for_test(&db);
     let before = native_tables(&db);
-    assert!(validate_database(&mut db, &|| false).is_err());
-    validate_placed_database(&mut db, &|| false).unwrap();
+    validate_database(&mut db, &|| false).unwrap();
     assert_eq!(native_tables(&db), before);
-    assert_eq!(verify_migration_history(&db).unwrap(), 27);
-    assert!(validate_placed_database(&mut db, &|| true).is_err());
+    assert_eq!(verify_migration_history(&db).unwrap(), MIGRATIONS.len());
+    assert!(validate_database(&mut db, &|| true).is_err());
     assert_eq!(native_tables(&db), before);
 }
 
 #[test]
-fn history_placed_database_refuses_changed_old_structure_and_disabled_protection() {
-    for change in 0..4 {
-        let f = Fixture::new();
-        let mut db = f.storage.connection.lock().unwrap();
-        crate::storage::edit_recovery::remove_schema_for_test(&db);
-        match change {
-            0 => db
-                .execute_batch("CREATE TABLE unknown_image(body TEXT)")
-                .unwrap(),
-            1 => db.execute_batch("PRAGMA foreign_keys=OFF").unwrap(),
-            2 => {
-                db.set_db_config(
-                    rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER,
-                    false,
-                )
-                .unwrap();
-            }
-            _ => {
-                db.execute(
-                    "UPDATE schema_migrations SET checksum=?1 WHERE version=27",
-                    ["a".repeat(64)],
-                )
-                .unwrap();
-            }
+fn placed_old_database_schemas_are_rejected_without_mutation() {
+    for version in 27..MIGRATIONS.len() {
+        // Rejection data only. Product snapshot/restore constructors never
+        // create or migrate these unsupported schemas.
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);").unwrap();
+        for &(number, sql) in &MIGRATIONS[..version] {
+            db.execute_batch(sql).unwrap();
+            db.execute(
+                "INSERT INTO schema_migrations VALUES(?1,?2,0)",
+                params![number, format!("{:x}", Sha256::digest(sql.as_bytes()))],
+            )
+            .unwrap();
         }
         let before = native_tables(&db);
-        assert!(validate_placed_database(&mut db, &|| false).is_err());
+        assert!(validate_database(&mut db, &|| false).is_err());
         assert_eq!(native_tables(&db), before);
+        assert_eq!(verify_migration_history(&db).unwrap(), version);
     }
 }
 

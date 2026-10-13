@@ -199,7 +199,7 @@ fn activation_admitted_binding_substitution_or_missing_current_schema_is_not_rep
 }
 
 #[test]
-fn activation_owned_schema_one_placement_upgrades_without_rewriting_original_copy_proofs() {
+fn activation_old_placement_ledger_is_rejected_without_rewriting_any_copy_proofs() {
     let f = Fixture::new();
     let s = f.storage.prepare_relocation_snapshot(&|| false).unwrap();
     f.intent(&s);
@@ -207,29 +207,39 @@ fn activation_owned_schema_one_placement_upgrades_without_rewriting_original_cop
     p.copy(&s, &|| false).unwrap();
     let h = s.prepare_control_handoff(&|| false).unwrap();
     p.install_history(&h, &|| false).unwrap();
-    let confirmation = p.pending.confirmation_id.clone();
     let owner = p.path.clone();
-    let before: String =
-        p.db.query_row("SELECT manifest_hash FROM metadata", [], |r| r.get(0))
-            .unwrap();
     drop(p);
     let db = Connection::open(&owner).unwrap();
     db.execute_batch("DROP TRIGGER admission_fixed; DROP TRIGGER admission_retained; DROP TABLE admission; PRAGMA user_version=1;").unwrap();
     drop(db);
-    let mut p = f.bootstrap.pending_placement(&f.operation, &s).unwrap();
+    let ledger = std::fs::read(&owner).unwrap();
+    let bootstrap = std::fs::read(f.bootstrap.config.join(NAME)).unwrap();
+    let source = std::fs::read(f.storage.root().join(&f.relative)).unwrap();
+    let target = std::fs::read(f.target.join(&f.relative)).unwrap();
+    assert!(f.bootstrap.pending_placement(&f.operation, &s).is_err());
+    assert_eq!(std::fs::read(&owner).unwrap(), ledger);
     assert_eq!(
-        p.db.query_row("SELECT manifest_hash FROM metadata", [], |r| r
-            .get::<_, String>(0))
-            .unwrap(),
-        before
+        std::fs::read(f.bootstrap.config.join(NAME)).unwrap(),
+        bootstrap
     );
     assert_eq!(
-        p.db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        2
+        std::fs::read(f.storage.root().join(&f.relative)).unwrap(),
+        source
     );
-    p.activate_for_restart(&h, &confirmation, 1, &|| false)
-        .unwrap();
+    assert_eq!(std::fs::read(f.target.join(&f.relative)).unwrap(), target);
+    let db = Connection::open(&owner).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(!db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='admission')",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
 }
 
 #[test]
