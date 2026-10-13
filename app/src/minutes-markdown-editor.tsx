@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { IconButton } from "./action-icon";
 import { MinutesMarkdownPreview } from "./minutes-markdown-preview";
@@ -7,14 +7,16 @@ import { ToastNotice } from "./toast";
 
 /** Plain human editing. The parent owns generation/admission and navigation;
  * this view never generates, autosaves, constructs items or keeps old bodies. */
-export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPlay, locked = false, visible = true, actionsHost = null }: {
+export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPlay, locked = false, visible = true, actionsHost = null, inputRef }: {
   meetingId:string; controller:MarkdownSaveController; durationUs:number|null;
   onPlay?:(interval:MarkdownAudioInterval)=>void; locked?:boolean; visible?:boolean;
   actionsHost?:HTMLElement|null;
+  inputRef?:RefObject<HTMLTextAreaElement|null>;
 }) {
   const [state,setState]=useState(()=>controller.snapshot());
   const [editing,setEditing]=useState(false), [savedEvent,setSavedEvent]=useState("");
-  const textarea=useRef<HTMLTextAreaElement>(null);
+  const ownInput=useRef<HTMLTextAreaElement>(null);
+  const textarea=inputRef??ownInput;
   const alive=useRef(true);
   const liveController=useRef(controller);liveController.current=controller;
   useLayoutEffect(()=>{

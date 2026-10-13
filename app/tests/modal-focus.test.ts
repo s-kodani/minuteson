@@ -34,3 +34,12 @@ test("initial busy focus remains pending until a visible cancellation is ready w
   assert.match(view,/if \(!cancel\) return;\s*cancel.focus\(\{ preventScroll: true \}\)/);
   assert.match(view,/\[open, blocked, owned\?\.id, replacement\?\.key, ref\]/);
 });
+test("plain minutes leave remembers its persistent input before native quit locks lose focus and respects nested reviews",()=>{
+  const panel=readFileSync(new URL("../src/minutes.tsx",import.meta.url),"utf8");
+  const editor=readFileSync(new URL("../src/minutes-markdown-editor.tsx",import.meta.url),"utf8");
+  assert.match(panel,/opener: !topOpenModal\(\) && input\?\.isConnected\s*&& !!input\.getClientRects\(\)\.length \? input : undefined/);
+  assert.match(panel,/confirmMarkdownLeave\(controller, live\.current\.meetingTitle, read, confirmLeave\)/);
+  assert.match(panel,/inputRef=\{editorInput\}/);
+  assert.match(editor,/const textarea=inputRef\?\?ownInput/);
+  assert.match(editor,/<textarea ref=\{textarea\}/);
+});

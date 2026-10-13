@@ -21,6 +21,9 @@ async (page) => {
   await dialog().waitFor({state:"hidden"});
   check(await finished() === 0 && await saved() === 0 && await input().inputValue() === "# 終了前の人間の入力\n", "quit cancellation lost or implicitly saved human input");
   check(await page.getByRole("alert").count() === 0, "normal quit cancellation displayed a failure toast");
+  await page.waitForFunction(() => document.activeElement === document.querySelector('textarea[aria-label="議事録のMarkdown本文"]'));
+  await page.keyboard.press("End"); await page.keyboard.type("取消後の追記");
+  check((await input().inputValue()).includes("取消後の追記"), "quit cancellation did not return to an editable input");
   results.push("native quit cancellation keeps plain Markdown input without saving or closing");
 
   await review(); await dialog().getByRole("button", { name:"編集を破棄して続ける", exact:true }).click();
@@ -43,6 +46,7 @@ async (page) => {
   await dialog().getByRole("alert").waitFor();
   check(await finished() === 0 && await saved() === 1, "failed human save closed app or retried implicitly");
   await dialog().locator(":scope > .common-modal-dismiss-row > [data-dialog-cancel]").click();
+  await page.waitForFunction(() => document.activeElement === document.querySelector('textarea[aria-label="議事録のMarkdown本文"]'));
   check(await input().inputValue() === "# 終了前の人間の入力\n", "failed quit save lost human input");
   results.push("failed save blocks native quit and retains human input after dismissing failure");
   return results;

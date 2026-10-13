@@ -16,6 +16,8 @@ import { MarkdownExportController, type MarkdownExportRecord, type MarkdownExpor
 import "./minutes-markdown-editor.css";
 import { markdownIntervalRequest, validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
 import { useTranscriptAudio } from "./transcript-audio";
+import { topOpenModal } from "./modal-state";
+import type { ConfirmationOptions } from "./confirmation-state";
 
 type Job = AnalysisJob & { operationId: string };
 
@@ -48,6 +50,15 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   // Navigation/quit sets a main-window lock while awaiting this decision.
   // That lock must not disable the confirmation which resolves it.
   const confirm = useActionConfirmation(false);
+  const editorInput = useRef<HTMLTextAreaElement|null>(null);
+  const confirmLeave = (options: ConfirmationOptions) => {
+    // Native quit disables the editor before its async status reads finish.
+    // Capture the persistent input explicitly, not the resulting body focus.
+    // A nested review keeps its own modal entry point instead.
+    const input = editorInput.current;
+    return confirm({ ...options, opener: !topOpenModal() && input?.isConnected
+      && !!input.getClientRects().length ? input : undefined });
+  };
   const live = useRef({ meetingTitle, loaded }); live.current = { meetingTitle, loaded };
   const read = () => invoke<MarkdownDocument | null>("get_minutes_markdown", { meetingId });
   useEffect(() => exporter.subscribe(() => setExportState(exporter.snapshot())), [exporter]);
@@ -68,7 +79,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       // Both tab panels stay mounted. This is not leaving the meeting and
       // must not prompt or write the human's unfinished Markdown input.
       if (reason === "tab" && !controller.isComposing()) return;
-      if (live.current.loaded) await confirmMarkdownLeave(controller, live.current.meetingTitle, read, confirm);
+      if (live.current.loaded) await confirmMarkdownLeave(controller, live.current.meetingTitle, read, confirmLeave);
     });
     return () => { alive.current = false; unsubscribe(); unregister(); };
   }, [controller]);
@@ -201,7 +212,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       <OptionsModal label="議事録の操作" icon="more" hidden={!visible} className="plain-minutes-options">
         <div className="plain-minutes-options-body">
           <div className="plain-minutes-option-actions"><IconButton label="議事録を再読込" icon="refresh" disabled={disabled} onClick={() => void run(async () => {
-            await confirmMarkdownLeave(controller, meetingTitle, read, confirm); await refreshRef.current();
+            await confirmMarkdownLeave(controller, meetingTitle, read, confirmLeave); await refreshRef.current();
           })} />{documentState.document && <button type="button" disabled={cannotGenerate} onClick={() => void start()}>議事録を再生成</button>}</div>
           {(!engine || !minutesConfigured(engine)) && <p>設定のローカルAIから議事録用モデルを導入してください。</p>}
           {generationJobs.length > 0 && <ul className="analysis-jobs" aria-label="議事録生成の状況">{generationJobs.map(j => <li key={j.id}>
@@ -219,7 +230,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     {pending && <p className="minutes-generation-status" role="status">議事録生成：{generationJobs.filter(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)).map(j => `${jobLabel(j.state)} ${j.completedUnits} / ${j.totalUnits ?? "?"}`).join("、")}</p>}
     {externalChange && <p className="plain-minutes-save-error" role="status">保存済みの本文が更新されています。編集中の入力は保持しています。再読込から保存済みの本文を確認できます。</p>}
     {!loaded && <p className="minutes-empty-state">議事録を読み込んでいます。</p>}
-    {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost}
+    {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost} inputRef={editorInput}
       durationUs={audioSummary?.modes.length ? audioSummary.durationUs : null}
       onPlay={interval => { if (audioSummary) void audio.start("", `markdown:${interval.startUs}:${interval.endUs}`, markdownIntervalRequest(meetingId, audioSummary, interval)); }} />}
     {audio.controls}

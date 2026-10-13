@@ -21,6 +21,7 @@ async (page,capturePath) => {
   await dialog().getByRole("button",{name:"確認をキャンセル",exact:true}).click();
   check(await input().inputValue().then(v=>v.includes("人間の編集"))&&await count("save_minutes_markdown")===0,"cancel navigated or saved");
   check(await page.getByRole("alert").count()===0,"normal navigation cancellation displayed an error");
+  await page.waitForFunction(() => document.activeElement === document.querySelector('textarea[aria-label="議事録のMarkdown本文"]'));
   results.push("navigation lock does not block save/discard/cancel modal; cancellation retains input");
   await meetings().click();await dialog().getByRole("button",{name:"編集を破棄して続ける",exact:true}).click();
   await page.getByRole("heading",{name:"会議一覧",exact:true}).waitFor();check(await count("save_minutes_markdown")===0,"discard wrote unwanted input");await open();
