@@ -76,12 +76,18 @@ pub(crate) fn get_official_model_options(
 #[cfg(target_os = "macos")]
 pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionView>, String> {
     let mut result = options()?;
-    let recipe = crate::model_bundled_runtime::Bundle::open(root)?.recipe()?;
-    result.insert(0, OptionView {
-        id: "whisper-194-small-multilingual".into(), label: "文字起こし".into(),
-        description: "アプリ同梱のCPU実行ファイルと、固定版Whisper small（多言語）を準備します。品質・速度は正式評価前です。".into(),
-        definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?, review: recipe.review()?, token_limits: None,
-    });
+    let mut whisper = Vec::new();
+    for (name, recipe) in crate::model_bundled_runtime::Bundle::open(root)?.recipes()? {
+        whisper.push(OptionView {
+            id: format!("whisper-194-{name}-multilingual"),
+            label: format!("Whisper {name}（多言語）"),
+            description: format!("アプリ同梱のCPU実行ファイルと、固定版Whisper {name}（多言語）を準備します。品質・速度は正式評価前です。"),
+            definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?,
+            review: recipe.review()?, token_limits: None,
+        });
+    }
+    whisper.append(&mut result);
+    let result = whisper;
     Ok(result)
 }
 

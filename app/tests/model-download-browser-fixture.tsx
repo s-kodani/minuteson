@@ -10,6 +10,7 @@ import "../src/style.css";
 import "../src/prototype-alignment.css";
 import officialChoices from "../model-catalog/macos.json";
 import whisperNetwork from "../model-catalog/whisper-small-network.json";
+import whisperVariants from "../model-catalog/whisper-variants.json";
 // Build-specific bundle hashes cannot be a static catalog. Browser-only fake
 // runtime metadata exercises the same review shape; never actual IO/CPU proof.
 const fakeRuntimeFiles = [
@@ -21,6 +22,17 @@ const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし",
   schemaVersion: 3, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files] },
   sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources],
 } };
+const hybridChoices = whisperVariants.map(variant => {
+  const choice = structuredClone(hybridChoice), path = `models/ggml-${variant.name}.bin`;
+  choice.id = `whisper-synthetic-${variant.name}`;
+  choice.label = `Whisper ${variant.name}（多言語）`;
+  choice.recipe.manifest.modelName = choice.label;
+  choice.recipe.manifest.files[3] = { ...choice.recipe.manifest.files[3], relativePath: path,
+    expectedSize: variant.bytes, expectedHash: variant.sha256 };
+  choice.recipe.sources[3] = { ...choice.recipe.sources[3], relativePath: path,
+    url: `https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-${variant.name}.bin` };
+  return choice;
+});
 const f = (window as any).modelDownloadFixture = { calls: [] as any[], mode: "success", failCancel: false, failCatalog: false, failLifetime: false, forgedReadback: false, readMissing: false, changed: 0, active: new Set<string>(), cancelled: new Set<string>(), operations: new Map<string, any>(), placements: new Map<string, any>(), finish: () => {}, setLocked: (_: boolean) => {}, setVisible: (_: boolean) => {}, setParent: (_: boolean) => {}, busy: false };
 f.profiles = ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
 f.entries = [{ packageId: "44444444-4444-4444-8444-444444444444", modelName: "既存の合成モデル", modelVersion: "1", engine: "whisper.cpp", engineVersion: "test", totalBytes: 33, placementRecorded: true, ready: false, reviewHash: "a".repeat(64), compatibility: null }];
@@ -40,7 +52,7 @@ f.seed = async () => { const id = "33333333-3333-4333-8333-333333333333", review
 mockIPC(async (command, args) => {
   f.calls.push({ command, args: structuredClone(args) });
   if (command === "get_official_model_options") {
-    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([hybridChoice, ...officialChoices].map(async choice => {
+    if (new URLSearchParams(location.search).get("official") === "1") return Promise.all([...hybridChoices, ...officialChoices].map(async choice => {
       const definition = JSON.stringify(parseDownloadDefinition(JSON.stringify(choice.recipe)));
       return { id: choice.id, label: choice.label, description: choice.description, definition, review: await reviewed(definition), tokenLimits: "tokenLimits" in choice ? choice.tokenLimits : null };
     }));

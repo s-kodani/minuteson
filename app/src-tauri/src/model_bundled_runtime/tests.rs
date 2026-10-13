@@ -36,15 +36,15 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 3);
-    assert_eq!(catalog[0]["label"], "文字起こし");
+    assert_eq!(catalog.as_array().unwrap().len(), 6);
+    assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
-        catalog[1]["review"]["recipeHash"],
+        catalog[4]["review"]["recipeHash"],
         "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
     );
     assert_eq!(
-        catalog[2]["review"]["recipeHash"],
+        catalog[5]["review"]["recipeHash"],
         "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8"
     );
     let recipe = bundle.recipe().unwrap();
@@ -66,6 +66,79 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
         serde_json::to_value(&origin).unwrap()["recipeSchemaVersion"],
         3
     );
+}
+#[test]
+fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_and_notices() {
+    let (_temp, root, bytes, _) = fixture();
+    let bundle = Bundle::open(&root).unwrap();
+    let recipes = bundle.recipes().unwrap();
+    assert_eq!(recipes.len(), 4);
+    let mut hashes = std::collections::BTreeSet::new();
+    for (name, recipe) in &recipes {
+        bundle.bind(recipe).unwrap();
+        assert!(hashes.insert(recipe.hash().unwrap()));
+        let model = recipe
+            .manifest
+            .files
+            .iter()
+            .find(|f| f.role == Role::Asr)
+            .unwrap();
+        let source = recipe
+            .sources
+            .iter()
+            .find(|s| s.relative_path == model.relative_path)
+            .unwrap();
+        assert_eq!(model.relative_path, format!("models/ggml-{name}.bin"));
+        assert!(source.url.ends_with(&format!("/ggml-{name}.bin")));
+        assert!(source
+            .url
+            .contains("/5359861c739e955e79d9a303bcbc70fb988958b1/"));
+        assert_eq!(
+            recipe.review().unwrap().bundled_bytes,
+            Some(bytes.len() as u64)
+        );
+        assert!(recipe.transfer_bytes().unwrap() < 2 * 1024 * 1024 * 1024);
+        for shared in [
+            "bin/whisper-cli",
+            "notices/whisper-MIT.txt",
+            "build-info.json",
+            "notices/whisper-model-card.md",
+            "notices/openai-whisper-MIT.txt",
+        ] {
+            assert_eq!(
+                recipe
+                    .manifest
+                    .files
+                    .iter()
+                    .find(|f| f.relative_path == shared),
+                recipes[0]
+                    .1
+                    .manifest
+                    .files
+                    .iter()
+                    .find(|f| f.relative_path == shared)
+            );
+        }
+        for field in ["hash", "size", "url", "name"] {
+            let mut forged = recipe.clone();
+            match field {
+                "hash" => forged.manifest.files[3].expected_hash = Some("0".repeat(64)),
+                "size" => forged.manifest.files[3].expected_size = Some(1),
+                "url" => forged.sources[3].url = source.url.replace("/resolve/", "/resolve/main/"),
+                "name" => forged.manifest.model_name = "arbitrary model".into(),
+                _ => unreachable!(),
+            }
+            assert!(bundle.bind(&forged).is_err(), "{name}:{field}");
+        }
+        let mut preparing = Bundle::open(&root).unwrap();
+        assert!(preparing.prepare(&root, recipe, &|| true).is_err());
+        assert!(preparing.archive.is_none());
+        preparing.prepare(&root, recipe, &|| false).unwrap();
+    }
+    assert!(bundle.recipe_for("tiny.en").is_err());
+    // The already shipped small recipe keeps its model provenance unchanged.
+    let small = recipes.iter().find(|(name, _)| name == "small").unwrap();
+    assert_eq!(small.1, bundle.recipe().unwrap());
 }
 #[test]
 fn index_rejects_changed_version_options_types_paths_sha_unknown_and_oversize() {

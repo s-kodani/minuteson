@@ -68,6 +68,13 @@ struct Network {
     files: Vec<PackageFile>,
     sources: Vec<DownloadSource>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Variant {
+    name: String,
+    bytes: u64,
+    sha256: String,
+}
 pub(crate) struct Bundle {
     index: Index,
     evidence: Source,
@@ -144,12 +151,51 @@ impl Bundle {
             archive: None,
         })
     }
+    #[cfg(test)]
     pub(crate) fn recipe(&self) -> Result<Recipe, String> {
+        self.recipe_for("small")
+    }
+    pub(crate) fn recipes(&self) -> Result<Vec<(String, Recipe)>, String> {
+        Self::variants()?
+            .into_iter()
+            .map(|v| {
+                let recipe = self.recipe_for(&v.name)?;
+                Ok((v.name, recipe))
+            })
+            .collect()
+    }
+    fn variants() -> Result<Vec<Variant>, String> {
+        let variants: Vec<Variant> =
+            serde_json::from_str(include_str!("../../model-catalog/whisper-variants.json"))
+                .map_err(|_| "文字起こしモデルの候補情報が不正です")?;
+        let names: Vec<_> = variants.iter().map(|v| v.name.as_str()).collect();
+        if names != ["tiny", "base", "small", "medium"]
+            || variants.iter().any(|v| {
+                v.bytes == 0
+                    || v.bytes > 2 * 1024 * 1024 * 1024
+                    || !crate::model_download_ipc::hash(&v.sha256)
+            })
+        {
+            return Err("文字起こしモデルの固定候補・容量・SHAが不正です".into());
+        }
+        Ok(variants)
+    }
+    fn recipe_for(&self, name: &str) -> Result<Recipe, String> {
         self.evidence.verify()?;
-        let network: Network = serde_json::from_str(include_str!(
+        let variant = Self::variants()?
+            .into_iter()
+            .find(|v| v.name == name)
+            .ok_or("非対応の文字起こしモデルです")?;
+        let mut network: Network = serde_json::from_str(include_str!(
             "../../model-catalog/whisper-small-network.json"
         ))
         .map_err(|_| "文字起こしモデルの固定配布情報が不正です")?;
+        let path = format!("models/ggml-{name}.bin");
+        network.files[0].relative_path = path.clone();
+        network.files[0].expected_size = Some(variant.bytes);
+        network.files[0].expected_hash = Some(variant.sha256);
+        network.sources[0].relative_path = path;
+        network.sources[0].url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-{name}.bin");
         let mut files = Vec::new();
         let mut sources = Vec::new();
         for (i, member) in self.index.files.iter().enumerate() {
@@ -178,7 +224,7 @@ impl Bundle {
         sources.extend(network.sources);
         let recipe = Recipe { schema_version: 3, manifest: PackageManifest {
             schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
-            model_name: "Whisper small（多言語）".into(), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
+            model_name: format!("Whisper {name}（多言語）"), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
             quantization: None, target: Target::MacosAarch64,
             license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt; model card: notices/whisper-model-card.md; app-built CPU provenance: build-info.json".into(),
             files,
@@ -187,7 +233,7 @@ impl Bundle {
         Ok(recipe)
     }
     pub(crate) fn bind(&self, recipe: &Recipe) -> Result<(), String> {
-        if *recipe != self.recipe()? {
+        if !self.recipes()?.iter().any(|(_, allowed)| recipe == allowed) {
             return Err(
                 "同梱モデルの準備内容がこのアプリの固定構成と一致しません。再確認してください"
                     .into(),
