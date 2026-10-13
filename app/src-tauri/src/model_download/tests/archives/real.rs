@@ -12,6 +12,12 @@ fn real_qwen05_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets(
     llama_trial("llama-b11533-qwen25-05b-q4km");
 }
 
+#[test]
+#[ignore = "requires fixed official Q8 assets and explicit synthetic CPU/Markdown generation permission"]
+fn real_qwen_q8_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets() {
+    llama_trial("llama-b11533-qwen25-15b-q8");
+}
+
 fn llama_trial(choice: &str) {
     let archive_path =
         PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").expect("official archive path"));
@@ -38,12 +44,22 @@ fn llama_trial(choice: &str) {
 #[test]
 #[ignore = "requires official local assets and explicit permission for a synthetic CPU trial"]
 fn real_sherpa_catalog_archive_copy_and_cpu_with_reused_assets() {
+    sherpa_trial("sherpa-1138-pyannote3-eres2net-base");
+}
+
+#[test]
+#[ignore = "requires fixed official int8 assets and explicit synthetic CPU permission"]
+fn real_sherpa_int8_catalog_copy_cpu_and_apply_with_reused_assets() {
+    sherpa_trial("sherpa-1138-pyannote3-int8-eres2net-base");
+}
+
+fn sherpa_trial(choice: &str) {
     let assets =
         PathBuf::from(std::env::var("MON_QA_SHERPA_ASSETS").expect("existing sherpa assets"));
     let notices =
         PathBuf::from(std::env::var("MON_QA_SHERPA_NOTICES").expect("fixed official notices"));
     trial(
-        "sherpa-1138-pyannote3-eres2net-base",
+        choice,
         &|url| {
             if url.ends_with("osx-arm64-shared-no-tts.tar.bz2") {
                 assets.join("sherpa.tar.bz2")
@@ -106,6 +122,56 @@ fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets(
         4,
         Some(bundle),
     );
+}
+
+#[test]
+#[ignore = "requires all four fixed Whisper assets, the app-owned runtime, and explicit synthetic CPU permission"]
+fn real_all_whisper_variants_copy_cpu_and_apply_with_reused_assets() {
+    let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").expect("app runtime"));
+    let payload =
+        PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").expect("small payload and notices"));
+    let extra =
+        PathBuf::from(std::env::var("MON_QA_EXTRA_MODELS").expect("fixed base and medium assets"));
+    let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").expect("fixed tiny asset"));
+    let choices = crate::model_bundled_runtime::Bundle::open(&bundle_root)
+        .unwrap()
+        .recipes()
+        .unwrap();
+    assert_eq!(
+        choices
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["tiny", "base", "small", "medium"]
+    );
+    // Keep only one variant's staging and managed copies alive at a time.
+    // Exercise the same recipe, placement and CPU admission for every variant.
+    for (name, recipe) in choices {
+        let model = match name.as_str() {
+            "tiny" => tiny.clone(),
+            "base" | "medium" => extra.join(format!("ggml-{name}.bin")),
+            "small" => payload.join("models/ggml-small.bin"),
+            _ => panic!("unexpected Whisper variant"),
+        };
+        let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
+        bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+        trial_recipe(
+            &format!("whisper-194-{name}-multilingual"),
+            recipe,
+            &|url| {
+                if url.ends_with(&format!("ggml-{name}.bin")) {
+                    model.clone()
+                } else if url.ends_with("README.md") {
+                    payload.join("notices/whisper-model-card.md")
+                } else {
+                    assert!(url.ends_with("/LICENSE"));
+                    payload.join("notices/openai-whisper-MIT.txt")
+                }
+            },
+            4,
+            Some(bundle),
+        );
+    }
 }
 
 fn trial_recipe(
