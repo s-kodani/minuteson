@@ -20,11 +20,11 @@ async page=>{
   check((await diagnostic.innerText()).includes("取得履歴がありません"),"historical diagnostics missing from list");
   results.push("actual toast/list visibility acknowledges delivery; retained history and losses appear only in the list");
   const mic=dialog.locator(".toast-card").filter({hasText:"マイクの取得が中断していました"});
-  await mic.getByRole("button",{name:"注意通知を閉じる",exact:true}).click();
+  await mic.getByRole("button",{name:"注意通知を削除",exact:true}).click();
   await dialog.locator(".toast-card").filter({hasText:"マイクの取得が復帰していました"}).waitFor();
   check(await page.evaluate(()=>window.closeFixture.archived.rows[0].lanes.system[0].delivery.sequence)===1,"microphone dismissal advanced another lane");
   check(await diagnostic.count()===1,"closing delivery deleted retained diagnosis");
-  results.push("closing one input advances only its exact lane and does not delete recording diagnostics");
+  results.push("deleting one notification advances only its exact lane and does not delete recording diagnostics");
   await diagnostic.getByRole("button",{name:"会議を開く",exact:true}).click();await dialog.waitFor({state:"hidden"});
   await page.getByRole("tab",{name:"文字起こし",exact:true}).waitFor();
   check(await page.locator(".meeting-detail-status h1").innerText()==="通知一覧の点検会議","notification opened wrong meeting");

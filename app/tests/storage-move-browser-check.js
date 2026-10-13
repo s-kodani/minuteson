@@ -16,6 +16,7 @@ async (page) => {
   const finished = () => region().getByRole("alert").filter({ hasText: "保存先切替の書込停止中です" }).waitFor();
   const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
   const stop = async () => { await region().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await stopChoice().getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); };
+  const waitMoveAvailable = () => page.waitForFunction(() => [...document.querySelectorAll('.data-save button')].some(b => b.textContent === '会議保存先を変更' && !b.disabled));
 
   await boot(); await choose();
   const body = await dialog().innerText();
@@ -96,12 +97,14 @@ async (page) => {
   results.push("pending review requires explicit resume and shows actual verified progress");
 
   await pendingReview({ resumeAllowed: false });
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog[open] button')].some(b => b.textContent === '保持して移動を中止' && !b.disabled));
   check(await dialog().getByRole("button", { name: "照合して移動を続行", exact: true }).isDisabled(), "changed source permits resume");
   check((await dialog().innerText()).includes("ファイル 確認不可 件"), "unknown file count fabricated");
   check(!await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).isDisabled(), "non-destructive keep blocked by unknown source");
   await page.screenshot({ path: "output/playwright/storage-move-pending-review.png" });
   await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
   await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
+  await waitMoveAvailable();
   check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "keep did not release pending move");
   check(!await page.getByRole("button", { name: "用語を追加", exact: true }).isDisabled(), "keep incorrectly retires old root");
   await region().getByText("保持した途中コピー（1 件）", { exact: true }).click();
@@ -122,6 +125,7 @@ async (page) => {
   await dialog().getByRole("button", { name: "保持して移動を中止", exact: true }).click();
   await page.getByRole("complementary", { name: "通知", exact: true }).getByRole("status").filter({ hasText: "途中コピーを保持して移動を中止しました" }).waitFor();
   check(await count() === 1 && await page.evaluate(() => window.dataFixture.keptMoves.length) === 1, "lost keep result duplicated durable decision");
+  await waitMoveAvailable();
   check(!await region().getByRole("button", { name: "会議保存先を変更", exact: true }).isDisabled(), "lost keep acknowledgement remains locked after verified read");
   results.push("lost pending review and keep replies recover via read without duplicate");
   return results;

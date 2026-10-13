@@ -694,7 +694,7 @@ function MainWindow() {
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <CaptureTestRecoveryPanel control={captureTestRecovery} locked={operationNavigationLocked||captureBusy||closingBusy||startConfirm.pending} currentTest={!!captureTest.snapshot||!!captureTest.pending}/>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
-          <ArchivedInputNotices locked={navigationLocked} paused={!dataOperation.connected||!!dataOperation.snapshot?.busy||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
+          <ArchivedInputNotices locked={navigationLocked} paused={!dataOperation.connected||dataPending||!!dataOperation.snapshot?.busy||dataOperation.snapshot?.phase==="ready"||!!dataOperation.snapshot?.restartRequired||deletionBlocked||closingBusy} onOpen={openNotifiedMeeting}/>
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><div className="eyebrow">YOUR WORKSPACE</div><h1>会議一覧</h1><p className="lead">会話を記録して、次のアクションにつなげる。</p></div>}
           <AudioImportPanel visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();

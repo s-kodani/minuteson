@@ -28,9 +28,9 @@ async page => {
   await modal(changeTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();
   results.push("changed native review invalidates choice before selection without retry");
 
-  await failedMove(); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
+  await failedMove(); await page.evaluate(() => window.dataFixture.failSave = true); await page.getByRole("button", { name: "用語を追加", exact: true }).click();
   await page.getByRole("textbox", { name: "用語（必須）", exact: true }).fill("点検日");
-  await changeButton().click(); await modal(changeTitle).waitFor(); await page.evaluate(() => window.dataFixture.failSave = true);
+  await changeButton().click(); await modal(changeTitle).waitFor();
   await modal(changeTitle).getByRole("button", { name: "確認内容を変更して選び直す", exact: true }).click(); await modal(changeTitle).getByRole("alert").waitFor();
   check(await count("select_data_operation") === 1 && await page.getByRole("textbox", { name: "用語（必須）", exact: true }).inputValue() === "点検日", "failed save selected files or lost local input");
   await modal(changeTitle).getByRole("button", { name: "確認を閉じる", exact: true }).click();

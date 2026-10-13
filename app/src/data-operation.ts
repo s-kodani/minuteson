@@ -21,6 +21,9 @@ export function useDataOperation() {
   const readEpoch = useRef(0);
   const accept = (next: DataSnapshot) => {
     const value = acceptDataSnapshot(current.current, next);
+    // A ready event can precede release of the worker's admission lease.
+    // Availability from before selection cannot authorize its next phase.
+    if (value.revision !== current.current?.revision) setAvailability(null);
     current.current = value; setSnapshot(value);
   };
   const refresh = async () => {
@@ -39,7 +42,7 @@ export function useDataOperation() {
       const audioSupported = Object.hasOwn(next, "audioDeletionPreview");
       const audioListing = audioSupported ? await invoke<AudioDeletionListing>("get_audio_deletion_items") : null;
       if (audioListing) assertAudioDeletionListing(audioListing);
-      if (epoch === readEpoch.current) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setConnected(true); setError(""); }
+      if (epoch === readEpoch.current && current.current?.revision === next.revision) { setAvailability(value); setDeletionSupported(supported); setDeletionListing(listing); setModelDeletionSupported(modelSupported); setModelDeletionListing(modelListing); setAudioDeletionSupported(audioSupported); setAudioDeletionListing(audioListing); setConnected(true); setError(""); }
     } catch (cause) {
       if (epoch === readEpoch.current) { setAvailability(null); setConnected(false); setError(String(cause)); }
       throw cause;

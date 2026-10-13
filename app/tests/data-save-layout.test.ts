@@ -19,3 +19,18 @@ test("removing manual status refresh preserves automatic verification and uncert
   assert.match(panel, /同じ操作の結果を確認/);
   assert.match(panel, /未完了移動を確認/);
 });
+test("data availability must be read for the current snapshot revision before its next phase", () => {
+  const operation = readFileSync(new URL("../src/data-operation.ts", import.meta.url), "utf8");
+  assert.match(operation, /if \(value.revision !== current.current\?\.revision\) setAvailability\(null\)/);
+  assert.match(operation, /epoch === readEpoch.current && current.current\?\.revision === next.revision/);
+  assert.match(operation, /invoke<DataAvailability>\("get_data_operation_availability"\)/);
+});
+test("historical notification IO stays paused across data selection and ready handoff", () => {
+  const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+  const start = main.indexOf("<ArchivedInputNotices");
+  const notice = main.slice(start, main.indexOf("/>", start));
+  assert.match(notice, /paused=\{/);
+  assert.match(notice, /dataPending/);
+  assert.match(notice, /dataOperation.snapshot\?\.phase===\"ready\"/);
+  assert.match(notice, /dataOperation.snapshot\?\.busy/);
+});

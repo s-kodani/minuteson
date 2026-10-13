@@ -6,6 +6,7 @@ const idle = dataIdleRead("get_data_operation");
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const f = window.dataFixture = {
   snapshot: idle, calls: [], mode: "success", replacesExisting: false, blocker: null,
+  readyBlocker: null, holdAvailability: false, availabilityComplete: null,
   failRead: false, operationReadFailure: false, failSave: false, failCancel: false, cancelLost: false, failClose: false, saveDelay: 0, suppressEvents: false, selectLost: false, previewMode: "success", complete: () => {}, archiveId: crypto.randomUUID(),
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
@@ -34,9 +35,15 @@ export const dataSaveIPC = async (command, args) => {
   if (command === "get_ui_preferences") return dataIdleRead(command);
   if (["get_capture_test_snapshot","get_capture_test_recovery"].includes(command)) return dataIdleRead(command);
   if (["get_analysis_notification_jobs","get_archived_recording_input_notices"].includes(command)) return dataIdleRead(command);
+  if (command === "get_ready_analysis_flows") return dataIdleRead(command);
   if (command === "get_application_close_activity") return dataIdleRead(command);
   if (command === "get_data_operation") { if (f.failRead) throw Error("模擬状態読込失敗"); return structuredClone(f.snapshot); }
-  if (command === "get_data_operation_availability") { const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker; return { available: reason === null, reason }; }
+  if (command === "get_data_operation_availability") {
+    const reason = f.snapshot.restartRequired ? "保存先切替後の再起動が必要です" : f.snapshot.busy ? "バックアップ／復元中" : f.blocker;
+    const result = { available: reason === null, reason };
+    if (f.holdAvailability) return new Promise(resolve => { f.availabilityComplete = () => resolve(result); });
+    return result;
+  }
   if (command === "get_storage_bootstrap") {
     const pending = f.pendingMove ?? (f.snapshot.kind === "relocation" && f.snapshot.attentionRequired && !f.snapshot.restartRequired ? f.snapshot.relocationPreview : null);
     return { meetingRoot: f.snapshot.restartRequired ? f.snapshot.relocationReceipt?.destination ?? "/safe/root" : "/safe/root", activeMeetingRoot: "/safe/root", restartRequired: f.snapshot.restartRequired, modelsRoot: "/safe/app-data/models", bootstrapPath: "/safe/config/bootstrap.json", revision: f.snapshot.relocationReceipt ? 2 : 0, origin: f.snapshot.restartRequired ? "relocated" : "default", pendingOperationId: pending?.operationId ?? null, pendingTarget: pending?.destination ?? null, keptMoves: structuredClone(f.keptMoves) };
@@ -70,6 +77,7 @@ export const dataSaveIPC = async (command, args) => {
       if (f.snapshot.phase === "cancelling") return f.changed({ phase: "cancelled", busy: false });
       if (f.previewMode === "invalid") return f.changed({ phase: "failed", busy: false, errorMessage: "不正な形式またはハッシュです" });
       if (f.previewMode === "cancel") return f.changed({ phase: "idle", busy: false });
+      if (f.readyBlocker) f.blocker = f.readyBlocker;
       await f.changed({ phase: "ready", busy: false, retryAllowed: true,
         backupPreview: args.kind === "backup" ? { confirmationId, destination: "/safe/会議.monbackup", replacesExisting: f.replacesExisting } : null,
         restorePreview: args.kind === "restore" ? { confirmationId, batchId: crypto.randomUUID(), archiveId: f.archiveId, meetingTitles: ["点検会議", "計画会議"], deletedAudioMeetingCount: f.deletedAudioMeetingCount, deletedAudioAssetCount: f.deletedAudioAssetCount, requiredBytes: 32 * 1024 * 1024, availableBytes: f.previewMode === "capacity" ? 0 : 1024 * 1024 * 1024, vocabularyAdded: 1, vocabularyDeduplicated: 1, vocabularyConflicts: ["点検日"] } : null,
@@ -81,6 +89,7 @@ export const dataSaveIPC = async (command, args) => {
     return structuredClone(f.snapshot);
   }
   if (command === "start_data_operation") {
+    if (f.blocker) throw Error("合成の準備排他が未解除です");
     const r = args.request;
     if (f.mode === "lostNoCommit") throw Error("模擬受付応答喪失・未受付");
     if (JSON.stringify(r) === JSON.stringify(f.lastRequest) && (f.snapshot.busy || ["completed", "attention"].includes(f.snapshot.phase) || (r.action === "refresh" && f.snapshot.phase === "ready"))) return structuredClone(f.snapshot);

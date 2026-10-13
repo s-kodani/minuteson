@@ -33,6 +33,7 @@ const suites = [
   ["info", "info-popover-browser-fixture.tsx", "info-popover-browser-check.js"],
   ["import", "import-browser-fixture.js", "import-modal-browser-check.js"],
   ["data", "data-save-browser-fixture.js", "data-save-browser-check.js"],
+  ["data-admission", "data-save-browser-fixture.js", "data-admission-browser-check.js"],
   ["no-maintenance", "data-save-browser-fixture.js", "no-maintenance-browser-check.js"],
   ["data-layout", "data-save-browser-fixture.js", "data-save-layout-browser-check.js"],
   ["data-action", "data-save-browser-fixture.js", "data-action-confirmation-browser-check.js"],
