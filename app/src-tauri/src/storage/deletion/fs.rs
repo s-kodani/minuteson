@@ -633,17 +633,12 @@ impl RootAnchor {
         let _ = (db, operation);
         Ok(false)
     }
-    pub(super) fn require_detachable_history(
-        &self,
-        db: &rusqlite::Connection,
-        meeting: &str,
-    ) -> Result<(), String> {
+    pub(super) fn verify_current_history(&self) -> Result<(), String> {
         self.verify()?;
         #[cfg(target_os = "macos")]
         if let Some(history) = &self.inspection_history {
-            return history.require_detachable_history(db, meeting, &self.identity()?);
+            return history.verify_current_history(&self.identity()?);
         }
-        let _ = (db, meeting);
         Ok(())
     }
     pub(super) fn verify_history_directory(

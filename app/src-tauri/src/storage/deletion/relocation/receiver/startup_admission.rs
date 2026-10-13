@@ -65,11 +65,8 @@ fn record_valid(record: &Record, version: u32) -> bool {
         && record.path_count <= MAX_PATHS
         && record.historical_roots.len() <= MAX_ROOTS_PER_RECORD
         && (version == 3 || record.historical_roots.is_empty())
-        && match (version, &record.immutable_hash) {
-            (1, None) => true,
-            (2 | 3, Some(h)) => sha(h),
-            _ => false,
-        }
+        && matches!(version, 2 | 3)
+        && sha(&record.immutable_hash)
         && match (
             record.kind.as_str(),
             record.state.as_str(),
@@ -96,6 +93,14 @@ fn record_valid(record: &Record, version: u32) -> bool {
         }
 }
 fn records(db: &Connection, source: &SourceFacts) -> Result<(), String> {
+    if !matches!(source.version, 2 | 3)
+        || source
+            .records
+            .iter()
+            .any(|record| !record_valid(record, source.version))
+    {
+        return Err("削除履歴は現行の照合ハッシュ付き形式である必要があります".into());
+    }
     database::verify_history_schema_hash(db, &source.schema_hash)?;
     let (count, bytes): (i64,i64) = db.query_row("SELECT count(*),coalesce(sum(length(CAST(target_manifest_json AS BLOB))+length(CAST(progress_json AS BLOB))+512),0) FROM maintenance_operations WHERE kind IN ('delete_meeting','delete_assets')", [], |r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
     let (count_paths, bytes_paths): (i64,i64) = db.query_row("SELECT count(*),coalesce(sum(length(CAST(p.relative_path AS BLOB))+coalesce(length(CAST(p.identity_json AS BLOB)),0)+256),0) FROM maintenance_paths p JOIN maintenance_operations m ON m.id=p.operation_id WHERE m.kind IN ('delete_meeting','delete_assets')",[],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
@@ -111,10 +116,7 @@ fn records(db: &Connection, source: &SourceFacts) -> Result<(), String> {
     // original, admitted records receive a historical-identity correspondence.
     for expected in &source.records {
         let row = db.query_row("SELECT rowid,id,meeting_id,kind,state,restore_batch_id,target_manifest_json,target_hash,consent_at,progress_json,error_code,created_at,updated_at FROM maintenance_operations WHERE id=?1 AND length(CAST(target_manifest_json AS BLOB))+length(CAST(progress_json AS BLOB))+512<=67108864", [&expected.operation_id], operation_row).map_err(|e|e.to_string())?;
-        let fixed = match &expected.immutable_hash {
-            Some(hash) => super::super::immutable_hash(&row)? == *hash,
-            None => row_hash(&row)? == expected.row_hash,
-        };
+        let fixed = super::super::immutable_hash(&row)? == expected.immutable_hash;
         if !fixed
             || row.3 != expected.kind
             || row.4 != expected.state
@@ -196,7 +198,7 @@ pub(in crate::storage) fn admitted_history(
     destination.root.validate(true)?;
     destination.database.validate(false)?;
     let (path, root_id, db_id) = admission.source();
-    if !matches!(source.version, 1 | 2 | 3)
+    if !matches!(source.version, 2 | 3)
         || source.source_root != path
         || source.root.registered()? != root_id
         || source.database.registered()? != db_id
@@ -676,14 +678,13 @@ mod tests {
         .collect()
     }
     #[test]
-    fn deletion_startup_admission_legacy_version_one_remains_exact_and_cannot_use_new_stamp_relaxation(
-    ) {
+    fn deletion_startup_admission_requires_current_immutable_hash_and_rejects_old_shape() {
         use crate::{
             analysis_worker::AnalysisController, storage::deletion::operations, storage::Storage,
         };
         let base = tempfile::tempdir().unwrap();
         let storage = Storage::open(base.path().join("root")).unwrap();
-        let meeting = storage.create_meeting("SYNTHETIC LEGACY RECEIPT").unwrap();
+        let meeting = storage.create_meeting("SYNTHETIC CURRENT RECEIPT").unwrap();
         let mut deletion = operations::Prepared::fresh(&storage, &meeting.id, &|| false).unwrap();
         let lease = AnalysisController::default()
             .begin_data_maintenance(false, false, &|| false)
@@ -705,24 +706,46 @@ mod tests {
             .unwrap();
         let current: SourceFacts =
             serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
-        let mut legacy = serde_json::to_value(&source).unwrap();
-        legacy["version"] = 1.into();
-        for record in legacy["records"].as_array_mut().unwrap() {
-            record.as_object_mut().unwrap().remove("immutableHash");
-        }
-        let legacy: SourceFacts = serde_json::from_value(legacy).unwrap();
-        assert!(legacy.records.iter().all(|r| record_valid(r, 1)));
         drop(snapshot);
         let db = storage.connection.lock().unwrap();
         records(&db, &current).unwrap();
-        records(&db, &legacy).unwrap();
+        for version in [0, 1, 4] {
+            let mut unsupported = serde_json::to_value(&source).unwrap();
+            unsupported["version"] = version.into();
+            let unsupported: SourceFacts = serde_json::from_value(unsupported).unwrap();
+            assert!(records(&db, &unsupported).is_err());
+        }
+        for replacement in [None, Some(serde_json::Value::Null)] {
+            let mut missing = serde_json::to_value(&source).unwrap();
+            let record = missing["records"][0].as_object_mut().unwrap();
+            if let Some(value) = replacement {
+                record.insert("immutableHash".into(), value);
+            } else {
+                record.remove("immutableHash");
+            }
+            assert!(serde_json::from_value::<SourceFacts>(missing).is_err());
+        }
+        for hash in ["invalid".to_owned(), "0".repeat(64)] {
+            let mut altered = serde_json::to_value(&source).unwrap();
+            altered["records"][0]["immutableHash"] = hash.into();
+            let altered: SourceFacts = serde_json::from_value(altered).unwrap();
+            assert!(records(&db, &altered).is_err());
+        }
         db.execute(
             "UPDATE maintenance_operations SET updated_at=updated_at+1 WHERE id=?1",
             [&current.records[0].operation_id],
         )
         .unwrap();
         records(&db, &current).unwrap();
-        assert!(records(&db, &legacy).is_err());
+        // The current DB also prevents consent mutation before the reader is
+        // reached; do not disable its trigger to make a legacy fixture pass.
+        assert!(db
+            .execute(
+                "UPDATE maintenance_operations SET consent_at=consent_at+1 WHERE id=?1",
+                [&current.records[0].operation_id],
+            )
+            .is_err());
+        records(&db, &current).unwrap();
     }
     #[test]
     fn deletion_startup_admission_checkpointed_wal_mode_and_uri_characters_create_no_controls() {
@@ -749,7 +772,6 @@ mod tests {
         a.verify().unwrap();
         assert_eq!(files(&path), before);
     }
-
 
     fn crashed_wal(path: &Path) {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
