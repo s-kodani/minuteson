@@ -1,4 +1,4 @@
-async (page, capturePath, detailUI) => {
+async (page) => {
   const context = page.context(), results = [], check = (ok, message) => { if (!ok) throw Error(message); };
   await context.route(/^http:\/\/127\.0\.0\.1:1420\/(?:\?.*)?$/, async route => {
     const response = await route.fetch();
@@ -13,7 +13,11 @@ async (page, capturePath, detailUI) => {
   const boot = async (select = false) => {
     await page.goto("http://127.0.0.1:1420/");
     await page.waitForFunction(() => !!window.closeFixture && !!document.querySelector(".meeting-table tbody tr"));
-    if (select) { await page.locator(".meeting-table tbody tr").first().locator(".meeting-name").click(); await detailUI.openMeetingTools(); await page.getByRole("button",{name:"録音準備を開く",exact:true}).click(); await page.waitForFunction(() => document.querySelector('.recording-workspace button')?.disabled === false); }
+    if (select) {
+      await page.getByRole("button", { name: "新しい録音", exact: true }).click();
+      await page.locator("#recording-title").fill("終了検査の会議");
+      await page.waitForFunction(() => document.querySelector('.recording-workspace button')?.disabled === false);
+    }
   };
   const configureImport = busy => page.evaluate(async busy => window.closeFixture.importChanged({ token: crypto.randomUUID(), phase: busy ? "copying" : "ready", busy, fileName: "合成会議.m4a" }), busy);
   const configureData = () => page.evaluate(() => window.dataFixture.changed({ token: crypto.randomUUID(), kind: "backup", phase: "publishing", busy: true }));
@@ -22,7 +26,7 @@ async (page, capturePath, detailUI) => {
   let stage = "setup";
   try {
     stage = "start-decline"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await modal(startTitle).waitFor();
-    check((await modal(startTitle).innerText()).includes("既存会議") && (await modal(startTitle).innerText()).includes("参加者の同意") && await modal(startTitle).getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "start omitted target or unsafe focus");
+    check((await modal(startTitle).innerText()).includes("終了検査の会議") && (await modal(startTitle).innerText()).includes("参加者の同意") && await modal(startTitle).getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "start omitted target or unsafe focus");
     await page.keyboard.press("Enter"); await modal(startTitle).waitFor({ state: "hidden" }); check(await count("start_recording") === 0, "initial Enter started recording");
     results.push("recording start reviews the exact meeting and permission scope; initial Enter cancels without device access");
 
@@ -39,7 +43,7 @@ async (page, capturePath, detailUI) => {
       results.push(`recording start rejects a changed ${change} target after saving without sending start`);
     }
     stage = "start-save-failure"; await boot(true); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().waitFor(); await page.evaluate(() => { window.closeFixture.failFlush = true; }); await start().click(); await dismissFailed(startTitle);
-    check(await count("start_recording") === 0 && await page.locator(".recording-workspace-title").textContent() === "既存会議", "save failure started or erased original meeting context");
+    check(await count("start_recording") === 0 && await page.locator("#recording-title").inputValue() === "終了検査の会議", "save failure started or erased original meeting context");
     results.push("failed edit flush retains meeting context and does not call recording start");
 
     stage = "start-ack-lost"; await boot(true); await page.evaluate(() => { window.closeFixture.startLost = true; }); await page.getByRole("button", { name: "録音を開始", exact: true }).click(); await start().click(); await modal(startTitle).getByRole("alert").waitFor(); check(await start().isDisabled() && await count("start_recording") === 1, "lost accepted start was replayed"); await dismissFailed(startTitle);
@@ -83,7 +87,7 @@ async (page, capturePath, detailUI) => {
     stage = "close-read-failure"; await boot(); await page.evaluate(() => { window.closeFixture.failRead = true; }); await request(); await page.getByRole("alert").filter({ hasText: "終了できませんでした" }).waitFor(); check(await count("finish_main_close") === 0 && await page.getByRole("dialog").count() === 0, "unknown native read fabricated quiet close");
     results.push("failed canonical close reads preserve the app and never fabricate quiet completion");
 
-    stage = "quiet-save-failure"; await boot(); await page.getByRole("textbox", { name: "会議名", exact: true }).fill("保持する入力"); await page.evaluate(() => { window.closeFixture.failFlush = true; }); await request(); await page.getByRole("alert").filter({ hasText: "終了できませんでした" }).waitFor(); check(await count("finish_main_close") === 0 && await page.getByRole("textbox", { name: "会議名", exact: true }).inputValue() === "保持する入力", "quiet close lost unsaved context");
+    stage = "quiet-save-failure"; await boot(true); await page.locator("#recording-title").fill("保持する入力"); await page.evaluate(() => { window.closeFixture.failFlush = true; }); await request(); await page.getByRole("alert").filter({ hasText: "終了できませんでした" }).waitFor(); check(await count("finish_main_close") === 0 && await page.locator("#recording-title").inputValue() === "保持する入力", "quiet close lost unsaved context");
     results.push("quiet close refuses failed edit flush and retains the current input");
 
     const savingTitle = "録音の保存完了後の終了を確認";

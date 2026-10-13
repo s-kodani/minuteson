@@ -53,7 +53,13 @@ registerPendingEdits(async () => {
   if (f.flushDelay) await new Promise(resolve => setTimeout(resolve, f.flushDelay));
   if (f.failFlush) throw Error("模擬編集保存失敗・入力を保持");
   if (f.mutateDuringFlush === "import") await f.importChanged({ token: crypto.randomUUID() });
-  if (f.mutateDuringFlush === "meeting") { data.meetings[0].title = "確認後に変更された会議"; data.meetings[0].lockVersion++; }
+  if (f.mutateDuringFlush === "meeting") {
+    const id = f.calls.filter(c => c.command === "get_meeting").at(-1)?.args.id;
+    if (!id) throw Error("合成の確認済み会議IDがありません");
+    const existing = data.meetings.find(m => m.id === id);
+    if (existing) { existing.title = "確認後に変更された会議"; existing.lockVersion++; }
+    else data.meetings.push({ ...data.meetings[0], id, title: "確認後に作成された会議" });
+  }
   if(f.mutateApplicationDuringFlush){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationDuringFlush=false;}
   f.mutateDuringFlush = null;
 });
@@ -233,7 +239,8 @@ mockIPC(async (command, args) => {
     return null;
   }
   if (["get_analysis_flow", "get_current_analysis", "get_transcript_draft", "get_current_minutes", "get_minutes_draft", "get_minutes_markdown"].includes(command)) return null;
-  if (["get_analysis_jobs", "get_minutes_exports"].includes(command)) return [];
+  if (["get_analysis_jobs", "get_ready_analysis_flows", "get_minutes_exports"].includes(command)) return [];
+  if (command === "get_analysis_publication_status") return null;
   if (["get_analysis_versions", "get_minutes_versions"].includes(command)) return { meetingLockVersion: data.meetings[0].lockVersion, currentId: null, previousId: null, draft: null, versions: [] };
   if (command === "get_meeting_vocabulary") return { global: clone(data.book), meeting: { id: `meeting:${args.meetingId}`, payload: [], lockVersion: 0 } };
   if (command === "get_diarization_preferences") {

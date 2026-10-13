@@ -40,6 +40,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
         if (cmd === "get_recording_snapshot") return {revision:1,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};
         if (cmd === "get_capture_test_snapshot") return null;
+        if (cmd === "get_application_close_activity") return { analysisBusy:false, modelPreparationBusy:false };
         if (cmd === "get_capture_test_recovery") return {schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null};
         if (cmd === "get_recording_confirmation") return {revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null};
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];
@@ -58,7 +59,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_data_operation_availability") return { available: true, reason: null };
         if (cmd === "get_recovery_items") return { supported: true, root: "/mock", items: [] };
         if (cmd === "list_restored_meeting_ids") return [];
-        if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
+        if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName:null, saved: null, errorMessage: null };
         if (cmd === "get_analysis_flow") return null;
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-recovery-browser-fixture.js")).stampFixtureDraft(data.td);

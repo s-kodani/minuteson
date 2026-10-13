@@ -81,7 +81,9 @@ export function CommonModal({ ref: suppliedRef, open, blocked = false, onDismiss
       const remaining = topOpenModal();
       if (!restorePending.current || latest.current.open || !latest.current.restoreReady || remaining && remaining !== parentModal.current) return;
       const candidate = latest.current.restoreTarget?.() ?? opener.current;
-      const usable = (target: HTMLElement | null): target is HTMLElement => !!target?.isConnected && !target.matches(":disabled") && !!target.getClientRects().length && !target.closest("[hidden], [inert], dialog:not([open])") && (!remaining || remaining.contains(target));
+      // WebKit mouse activation need not focus the opener. If it disappears,
+      // the captured body/html is not an entry point; use the panel fallback.
+      const usable = (target: HTMLElement | null): target is HTMLElement => !!target?.isConnected && target !== document.body && target !== document.documentElement && !target.matches(":disabled") && !!target.getClientRects().length && !target.closest("[hidden], [inert], dialog:not([open])") && (!remaining || remaining.contains(target));
       const target = usable(candidate) ? candidate : usable(fallback.current) ? fallback.current : null;
       if (target) {
         if (target === fallback.current && target.tabIndex < 0) target.tabIndex = -1;

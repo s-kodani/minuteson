@@ -73,6 +73,7 @@ test("removed nested openers restore inside the surviving parent modal, never it
   assert.match(source, /\[hidden\], \[inert\], dialog:not\(\[open\]\)/);
   assert.match(source, /target === fallback.current && target.tabIndex < 0/);
   assert.match(source, /if \(document.activeElement === target\) restorePending.current = false/);
+  assert.match(source, /target !== document.body && target !== document.documentElement/);
 });
 
 test("confirmation cancellation does not inherit a settings dialog's custom close label", () => {

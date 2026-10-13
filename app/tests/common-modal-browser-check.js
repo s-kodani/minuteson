@@ -3,6 +3,7 @@ async (page) => {
   const dialog = () => page.getByRole("dialog", { name: "対象の変更確認", exact: true });
   const open = async () => { await page.getByRole("button", { name: "確認を開く", exact: true }).click(); await dialog().waitFor(); await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "確認をキャンセル"); };
   const closed = async () => { await dialog().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "確認を開く"); };
+  try {
   check(await page.evaluate(() => [...document.querySelectorAll("dialog")].every(element => !element.hasAttribute("aria-modal"))), "closed dialogs declare independent modality");
   await open();
   check(await dialog().evaluate(element => element.matches(":modal") && !element.hasAttribute("aria-modal")), "native modal semantics missing");
@@ -98,4 +99,7 @@ async (page) => {
   await page.waitForFunction(() => document.activeElement?.textContent === "共通モーダル検証");
   results.push("removed review opener falls back to its existing panel heading without restoring a detached node");
   return { passed: results.length, results };
+  } catch (cause) {
+    throw Error(`after ${results.length} completed cases (${results.at(-1) ?? "opening"}): ${cause}; active=${await page.evaluate(() => document.activeElement?.outerHTML)}; body=${await page.locator('body').innerText()}`);
+  }
 }
