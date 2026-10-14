@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {InputJournalSession,checkedJournalReport,journalMessage,type JournalPersistence} from "../src/input-journal-state.ts";
+import {InputJournalSession,checkedJournalReport,journalMessage,journalNoticeReady,type JournalPersistence} from "../src/input-journal-state.ts";
 import {ArchivedInputController} from "../src/archived-input-controller.ts";
 import {checkedArchivedInputPage} from "../src/archived-input-state.ts";
 const owner="73500000-0000-4000-8000-000000000001",meeting="63500000-0000-4000-8000-000000000001";
@@ -24,6 +24,16 @@ test("failure survives absent/failed/stale reads and only fresh confirmation res
   assert.match(journalMessage(s.read(2)),/以前の書込み失敗/u);
   assert.equal(s.read(1003).problem,true);
   s.accept(report(3,"confirmed",999,999),1004);assert.deepEqual(s.read(1004),{state:"confirmed",problem:false});
+});
+test("preparation and a single atomic-read miss do not announce unknown journal persistence",()=>{
+  const unknown={state:"unknown" as const,problem:false};
+  assert.equal(journalNoticeReady(unknown,"preparing",5000,5000),false);
+  assert.equal(journalNoticeReady(unknown,"recording",900,900),false);
+  assert.equal(journalNoticeReady(unknown,"recording",1500,400),false);
+  assert.equal(journalNoticeReady(unknown,"recording",1500,1000),true);
+  assert.equal(journalNoticeReady({state:"failed",problem:true},"recording",0,0),true);
+  assert.equal(journalNoticeReady({state:"confirmed",problem:false},"recording",5000,5000),true);
+  assert.equal(journalNoticeReady({state:"unknown",problem:true},"recording",0,0),true);
 });
 test("immutable heartbeat, committed floors, closed and invalid state cannot regress",()=>{
   const s=new InputJournalSession(owner);s.accept(report(),0);

@@ -20,11 +20,11 @@ test("completed startup hints retain null meeting FK and do not substitute for a
   }
 });
 const preview = (): DeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), title: "点検会議", phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, pathCount: 3, processedPaths: 0, fileCount: 1, missingCount: 0, changedCount: 0, unregisteredCount: 0, bytes: 123, rowCount: 20, rowPhaseCommitted: false });
-const ready = (): DataSnapshot => ({ revision: 1, token: id(1), kind: "deletion", phase: "ready", busy: false, backupPreview: null, restorePreview: null, recoveryPreview: null, relocationPreview: null, backupReceipt: null, restoreReceipt: null, recoveryReceipt: null, relocationReceipt: null, deletionPreview: preview(), deletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
+const ready = (): DataSnapshot => ({ revision: 1, token: id(1), kind: "deletion", phase: "ready", busy: false, backupPreview: null, restorePreview: null, relocationPreview: null, backupReceipt: null, restoreReceipt: null, relocationReceipt: null, deletionPreview: preview(), deletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 test("deletion requests use only owned IDs and never paths, rows or policy substitutions", () => {
   assert.deepEqual(dataRequest(ready(), "publish"), { token: id(1), confirmationId: id(2), action: "publish" });
   assert.deepEqual(dataRequest(ready(), "refresh"), { token: id(1), confirmationId: id(2), action: "refresh" });
-  assert.throws(() => dataRequest(ready(), "keep")); assert.throws(() => dataRequest(ready(), "recover"));
+  assert.throws(() => dataRequest(ready(), "keep")); assert.throws(() => dataRequest(ready(), "review_remaining"));
 });
 test("remaining review is read-only resolution only for the server-advertised file phase", () => {
   const s = ready(); Object.assign(s, { phase: "attention", attentionRequired: true, retryAllowed: false });

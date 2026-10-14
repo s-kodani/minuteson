@@ -256,10 +256,6 @@ fn audio_controller_unregistered_audio_requires_separate_choice_unknown_is_alway
         .controller
         .begin_request(f.request(&s, Action::Keep))
         .is_err());
-    assert!(f
-        .controller
-        .begin_request(f.request(&s, Action::Recover))
-        .is_err());
     let done = f.run(&s, Action::DeleteIncludingUnregistered);
     assert!(done.audio_deletion_receipt.unwrap().audio_deleted);
     assert!(!leftover.exists() && unknown.exists());

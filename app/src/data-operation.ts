@@ -36,7 +36,7 @@ export function useDataOperation() {
       const supported = Object.hasOwn(next, "deletionPreview");
       const listing = supported ? await invoke<DeletionListing>("get_deletion_items") : null;
       if (listing) assertDeletionListing(listing);
-      const modelSupported = Object.hasOwn(next, "modelDeletionPreview");
+      const modelSupported = supported;
       const modelListing = modelSupported ? await invoke<ModelBodyDeletionListing>("get_model_deletion_items") : null;
       if (modelListing) assertModelBodyDeletionListing(modelListing);
       const audioSupported = Object.hasOwn(next, "audioDeletionPreview");

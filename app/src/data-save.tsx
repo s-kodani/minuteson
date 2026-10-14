@@ -140,7 +140,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
   };
   useEffect(() => {
     if (!s) return;
-    if (s.kind === "recovery" || s.kind === "deletion" || s.kind === "model_deletion" || s.kind === "audio_deletion") { setOpen(false); setToast(""); return; }
+    if (s.kind === "deletion" || s.kind === "audio_deletion") { setOpen(false); setToast(""); return; }
     if (s.busy) setOpen(false);
     if (unknown) {
       const choice = pendingChoice.current;
@@ -178,7 +178,7 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
     const active = document.activeElement;
     if (active === document.body || active === target || !active?.isConnected || active.matches('main[aria-label="会議ワークスペース"][tabindex="-1"]')) target.focus({ preventScroll: true });
   }, [canAct, open, visible, s]);
-  const requestReady = s?.kind !== "recovery" && s?.kind !== "deletion" && s?.kind !== "model_deletion" && s?.kind !== "audio_deletion" && !!s?.retryAllowed && !s.attentionRequired;
+  const requestReady = s?.kind !== "deletion" && s?.kind !== "audio_deletion" && !!s?.retryAllowed && !s.attentionRequired;
   const restore = s?.restorePreview;
   const moving = s?.relocationPreview;
   const canPublish = canAct && requestReady && (s?.kind === "backup" || (s?.phase === "ready" && ((!!restore && restore.availableBytes >= restore.requiredBytes) || (!!moving?.resumeAllowed && moving.availableBytes >= moving.requiredBytes))));
@@ -199,13 +199,13 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
       {(s?.restartRequired || storage?.restartRequired) && <button type="button" disabled={rpcBusy || confirm.pending || !!s?.busy} onClick={() => void restart()}>終了する（再起動は手動）</button>}
       {!connected && <p role="status">データ操作の状態を確認できるまで変更操作を停止しています。</p>}
       {availability?.reason && !s?.busy && <p role="status">{availability.reason}。停止・完了後にバックアップ／復元できます。</p>}
-      {s?.token && s.kind !== "recovery" && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
+      {s?.token && s.kind !== "deletion" && s.kind !== "audio_deletion" && <p role="status">{dataPhaseLabel(s.phase)}{s.busy && "。未完成ファイルは利用できません。"}</p>}
       <div className="analysis-actions">
         {unknown && <><button type="button" disabled={rpcBusy || locked || !!s?.busy} onClick={() => void retryUnknown()}>同じ操作の結果を確認</button><button type="button" className="small-secondary" disabled={rpcBusy || !s?.token} onClick={() => void cancel()}>同じ操作を取り消して確認</button></>}
-        {s?.busy && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <button type="button" className="stop-button" disabled={rpcBusy || ["cancelling", "discarding"].includes(s.phase)} onClick={() => void cancel()}>処理を取り消す</button>}
+        {s?.busy && s.kind !== "deletion" && s.kind !== "audio_deletion" && <button type="button" className="stop-button" disabled={rpcBusy || ["cancelling", "discarding"].includes(s.phase)} onClick={() => void cancel()}>処理を取り消す</button>}
         {requestReady && !s?.busy && !unknown && <><button type="button" className="small-secondary" disabled={!canAct} onClick={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setOpen(true); }}>確認内容を開く</button>{s?.kind === "restore" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じバックアップを再検証</button>}{s?.kind === "relocation" && <button type="button" className="small-secondary" disabled={!canAct} onClick={() => void submit("refresh")}>同じ保存先を再確認</button>}<button type="button" className="small-secondary" disabled={rpcBusy} onClick={() => void cancel()}>確認内容を破棄</button></>}
       </div>
-      {s?.attentionRequired && s.kind !== "deletion" && s.kind !== "model_deletion" && s.kind !== "audio_deletion" && <p role="alert">{s.kind === "relocation" ? "保存先変更の確認が必要です。旧保存先と途中コピーを保持し、自動削除・再上書きは行いません。切替結果が未確定の場合は終了して再起動してください。" : "保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。"}</p>}
+      {s?.attentionRequired && s.kind !== "deletion" && s.kind !== "audio_deletion" && <p role="alert">{s.kind === "relocation" ? "保存先変更の確認が必要です。旧保存先と途中コピーを保持し、自動削除・再上書きは行いません。切替結果が未確定の場合は終了して再起動してください。" : "保存先に公開済みの可能性があります。実ファイルを確認してください。同じ操作での再上書きは行いません。"}</p>}
       {s?.backupReceipt && <><p>保存先: <span className="data-path">{s.backupPreview?.destination}</span><br />会議 {s.backupReceipt.meetingCount} 件 · {bytesLabel(s.backupReceipt.size)}</p>{s.backupReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.backupReceipt.deletedAudioMeetingCount} 件・音声資産 {s.backupReceipt.deletedAudioAssetCount} 件の保存済み文書と音声の欠落情報を保存しました。音声本体は含みません。追加復元後も、削除済み音声の再生・再解析はできません。</p>}</>}
       {s?.restoreReceipt && <>{s.restoreReceipt.deletedAudioMeetingCount > 0 && <p role="alert">音声削除済みの会議 {s.restoreReceipt.deletedAudioMeetingCount} 件・音声資産 {s.restoreReceipt.deletedAudioAssetCount} 件は、保存済み文書と音声の欠落情報を復元しました。削除済み音声の再生・再解析はできません。</p>}<button type="button" disabled={rpcBusy || locked} onClick={() => void show()}>復元した会議一覧を開く</button><p>共通用語：追加 {s.restoreReceipt.vocabularyAdded ?? "記録不明"} 件、完全一致の重複 {s.restoreReceipt.vocabularyDeduplicated ?? "記録不明"} 件、既存を保持した競合 {s.restoreReceipt.vocabularyConflicts?.length ?? "記録不明"} 件。</p><p>共通用語の表示を更新するには、編集を保存して「用語を再読込」を選んでください。</p>{s.restoreReceipt.vocabularyConflicts && s.restoreReceipt.vocabularyConflicts.length > 0 && <details><summary>競合した用語を確認</summary><ul>{s.restoreReceipt.vocabularyConflicts.map(term => <li key={term}>{term}</li>)}</ul></details>}</>}
       {openError && <p role="alert">{openError}</p>}

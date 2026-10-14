@@ -6,7 +6,7 @@ const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const f = window.dataFixture;
 f.meetings[0].lifecycle = "recorded";
 f.meetings[0].sourceType = "recording";
-f.snapshot = { ...f.snapshot, deletionPreview: null, deletionReceipt: null, modelDeletionPreview: null, modelDeletionReceipt: null, audioDeletionPreview: null, audioDeletionReceipt: null };
+f.snapshot = { ...f.snapshot, deletionPreview: null, deletionReceipt: null, audioDeletionPreview: null, audioDeletionReceipt: null };
 const idle = structuredClone(f.snapshot), changed = f.changed;
 f.changed = patch => changed(patch.kind && patch.kind !== "audio_deletion" ? { ...patch, audioDeletionPreview: null, audioDeletionReceipt: null } : patch);
 const d = window.audioDeletionFixture = {

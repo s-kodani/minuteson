@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { assertCloseContext, assertCloseTargets, closeMessage, dataNeedsConsent, importNeedsConsent, waitForImportStop, waitForRecordingSave, type CloseContext } from "../src/application-close.ts";
 const token = "11111111-1111-4111-8111-111111111111";
 const other = "21111111-1111-4111-8111-111111111111";
-const context = (): CloseContext => ({ recording: { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null }, importing: { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null }, data: { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false }, activity: { analysisBusy: false, modelPreparationBusy: false } });
+const context = (): CloseContext => ({ recording: { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null }, importing: { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null }, data: { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false }, activity: { analysisBusy: false, modelPreparationBusy: false } });
 test("close reviews validate native states instead of assuming unknown states are idle", () => {
   const c = context(); assertCloseContext(c);
   assert.throws(() => assertCloseContext({ ...c, recording: { ...c.recording, phase: "saving" } }), /録音状態/u);
@@ -30,14 +30,13 @@ test("busy progress and a winning publication retain the reviewed operation", ()
   assertCloseTargets(c, { ...c, data: saved });
   assert.equal(saved.backupReceipt.archiveId, token);
 });
-test("closing preserves deletion loss warnings, relocation copies and recovery results", () => {
+test("closing preserves deletion loss warnings and relocation copies", () => {
   const c = context();
-  for (const kind of ["deletion", "audio_deletion", "model_deletion"] as const) {
+  for (const kind of ["deletion", "audio_deletion"] as const) {
     const message = closeMessage({ ...c, data: { ...c.data, kind, token, retryAllowed: true } });
     assert.match(message, /既に消した/u); assert.match(message, /復元しません/u); assert.match(message, /未完了記録/u);
   }
   assert.match(closeMessage({ ...c, data: { ...c.data, kind: "relocation", token, retryAllowed: true } }), /旧保存先と途中コピー/u);
-  assert.match(closeMessage({ ...c, data: { ...c.data, kind: "recovery", token, retryAllowed: true } }), /完了済み.*取り消さず/u);
 });
 test("import cancellation waits for actual terminal state and keeps winning publication", async () => {
   const c = context(); let reads = 0, waits = 0;

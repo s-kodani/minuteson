@@ -4,7 +4,7 @@ import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot 
 import { assertAudioDeletionListing, assertAudioDeletionPage, assertAudioDeletionPreview, type AudioDeletionPreview } from "../src/audio-deletion-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const preview = (): AudioDeletionPreview => ({ confirmationId: id(2), operationId: id(3), meetingId: id(4), sourceOperationId: null, reconfirmationSourceKind: null, phase: "review", pending: false, executeAllowed: true, resumeReason: null, keepAllowed: false, reconfirmationAllowed: false, includeUnregisteredRecorded: null, pathCount: 2, processedFiles: 0, audioFiles: 1, audioBytes: 4, missingAudioFiles: 0, changedAudioFiles: 0, unregisteredAudioFiles: 0, unclassifiedFiles: 1, retained: { analysisRevisions: 1, utterances: 5, minutesRevisions: 2, drafts: 2, editOperations: 3, evidenceLinks: 2, jobs: 2, externalExportRecords: 1 }, tracks: [{ id: id(5), kind: "mic", state: "ready", chunks: 1, durationUs: 1000000 }], priorDeletionCompleted: false });
-const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "audio_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, modelDeletionPreview: null, modelDeletionReceipt: null, audioDeletionPreview: preview(), audioDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
+const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "audio_deletion", phase: "ready", busy: false, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, deletionPreview: null, deletionReceipt: null, audioDeletionPreview: preview(), audioDeletionReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: true });
 test("long historical audio reservation pages use UTF8 bounds without granting a path request", () => {
   const s = ready(), p = s.audioDeletionPreview!;
   Object.assign(p, { phase: "reconfirmation", pending: true, sourceOperationId: p.operationId, reconfirmationSourceKind: "native_audio_pending", pathCount: 1, audioFiles: 1, unregisteredAudioFiles: 1, unclassifiedFiles: 0 });
@@ -40,7 +40,7 @@ test("long audio page exceptions reject ordinary files forged names and byte-ove
 test("audio requests contain only native IDs and require separate unregistered consent", () => {
   const s = ready();
   assert.deepEqual(dataRequest(s, "publish"), { token: id(1), confirmationId: id(2), action: "publish" });
-  for (const action of ["recover", "keep", "review_remaining", "delete_including_unregistered"] as const) assert.throws(() => dataRequest(s, action));
+  for (const action of ["keep", "review_remaining", "delete_including_unregistered"] as const) assert.throws(() => dataRequest(s, action));
   s.audioDeletionPreview!.unregisteredAudioFiles = 1;
   assert.throws(() => dataRequest(s, "publish"));
   assert.equal(dataRequest(s, "delete_including_unregistered").action, "delete_including_unregistered");
@@ -123,7 +123,7 @@ test("restored baseline is a read-only source, not a deletion consent or complet
   const s = ready(); Object.assign(s.audioDeletionPreview!, { phase: "restored_unavailable", pending: true, executeAllowed: false, resumeReason: "no consent", reconfirmationAllowed: true });
   assert.doesNotThrow(() => assertDataSnapshot(s));
   for (const action of ["refresh", "review_remaining"] as const) assert.doesNotThrow(() => dataRequest(s, action));
-  for (const action of ["publish", "keep", "recover", "delete_including_unregistered"] as const) assert.throws(() => dataRequest(s, action));
+  for (const action of ["publish", "keep", "delete_including_unregistered"] as const) assert.throws(() => dataRequest(s, action));
   for (const change of [{ executeAllowed: true, resumeReason: null }, { priorDeletionCompleted: true }, { processedFiles: 1 }, { includeUnregisteredRecorded: true }, { reconfirmationSourceKind: "restored_audio_unavailable" }]) assert.throws(() => assertAudioDeletionPreview({ ...s.audioDeletionPreview!, ...change } as never));
 });
 test("restored new scope declares an unavailable source, never a previously completed deletion", () => {

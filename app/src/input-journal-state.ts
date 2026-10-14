@@ -43,3 +43,12 @@ export function journalMessage(view:JournalView):string {
   const detail={unknown:"入力履歴の保存診断を確認できません",stale:"入力履歴の保存診断の更新を確認できません",pending:"入力履歴の書込み結果を確認中です",failed:"入力履歴の書込みを確定できません",invalid:"入力履歴の整合を確認できず、履歴の保存を停止しています",confirmed:""}[view.state];
   return detail?`${detail}。${view.problem&&!["failed","invalid"].includes(view.state)?"以前の書込み失敗はまだ解決を確認できません。":""}音声の取得・保存結果とは別の診断です。保存後に音声と欠損範囲を確認してください。`:"";
 }
+// Preparing can precede creation of the helper's diagnostic file. A single
+// read racing its atomic replacement is also not a persistence failure.
+export function journalNoticeReady(view:JournalView,phase:string,recordingForMs:number,unavailableForMs:number):boolean {
+  if(phase!=="recording")return false;
+  if(view.state==="confirmed")return true;
+  if(view.state==="failed"||view.state==="invalid"||view.problem)return true;
+  if(view.state==="pending")return recordingForMs>=1000;
+  return recordingForMs>=1000&&unavailableForMs>=1000;
+}

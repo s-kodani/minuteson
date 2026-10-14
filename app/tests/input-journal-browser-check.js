@@ -15,10 +15,17 @@ async page=>{
     await page.getByRole("button",{name:"新しい録音",exact:true}).click();await page.locator("#recording-title").waitFor();
     check(await calls("get_recording_input_history_status")===0,"unowned preparation polled journal result");
     await page.getByRole("button",{name:"録音を開始",exact:true}).click();const dialog=page.getByRole("dialog",{name:"選択した会議の録音を開始しますか？",exact:true});
+    await page.evaluate(()=>window.closeFixture.failJournal=true);
     await dialog.getByRole("button",{name:"録音を開始する",exact:true}).click();await dialog.waitFor({state:"hidden"});
+    await page.waitForTimeout(1200);
+    check(await diagnostic().count()===0&&await toast().count()===0,"helper preparation displayed an unavailable journal warning");
     await page.evaluate(()=>{const f=window.closeFixture;f.refreshInputStatus=true;f.queueState={lanes:{microphone:[],system:[]},closed:{},loss:{microphone:0,system:0}};f.inputStatus={schemaVersion:4,ownerId:f.recording.sessionId,revision:1,reportAgeMs:0,
       microphone:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},system:{state:"connected",sourceEpoch:1,interruptions:0,reason:null},notices:[],noticeLoss:f.queueState.loss};return f.recordChanged({phase:"recording"});});
+    await page.waitForTimeout(600);
+    check(await diagnostic().count()===0&&await toast().count()===0,"one startup read failure displayed a journal warning");
+    await page.evaluate(()=>window.closeFixture.failJournal=false);
     await state("confirmed");check(await diagnostic().count()===0&&await toast().count()===0,"confirmed journal created audio success/issue notice");
+    results.push("preparation and a short initial diagnostic read failure do not create a false recording warning");
     results.push("only an owned recording reads writer diagnostics; confirmation does not create an audio-success toast");
     await set("pending");await state("pending");await diagnostic().waitFor({state:'attached'});await toast().waitFor();
     check((await toast().innerText()).includes("音声の取得・保存結果とは別"),"pending journal implied audio failure/success");

@@ -56,12 +56,6 @@ fn request(snapshot: &Snapshot, action: Action) -> Request {
             })
             .or_else(|| {
                 snapshot
-                    .recovery_preview
-                    .as_ref()
-                    .map(|p| p.confirmation_id.clone())
-            })
-            .or_else(|| {
-                snapshot
                     .relocation_preview
                     .as_ref()
                     .map(|p| p.confirmation_id.clone())
@@ -148,7 +142,7 @@ fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operatio
         .finish(choosing.token.as_deref().unwrap(), done)
         .unwrap();
     assert_eq!(ready.phase, "ready");
-    for action in [Action::Keep, Action::Recover] {
+    for action in [Action::Keep, Action::ReviewRemaining] {
         assert!(controller.begin_request(request(&ready, action)).is_err());
     }
     let publish = request(&ready, Action::Publish);
@@ -163,12 +157,7 @@ fn relocation_controller_replays_terminal_cutover_and_rejects_every_new_operatio
     assert!(done.restart_required);
     assert!(done.relocation_receipt.is_some());
     assert!(controller.begin_request(publish).unwrap().is_none());
-    for kind in [
-        Kind::Backup,
-        Kind::Restore,
-        Kind::Recovery,
-        Kind::Relocation,
-    ] {
+    for kind in [Kind::Backup, Kind::Restore, Kind::Relocation] {
         assert!(controller.begin(kind).is_err());
     }
     assert!(!done.retry_allowed);
@@ -302,66 +291,6 @@ fn relocation_controller_refresh_loss_keeps_selection_and_cancelled_copy_require
         .is_none());
     assert!(controller
         .begin_request(request(&done, Action::Refresh))
-        .is_err());
-}
-
-#[test]
-#[cfg(unix)]
-fn recovery_controller_replays_kept_receipt_and_wrong_actions_cannot_cross_confirmation_kinds() {
-    let root = tempfile::tempdir().unwrap();
-    let storage = Storage::open(root.path().into()).unwrap();
-    let controller = DataController::default();
-    let listing = storage.recovery_listing().unwrap();
-    assert!(listing.items.is_empty());
-    let (snapshot, _, previous) = controller.begin(Kind::Recovery).unwrap();
-    let failed = finish_work(
-        &controller,
-        &snapshot,
-        &storage,
-        Work::Recovery(
-            recovery::Source::Scratch,
-            Uuid::new_v4().to_string(),
-            previous,
-        ),
-    );
-    assert_eq!(failed.phase, "failed");
-    assert!(!failed.busy);
-    // A valid backup selection cannot be turned into deletion/keep actions.
-    let output = tempfile::tempdir().unwrap();
-    let selected = select(
-        &controller,
-        Kind::Backup,
-        output.path().join("safe.monbackup"),
-        &storage,
-    );
-    for action in [Action::Keep, Action::Recover] {
-        assert!(controller
-            .begin_request(request(&selected, action))
-            .is_err());
-    }
-    let item = recovery::unresolved_for_controller_test(&storage);
-    let (snapshot, _, previous) = controller.begin(Kind::Recovery).unwrap();
-    let selected = finish_work(
-        &controller,
-        &snapshot,
-        &storage,
-        Work::Recovery(item.source, item.operation_id, previous),
-    );
-    assert!(controller
-        .begin_request(request(&selected, Action::Publish))
-        .is_err());
-    let keep = request(&selected, Action::Keep);
-    let (work, _, started) = controller.begin_request(keep.clone()).unwrap().unwrap();
-    assert!(controller.begin_request(keep.clone()).unwrap().is_none());
-    let done = finish_work(&controller, &started, &storage, work);
-    assert_eq!(done.phase, "completed");
-    assert_eq!(
-        done.recovery_receipt.as_ref().unwrap().outcome,
-        recovery::Outcome::Retained
-    );
-    assert!(controller.begin_request(keep).unwrap().is_none());
-    assert!(controller
-        .begin_request(request(&done, Action::Recover))
         .is_err());
 }
 

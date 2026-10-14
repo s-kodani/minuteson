@@ -55,9 +55,8 @@ export async function installPlainMinutesWindowFixture(page) {
           data.ui = { ...data.ui, payload:copy(args.payload), lockVersion:data.ui.lockVersion + 1 };
           return copy(data.ui);
         }
-        if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
+        if (cmd === "get_data_operation") return { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false };
         if (cmd === "get_data_operation_availability") return { available: true, reason: null };
-        if (cmd === "get_recovery_items") return { supported: true, root: "/mock", items: [] };
         if (cmd === "list_restored_meeting_ids") return [];
         if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName:null, saved: null, errorMessage: null };
         if (cmd === "get_analysis_flow") return null;

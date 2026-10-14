@@ -1,12 +1,12 @@
 import {invoke,isTauri} from "@tauri-apps/api/core";
-import {createContext,useContext,useEffect,useState,type ReactNode} from "react";
+import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from "react";
 import {useRecordingSession} from "./session";
 import {InputLevelClock} from "./input-level-state";
 import {RecordingInputSession,inputLabel,type InputKind,type VisibleInput,type InputNotice} from "./recording-input-state";
 import {RecordingInputQueue,type QueueAttempt,type NoticeReception} from "./recording-input-queue";
 import {ToastNotice,IssueNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
-import {InputJournalSession,journalMessage,type JournalView} from "./input-journal-state";
+import {InputJournalSession,journalMessage,journalNoticeReady,type JournalView} from "./input-journal-state";
 import "./recording-input-status.css";
 type View={owner:string|null;microphone:VisibleInput;system:VisibleInput;notices:InputNotice[];reception:Record<InputKind,NoticeReception>;loss:{microphone:number;system:number};journal:JournalView&{ready?:boolean};dismiss:(input:InputKind)=>void;rendered:(id:string,generation:number)=>void};
 const unknown=()=>({microphone:{state:"unknown"} as VisibleInput,system:{state:"unknown"} as VisibleInput,notices:[] as InputNotice[]});
@@ -14,6 +14,7 @@ const empty=()=>({owner:null,...unknown(),reception:{microphone:"none",system:"n
 const Context=createContext<View>(empty());
 export function RecordingInputProvider({children,windowLabel}:{children:ReactNode;windowLabel:"main"|"recorder"}){
   const recording=useRecordingSession(),owner=recording.kind==="ready"&&["preparing","recording"].includes(recording.snapshot.phase)?recording.snapshot.sessionId:null;
+  const phaseRef=useRef(recording.kind==="ready"?recording.snapshot.phase:"idle");phaseRef.current=recording.kind==="ready"?recording.snapshot.phase:"idle";
   const [view,setView]=useState<View>(empty());
   useEffect(()=>{
     let disposed=false,inFlight=false,failed=true;const session=new RecordingInputSession(),clock=new InputLevelClock(performance.now(),Date.now());
@@ -23,8 +24,14 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     const queue=new RecordingInputQueue(owner,crypto.randomUUID(),windowLabel);
     const journal=new InputJournalSession(owner);let journalInFlight=false;
     const now=()=>clock.read(performance.now(),Date.now());
-    const journalStarted=now();let journalReplied=false;
-    const journalView=(at:number)=>({...journal.read(at),ready:journalReplied||!Number.isFinite(at)||at-journalStarted>=1000});
+    let recordingSince:number|null=null,journalUnavailableSince:number|null=null;
+    const journalView=(at:number)=>{
+      const phase=phaseRef.current;
+      if(phase==="recording")recordingSince??=at;else recordingSince=null;
+      const state=journal.read(at);
+      if(state.state==="unknown"||state.state==="stale")journalUnavailableSince??=at;else journalUnavailableSince=null;
+      return {...state,ready:journalNoticeReady(state,phase,recordingSince===null?0:at-recordingSince,journalUnavailableSince===null?0:at-journalUnavailableSince)};
+    };
     const paint=()=>{
       if(disposed)return;const at=now(),raw=failed?unknown():session.read(at);
       // The mini panel presents telemetry only. Do not receive or acknowledge
@@ -44,7 +51,7 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     };
     const pollJournal=async()=>{if(disposed||journalInFlight)return;journalInFlight=true;const at=now();
       try{const value=await invoke("get_recording_input_history_status",{sessionId:owner});if(!disposed)journal.accept(value,at);}
-      catch{if(!disposed)journal.fail();}finally{journalInFlight=false;journalReplied=true;if(!disposed)paint();}
+      catch{if(!disposed)journal.fail();}finally{journalInFlight=false;if(!disposed)paint();}
     };
     void poll();void pollJournal();const painting=window.setInterval(paint,100),polling=window.setInterval(()=>{void poll();void pollJournal();},500);
     return()=>{disposed=true;window.clearInterval(painting);window.clearInterval(polling);};

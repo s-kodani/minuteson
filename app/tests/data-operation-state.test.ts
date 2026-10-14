@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "restore", phase: "ready", busy: false,
-  backupPreview: null, backupReceipt: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, errorMessage: null, retryAllowed: true,
+  backupPreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, errorMessage: null, retryAllowed: true,
   restorePreview: { confirmationId: id(2), batchId: id(3), archiveId: id(4), meetingTitles: ["会議"], deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, requiredBytes: 32, availableBytes: 64, vocabularyAdded: 1, vocabularyDeduplicated: 2, vocabularyConflicts: ["点検日"] } });
 
 test("data requests retain server-issued token and confirmation, never paths or batch substitutions", () => {
@@ -91,7 +91,7 @@ test("relocation uses only server confirmation, never source or target paths in 
   assert.deepEqual(dataRequest(relocation(), "publish"), { token: id(1), confirmationId: id(2), action: "publish" });
   assert.doesNotThrow(() => dataRequest(relocation(), "refresh"));
   assert.throws(() => dataRequest(relocation(), "keep"));
-  assert.throws(() => dataRequest(relocation(), "recover"));
+  assert.throws(() => dataRequest(relocation(), "delete_including_unregistered"));
 });
 test("relocation requires current confirmation and capacity, not a failed preview", () => {
   const s = relocation(); s.relocationPreview!.availableBytes = 0;

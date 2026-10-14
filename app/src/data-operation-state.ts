@@ -1,9 +1,6 @@
-import { assertRecoveryPreview, assertRecoveryReceipt, type RecoveryPreview, type RecoveryReceipt } from "./recovery-state.ts";
 import { assertDeletionPreview, assertDeletionReceipt, type DeletionPreview, type DeletionReceipt } from "./deletion-state.ts";
-import { assertModelBodyDeletionPreview, assertModelBodyDeletionReceipt, type ModelBodyDeletionPreview, type ModelBodyDeletionReceipt } from "./model-deletion-operation-state.ts";
 import { assertAudioDeletionPreview, assertAudioDeletionReceipt, type AudioDeletionPreview, type AudioDeletionReceipt } from "./audio-deletion-operation-state.ts";
-import { assertPartialRecordingPreview, assertPartialRecordingReceipt, canRecoverPartialRecording, type PartialRecordingPreview, type PartialRecordingReceipt } from "./partial-recording-state.ts";
-export type DataKind = "backup" | "restore" | "recovery" | "relocation" | "deletion" | "model_deletion" | "audio_deletion" | "partial_recording";
+export type DataKind = "backup" | "restore" | "relocation" | "deletion" | "audio_deletion";
 export interface MovePreview { confirmationId: string; operationId: string; source: string; destination: string; meetingCount: number; fileCount: number | null; requiredBytes: number; availableBytes: number; pending: boolean; resumeAllowed: boolean; resumeReason: string | null; copiedPaths: number | null; expectedPaths: number | null }
 export interface MoveReceipt { operationId: string; source: string; destination: string; restartRequired: boolean; retained: boolean }
 export interface BackupPreview { confirmationId: string; destination: string; replacesExisting: boolean }
@@ -26,15 +23,12 @@ export interface DataSnapshot {
   revision: number; token: string | null; kind: DataKind | null; phase: string; busy: boolean;
   backupPreview: BackupPreview | null; restorePreview: RestorePreview | null;
   backupReceipt: BackupReceipt | null; restoreReceipt: RestoreReceipt | null;
-  recoveryPreview: RecoveryPreview | null; recoveryReceipt: RecoveryReceipt | null;
   relocationPreview: MovePreview | null; relocationReceipt: MoveReceipt | null; restartRequired: boolean;
   deletionPreview?: DeletionPreview | null; deletionReceipt?: DeletionReceipt | null;
-  modelDeletionPreview?: ModelBodyDeletionPreview | null; modelDeletionReceipt?: ModelBodyDeletionReceipt | null;
   audioDeletionPreview?: AudioDeletionPreview | null; audioDeletionReceipt?: AudioDeletionReceipt | null;
-  partialRecordingPreview?: PartialRecordingPreview | null; partialRecordingReceipt?: PartialRecordingReceipt | null;
   errorMessage: string | null; attentionRequired: boolean; retryAllowed: boolean;
 }
-export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "recover" | "keep" | "delete_including_unregistered" | "review_remaining" }
+export interface DataRequest { token: string; confirmationId: string; action: "refresh" | "publish" | "keep" | "delete_including_unregistered" | "review_remaining" }
 export interface DataAvailability { available: boolean; reason: string | null }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -42,13 +36,12 @@ const integer = (n: unknown): n is number => Number.isSafeInteger(n) && (n as nu
 const texts = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 65536 && values.every(v => typeof v === "string" && !v.includes("\0"));
 export function assertDataSnapshot(s: DataSnapshot): void {
   const fail = () => { throw Error("バックアップ／復元の状態が不正です。状態を再確認してください。"); };
-  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database", "verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed", "verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed"].includes(s.phase)
+  if (!s || !integer(s.revision) || !["idle", "choosing", "verifying", "reading", "reconstructing", "publishing", "copying", "handoff", "switching", "ready", "completed", "failed", "cancelling", "cancelled", "discarding", "attention", "verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database", "verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed"].includes(s.phase)
     || typeof s.busy !== "boolean" || typeof s.attentionRequired !== "boolean" || typeof s.retryAllowed !== "boolean"
     || typeof s.restartRequired !== "boolean"
-    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "recovery", "relocation", "deletion", "model_deletion", "audio_deletion", "partial_recording"].includes(s.kind)
+    || (s.token !== null && (typeof s.token !== "string" || !uuid.test(s.token))) || ![null, "backup", "restore", "relocation", "deletion", "audio_deletion"].includes(s.kind)
     || (s.errorMessage !== null && typeof s.errorMessage !== "string")) fail();
   if (["verifying_delete_scope", "fixing_delete_scope", "delete_scope_fixed", "deleting_files", "deleting_database"].includes(s.phase) && (s.kind !== "deletion" || !s.busy)) fail();
-  if (["verifying_model_delete_scope", "fixing_model_delete_scope", "model_delete_scope_fixed", "deleting_model_files", "model_delete_completed"].includes(s.phase) && (s.kind !== "model_deletion" || !s.busy)) fail();
   if (["verifying_audio_delete_scope", "fixing_audio_delete_scope", "audio_delete_scope_fixed", "deleting_audio_files", "fixing_audio_unavailable", "audio_delete_completed"].includes(s.phase) && (s.kind !== "audio_deletion" || !s.busy)) fail();
   if (s.backupPreview !== null) {
     const p = s.backupPreview;
@@ -77,11 +70,6 @@ export function assertDataSnapshot(s: DataSnapshot): void {
       || (s.restorePreview && (r.batchId !== s.restorePreview.batchId || r.archiveId !== s.restorePreview.archiveId
         || r.deletedAudioMeetingCount !== s.restorePreview.deletedAudioMeetingCount || r.deletedAudioAssetCount !== s.restorePreview.deletedAudioAssetCount))) fail();
   }
-  if (s.recoveryPreview !== null) { assertRecoveryPreview(s.recoveryPreview); if (s.kind !== "recovery") fail(); }
-  if (s.recoveryReceipt !== null) {
-    assertRecoveryReceipt(s.recoveryReceipt);
-    if (s.kind !== "recovery" || (s.recoveryPreview && (s.recoveryReceipt.operationId !== s.recoveryPreview.item.operationId || s.recoveryReceipt.source !== s.recoveryPreview.item.source))) fail();
-  }
   const path = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && p.length <= 4096 && !p.includes("\0");
   if (s.relocationPreview !== null) {
     const p = s.relocationPreview;
@@ -106,26 +94,16 @@ export function assertDataSnapshot(s: DataSnapshot): void {
     assertDeletionReceipt(s.deletionReceipt, s.deletionPreview);
     if (s.kind !== "deletion" || s.restartRequired !== s.deletionReceipt.restartRequired) fail();
   }
-  if (s.modelDeletionPreview != null) { assertModelBodyDeletionPreview(s.modelDeletionPreview); if (s.kind !== "model_deletion") fail(); }
-  if (s.modelDeletionReceipt != null) {
-    assertModelBodyDeletionReceipt(s.modelDeletionReceipt, s.modelDeletionPreview);
-    if (s.kind !== "model_deletion" || s.restartRequired !== s.modelDeletionReceipt.restartRequired) fail();
-  }
   if (s.audioDeletionPreview != null) { assertAudioDeletionPreview(s.audioDeletionPreview); if (s.kind !== "audio_deletion") fail(); }
   if (s.audioDeletionReceipt != null) {
     assertAudioDeletionReceipt(s.audioDeletionReceipt, s.audioDeletionPreview);
     if (s.kind !== "audio_deletion" || s.restartRequired !== s.audioDeletionReceipt.restartRequired) fail();
   }
-  const pendingDeletion = (s.kind === "deletion" && !!s.deletionPreview?.pending) || (s.kind === "model_deletion" && !!s.modelDeletionPreview?.pending) || (s.kind === "audio_deletion" && !!s.audioDeletionPreview?.pending);
-  if (s.partialRecordingPreview != null) { assertPartialRecordingPreview(s.partialRecordingPreview); if (s.kind !== "partial_recording") fail(); }
-  if (s.partialRecordingReceipt != null) {
-    assertPartialRecordingReceipt(s.partialRecordingReceipt, s.partialRecordingPreview);
-    if (s.kind !== "partial_recording" || s.restartRequired) fail();
-  }
-  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.recoveryReceipt || s.relocationReceipt || s.deletionReceipt || s.modelDeletionReceipt || s.audioDeletionReceipt || s.partialRecordingReceipt);
+  const pendingDeletion = (s.kind === "deletion" && !!s.deletionPreview?.pending) || (s.kind === "audio_deletion" && !!s.audioDeletionPreview?.pending);
+  const hasResult = !!(s.backupReceipt || s.restoreReceipt || s.relocationReceipt || s.deletionReceipt || s.audioDeletionReceipt);
   if ((s.phase === "completed") !== hasResult || (hasResult && (s.busy || s.attentionRequired || s.retryAllowed))
-    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.recoveryPreview || s.relocationPreview || s.deletionPreview || s.modelDeletionPreview || s.audioDeletionPreview || s.partialRecordingPreview)))
-    || (s.restartRequired && !pendingDeletion && (s.busy || s.retryAllowed || !["relocation", "deletion", "model_deletion", "audio_deletion"].includes(s.kind!) || (!s.relocationReceipt && !s.deletionReceipt && !s.modelDeletionReceipt && !s.audioDeletionReceipt && !s.attentionRequired)))
+    || (s.phase === "ready" && (s.busy || !s.retryAllowed || !(s.backupPreview || s.restorePreview || s.relocationPreview || s.deletionPreview || s.audioDeletionPreview)))
+    || (s.restartRequired && !pendingDeletion && (s.busy || s.retryAllowed || !["relocation", "deletion", "audio_deletion"].includes(s.kind!) || (!s.relocationReceipt && !s.deletionReceipt && !s.audioDeletionReceipt && !s.attentionRequired)))
     || ((s.busy || s.retryAllowed || hasResult || s.attentionRequired) && (!s.token || !s.kind))) fail();
 }
 export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnapshot): DataSnapshot {
@@ -139,34 +117,15 @@ export function acceptDataSnapshot(current: DataSnapshot | null, next: DataSnaps
 }
 export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): DataRequest {
   assertDataSnapshot(s);
-  if (s.kind === "partial_recording") {
-    const p = s.partialRecordingPreview;
-    if (!s.token || !p || s.busy || s.partialRecordingReceipt || s.restartRequired ||
-        !["refresh", "recover", "keep"].includes(action) ||
-        action !== "refresh" && (s.phase !== "ready" || !s.retryAllowed || s.attentionRequired) ||
-        action === "recover" && !canRecoverPartialRecording(p.summary)) throw Error("部分救出の対象と同意を再確認してください。");
-    return { token: s.token, confirmationId: p.confirmationId, action };
-  }
   if (s.kind === "audio_deletion") {
     const p = s.audioDeletionPreview;
     if (!s.token || !p || s.busy || s.audioDeletionReceipt || (s.restartRequired && !p.pending)) throw Error("音声削除の現在の状態を再確認してください。");
     const resolution = action === "refresh" || (action === "keep" && p.keepAllowed) || (action === "review_remaining" && p.reconfirmationAllowed);
     if ((s.attentionRequired || !s.retryAllowed) && !resolution) throw Error("音声削除の残りを再検査してください。");
     const newScope = ["review", "reconfirmation"].includes(p.phase);
-    if (action === "recover" || (action === "keep" && !p.keepAllowed) || (action === "review_remaining" && !p.reconfirmationAllowed)
+    if ((action === "keep" && !p.keepAllowed) || (action === "review_remaining" && !p.reconfirmationAllowed)
       || (action === "delete_including_unregistered" && (!newScope || !p.unregisteredAudioFiles))
       || (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed || (action === "publish" && newScope && p.unregisteredAudioFiles > 0)))) throw Error("音声削除の対象と同意を再確認してください。");
-    return { token: s.token, confirmationId: p.confirmationId, action };
-  }
-  if (s.kind === "model_deletion") {
-    const p = s.modelDeletionPreview;
-    if (!s.token || !p || s.busy || s.modelDeletionReceipt || (s.restartRequired && !p.pending)) throw Error("モデル削除の現在の状態を再確認してください。");
-    const resolution = action === "refresh" || (action === "keep" && p.keepAllowed) || (action === "review_remaining" && p.reconfirmationAllowed);
-    if ((s.attentionRequired || !s.retryAllowed) && !resolution) throw Error("モデル削除の残りを再検査してください。");
-    const newScope = ["review", "reconfirmation"].includes(p.phase);
-    if (action === "recover" || (action === "keep" && !p.keepAllowed) || (action === "review_remaining" && !p.reconfirmationAllowed)
-      || (action === "delete_including_unregistered" && (!newScope || !p.unregisteredCount))
-      || (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed || (action === "publish" && newScope && p.unregisteredCount > 0)))) throw Error("モデル削除の対象と同意を再確認してください。");
     return { token: s.token, confirmationId: p.confirmationId, action };
   }
   if (s.kind === "deletion") {
@@ -177,17 +136,16 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
     if (!s.retryAllowed && !resolution) throw Error("削除確認が失効しています。");
     if (action === "keep" && !p.keepAllowed) throw Error("開始済み削除を保持・中止して復元することはできません。");
     if (action === "review_remaining" && !p.reconfirmationAllowed) throw Error("この段階では残り範囲への再同意はできません。");
-    if (action === "recover" || (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase)))) throw Error("確認した対象と削除の判断が一致しません。");
+    if (action === "delete_including_unregistered" && (!p.unregisteredCount || !["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase))) throw Error("確認した対象と削除の判断が一致しません。");
     if (["publish", "delete_including_unregistered"].includes(action) && (s.phase !== "ready" || !p.executeAllowed
       || (action === "publish" && p.unregisteredCount > 0 && ["review", "not_started", "reconfirmation", "database_reconfirmation"].includes(p.phase)))) throw Error("対象と未登録物の判断を再確認してください。");
     return { token: s.token, confirmationId: p.confirmationId, action };
   }
   if (["delete_including_unregistered", "review_remaining"].includes(action)) throw Error("削除以外の操作には使用できません。");
-  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.recoveryPreview?.confirmationId ?? s.relocationPreview?.confirmationId;
-  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "recovery" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
+  const id = s.backupPreview?.confirmationId ?? s.restorePreview?.confirmationId ?? s.relocationPreview?.confirmationId;
+  if (!s.token || !id || s.busy || !s.retryAllowed || s.attentionRequired || s.restartRequired || (action === "refresh" && s.kind !== "restore" && s.kind !== "relocation")) throw Error("確認済みの操作を再確認してください。");
   const keepingMove = action === "keep" && s.kind === "relocation" && s.relocationPreview?.pending;
-  if (!keepingMove && (s.kind === "recovery") !== ["recover", "keep"].includes(action) && action !== "refresh") throw Error("対象と実行する操作が一致しません。");
-  if (["recover", "keep"].includes(action) && (s.phase !== "ready" || (!keepingMove && (s.kind !== "recovery" || !s.recoveryPreview)))) throw Error("最新の確認内容を再確認してください。");
+  if (action === "keep" && (!keepingMove || s.phase !== "ready")) throw Error("最新の確認内容を再確認してください。");
   if (action === "publish" && s.kind === "restore" && (s.phase !== "ready" || !s.restorePreview || s.restorePreview.availableBytes < s.restorePreview.requiredBytes)) throw Error("復元内容と容量を再確認してください。");
   if (action === "publish" && s.kind === "relocation" && (s.phase !== "ready" || !s.relocationPreview?.resumeAllowed || s.relocationPreview.availableBytes < s.relocationPreview.requiredBytes)) throw Error("保存先と容量を再確認してください。");
   return { token: s.token, confirmationId: id, action };

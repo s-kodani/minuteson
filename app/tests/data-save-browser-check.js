@@ -47,7 +47,7 @@ async (page) => {
   const deletedWarning = region().getByRole("alert").filter({ hasText: "音声削除済みの会議" });
   await deletedWarning.waitFor();
   const deletedText = await deletedWarning.innerText();
-  check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("本文・根拠の履歴") && deletedText.includes("音声本体は含みません") && deletedText.includes("削除済み音声の再生・再解析はできません"), "deleted-source counts or restore limitation missing");
+  check(deletedText.includes("会議 1 件") && deletedText.includes("音声資産 4 件") && deletedText.includes("保存済み文書と音声の欠落情報") && deletedText.includes("音声本体は含みません") && deletedText.includes("削除済み音声の再生・再解析はできません"), "deleted-source counts or restore limitation missing");
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await deletedWarning.scrollIntoViewIfNeeded();
@@ -59,14 +59,14 @@ async (page) => {
   const historyWarning = page.getByRole("dialog").getByRole("alert").filter({ hasText: "音声削除済みの会議" });
   await historyWarning.waitFor();
   const historyText = await historyWarning.innerText();
-  check(historyText.includes("会議 1 件") && historyText.includes("音声資産 4 件") && historyText.includes("本文・根拠・下書き") && historyText.includes("再生・再解析はできません"), "history-only restore confirmation missing");
+  check(historyText.includes("会議 1 件") && historyText.includes("音声資産 4 件") && historyText.includes("保存済み文書と音声の欠落情報") && historyText.includes("再生・再解析はできません"), "history-only restore confirmation missing");
   check((await calls("start_data_operation")).length === 0, "history-only preview published before confirmation");
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.screenshot({ path: `output/playwright/deleted-audio-restore-confirm-${width}.png` });
   }
   await set({ mode: "lost", suppressEvents: true }); await confirm(); await done();
-  const restoredWarning = region().getByRole("alert").filter({ hasText: "履歴のみ復元しました" });
+  const restoredWarning = region().getByRole("alert").filter({ hasText: "保存済み文書と音声の欠落情報を復元しました" });
   await restoredWarning.waitFor();
   check((await restoredWarning.innerText()).includes("音声資産 4 件"), "published history-only receipt lost counts");
   check((await calls("start_data_operation")).length === 1 && await page.evaluate(() => window.dataFixture.published) === 1, "history-only restore duplicated on lost reply");

@@ -32,7 +32,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const listing = operation.audioDeletionListing, protectedNow = rpcBusy || unknown;
   const sharedAvailable = !!operation.availability?.available || (!!listing?.restartRequired && operation.availability?.reason === "保存先の切替後は終了して再起動が必要です");
   const canReviewPending = isTauri() && operation.audioDeletionSupported && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
-  const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending && !s?.modelDeletionPreview?.pending;
+  const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const understood = !!preview && understoodId === preview.confirmationId, includeUnknown = !!preview && includeUnknownId === preview.confirmationId;
   const run = async (action: () => Promise<void>) => {
@@ -43,7 +43,7 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   };
   const protect = async (action: () => Promise<void>) => {
     const op = latest.current.operation, now = op.getSnapshot();
-    if (op.audioDeletionListing?.writeBlocked || op.deletionListing?.writeBlocked || op.modelDeletionListing?.writeBlocked || now?.audioDeletionPreview?.pending || now?.deletionPreview?.pending || now?.modelDeletionPreview?.pending) await run(action);
+    if (op.audioDeletionListing?.writeBlocked || op.deletionListing?.writeBlocked || op.modelDeletionListing?.writeBlocked || now?.audioDeletionPreview?.pending || now?.deletionPreview?.pending) await run(action);
     else await latest.current.withSavedEdits(async () => run(action));
   };
   const loadPage = async (offset = 0) => {

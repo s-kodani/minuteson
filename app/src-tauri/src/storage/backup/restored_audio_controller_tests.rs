@@ -38,7 +38,6 @@ fn restored_audio_controller_readonly_baseline_has_no_consent_and_requires_new_o
         Action::Publish,
         Action::DeleteIncludingUnregistered,
         Action::Keep,
-        Action::Recover,
     ] {
         assert!(c.denied(&s, action));
     }

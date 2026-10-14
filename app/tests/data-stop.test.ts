@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { waitForDataStop } from "../src/data-stop.ts";
 import type { DataSnapshot } from "../src/data-operation-state.ts";
 const token = "11111111-1111-4111-8111-111111111111";
-const snapshot = (busy: boolean): DataSnapshot => ({ revision: 1, token, kind: "backup", phase: busy ? "cancelling" : "cancelled", busy, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, recoveryPreview: null, recoveryReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, retryAllowed: false, errorMessage: null });
+const snapshot = (busy: boolean): DataSnapshot => ({ revision: 1, token, kind: "backup", phase: busy ? "cancelling" : "cancelled", busy, backupPreview: null, backupReceipt: null, restorePreview: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, retryAllowed: false, errorMessage: null });
 test("data stop observes same token until actual terminal state", async () => {
   let reads = 0, waits = 0;
   const result = await waitForDataStop(token, "backup", async () => { reads++; return snapshot(reads < 3); }, async () => { waits++; });

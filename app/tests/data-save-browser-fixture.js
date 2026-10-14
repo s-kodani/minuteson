@@ -11,7 +11,6 @@ const f = window.dataFixture = {
   book: { id: "global", payload: [], lockVersion: 0 },
   meetings: [{ id: crypto.randomUUID(), title: "既存会議", lifecycle: "draft", createdAt: 1791160000000, updatedAt: 1791160000000, lockVersion: 0 }],
   restored: [], published: 0, lastRequest: null, pendingMove: null, keptMoves: [], resumeAllowed: true, reviewLost: false, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0,
-  recoveryItems: [], recoveryMode: "success", recoveryReadFail: false, recoverySelectLost: false, recoveryUnsupported: false,
   changed: async patch => { f.snapshot = { ...f.snapshot, ...patch, revision: f.snapshot.revision + 1 }; if (!f.suppressEvents) await emit("data-operation-changed", structuredClone(f.snapshot)); },
 };
 const profile = { executablePath: "", modelPath: "", threads: 4, useGpu: false };
@@ -57,17 +56,7 @@ export const dataSaveIPC = async (command, args) => {
     return structuredClone(f.snapshot);
   }
   if (command === "list_restored_meeting_ids") return [...f.restored];
-  if (command === "get_recovery_items") { if (f.recoveryReadFail) throw Error("模擬回収一覧失敗"); return { supported: !f.recoveryUnsupported, root: "/safe/root", items: structuredClone(f.recoveryItems) }; }
-  if (command === "review_recovery_item") {
-    if (f.blocker || f.snapshot.busy) throw Error("処理の停止を待ってください");
-    const item = f.recoveryItems.find(i => i.source === args.source && i.operationId === args.operationId);
-    if (!item || item.retained) throw Error("対象は確認済みまたは不明です");
-    f.lastRequest = null;
-    await f.changed({ ...idle, revision: f.snapshot.revision, token: crypto.randomUUID(), kind: "recovery", phase: "verifying", busy: true });
-    setTimeout(() => void f.changed({ phase: "ready", busy: false, retryAllowed: true, recoveryPreview: { confirmationId: crypto.randomUUID(), item: structuredClone(item), root: "/safe/root", observedPaths: 4, inspectionComplete: true } }), 50);
-    if (f.recoverySelectLost) throw Error("模擬回収選択の応答喪失");
-    return structuredClone(f.snapshot);
-  }
+  if (command === "get_model_deletion_items") return { items: [], writeBlocked: false, restartRequired: false, reason: null };
   if (command === "select_data_operation") {
     if (f.blocker || f.snapshot.busy) throw Error("処理の停止・完了を待ってください");
     const token = crypto.randomUUID(), confirmationId = crypto.randomUUID();
@@ -93,7 +82,7 @@ export const dataSaveIPC = async (command, args) => {
     const r = args.request;
     if (f.mode === "lostNoCommit") throw Error("模擬受付応答喪失・未受付");
     if (JSON.stringify(r) === JSON.stringify(f.lastRequest) && (f.snapshot.busy || ["completed", "attention"].includes(f.snapshot.phase) || (r.action === "refresh" && f.snapshot.phase === "ready"))) return structuredClone(f.snapshot);
-    const p = f.snapshot.backupPreview || f.snapshot.restorePreview || f.snapshot.recoveryPreview || f.snapshot.relocationPreview;
+    const p = f.snapshot.backupPreview || f.snapshot.restorePreview || f.snapshot.relocationPreview;
     if (r.token !== f.snapshot.token || r.confirmationId !== p?.confirmationId || f.snapshot.busy) throw Error("確認が変更されています");
     f.lastRequest = structuredClone(r);
     if (f.snapshot.kind === "relocation") {
@@ -117,24 +106,6 @@ export const dataSaveIPC = async (command, args) => {
       };
       if (["delay", "cancelRace", "lostDelay"].includes(f.mode)) f.complete = finish; else setTimeout(() => void finish(), 50);
       if (["lost", "lostDelay"].includes(f.mode)) throw Error("模擬保存先切替の応答喪失");
-      return structuredClone(f.snapshot);
-    }
-    if (f.snapshot.kind === "recovery") {
-      if (r.action === "refresh") { await f.changed({ phase: "ready", retryAllowed: true, errorMessage: null, recoveryPreview: { ...p, confirmationId: crypto.randomUUID() } }); if (f.recoveryMode === "stale") f.recoveryMode = "success"; return structuredClone(f.snapshot); }
-      if (f.recoveryMode === "lostNoCommit") throw Error("模擬回収受付喪失・未受付");
-      if (f.recoveryMode === "stale") { await f.changed({ phase: "failed", retryAllowed: true, errorMessage: "確認後に対象が変更されています。最新の内容を再確認してください" }); return structuredClone(f.snapshot); }
-      if (f.recoveryMode === "forged") return { ...structuredClone(f.snapshot), phase: "completed", retryAllowed: false, revision: f.snapshot.revision + 1, recoveryReceipt: { source: p.item.source, operationId: crypto.randomUUID(), outcome: "retained", reason: null } };
-      await f.changed({ phase: "publishing", busy: true, retryAllowed: false });
-      const finish = async () => {
-        if (f.snapshot.phase === "cancelling" && f.recoveryMode !== "cancelRace") return f.changed({ phase: "cancelled", busy: false, retryAllowed: true });
-        const outcome = r.action === "keep" ? "retained" : f.recoveryMode === "attention" ? "attention" : "recovered";
-        const index = f.recoveryItems.findIndex(i => i.source === p.item.source && i.operationId === p.item.operationId);
-        if (outcome === "retained") f.recoveryItems[index].retained = true;
-        if (outcome === "recovered") f.recoveryItems.splice(index, 1);
-        await f.changed({ phase: "completed", busy: false, recoveryReceipt: { source: p.item.source, operationId: p.item.operationId, outcome, reason: outcome === "attention" ? "所有不明の対象を保持します" : null } });
-      };
-      if (["delay", "cancelRace"].includes(f.recoveryMode)) f.complete = finish; else setTimeout(() => void finish(), 50);
-      if (f.recoveryMode === "lost") throw Error("模擬保持確認の応答喪失");
       return structuredClone(f.snapshot);
     }
     if (r.action === "refresh") {
@@ -163,7 +134,7 @@ export const dataSaveIPC = async (command, args) => {
     if (f.failCancel) throw Error("模擬停止要求失敗");
     if (args.token !== f.snapshot.token) throw Error("取消対象が変更されています");
     if (f.snapshot.busy) await f.changed({ phase: "cancelling" });
-    else if (!f.snapshot.backupReceipt && !f.snapshot.restoreReceipt && !f.snapshot.recoveryReceipt && !f.snapshot.relocationReceipt && !f.snapshot.attentionRequired) await f.changed({ phase: "cancelled", retryAllowed: false, backupPreview: null, restorePreview: null, recoveryPreview: null, relocationPreview: null });
+    else if (!f.snapshot.backupReceipt && !f.snapshot.restoreReceipt && !f.snapshot.relocationReceipt && !f.snapshot.attentionRequired) await f.changed({ phase: "cancelled", retryAllowed: false, backupPreview: null, restorePreview: null, relocationPreview: null });
     if (f.cancelLost) throw Error("模擬停止要求の応答喪失");
     return structuredClone(f.snapshot);
   }
