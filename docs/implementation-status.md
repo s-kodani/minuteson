@@ -3,6 +3,10 @@
 - 更新日: 2026-10-14
 - 基準: `docs/development-plan.md`
 
+## 2026年10月14日 音声ドロップの画面回帰
+
+合成 `tauri://drag-drop` から通常の音声選択・確認画面へ進み、確認前に保存せず、明示破棄で同じ選択を取り消す回帰を追加した。Chrome・WebKit各12件、フロント単体864件と型検査・ビルドが成功。Finderからの実機ドラッグは操作ツールで完了できず未検証のまま、合成WAVの手動確認を依頼中。録音・追加取得・CIは行っていない。[検証範囲と工程時間](verification/audio-import-drop-regression-2026-10-14.md)。
+
 ## 2026年10月14日 Mac実録音前の合成ゲート
 
 同じ専用Mac QAの現行設定画面からWhisper base・small、話者分離の標準・int8を初回HTTPS取得・CPU確認・使用設定まで進めた。全5導入済みモデルのファイルSHAが固定manifestと一致し、冷起動後もsmall/int8の使用設定を保持した。今回の取得対象765,868,380bytesを加えた保守的累計は8,214,203,256bytesで、承認8GiB枠内。Qwen Q4/Q8とWhisper mediumの初回HTTPS取得は残枠では行わない。通常QA・実会議・録音・OS権限・CIは変更していない。[追加の実機導入記録](verification/current-simple-model-download-variants-2026-10-14.md)。

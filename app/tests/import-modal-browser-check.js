@@ -10,6 +10,19 @@ async (page) => {
   const boot = async () => { await page.reload(); await trigger().waitFor(); };
   const open = async () => { await trigger().click(); await modal().waitFor(); await page.waitForFunction(() => window.monImportFixture.import.phase === "ready"); await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).waitFor(); await page.waitForFunction(() => !document.querySelector('dialog[open] [aria-label="確認をキャンセル"]')?.disabled && document.querySelector('dialog[open] input')?.value === "会議"); };
   const closed = async () => { await modal().waitFor({ state: "hidden" }); await page.waitForFunction(() => document.activeElement?.textContent === "音声を取り込む"); };
+  await boot();
+  const droppedPath = "/private/tmp/qa-synthetic-dropped-meeting.wav";
+  await page.evaluate(path => window.monImportFixture.drop([path]), droppedPath);
+  await modal().waitFor();
+  await page.waitForFunction(() => window.monImportFixture.import.phase === "ready");
+  check(await page.evaluate(path => window.monImportFixture.calls.filter(call => call.command === "select_audio_import" && call.args.path === path).length === 1, droppedPath), "file drop did not select exactly the dropped audio path");
+  check(await count("start_audio_import") === 0 && await modal().getByRole("textbox", { name: "会議名", exact: true }).inputValue() === "会議", "file drop bypassed confirmation or lost the suggested title");
+  await page.keyboard.press("Escape");
+  await discard().getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click();
+  await modal().waitFor({ state: "hidden" });
+  check(await count("cancel_audio_import") === 1, "file drop dismissal did not cancel the selected import");
+  results.push("one dropped audio path opens the normal confirmation without starting import; dismissal cancels the same selection");
+
   await boot(); await open();
   check(await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "ready import stayed on container or focused a hidden sibling's cancellation");
   results.push("busy initial import exposes only its visible cancellation after readiness, not retained hidden sibling controls");
