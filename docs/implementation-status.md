@@ -5,6 +5,8 @@
 
 ## 2026年10月14日 Mac実録音前の合成ゲート
 
+同じ専用Mac QAの現行設定画面からWhisper base・small、話者分離の標準・int8を初回HTTPS取得・CPU確認・使用設定まで進めた。全5導入済みモデルのファイルSHAが固定manifestと一致し、冷起動後もsmall/int8の使用設定を保持した。今回の取得対象765,868,380bytesを加えた保守的累計は8,214,203,256bytesで、承認8GiB枠内。Qwen Q4/Q8とWhisper mediumの初回HTTPS取得は残枠では行わない。通常QA・実会議・録音・OS権限・CIは変更していない。[追加の実機導入記録](verification/current-simple-model-download-variants-2026-10-14.md)。
+
 現行の簡素化設定画面から、保存先を分けた新規Mac専用QAでWhisper tinyを選択・公式HTTPSから初回取得・管理配置・CPU確認・使用設定まで行った。正常終了と冷起動後も「使用中」を保持し、本体のサイズ・SHAを取得記録と管理配置先で照合した。追加のHTTPS対象は77,695,972bytes、既知の完了取得累計に重複分も加えて約6.94GiBで承認8GiB内。通常QA・録音・権限は変更していない。他7候補の画面からの初回取得や配布・品質の合格とはしない。[実機記録・工程時間](verification/current-simple-model-download-2026-10-14.md)。
 
 テスト期待値の修正を含む現行ソース `3fead15` で、待受け可能な環境のローカル `make check` が単一実行で終了0、経過16分08.18秒。Rust通常全体・doc test、Swift／フロント／Python、録音と話者分離の全専用連携ゲートを通過した。正式評価不足の警告7件は残し、実録音・CIは未実施。[全体結果と境界](verification/local-full-check-green-2026-10-14.md)。
