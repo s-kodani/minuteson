@@ -22,6 +22,10 @@ fn wants_panel(
         && !confirming
 }
 
+fn confirmation_hides_panel(visible: bool, origin: Option<&str>) -> bool {
+    visible && origin != Some("recorder")
+}
+
 fn main_focused(app: &AppHandle) -> bool {
     // A failed focus read must never make an always-on-top window appear.
     app.get_webview_window("main")
@@ -73,8 +77,12 @@ pub(crate) fn synchronize(app: &AppHandle, focused: Option<bool>) -> Result<(), 
     let panel = app
         .get_webview_window("recorder")
         .ok_or("録音パネルがありません")?;
-    let confirming = app.state::<StopDecisionStore>().snapshot().visible();
-    if !wants_panel(&snapshot, focused, dismissed, confirming) {
+    let decision = app.state::<StopDecisionStore>().snapshot();
+    // Keep the panel behind a stop popup opened from its own stop button.
+    // It still closes as soon as the recording enters stopping/saving.
+    let confirming_elsewhere =
+        confirmation_hides_panel(decision.visible(), decision.origin.as_deref());
+    if !wants_panel(&snapshot, focused, dismissed, confirming_elsewhere) {
         // If visibility cannot be read, still attempt to close: a stopped
         // recording must not leave an always-on-top panel behind.
         if panel.is_visible().unwrap_or(true) {
@@ -99,6 +107,9 @@ mod tests {
         assert!(!wants_panel(&snapshot, true, false, false));
         assert!(!wants_panel(&snapshot, false, true, false));
         assert!(!wants_panel(&snapshot, false, false, true));
+        assert!(!confirmation_hides_panel(true, Some("recorder")));
+        assert!(confirmation_hides_panel(true, Some("main")));
+        assert!(!confirmation_hides_panel(false, Some("main")));
         for phase in [
             RecordingPhase::Preparing,
             RecordingPhase::Stopping,

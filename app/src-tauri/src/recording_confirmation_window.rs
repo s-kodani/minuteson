@@ -1,12 +1,55 @@
 use crate::recorder::RecorderController;
 use crate::recording_confirmation::{
-    centered_position, fitted_size, DecisionPhase, StopDecision, StopDecisionStore,
+    fitted_size, popup_position, DecisionPhase, StopDecision, StopDecisionStore,
 };
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::Storage;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 pub const LABEL: &str = "recording-confirmation";
+#[derive(serde::Deserialize)]
+pub struct PopupAnchor {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn physical_anchor(
+    window: &WebviewWindow,
+    anchor: Option<PopupAnchor>,
+    scale: f64,
+) -> Option<(i32, i32, u32, u32)> {
+    let anchor = anchor?;
+    if anchor.x < 0
+        || anchor.y < 0
+        || anchor.width == 0
+        || anchor.height == 0
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return None;
+    }
+    let size = window.inner_size().ok()?;
+    let position = window.inner_position().ok()?;
+    let x = u32::try_from((f64::from(anchor.x) * scale).round() as u64).ok()?;
+    let y = u32::try_from((f64::from(anchor.y) * scale).round() as u64).ok()?;
+    let width = u32::try_from((f64::from(anchor.width) * scale).round() as u64).ok()?;
+    let height = u32::try_from((f64::from(anchor.height) * scale).round() as u64).ok()?;
+    if u64::from(x) + u64::from(width) > u64::from(size.width) + 2
+        || u64::from(y) + u64::from(height) > u64::from(size.height) + 2
+    {
+        return None;
+    }
+    Some((
+        (i64::from(position.x) + i64::from(x)).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+            as i32,
+        (i64::from(position.y) + i64::from(y)).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+            as i32,
+        width,
+        height,
+    ))
+}
 fn emit(app: &AppHandle, value: &StopDecision) {
     let _ = app.emit("recording-confirmation-changed", value);
 }
@@ -16,18 +59,13 @@ fn restore(app: &AppHandle, value: &StopDecision, cancelled: bool) {
     let _ = app.run_on_main_thread(move || restore_current(&handle, &expected, cancelled));
 }
 fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
-    // A delayed completion must not hide or unlock the next decision.
+    // A delayed completion must not hide the next decision.
     let current = app.state::<StopDecisionStore>().snapshot();
     if current.id != value.id || current.phase != value.phase {
         return;
     }
     if let Some(window) = app.get_webview_window(LABEL) {
         let _ = window.hide();
-    }
-    for label in ["main", "recorder"] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window.set_enabled(true);
-        }
     }
     // Completion never brings the main window to the foreground.
     if cancelled {
@@ -36,8 +74,8 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
             .as_deref()
             .and_then(|label| app.get_webview_window(label))
         {
-            // Confirmation hides the mini panel. Restore it only if recording
-            // is still active and the user has not explicitly dismissed it.
+            // Restore the initiating window's focus only while recording is
+            // still active and the panel was not explicitly dismissed.
             if window.label() != "recorder" || crate::recorder_panel::may_present(app) {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -90,6 +128,7 @@ pub fn get_recording_confirmation(window: WebviewWindow) -> Result<StopDecision,
 pub fn request_recording_confirmation(
     window: WebviewWindow,
     quit: Option<bool>,
+    anchor: Option<PopupAnchor>,
 ) -> Result<StopDecision, String> {
     if !matches!(window.label(), "main" | "recorder") {
         return Err("録音画面から確認してください".into());
@@ -114,7 +153,7 @@ pub fn request_recording_confirmation(
     let present = || -> Result<(), String> {
         // Read-only help cannot cover a confirmation or steal its focus back.
         crate::recorder_info::hide(app, false)?;
-        let modal = app
+        let popup = app
             .get_webview_window(LABEL)
             .ok_or("録音確認ウィンドウがありません")?;
         if created {
@@ -125,26 +164,29 @@ pub fn request_recording_confirmation(
             let area = monitor.work_area();
             let (width, height) =
                 fitted_size((area.size.width, area.size.height), monitor.scale_factor())?;
-            let (x, y) = centered_position(
+            let source = window.outer_position().map_err(|e| e.to_string())?;
+            let source_size = window.outer_size().map_err(|e| e.to_string())?;
+            let anchor = physical_anchor(&window, anchor, monitor.scale_factor());
+            let (x, y) = popup_position(
                 (area.position.x, area.position.y),
                 (area.size.width, area.size.height),
+                (source.x, source.y),
+                (source_size.width, source_size.height),
+                anchor,
                 (width, height),
+                window.label() == "recorder",
+                monitor.scale_factor(),
             );
-            modal
+            popup
                 .set_position(PhysicalPosition::new(x, y))
                 .map_err(|e| e.to_string())?;
-            modal
+            popup
                 .set_size(PhysicalSize::new(width, height))
                 .map_err(|e| e.to_string())?;
         }
-        modal.set_always_on_top(true).map_err(|e| e.to_string())?;
-        for label in ["main"] {
-            if let Some(background) = app.get_webview_window(label) {
-                background.set_enabled(false).map_err(|e| e.to_string())?;
-            }
-        }
-        modal.show().map_err(|e| e.to_string())?;
-        modal.set_focus().map_err(|e| e.to_string())?;
+        popup.set_always_on_top(true).map_err(|e| e.to_string())?;
+        popup.show().map_err(|e| e.to_string())?;
+        popup.set_focus().map_err(|e| e.to_string())?;
         // A panel failure must not block the stop confirmation itself.
         let _ = crate::recorder_panel::synchronize(app, None);
         Ok(())

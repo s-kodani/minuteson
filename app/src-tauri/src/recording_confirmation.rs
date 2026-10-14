@@ -255,15 +255,54 @@ impl StopDecisionStore {
     }
 }
 
-// Physical work-area coordinates include monitors left/above the primary one.
-pub fn centered_position(origin: (i32, i32), area: (u32, u32), window: (u32, u32)) -> (i32, i32) {
-    let coordinate = |start: i32, extent: u32, size: u32| {
-        (i64::from(start) + i64::from(extent.saturating_sub(size)) / 2)
-            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+// A small, non-modal window follows the clicked stop button. OS-initiated
+// requests without a button fall back to the source window's edge.
+pub fn popup_position(
+    origin: (i32, i32),
+    area: (u32, u32),
+    source: (i32, i32),
+    source_size: (u32, u32),
+    anchor: Option<(i32, i32, u32, u32)>,
+    popup: (u32, u32),
+    mini: bool,
+    scale: f64,
+) -> (i32, i32) {
+    let margin = (12.0 * scale).round() as i64;
+    let gap = (8.0 * scale).round() as i64;
+    let clamp = |candidate: i64, start: i32, extent: u32, size: u32| {
+        let low = i64::from(start) + margin;
+        let high = i64::from(start) + i64::from(extent) - i64::from(size) - margin;
+        if high < low {
+            start
+        } else {
+            candidate.clamp(low, high) as i32
+        }
+    };
+    let (x, below, above) = if let Some((ax, ay, aw, ah)) = anchor {
+        (
+            i64::from(ax) + i64::from(aw) - i64::from(popup.0),
+            i64::from(ay) + i64::from(ah) + gap,
+            i64::from(ay) - i64::from(popup.1) - gap,
+        )
+    } else {
+        (
+            i64::from(source.0) + i64::from(source_size.0) - i64::from(popup.0) - margin,
+            i64::from(source.1) + i64::from(source_size.1) + gap,
+            i64::from(source.1) - i64::from(popup.1) - gap,
+        )
+    };
+    let y = if mini || anchor.is_some() {
+        if below + i64::from(popup.1) <= i64::from(origin.1) + i64::from(area.1) - margin {
+            below
+        } else {
+            above
+        }
+    } else {
+        i64::from(source.1) + (68.0 * scale).round() as i64
     };
     (
-        coordinate(origin.0, area.0, window.0),
-        coordinate(origin.1, area.1, window.1),
+        clamp(x, origin.0, area.0, popup.0),
+        clamp(y, origin.1, area.1, popup.1),
     )
 }
 
@@ -272,8 +311,8 @@ pub fn fitted_size(area: (u32, u32), scale: f64) -> Result<(u32, u32), String> {
         return Err("確認用の画面領域を検証できません".into());
     }
     Ok((
-        ((560.0 * scale).round() as u32).max(1).min(area.0),
-        ((460.0 * scale).round() as u32).max(1).min(area.1),
+        ((420.0 * scale).round() as u32).max(1).min(area.0),
+        ((280.0 * scale).round() as u32).max(1).min(area.1),
     ))
 }
 
@@ -409,8 +448,8 @@ mod tests {
     }
     #[test]
     fn window_size_uses_target_dpi_and_fits_small_work_area() {
-        assert_eq!(fitted_size((1920, 1080), 2.0).unwrap(), (1120, 920));
-        assert_eq!(fitted_size((800, 600), 2.0).unwrap(), (800, 600));
+        assert_eq!(fitted_size((1920, 1080), 2.0).unwrap(), (840, 560));
+        assert_eq!(fitted_size((800, 600), 2.0).unwrap(), (800, 560));
         assert!(fitted_size((0, 600), 1.0).is_err());
         assert!(fitted_size((800, 600), f64::NAN).is_err());
     }
@@ -515,14 +554,71 @@ mod tests {
         assert!(s.request(&r, "main", "A".into()).is_err());
     }
     #[test]
-    fn position_uses_work_area_and_negative_coordinates() {
+    fn popup_follows_origin_and_fits_negative_monitor_coordinates() {
         assert_eq!(
-            centered_position((-1920, -1080), (1920, 1040), (560, 460)),
-            (-1240, -790)
+            popup_position(
+                (-1920, -1080),
+                (1920, 1040),
+                (-1700, -900),
+                (1000, 700),
+                None,
+                (420, 280),
+                false,
+                1.0,
+            ),
+            (-1132, -832)
         );
         assert_eq!(
-            centered_position((10, 20), (200, 200), (560, 460)),
+            popup_position(
+                (-1920, -1080),
+                (1920, 1040),
+                (-1800, -200),
+                (360, 116),
+                None,
+                (420, 280),
+                true,
+                1.0,
+            ),
+            (-1872, -488)
+        );
+        assert_eq!(
+            popup_position(
+                (10, 20),
+                (200, 200),
+                (10, 20),
+                (200, 200),
+                None,
+                (200, 200),
+                true,
+                1.0
+            ),
             (10, 20)
+        );
+        assert_eq!(
+            popup_position(
+                (-1920, -1080),
+                (1920, 1040),
+                (-1700, -900),
+                (1000, 700),
+                Some((-900, -840, 88, 40)),
+                (420, 280),
+                false,
+                1.0,
+            ),
+            (-1232, -792)
+        );
+        assert_eq!(
+            popup_position(
+                (-1920, -1080),
+                (1920, 1040),
+                (-1600, -200),
+                (360, 116),
+                Some((-1500, -100, 36, 32)),
+                (420, 280),
+                true,
+                1.0,
+            ),
+            (-1884, -388)
         );
     }
 }

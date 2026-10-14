@@ -24,7 +24,7 @@ test("explanation has its own role and does not mount recording or editing provi
 test("native confirmation dismisses explanation without restoring recorder focus", () => {
   const confirmation = source("../src-tauri/src/recording_confirmation_window.rs");
   assert.ok(confirmation.includes("crate::recorder_info::hide(app, false)?;"));
-  assert.ok(confirmation.indexOf("crate::recorder_info::hide(app, false)?;") < confirmation.indexOf("modal.show()"));
+  assert.ok(confirmation.indexOf("crate::recorder_info::hide(app, false)?;") < confirmation.indexOf("popup.show()"));
   const native = source("../src-tauri/src/recorder_info.rs");
   assert.doesNotMatch(native, /RecorderController|state::<Storage>|SessionStore/);
 });

@@ -83,7 +83,7 @@ async (page, capturePath = path => path) => {
         const buttons=[...e.parentElement.querySelectorAll("button")].map(b=>b.getBoundingClientRect());
         return badge.top >= button.bottom + 4 - .5 && badge.bottom <= innerHeight
           && Math.abs((badge.left+badge.right)/2-(button.left+button.right)/2)<1
-          && buttons.every(b=>Math.abs(b.top-button.top)<1 && b.height===32 && b.left>=0 && b.right<=innerWidth);
+          && buttons.every(b=>Math.abs(b.top-button.top)<1 && b.height===36 && b.left>=0 && b.right<=innerWidth);
       }), `issue badge overlaps or misaligns controls: ${theme}/${width}`);
       check(await page.locator(".mini-shell").evaluate(e=>e.scrollHeight<=e.clientHeight && e.scrollWidth<=e.clientWidth), "issue badge clips mini geometry");
       await page.screenshot({path:capturePath(`mini-issue-badge-${theme}-${width}.png`)});

@@ -20,13 +20,13 @@ test("mini always has an independent close action without disabling on active or
   assert.match(panel,/disabled=\{closeAction.busy \|\| !isTauri\(\)\}/);
   assert.doesNotMatch(panel,/idle && <IconButton/);
 });
-test("mini close stays usable while stop confirmation keeps stop controls guarded",()=>{
+test("mini close stays usable while non-modal stop popup keeps stop controls guarded",()=>{
   const sourceWindow=source("../src-tauri/src/recording_confirmation_window.rs");
   const present=sourceWindow.split("let present =")[1].split("if let Err(error) = present()")[0];
-  assert.match(present,/for label in \["main"\]/);
-  assert.doesNotMatch(present,/\["main", "recorder"\]/);
+  assert.doesNotMatch(present,/set_enabled\(false\)/);
+  assert.match(present,/popup_position\(/);
   assert.match(sourceWindow,/window.label\(\) != "recorder" \|\| crate::recorder_panel::may_present\(app\)/);
-  assert.match(sourceWindow,/modal.set_focus\(\).*crate::recorder_panel::synchronize\(app, None\)/s);
+  assert.match(sourceWindow,/popup.set_focus\(\).*crate::recorder_panel::synchronize\(app, None\)/s);
   const permission=JSON.parse(source("../src-tauri/capabilities/recorder.json"));
   assert.deepEqual(permission.windows,["recorder"]);
   assert.ok(permission.permissions.includes("core:window:allow-start-dragging"));
@@ -40,7 +40,8 @@ test("native main focus and recording phase own mini visibility without a manual
   assert.doesNotMatch(recorder,/panel\.show\(\)/);
   assert.match(panel,/matches!\(snapshot.phase, RecordingPhase::Recording\)\s*&& !main_focused/);
   assert.match(panel,/RecordingPhase::Stopping,/);
-  assert.match(panel,/if !wants_panel\(&snapshot, focused, dismissed, confirming\) \{/);
+  assert.match(panel,/if !wants_panel\(&snapshot, focused, dismissed, confirming_elsewhere\) \{/);
+  assert.match(panel,/decision.origin.as_deref\(\)/);
   assert.match(panel,/&& !confirming/);
   assert.match(panel,/\.dismissed\s*\.store\(true, Ordering::SeqCst\)/);
 });
@@ -50,7 +51,8 @@ test("mini issue badge uses a separate grid row and adjacent buttons stay top al
   const badge=base.match(/\.recorder-operation-badge \{([^}]*)\}/)?.[1]??"";
   assert.ok(badge.includes("line-height:10px"));
   assert.doesNotMatch(badge,/position:absolute|bottom:|left:|width:/);
-  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; height:32px; margin:0; align-items:flex-start; \}/);
+  assert.match(mini,/\.mini-shell \.mini-bottom \{ flex:none; gap:4px; height:36px; margin:0; align-items:flex-start; \}/);
+  assert.match(mini,/button\.mini-action-icon \{[^}]*background:transparent; border:0;/);
 });
 test("mini centers its content and larger drag grip independently of its top-right close",()=>{
   const mini=source("../src/recorder-panel.css");

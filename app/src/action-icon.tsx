@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef, Ref } from "react";
 
-export type ActionIconName = "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
+export type ActionIconName = "gear" | "trash" | "bell" | "close" | "open" | "edit" | "preview" | "play" | "pause" | "stop" | "restart" | "more" | "refresh" | "undo" | "plus" | "previous" | "next" | "settings" | "download" | "bold" | "italic" | "heading1" | "heading2" | "heading3" | "list" | "numberedList" | "table";
 
 // One code-native icon style; decorative SVGs never become the button's name.
 export function ActionIcon({ name }: { name: ActionIconName }) {
@@ -14,6 +14,7 @@ export function ActionIcon({ name }: { name: ActionIconName }) {
     {name === "preview" && <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>}
     {name === "play" && <path d="m8 5 11 7-11 7V5Z" />}
     {name === "pause" && <><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></>}
+    {name === "stop" && <rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor" stroke="none" />}
     {name === "restart" && <><path d="M5 5v14m14-14L8 12l11 7V5Z" /></>}
     {name === "more" && <><circle cx="5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="19" cy="12" r="1" fill="currentColor" /></>}
     {name === "refresh" && <><path d="M20 7a8 8 0 0 0-14-1L3 9m0-5v5h5M4 17a8 8 0 0 0 14 1l3-3m0 5v-5h-5" /></>}

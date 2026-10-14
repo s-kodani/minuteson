@@ -10,10 +10,15 @@
 .mini-shell .mini-save-diagnostics { margin-top:4px; gap:2px; }
 .mini-shell .mini-inputs { display:grid; grid-template-columns:minmax(75px,1.15fr) minmax(65px,1fr); margin-top:3px; gap:3px; }
 .mini-shell .mini-input-status { font-size:9px; line-height:12px; }
-.mini-shell .mini-bottom { flex:none; gap:4px; height:32px; margin:0; align-items:flex-start; }
-.mini-shell .mini-bottom button { display:inline-flex; align-items:center; justify-content:center; height:32px; min-height:32px; padding:0 8px; font-size:12px; line-height:18px; border-radius:8px; }
+.mini-shell .mini-bottom { flex:none; gap:4px; height:36px; margin:0; align-items:flex-start; }
+.mini-shell .mini-bottom button { display:inline-flex; align-items:center; justify-content:center; height:36px; min-height:36px; padding:0 8px; font-size:12px; line-height:18px; border-radius:8px; }
 .mini-shell .mini-bottom .icon-button,.mini-shell .mini-bottom .info-trigger { width:28px; min-width:28px; padding:0; }
-.mini-shell .mini-bottom .stop-button { color:var(--danger-text); background:var(--surface); border:1px solid var(--danger-text); }
+.mini-shell .mini-bottom button.mini-action-icon { width:36px; min-width:36px; height:36px; min-height:36px; padding:0; background:transparent; border:0; box-shadow:none; }
+.mini-shell .mini-bottom button.mini-stop { color:var(--danger-text); }
+.mini-shell .mini-bottom button.mini-open { color:var(--secondary-text); }
+.mini-shell .mini-bottom button.mini-action-icon .action-icon { width:22px; height:22px; }
+.mini-shell .mini-bottom button.mini-action-icon:hover:not(:disabled) { background:var(--raised); }
+.mini-shell .mini-bottom button.mini-action-icon:disabled { color:var(--muted); background:transparent; }
 .mini-shell .mini-bottom .text-button { background:transparent; border-color:transparent; }
 .mini-shell .mini-bottom .info-trigger span { font-size:16px; }
 .mini-shell .mini-close.icon-button { position:absolute; top:10px; right:14px; width:28px; min-width:28px; height:32px; min-height:32px; padding:0; border-radius:8px; background:transparent; border-color:transparent; color:var(--secondary-text); }

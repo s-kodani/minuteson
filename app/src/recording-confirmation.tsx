@@ -1,7 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { CommonModal } from "./common-modal";
 import { ThemeReadNotice } from "./theme";
 import { acceptRecordingDecision, recordingDecisionVisible, type RecordingDecision } from "./recording-confirmation-state";
 
@@ -42,7 +41,9 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     // macOS mouse activation does not necessarily focus its button. Keep
     // the actual initiating control, not whichever field happened to be active.
     opener.current=source??(document.activeElement instanceof HTMLElement?document.activeElement:null);
-    try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit}));if(mounted.current)setRequestResolved(true);}
+    const rect=source?.getBoundingClientRect();
+    const anchor=rect?{x:Math.round(rect.x),y:Math.round(rect.y),width:Math.round(rect.width),height:Math.round(rect.height)}:null;
+    try{accept(await invoke<RecordingDecision>("request_recording_confirmation",{quit,anchor}));if(mounted.current)setRequestResolved(true);}
     catch(cause){if(mounted.current)setError(String(cause));if(quit)throw cause;}
     finally{requesting.current=false;if(mounted.current)setRequestBusy(false);}
   };
@@ -61,18 +62,33 @@ export function RecordingConfirmationWindow() {
   const stopping=value?.phase==="stopping", failed=value?.phase==="failed";
   const quit=value?.quitAfterSave;
   const cancel=()=>decision.decide(false);
+  const cancelButton=useRef<HTMLButtonElement>(null), focusedId=useRef<string|null>(null);
+  useEffect(()=>{
+    if(!decision.visible||!value?.id||focusedId.current===value.id)return;
+    focusedId.current=value.id;
+    cancelButton.current?.focus({preventScroll:true});
+  },[decision.visible,value?.id]);
+  useEffect(()=>{
+    if(!decision.visible)return;
+    const onKeyDown=(event:KeyboardEvent)=>{
+      if(event.key!=="Escape"||event.isComposing)return;
+      event.preventDefault();
+      if(!stopping&&!decision.decisionBusy&&decision.connected)void cancel();
+    };
+    window.addEventListener("keydown",onKeyDown);
+    return()=>window.removeEventListener("keydown",onKeyDown);
+  },[decision.visible,stopping,decision.decisionBusy,decision.connected]);
   return <main className="recording-confirmation-shell" aria-label="録音終了の確認ウィンドウ">
-    {!decision.visible&&<p role="status">録音確認を読み込んでいます。</p>}
-    {!decision.visible&&decision.error&&<><p role="alert">{decision.error}</p><button type="button" onClick={()=>void decision.refresh().catch(()=>{})}>状態を再確認</button></>}
-    <CommonModal open={decision.visible} blocked={stopping||decision.decisionBusy||!decision.connected} dismissLabel={failed?"閉じる":"キャンセル"} dismissText={failed?undefined:"録音を続ける"} onDismiss={cancel} aria-labelledby="recording-decision-title">
+    {!decision.visible&&<p role="status" className="recording-confirmation-loading">録音確認を読み込んでいます。</p>}
+    {!decision.visible&&decision.error&&<p role="alert" className="recording-confirmation-loading">{decision.error}</p>}
+    {decision.visible&&<section role="dialog" aria-modal="false" aria-labelledby="recording-decision-title" className="recording-confirmation-popover">
       <h2 id="recording-decision-title">{failed?"録音の保存状態を確認":quit?"録音を終了してアプリを閉じますか？":value?.preparing?"録音準備を中止しますか？":"録音を終了しますか？"}</h2>
-      <p>対象: {value?.meetingTitle}</p>
-      <p>{value?.preparing?"録音準備を中止します。音声は保存されない場合があります。元の会議は保持します。":quit?"ここまでの音声を保存します。終了後は同じ録音を継続できません。保存済みの会議・音声・文書は保持します。":"ここまでの音声を保存し、準備済みモデルで解析を開始します。終了後は同じ録音を継続できません。モデル未準備でも音声は保持し、解析結果は確認待ちの候補として保存します。"}</p>
-      {quit&&<p>録音と未保存編集の保存成功後に終了します。解析・モデル準備は安全な区切りで停止し、再起動後に解析を再実行できます。</p>}
+      <p className="recording-confirmation-meeting" title={value?.meetingTitle??undefined}>{value?.meetingTitle}</p>
+      <p>{value?.preparing?"録音準備を中止します。音声が保存されない場合があります。":quit?"ここまでの音声と未保存の編集を保存してからアプリを閉じます。保存後、この録音は再開できません。":"ここまでの音声を保存して解析を開始します。保存後、この録音は再開できません。"}</p>
       {stopping&&<p role="status">録音を停止・保存しています。保存完了を確認するまでお待ちください。</p>}
       {(value?.errorMessage||decision.error)&&<p role="alert" className="action-error">{value?.errorMessage||decision.error}</p>}
       <ThemeReadNotice />
-      <div className="analysis-actions"><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{quit?value?.preparing?"録音準備を中止して閉じる":"録音を終了して閉じる":value?.preparing?"録音準備を中止する":"録音を終了する"}</button><button type="button" className="small-secondary" disabled={decision.decisionBusy} onClick={()=>void decision.refresh().catch(()=>{})}>状態を再確認</button></div>
-    </CommonModal>
+      <div className="analysis-actions"><button ref={cancelButton} type="button" className="small-secondary" disabled={stopping||decision.decisionBusy||!decision.connected} onClick={cancel}>{failed?"確認を閉じる":"録音を続ける"}</button><button type="button" className="stop-button" disabled={!decision.connected||decision.decisionBusy||decision.stopSent||value?.phase!=="confirming"} onClick={()=>void decision.decide(true)}>{quit?value?.preparing?"録音準備を中止して閉じる":"録音を終了して閉じる":value?.preparing?"録音準備を中止する":"録音を終了する"}</button></div>
+    </section>}
   </main>;
 }

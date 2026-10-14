@@ -43,19 +43,27 @@ async (page, capturePath = path => path)=>{
  let stage="setup";
  try{
   await mini.setViewportSize({width:360,height:116});await mini.goto("http://127.0.0.1:1420/?window=recorder");
-  await modal.setViewportSize({width:560,height:460});await modal.goto("http://127.0.0.1:1420/?window=recording-confirmation");
+  await modal.setViewportSize({width:420,height:280});await modal.goto("http://127.0.0.1:1420/?window=recording-confirmation");
   // Use the always-visible production header. The maintenance modal's stop
   // button is intentionally hidden until a user opens that modal.
   const mainStop=()=>page.getByRole("button",{name:"録音を終了",exact:true});
   const state=()=>page.evaluate(()=>window.recordingFixture.read()), reset=async()=>{await page.evaluate(()=>window.recordingFixture.reset());await mainStop().waitFor();await page.waitForFunction(()=>document.querySelector('[aria-label="共通録音状態"] .stop-button')?.disabled===false);};
   const dialog=()=>modal.getByRole("dialog"), end=()=>modal.getByRole("button",{name:"録音を終了する",exact:true}), continued=()=>modal.getByRole("button",{name:"録音を続ける",exact:true});
-  stage="decline";await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();
+  stage="decline";await reset();const miniStop=mini.getByRole("button",{name:"停止",exact:true}), miniOpen=mini.getByRole("button",{name:"メインを開く",exact:true});
+  check(await miniStop.evaluate(e=>{const style=getComputedStyle(e);return style.borderWidth==="0px"&&style.backgroundColor==="rgba(0, 0, 0, 0)"&&!!e.querySelector("svg rect")}),"mini stop is not a borderless stop icon");
+  check(await miniOpen.evaluate(e=>{const style=getComputedStyle(e);return style.borderWidth==="0px"&&style.backgroundColor==="rgba(0, 0, 0, 0)"}),"mini main action still has a frame");
+  await miniOpen.locator("svg").click();check((await state()).calls.some(c=>c.command==="open_main_window"&&c.label==="recorder"),"clicking the main icon did not open main");
+  await miniStop.locator("svg").click();await dialog().waitFor();
+  const miniRequest=(await state()).calls.find(c=>c.command==="request_recording_confirmation"&&c.label==="recorder");
+  check(miniRequest?.args?.anchor?.width>0&&miniRequest?.args?.anchor?.height>0,"mini stop icon did not pass its popup anchor");
+  check(await dialog().getAttribute("aria-modal")==="false"&&await modal.locator(".common-modal").count()===0,"stop confirmation still uses a modal");
+  check(await modal.getByRole("button",{name:"状態を再確認",exact:true}).count()===0,"manual status refresh remains in stop popup");
   const original=(await state()).recording.sessionId;
   check(await mini.getByRole("dialog").count()===0&&await page.getByRole("dialog").count()===0,"confirmation was embedded in a recording window");
   await page.waitForFunction(()=>document.querySelector('[aria-label="共通録音状態"] .stop-button')?.disabled===true);check(await mini.getByRole("button",{name:"停止",exact:true}).isDisabled(),"mini stop remained enabled");
   check(await continued().evaluate(e=>e===document.activeElement)&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"unsafe initial focus or stopped before consent");
   await modal.keyboard.press("Enter");await dialog().waitFor({state:"hidden"});
-  await mini.waitForFunction(()=>document.activeElement?.textContent==="停止");check((await state()).recording.sessionId===original&&(await state()).recording.phase==="recording","decline changed recording identity");
+  await mini.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="停止");check((await state()).recording.sessionId===original&&(await state()).recording.phase==="recording","decline changed recording identity");
   results.push("mini uses a separate shared confirmation; initial Enter declines and returns exact opener while recording continues");
 
   stage="simultaneous";await reset();await Promise.all([page.evaluate(()=>window.__TAURI_INTERNALS__.invoke("request_recording_confirmation")),mini.evaluate(()=>window.__TAURI_INTERNALS__.invoke("request_recording_confirmation"))]);await dialog().waitFor();
@@ -68,7 +76,7 @@ async (page, capturePath = path => path)=>{
   await page.getByLabel("共通録音状態",{exact:true}).getByText("待機中",{exact:true}).waitFor();
   results.push("simultaneous requests share one decision; double-click stops once and repeated Escape waits for actual saving completion");
 
-  await reset();await page.evaluate(()=>window.recordingFixture.configure({lostStop:true}));await mainStop().click();await end().click();
+  await reset();await page.evaluate(()=>window.recordingFixture.configure({lostStop:true}));await mainStop().click();check((await state()).calls.some(c=>c.command==="request_recording_confirmation"&&c.label==="main"&&c.args.anchor?.width>0),"main stop did not pass its popup anchor");await end().click();
   await dialog().getByRole("alert").waitFor();check((await state()).calls.filter(c=>c.command==="synthetic-stop").length===1&&await end().isDisabled(),"lost response repeated stop");
   await modal.keyboard.press("Escape");check(await dialog().isVisible(),"uncertain stop dismissed");await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
   results.push("lost accepted-stop acknowledgement retains same decision and never replays stopping");
@@ -91,10 +99,10 @@ async (page, capturePath = path => path)=>{
   await reset();await page.evaluate(()=>window.recordingFixture.configure({failStop:true}));await mini.getByRole("button",{name:"停止",exact:true}).click();await end().click();await dialog().getByRole("alert").filter({hasText:"模擬停止失敗"}).waitFor();const failedId=(await state()).decision.id;check(!(await state()).calls.some(c=>c.command==="synthetic-stop")&&await end().isDisabled(),"failed stop was replayed");await modal.getByRole("button",{name:"確認を閉じる",exact:true}).click();await dialog().waitFor({state:"hidden"});await page.evaluate(()=>window.recordingFixture.configure({failStop:false}));await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();check((await state()).decision.id!==failedId&&await dialog().getByRole("alert").count()===0,"new explicit confirmation reused failed identity or stale error");await end().click();await page.evaluate(()=>window.recordingFixture.finish(false));await dialog().waitFor({state:"hidden"});
   results.push("failed stop stays visible without replay; only a new explicit confirmation can retry the same recording");
 
-  await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();await modal.setViewportSize({width:360,height:640});
-  const box=await dialog().boundingBox();check(box.x>=23.9&&box.x+box.width<=336.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"small separate confirmation clipped");await modal.screenshot({path:capturePath("recording-stop-confirmation-360.png")});await modal.setViewportSize({width:560,height:460});await modal.screenshot({path:capturePath("recording-stop-confirmation-560.png")});
+  await reset();await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();await modal.setViewportSize({width:360,height:280});await page.waitForTimeout(150);
+  const box=await dialog().boundingBox();check(box.x>=0&&box.x+box.width<=360.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1),"small stop popup clipped");await modal.screenshot({path:capturePath("recording-stop-popup-360.png")});await modal.setViewportSize({width:420,height:280});await page.waitForTimeout(150);await modal.screenshot({path:capturePath("recording-stop-popup-420.png")});
   await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});check(!(await state()).calls.some(c=>c.command==="synthetic-stop"),"visual check stopped recording");
-  results.push("separate confirmation fits 560px and 360px; visual check and Escape never stop recording");
+  results.push("non-modal stop popup fits 420px and 360px; visual check and Escape never stop recording");
 
   stage="recording-quit";
   const requestQuit=()=>page.evaluate(()=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"main-close-requested",payload:{quit:true}}));
@@ -103,7 +111,7 @@ async (page, capturePath = path => path)=>{
   const quitEnd=()=>modal.getByRole("button",{name:"録音を終了して閉じる",exact:true});
   await reset();await clearClose();await requestQuit();await modal.getByRole("heading",{name:"録音を終了してアプリを閉じますか？",exact:true}).waitFor();
   check((await state()).decision.quitAfterSave&&await page.getByRole("dialog").count()===0,"quit intent was missing or duplicated main confirmation");
-  const quitBox=await dialog().boundingBox();check(quitBox.y>=23.9&&quitBox.y+quitBox.height<=436.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1),"recording quit clipped the native-size confirmation");await modal.screenshot({path:capturePath("recording-quit-confirmation-560.png")});
+  const quitBox=await dialog().boundingBox();check(quitBox.y>=0&&quitBox.y+quitBox.height<=280.1&&await dialog().evaluate(e=>e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1),"recording quit clipped the native-size popup");await modal.screenshot({path:capturePath("recording-quit-popup-420.png")});
   await modal.keyboard.press("Enter");await dialog().waitFor({state:"hidden"});check(await closed()===0&&!(await state()).calls.some(c=>c.command==="synthetic-stop"),"declining quit stopped or closed recording");
   results.push("recording quit shares the independent confirmation and declining never stops or closes the app");
 
@@ -158,7 +166,7 @@ async (page, capturePath = path => path)=>{
   stage="hide-unreadable-decision";await reset();await mainStop().click();await dialog().waitFor();
   await page.evaluate(()=>window.recordingFixture.configure({failRead:true,suppressEvents:true}));
   await dialog().getByRole("alert").filter({hasText:"読戻し失敗"}).waitFor();
-  await mini.waitForFunction(()=>document.querySelector('.mini-bottom .stop-button')?.disabled===true);
+  await mini.waitForFunction(()=>document.querySelector('.mini-bottom .mini-stop')?.disabled===true);
   await hideWithoutMutation();check(await dialog().isVisible()&&await end().isDisabled(),"mini hide relaxed unreadable stop guard");
   await page.evaluate(()=>window.recordingFixture.configure({failRead:false}));
   await modal.waitForFunction(()=>document.querySelector('.analysis-actions .stop-button')?.disabled===false);

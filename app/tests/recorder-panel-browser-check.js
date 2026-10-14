@@ -44,7 +44,7 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
     const bounds = await page.locator(".mini-shell").evaluate(e => ({ overflow: e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight }));
     check(!bounds.overflow, `${phase} mini overflowed native geometry`);
     const buttons = await page.locator(".mini-bottom button").evaluateAll(list => list.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
-    check(buttons.every(r => r.x >= 0 && r.x + r.width <= 360 && r.y >= 0 && r.y + r.height <= 116 && Math.abs(r.y - buttons[0].y) < 1 && r.height === 32), `${phase} controls clipped or misaligned`);
+    check(buttons.every(r => r.x >= 0 && r.x + r.width <= 360 && r.y >= 0 && r.y + r.height <= 116 && Math.abs(r.y - buttons[0].y) < 1 && r.height === 36), `${phase} controls clipped or misaligned`);
     const layout = await page.locator(".mini-shell").evaluate(shell => {
       const rect = selector => { const r=shell.querySelector(selector).getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,center:(r.top+r.bottom)/2}; };
       const grip=shell.querySelector(".mini-drag");

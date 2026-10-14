@@ -138,8 +138,8 @@ function RecorderPanel() {
         <div className="mini-save-diagnostics">{state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?<><RecordingWriteStatus compact owner={state.snapshot.sessionId}/><RecordingJournalCompactStatus owner={state.snapshot.sessionId}/></>:<span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>}</div>
       </div>
       <div className="mini-bottom">
-        {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <button type="button" className="stop-button" onClick={event => void decision.request(false,event.currentTarget)} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected}>{state.snapshot.phase === "preparing" ? "中止" : "停止"}</button>}
-        <IconButton label="メインを開く" icon="open" onClick={() => action.run("open_main_window")} disabled={action.busy || !isTauri()} />
+        {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <IconButton label={state.snapshot.phase === "preparing" ? "中止" : "停止"} icon="stop" className="mini-action-icon mini-stop" onClick={event => void decision.request(false,event.currentTarget)} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected} />}
+        <IconButton label="メインを開く" icon="open" className="mini-action-icon mini-open" onClick={() => void action.run("open_main_window")} disabled={action.busy || !isTauri()} />
         <RecorderInfoTrigger disabled={decision.visible} problem={localProblem} />
       </div>
       </div>
