@@ -16,10 +16,8 @@ fn wants_panel(
     dismissed: bool,
     confirming: bool,
 ) -> bool {
-    matches!(
-        snapshot.phase,
-        RecordingPhase::Preparing | RecordingPhase::Recording
-    ) && !main_focused
+    matches!(snapshot.phase, RecordingPhase::Recording)
+        && !main_focused
         && !dismissed
         && !confirming
 }
@@ -61,10 +59,7 @@ pub(crate) fn main_focus_changed(app: &AppHandle, focused: bool) {
 /// change. The recorder lock is never held through a window operation.
 pub(crate) fn synchronize(app: &AppHandle, focused: Option<bool>) -> Result<(), String> {
     let snapshot = app.state::<SessionStore>().snapshot();
-    let active = matches!(
-        snapshot.phase,
-        RecordingPhase::Preparing | RecordingPhase::Recording
-    );
+    let active = matches!(snapshot.phase, RecordingPhase::Recording);
     if !active {
         app.state::<PanelVisibility>()
             .dismissed
@@ -99,14 +94,13 @@ mod tests {
     #[test]
     fn only_an_unfocused_active_recording_can_show_the_panel() {
         let mut snapshot = RecordingSnapshot::default();
-        for phase in [RecordingPhase::Preparing, RecordingPhase::Recording] {
-            snapshot.phase = phase;
-            assert!(wants_panel(&snapshot, false, false, false));
-            assert!(!wants_panel(&snapshot, true, false, false));
-            assert!(!wants_panel(&snapshot, false, true, false));
-            assert!(!wants_panel(&snapshot, false, false, true));
-        }
+        snapshot.phase = RecordingPhase::Recording;
+        assert!(wants_panel(&snapshot, false, false, false));
+        assert!(!wants_panel(&snapshot, true, false, false));
+        assert!(!wants_panel(&snapshot, false, true, false));
+        assert!(!wants_panel(&snapshot, false, false, true));
         for phase in [
+            RecordingPhase::Preparing,
             RecordingPhase::Stopping,
             RecordingPhase::Saving,
             RecordingPhase::Idle,

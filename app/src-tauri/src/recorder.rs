@@ -930,8 +930,11 @@ fn notify_session(app: &AppHandle) {
     // a preparing/recording state over an already stopped or newer session.
     let _ = app.run_on_main_thread(move || {
         let snapshot = handle.state::<SessionStore>().snapshot();
-        crate::recording_confirmation_window::session_changed(&handle, &snapshot);
+        // Close the floating panel before publishing a stop/saving result to
+        // the rest of the UI. A delayed start notification reads this latest
+        // phase too, so it cannot reopen the panel after stop.
         let _ = crate::recorder_panel::synchronize(&handle, None);
+        crate::recording_confirmation_window::session_changed(&handle, &snapshot);
         let _ = handle.emit("session-changed", snapshot);
     });
 }

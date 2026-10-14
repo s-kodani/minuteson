@@ -36,9 +36,10 @@ test("native main focus and recording phase own mini visibility without a manual
   assert.match(lib,/WindowEvent::Focused\(focused\).*recorder_panel::main_focus_changed/s);
   assert.match(lib,/window.hide\(\).*recorder_panel::synchronize\(window.app_handle\(\), Some\(false\)\)/s);
   assert.doesNotMatch(lib,/show_recorder_preview/);
-  assert.match(recorder,/recording_confirmation_window::session_changed\(&handle, &snapshot\);\s*let _ = crate::recorder_panel::synchronize\(&handle, None\)/);
+  assert.match(recorder,/let _ = crate::recorder_panel::synchronize\(&handle, None\);\s*crate::recording_confirmation_window::session_changed\(&handle, &snapshot\)/);
   assert.doesNotMatch(recorder,/panel\.show\(\)/);
-  assert.match(panel,/RecordingPhase::Preparing \| RecordingPhase::Recording/);
+  assert.match(panel,/matches!\(snapshot.phase, RecordingPhase::Recording\)\s*&& !main_focused/);
+  assert.match(panel,/RecordingPhase::Stopping,/);
   assert.match(panel,/if !wants_panel\(&snapshot, focused, dismissed, confirming\) \{/);
   assert.match(panel,/&& !confirming/);
   assert.match(panel,/\.dismissed\s*\.store\(true, Ordering::SeqCst\)/);
