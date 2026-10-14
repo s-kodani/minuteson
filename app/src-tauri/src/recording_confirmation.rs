@@ -255,6 +255,48 @@ impl StopDecisionStore {
     }
 }
 
+// Convert the clicked button's CSS-pixel rectangle to physical desktop
+// coordinates before positioning the separate native popup. Invalid or stale
+// rectangles fall back to the source window's edge instead of moving offscreen.
+pub fn css_anchor_to_physical(
+    inner_origin: (i32, i32),
+    inner_size: (u32, u32),
+    rect: (i32, i32, u32, u32),
+    scale: f64,
+) -> Option<(i32, i32, u32, u32)> {
+    if rect.0 < 0 || rect.1 < 0 || rect.2 == 0 || rect.3 == 0 || !scale.is_finite() || scale <= 0.0
+    {
+        return None;
+    }
+    let scaled = |value: u32| -> Option<u32> {
+        let physical = (f64::from(value) * scale).round();
+        if physical < 0.0 || physical > f64::from(u32::MAX) {
+            None
+        } else {
+            u32::try_from(physical as u64).ok()
+        }
+    };
+    let (x, y, width, height) = (
+        scaled(rect.0 as u32)?,
+        scaled(rect.1 as u32)?,
+        scaled(rect.2)?,
+        scaled(rect.3)?,
+    );
+    if width == 0
+        || height == 0
+        || u64::from(x) + u64::from(width) > u64::from(inner_size.0) + 2
+        || u64::from(y) + u64::from(height) > u64::from(inner_size.1) + 2
+    {
+        return None;
+    }
+    Some((
+        i32::try_from(i64::from(inner_origin.0) + i64::from(x)).ok()?,
+        i32::try_from(i64::from(inner_origin.1) + i64::from(y)).ok()?,
+        width,
+        height,
+    ))
+}
+
 // A small, non-modal window follows the clicked stop button. OS-initiated
 // requests without a button fall back to the source window's edge.
 pub fn popup_position(
@@ -619,6 +661,52 @@ mod tests {
                 1.0,
             ),
             (-1884, -388)
+        );
+    }
+
+    #[test]
+    fn css_button_anchor_uses_webview_origin_and_retina_scale() {
+        assert_eq!(
+            css_anchor_to_physical((-1800, -900), (1200, 800), (500, 32, 36, 36), 2.0),
+            Some((-800, -836, 72, 72))
+        );
+        assert_eq!(
+            css_anchor_to_physical((-100, 200), (200, 200), (10, 11, 35, 35), 1.5),
+            Some((-85, 217, 53, 53))
+        );
+    }
+
+    #[test]
+    fn stale_or_impossible_css_button_anchor_falls_back() {
+        let origin = (0, 0);
+        let size = (360, 116);
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (-1, 10, 36, 36), 1.0),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (340, 10, 36, 36), 1.0),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (10, 10, 0, 36), 1.0),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (10, 10, 36, 36), f64::NAN),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (10, 10, 36, 36), f64::INFINITY),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical(origin, size, (10, 10, 36, 36), 0.01),
+            None
+        );
+        assert_eq!(
+            css_anchor_to_physical((i32::MAX - 10, 0), (100, 100), (20, 0, 36, 36), 1.0),
+            None
         );
     }
 }

@@ -1,6 +1,7 @@
 use crate::recorder::RecorderController;
 use crate::recording_confirmation::{
-    fitted_size, popup_position, DecisionPhase, StopDecision, StopDecisionStore,
+    css_anchor_to_physical, fitted_size, popup_position, DecisionPhase, StopDecision,
+    StopDecisionStore,
 };
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::Storage;
@@ -21,34 +22,14 @@ fn physical_anchor(
     scale: f64,
 ) -> Option<(i32, i32, u32, u32)> {
     let anchor = anchor?;
-    if anchor.x < 0
-        || anchor.y < 0
-        || anchor.width == 0
-        || anchor.height == 0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
-        return None;
-    }
     let size = window.inner_size().ok()?;
     let position = window.inner_position().ok()?;
-    let x = u32::try_from((f64::from(anchor.x) * scale).round() as u64).ok()?;
-    let y = u32::try_from((f64::from(anchor.y) * scale).round() as u64).ok()?;
-    let width = u32::try_from((f64::from(anchor.width) * scale).round() as u64).ok()?;
-    let height = u32::try_from((f64::from(anchor.height) * scale).round() as u64).ok()?;
-    if u64::from(x) + u64::from(width) > u64::from(size.width) + 2
-        || u64::from(y) + u64::from(height) > u64::from(size.height) + 2
-    {
-        return None;
-    }
-    Some((
-        (i64::from(position.x) + i64::from(x)).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-            as i32,
-        (i64::from(position.y) + i64::from(y)).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-            as i32,
-        width,
-        height,
-    ))
+    css_anchor_to_physical(
+        (position.x, position.y),
+        (size.width, size.height),
+        (anchor.x, anchor.y, anchor.width, anchor.height),
+        scale,
+    )
 }
 fn emit(app: &AppHandle, value: &StopDecision) {
     let _ = app.emit("recording-confirmation-changed", value);
@@ -166,7 +147,10 @@ pub fn request_recording_confirmation(
                 fitted_size((area.size.width, area.size.height), monitor.scale_factor())?;
             let source = window.outer_position().map_err(|e| e.to_string())?;
             let source_size = window.outer_size().map_err(|e| e.to_string())?;
-            let anchor = physical_anchor(&window, anchor, monitor.scale_factor());
+            // CSS coordinates belong to the source WebView. Its active DPI can
+            // differ from the selected monitor during a display transition.
+            let source_scale = window.scale_factor().unwrap_or(monitor.scale_factor());
+            let anchor = physical_anchor(&window, anchor, source_scale);
             let (x, y) = popup_position(
                 (area.position.x, area.position.y),
                 (area.size.width, area.size.height),
