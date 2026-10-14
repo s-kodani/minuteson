@@ -171,7 +171,25 @@ fn swift_generated_input_status_is_owner_bound_and_never_pcm_proof() {
         assert!(!result.system_connected());
     }
     let other = reader.read(OWNER, Some("recorder")).unwrap();
-    assert!(other.notices.iter().all(|notice| notice.target == "main"));
+    if other.report_age_ms <= FRESH_MS {
+        assert_eq!(other.notices.len(), result.notices.len());
+        for (previous, next) in result.notices.iter().zip(&other.notices) {
+            // Offering is not receiving. An unclaimed notice follows the
+            // currently visible window with a new generation, but keeps its
+            // stable event identity and cannot be counted twice.
+            assert_eq!(next.id, previous.id);
+            assert_eq!(next.target, "recorder");
+            assert!(next.recipient_id.is_none());
+            let generation = |notice: &Notice| {
+                serde_json::to_value(&notice.delivery).unwrap()["generation"]
+                    .as_u64()
+                    .unwrap()
+            };
+            assert_eq!(generation(next), generation(previous) + 1);
+        }
+    } else {
+        assert!(other.notices.is_empty());
+    }
     assert_eq!(before, fs::read(path.join("input-status.json")).unwrap());
     assert!(!path.join("microphone.caf").exists());
     assert!(!path.join("system.caf").exists());
