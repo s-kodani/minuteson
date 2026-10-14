@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {checkedCaptureInputs,microphoneChoice,usableMicrophone,validMicrophoneUID,type CaptureInputs} from "../src/capture-input-state.ts";
+import {checkedCaptureInputs,microphoneChoice,usableAutomaticMicrophone,usableMicrophone,validMicrophoneUID,type CaptureInputs} from "../src/capture-input-state.ts";
 const snapshot=():CaptureInputs=>({schemaVersion:1,microphonePermission:"notDetermined",selectedMicrophoneUID:null,devices:[{uid:"built-in",name:"同じ名前",isDefault:true},{uid:"usb-123",name:"同じ名前",isDefault:false}]});
 test("microphone selection uses stable IDs and never replaces a missing remembered choice",()=>{
   const s=checkedCaptureInputs(snapshot());assert.equal(microphoneChoice(s,null),"built-in");
@@ -9,9 +9,16 @@ test("microphone selection uses stable IDs and never replaces a missing remember
 });
 test("no default or no devices requires an explicit choice; unknown permission is not fabricated as granted",()=>{
   const s=snapshot();s.devices[0].isDefault=false;assert.equal(microphoneChoice(s,null),"");
+  assert.equal(usableAutomaticMicrophone(s),null);
   for(const p of ["denied","restricted"] as const){s.microphonePermission=p;assert.equal(usableMicrophone(s,"usb-123"),null);}
   for(const p of ["notDetermined","unknown","authorized"] as const){s.microphonePermission=p;assert.equal(checkedCaptureInputs(s).microphonePermission,p);assert.equal(usableMicrophone(s,"usb-123")?.uid,"usb-123");}
   s.devices=[];assert.equal(usableMicrophone(s,"usb-123"),null);
+});
+test("automatic microphone follows the current OS default without pinning an old UID",()=>{
+  const s=snapshot();assert.equal(usableAutomaticMicrophone(s)?.uid,"built-in");
+  s.devices[0].isDefault=false;s.devices[1].isDefault=true;
+  assert.equal(usableAutomaticMicrophone(checkedCaptureInputs(s))?.uid,"usb-123");
+  s.microphonePermission="denied";assert.equal(usableAutomaticMicrophone(s),null);
 });
 test("microphone catalog rejects invalid identities, duplicate defaults and malformed bounds",()=>{
   for(const uid of ["", " \t", "a\nb", "a\0b", "x".repeat(1025), "日".repeat(342)])assert.equal(validMicrophoneUID(uid),false);

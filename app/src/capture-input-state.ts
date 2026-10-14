@@ -23,3 +23,7 @@ export function usableMicrophone(inputs:CaptureInputs|null,uid:string):CaptureIn
   if(!inputs||["denied","restricted"].includes(inputs.microphonePermission))return null;
   return inputs.devices.find(d=>d.uid===uid)??null;
 }
+export function usableAutomaticMicrophone(inputs:CaptureInputs|null):CaptureInputDevice|null {
+  if(!inputs||["denied","restricted"].includes(inputs.microphonePermission))return null;
+  return inputs.devices.find(d=>d.isDefault)??null;
+}

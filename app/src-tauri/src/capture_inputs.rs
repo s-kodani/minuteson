@@ -24,6 +24,16 @@ pub(crate) struct InputDevices {
     pub(crate) selected_microphone_uid: Option<String>,
 }
 impl InputDevices {
+    pub(crate) fn require_automatic_microphone(&self) -> Result<(), String> {
+        if matches!(self.microphone_permission.as_str(), "denied" | "restricted") {
+            return Err("マイクの利用を許可してから再確認してください".into());
+        }
+        if !self.devices.iter().any(|device| device.is_default) {
+            return Err("OSの既定入力を確認できません。マイクを接続して再確認してください".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_microphone(&self, uid: &str) -> Result<(), String> {
         if !crate::storage::valid_microphone_uid(uid) || !self.devices.iter().any(|d| d.uid == uid)
         {
@@ -136,13 +146,17 @@ mod tests {
     fn input_catalog_uses_stable_ids_without_name_or_default_fallback() {
         let result = parse(&serde_json::to_vec(&report()).unwrap()).unwrap();
         assert!(result.require_microphone("usb-123").is_ok());
+        assert!(result.require_automatic_microphone().is_ok());
         assert!(result.require_microphone("同じ名前").is_err());
         assert!(result.require_microphone("missing").is_err());
         let mut result = result;
         result.microphone_permission = "denied".into();
         assert!(result.require_microphone("usb-123").is_err());
+        assert!(result.require_automatic_microphone().is_err());
         result.microphone_permission = "unknown".into();
         assert!(result.require_microphone("usb-123").is_ok());
+        result.devices.retain(|device| !device.is_default);
+        assert!(result.require_automatic_microphone().is_err());
     }
     #[test]
     fn input_catalog_rejects_oversized_ambiguous_and_untrusted_metadata() {

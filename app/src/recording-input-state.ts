@@ -12,7 +12,7 @@ export const validInputOwner=owner;
 const integer=(v:unknown,min=0)=>typeof v==="number"&&Number.isSafeInteger(v)&&v>=min;
 const time=(v:number)=>Number.isFinite(v)&&v>=0&&v<=Number.MAX_SAFE_INTEGER;
 const sameInput=(a:MicrophoneStatus|null,b:MicrophoneStatus|null)=>a===null||b===null?a===b:a.state===b.state&&a.sourceEpoch===b.sourceEpoch&&a.interruptions===b.interruptions&&a.reason===b.reason;
-const reasons=new Set(["identity_changed","engine_changed","device_disconnected","identity_ambiguous","metadata_unavailable","permission_unavailable","restart_failed","format_changed","clock_changed"]);
+const reasons=new Set(["identity_changed","device_changed","engine_changed","device_disconnected","identity_ambiguous","metadata_unavailable","permission_unavailable","restart_failed","format_changed","clock_changed"]);
 const systemReasons=new Set(["stream_stopped","application_unavailable","acquisition_timeout","permission_unavailable","restart_failed","format_changed","clock_changed"]);
 function record(v:unknown,keys:string[]){if(!v||typeof v!=="object"||Array.isArray(v)||Object.keys(v).sort().join("|")!==keys.slice().sort().join("|"))throw Error("入力状態の形式が不正です。");return v as Record<string,unknown>;}
 function input(value:unknown,kind:InputKind):MicrophoneStatus{
@@ -102,6 +102,6 @@ export function inputLabel(m:VisibleInput,input:InputKind):string{
   const label={unknown:"状態を確認できません",stale:"状態の更新を確認できません",connected:"接続済み",disconnected:"切断されました",reconnecting:"再取得中",unavailable:"再取得できません",stopped:"取得を停止しました"}[m.state];
   if(!("reason" in m)||!m.reason)return label;
   const detail=m.reason==="permission_unavailable"?(input==="microphone"?"マイクの権限を確認してください":"PC音声の権限を確認してください"):
-    ({identity_changed:"機器の識別が変更",engine_changed:"音声エンジンが変更",device_disconnected:"選択した機器が未接続",identity_ambiguous:"機器を一意に確認できません",metadata_unavailable:"機器情報を確認できません",restart_failed:"再取得に失敗",format_changed:"入力形式が変更",clock_changed:"スリープ等により取得時計が変更",stream_stopped:"取得処理が停止",application_unavailable:"選択したアプリを確認できません",acquisition_timeout:"取得処理の応答待ち"} as Record<string,string>)[m.reason]??"取得条件を確認してください";
+    ({identity_changed:"機器の識別が変更",device_changed:"録音するマイクを切替中",engine_changed:"音声エンジンが変更",device_disconnected:"選択した機器が未接続",identity_ambiguous:"機器を一意に確認できません",metadata_unavailable:"機器情報を確認できません",restart_failed:"再取得に失敗",format_changed:"入力形式が変更",clock_changed:"スリープ等により取得時計が変更",stream_stopped:"取得処理が停止",application_unavailable:"選択したアプリを確認できません",acquisition_timeout:"取得処理の応答待ち"} as Record<string,string>)[m.reason]??"取得条件を確認してください";
   return `${label}（${detail}）`;
 }

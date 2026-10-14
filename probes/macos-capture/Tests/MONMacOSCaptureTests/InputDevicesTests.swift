@@ -50,4 +50,36 @@ final class InputDevicesTests: XCTestCase {
     XCTAssertEqual(rows[1]["uid"] as? String, "usb-123")
     XCTAssertNil(rows[1]["objectID"])
   }
+
+  func testAutomaticChoiceOnlyUsesOneKnownProcessInput() throws {
+    let direct = try InputDevices.automaticChoice(from: devices, application: nil)
+    XCTAssertEqual(direct.device.uid, "built-in")
+    XCTAssertEqual(direct.source, .systemDefault(reason: "mon_direct_recording"))
+    let app = try InputDevices.automaticChoice(from: devices, processInputObjects: [2])
+    XCTAssertEqual(app.device.uid, "usb-123")
+    XCTAssertEqual(app.source, .application)
+
+    let inconclusive: [[AudioObjectID]?] = [nil, [], [2, 1], [2, 2], [99]]
+    for objects in inconclusive {
+      let fallback = try InputDevices.automaticChoice(
+        from: devices, processInputObjects: objects)
+      XCTAssertEqual(fallback.device.uid, "built-in")
+      XCTAssertNotEqual(fallback.source, .application)
+    }
+    XCTAssertEqual(
+      try InputDevices.automaticChoice(from: devices, processInputObjects: nil).source,
+      .systemDefault(reason: "application_input_unavailable"))
+    XCTAssertThrowsError(
+      try InputDevices.automaticChoice(from: [devices[1]], processInputObjects: nil))
+  }
+
+  func testProcessLookupRejectsInvalidPIDWithoutOpeningAudio() {
+    XCTAssertThrowsError(try InputDevices.activeInputObjects(for: 0))
+    XCTAssertThrowsError(try InputDevices.activeInputObjects(for: -1))
+  }
+
+  func testProcessLookupOfThisProcessIsReadOnlyAndBounded() throws {
+    let objects = try InputDevices.activeInputObjects(for: getpid())
+    XCTAssertLessThanOrEqual(objects?.count ?? 0, 128)
+  }
 }

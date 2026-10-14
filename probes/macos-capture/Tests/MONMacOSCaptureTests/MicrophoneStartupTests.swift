@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import Darwin
 import Foundation
 import XCTest
 
@@ -66,6 +67,23 @@ private final class StartupFactory: @unchecked Sendable {
     }
   }
   var calls: Int { lock.withLock { count } }
+}
+
+private final class StartupDeviceCatalog: @unchecked Sendable {
+  private let lock = NSLock()
+  private var defaultUID = "first"
+  func setDefault(_ uid: String) { lock.withLock { defaultUID = uid } }
+  func read() -> CaptureInputDevices {
+    let current = lock.withLock { defaultUID }
+    return CaptureInputDevices(
+      microphonePermission: "authorized",
+      devices: [
+        CaptureInputDevice(
+          uid: "first", name: "First", isDefault: current == "first", objectID: 11),
+        CaptureInputDevice(
+          uid: "second", name: "Second", isDefault: current == "second", objectID: 12),
+      ])
+  }
 }
 
 /// Synthetic buffers and metadata only. This adapter never creates an
@@ -208,6 +226,145 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       "mon-silent-microphone-startup-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
     return url
+  }
+
+  func testAutomaticDefaultChangeRetiresOldCallbacksAndKeepsOneSavedTrack() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let old = SilentMicrophoneEngine()
+    let next = SilentMicrophoneEngine()
+    let catalog = StartupDeviceCatalog()
+    let factory = StartupFactory([old, next])
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let recorder = MicrophoneRecorder(
+      outputURL: dir.appendingPathComponent("microphone.caf"), clock: try time.domain(),
+      microphoneUID: nil, controlNow: control.read, makeEngine: factory.make,
+      devices: catalog.read)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try old.emit(host: 1_000_000_000)
+    let retiredCallback = try XCTUnwrap(old.savedTap())
+    let originalEpoch = try XCTUnwrap(recorder.snapshot().microphoneRecovery?.sourceEpoch)
+    XCTAssertEqual(recorder.deviceUID, "first")
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+
+    catalog.setDefault("second")
+    control.advance()
+    recorder.maintain()
+    XCTAssertEqual(recorder.deviceUID, "second")
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertFalse(old.isRunning)
+    let stale = try SilentMicrophoneEngine.pcm(format: old.inputFormat)
+    retiredCallback(stale, AVAudioTime(hostTime: 1_020_000_000, sampleTime: 480, atRate: 48000))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    control.settle(recorder)
+    time.set(1_030_000_000)
+    try next.emit(host: 1_030_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 960)
+    XCTAssertGreaterThan(
+      try XCTUnwrap(recorder.snapshot().microphoneRecovery?.sourceEpoch), originalEpoch)
+    XCTAssertEqual(
+      try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf")).length, 960)
+  }
+
+  func testAutomaticDifferentRateNormalizesIntoTheExistingMicrophoneTrack() async throws {
+    let created = try directory()
+    let canonical = try XCTUnwrap(realpath(created.path, nil))
+    defer { free(canonical) }
+    let dir = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let old = SilentMicrophoneEngine()
+    let next = SilentMicrophoneEngine()
+    next.setFormat(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!)
+    let catalog = StartupDeviceCatalog()
+    let factory = StartupFactory([old, next])
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let raw = try RawRecordingSegments(
+      output: dir, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "microphone")
+    let recorder = MicrophoneRecorder(
+      outputURL: dir.appendingPathComponent("microphone.caf"),
+      clock: try time.domain(), microphoneUID: nil,
+      rawSegments: raw, controlNow: control.read, makeEngine: factory.make,
+      devices: catalog.read)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try old.emit(host: 1_000_000_000)
+    catalog.setDefault("second")
+    control.advance()
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 2)
+    XCTAssertEqual(recorder.deviceUID, "second")
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertFalse(old.isRunning)
+    control.settle(recorder)
+    time.set(1_030_000_000)
+    try next.emit(frames: 441, host: 1_030_000_000)
+    for index in 1..<20 {
+      let host = Int64(1_030_000_000 + index * 10_000_000)
+      time.set(host)
+      try next.emit(frames: 441, sampleTime: Int64(index * 441), host: UInt64(host))
+    }
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertGreaterThan(recorder.snapshot().frames, 9_900)
+    let recorded = recorder.snapshot().frames
+    recorder.stop()
+    XCTAssertNil(raw.snapshot().failure)
+    XCTAssertEqual(raw.snapshot().sealedFrames, recorded)
+    let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))
+    XCTAssertEqual(file.length, recorded)
+    let saved = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(recorded))
+    )
+    try file.read(into: saved)
+    XCTAssertEqual(saved.frameLength, AVAudioFrameCount(recorded))
+    XCTAssertEqual(try XCTUnwrap(saved.floatChannelData)[0][600], 0.125, accuracy: 0.005)
+  }
+
+  func testRecordingCanSwitchFixedAndAutomaticWithoutAdmittingRetiredPCM() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = SilentMicrophoneEngine()
+    let second = SilentMicrophoneEngine()
+    let returnToDefault = SilentMicrophoneEngine()
+    let factory = StartupFactory([first, second, returnToDefault])
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let catalog = StartupDeviceCatalog()
+    let recorder = MicrophoneRecorder(
+      outputURL: dir.appendingPathComponent("microphone.caf"), clock: try time.domain(),
+      microphoneUID: nil, controlNow: control.read, makeEngine: factory.make,
+      devices: catalog.read)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try first.emit(host: 1_000_000_000)
+    let obsolete = try XCTUnwrap(first.savedTap())
+    try recorder.selectInput("second")
+    control.advance()
+    recorder.maintain()
+    XCTAssertEqual(recorder.deviceUID, "second")
+    XCTAssertFalse(first.isRunning)
+    obsolete(
+      try SilentMicrophoneEngine.pcm(format: first.inputFormat),
+      AVAudioTime(hostTime: 1_010_000_000))
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    control.settle(recorder)
+    time.set(1_030_000_000)
+    try second.emit(host: 1_030_000_000)
+    try recorder.selectInput(nil)
+    control.advance()
+    recorder.maintain()
+    XCTAssertEqual(recorder.deviceUID, "first")
+    control.settle(recorder)
+    time.set(1_060_000_000)
+    try returnToDefault.emit(host: 1_060_000_000)
+    XCTAssertEqual(recorder.snapshot().frames, 1_440)
+    recorder.stop()
+    XCTAssertThrowsError(try recorder.selectInput("second"))
   }
   private func recorder(
     _ directory: URL, _ engine: SilentMicrophoneEngine,

@@ -5,6 +5,11 @@
 .recording-workspace input{width:100%;min-width:0;box-sizing:border-box;font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--input-border);border-radius:8px;padding:10px;}
 .recording-workspace-title{overflow-wrap:anywhere;}
 .recording-workspace .capture-input-selection{margin-top:24px;}
+.active-microphone-selection{display:flex;align-items:end;gap:10px;margin:16px 0;flex-wrap:wrap;}
+.active-microphone-selection label{flex:1 1 260px;min-width:0;}
+.active-microphone-selection select{width:100%;min-height:40px;padding:9px 12px;font:inherit;font-size:13px;line-height:20px;background:var(--surface);color:var(--text);border:1px solid var(--input-border);border-radius:8px;}
+.active-microphone-selection button{min-height:40px;}
+.active-microphone-source{flex-basis:100%;color:var(--muted);font-size:12px;}
 .recording-workspace .clock{text-align:center;margin:24px 0;}
 .recording-track-status,.recording-write-tracks{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
 .recording-track-status div,.recording-write-tracks div{border:1px solid var(--border);border-radius:10px;padding:12px;}

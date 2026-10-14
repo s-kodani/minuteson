@@ -8,7 +8,8 @@ struct InputStatusReport: Encodable, Sendable {
     let reasons =
       input == "microphone"
       ? [
-        "identity_changed", "engine_changed", "device_disconnected", "identity_ambiguous",
+        "identity_changed", "device_changed", "engine_changed", "device_disconnected",
+        "identity_ambiguous",
         "metadata_unavailable", "permission_unavailable", "restart_failed", "format_changed",
         "clock_changed",
       ]

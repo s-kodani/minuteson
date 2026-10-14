@@ -10,7 +10,7 @@ import { ScreenHistory } from "./screen-history";
 import { CommonModal } from "./common-modal";
 import type { ModalReplacement } from "./common-modal";
 import { ConfirmationHost } from "./confirmation-host";
-import { IssueNotice, NotificationList, ToastHost, ToastNotice } from "./toast";
+import { IssueNotice, NotificationList, ToastHost, ToastNotice, toasts } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderInfoTrigger, RecorderInfoWindow } from "./recorder-info";
 import { RecorderOperationProvider, RecorderOperationNotifications, useRecorderOperationPublisher, useRecorderOperations } from "./recorder-operation-notices";
@@ -49,7 +49,7 @@ import { waitForDataStop } from "./data-stop";
 import { appShortcut, overlayOpen } from "./keyboard";
 import { MeetingPlaybackSurface } from "./playback-surface";
 import { MeetingAudioControls } from "./meeting-audio";
-import {CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
+import {ActiveMicrophoneSelection,CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
 import {RecordingWriteStatus} from "./recording-write-status";
@@ -57,7 +57,8 @@ import {RecordingInputProvider,RecordingInputNotice,RecordingCompactInputs,Recor
 import {waitForCaptureTestStop} from "./capture-test-client";
 import {stopAllPlayback} from "./playback-barrier";
 import {newRecordingPreparation,sameRecordingPreparation,validRecordingTitle,type RecordingPreparation} from "./recording-preparation-state";
-import {checkedCaptureInputs,usableMicrophone} from "./capture-input-state";
+import {checkedCaptureInputs,usableAutomaticMicrophone,usableMicrophone} from "./capture-input-state";
+import {useRecordingMicrophoneSelection} from "./microphone-selection-status";
 import {useCaptureScope} from "./capture-applications";
 import {captureApplicationScope,checkedCaptureApplications,checkedCaptureScope} from "./capture-scope-state";
 import { assertCloseContext, assertCloseImport, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
@@ -197,10 +198,22 @@ function MainWindow() {
   const renameOpener = useRef<HTMLButtonElement>(null);
   const [captureAvailable, setCaptureAvailable] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
+  const [microphoneRequest,setMicrophoneRequest]=useState<{owner:string;revision:number}|null>(null);
   const [captureError, setCaptureError] = useState("");
   const captureOwner=screen==="recording"&&preparation?preparation.id:selectedMeeting?.id??null;
   const captureEnabled=captureAvailable&&(screen==="recording"&&!!preparation&&!preparation.submitted||selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase);
-  const captureInputs=useCaptureInputs(captureEnabled,captureOwner);
+  const activeMicrophoneInput=screen==="recording"&&state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&state.snapshot.meetingId===selectedMeeting?.id;
+  const captureInputs=useCaptureInputs(captureEnabled||activeMicrophoneInput,captureOwner);
+  const microphoneSession=state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?state.snapshot.sessionId:null;
+  const microphoneSelection=useRecordingMicrophoneSelection(microphoneSession);
+  useEffect(()=>{
+    if(microphoneRequest&&(microphoneRequest.owner!==microphoneSession||microphoneSelection?.requestRevision!==undefined&&microphoneSelection.requestRevision>=microphoneRequest.revision))setMicrophoneRequest(null);
+  },[microphoneSession,microphoneRequest,microphoneSelection?.requestRevision]);
+  useEffect(()=>{
+    if(!activeMicrophoneInput||!microphoneSelection||!captureInputs.inputs||microphoneRequest?.owner===microphoneSession&&microphoneSelection.requestRevision<microphoneRequest.revision)return;
+    if(microphoneSelection.mode==="automatic"&&captureInputs.mode!=="automatic")captureInputs.select("");
+    if(microphoneSelection.mode==="fixed"&&microphoneSelection.source!=="pending"&&captureInputs.inputs.devices.some(device=>device.uid===microphoneSelection.deviceUID)&&(captureInputs.mode!=="fixed"||captureInputs.uid!==microphoneSelection.deviceUID))captureInputs.select(microphoneSelection.deviceUID);
+  },[activeMicrophoneInput,microphoneSelection?.revision,captureInputs.inputs,captureInputs.mode,captureInputs.uid,microphoneRequest,microphoneSession]);
   const captureScope=useCaptureScope(captureEnabled,captureOwner);
   const captureTest=useCaptureTest();
   const [closingBusy, setClosingBusy] = useState(false);
@@ -407,7 +420,8 @@ function MainWindow() {
     const local=screen==="recording"?preparation:null;
     if ((!selectedMeeting&&!local) || local&&(local.submitted||!validRecordingTitle(local.title)) || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked) return;
     const owner=local?.id??selectedMeeting!.id;
-    const microphoneUID=captureInputs.uid;
+    const microphoneMode=captureInputs.mode;
+    const microphoneUID=microphoneMode==="fixed"?captureInputs.uid:null;
     const scope=checkedCaptureScope(captureScope.scope,captureScope.applications);
     const scopeKey=JSON.stringify(scope);
     const scopeUnchanged=()=>JSON.stringify(root.current.captureScope.scope)===scopeKey;
@@ -420,18 +434,19 @@ function MainWindow() {
       const importing = await invoke<ImportSnapshot>("get_audio_import"); assertCloseImport(importing);
       const expectedTest=await captureTest.client.refresh();
       if(expectedTest?.busy)throw Error("録音前テストの停止・検証が終わってから録音を開始してください。");
-      const microphone=usableMicrophone(checkedCaptureInputs(await invoke("get_capture_inputs")),microphoneUID);
-      if(!microphone)throw Error("選択したマイクまたは権限を再確認してください。別機器には切り替えていません。");
+      const currentInputList=checkedCaptureInputs(await invoke("get_capture_inputs"));
+      const microphone=microphoneUID===null?usableAutomaticMicrophone(currentInputList):usableMicrophone(currentInputList,microphoneUID);
+      if(!microphone)throw Error("マイクまたは権限を再確認してください。録音は開始していません。");
       const applications=scope.mode==="application"?checkedCaptureApplications(await invoke("get_capture_applications")):null;
       checkedCaptureScope(scope,applications);
       const application=captureApplicationScope(scope,applications);
       const scopeMessage=scope.mode==="system"?"PC音声は全体取得し、通知音や他の動画の音も含まれる場合があります。":`PC音声は選択したアプリ（${application?.name}）を取得します。ブラウザでは他のタブの音も含まれる場合があり、特定タブだけの取得は保証しません。終了・再起動時は全体取得や別アプリに切り替えません。`;
       if (!expected || expected.lifecycle !== "draft" || expected.sourceType != null || !ownerUnchanged()) throw Error("録音対象の会議を再確認してください。");
-      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphone.name}。${scopeMessage}` + (expectedTest ? "\n前のテスト音声の再生を停止し、一時音声を破棄してから録音を開始します。保存済み会議の音声は変更しません。" : "") + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.uid===microphoneUID&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
+      await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "マイクとPCの再生音が端末内に保存されます。参加者の同意と録音権限を確認してください。実行中の解析は安全な区切りで一時停止し、録音終了後に再開します。"+`\n録音するマイク: ${microphoneUID===null?"自動（会議アプリの使用マイクを優先し、不明なときはOSの既定入力）":microphone.name}。${scopeMessage}` + (expectedTest ? "\n前のテスト音声の再生を停止し、一時音声を破棄してから録音を開始します。保存済み会議の音声は変更しません。" : "") + (importNeedsConsent(importing) ? `\n取り込み（${importing.fileName ?? "選択・確認中の音声"}）を安全に取り消して録音を優先します。取り込みの確認内容と未確定物だけを整理し、元ファイルと保存済み会議を保持します。` : ""), validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.mode===microphoneMode&&(microphoneUID===null||root.current.captureInputs.uid===microphoneUID)&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: () => withConfirmedEdits(withSavedEdits, async () => {
         const [meeting, recording, currentImport, currentInputs, currentApplications] = await Promise.all([invoke<Meeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null)]);
         assertCloseRecording(recording);
         assertCloseImport(currentImport);
-        if(!usableMicrophone(currentInputs,microphoneUID)||root.current.captureInputs.uid!==microphoneUID)throw Error("確認したマイクまたは権限が変更されました。録音は開始していません。別機器には切り替えていません。");
+        if(!(microphoneUID===null?usableAutomaticMicrophone(currentInputs):usableMicrophone(currentInputs,microphoneUID))||root.current.captureInputs.mode!==microphoneMode||microphoneUID!==null&&root.current.captureInputs.uid!==microphoneUID)throw Error("確認したマイクまたは権限が変更されました。録音は開始していません。");
         checkedCaptureScope(scope,currentApplications);
         if(!scopeUnchanged())throw Error("PC音声の取得範囲が変更されました。録音は開始していません。");
         const meetingUnchanged=local?meeting===null:!!meeting&&meeting.id===expected.id&&meeting.title===expected.title&&meeting.lockVersion===expected.lockVersion&&meeting.lifecycle==="draft"&&meeting.sourceType==null;
@@ -454,6 +469,22 @@ function MainWindow() {
       setCaptureBusy(false);
     }
   };
+  const selectRecordingMicrophone=async(value:string)=>{
+    const snapshot=state.kind==="ready"?state.snapshot:null;
+    const sessionId=snapshot?.sessionId;
+    if(!sessionId||!["preparing","recording"].includes(snapshot.phase)||captureBusy||!captureInputs.inputs)return;
+    if(value!==""&&!captureInputs.inputs.devices.some(device=>device.uid===value))return;
+    setCaptureBusy(true);
+    try{
+      const current=await invoke<RecordingSnapshot>("get_recording_snapshot");
+      if(current.sessionId!==sessionId||!["preparing","recording"].includes(current.phase))throw Error("録音が切り替わったか、停止しました。");
+      const revision=await invoke<number>("select_recording_microphone",{sessionId,microphoneUid:value===""?null:value});
+      setMicrophoneRequest({owner:sessionId,revision});
+      if(root.current.state.kind==="ready"&&root.current.state.snapshot.sessionId===sessionId)captureInputs.select(value);
+    }catch(error){
+      toasts.show({key:`recording-microphone-selection-${sessionId}`,level:"error",message:`マイクを切り替えられませんでした: ${String(error)}`});
+    }finally{setCaptureBusy(false);}
+  };
   const startCaptureTest=async()=>{
     if(!captureOwner||!captureInputs.selected||!captureScope.scope||root.current.baseWriteLocked||starting.current||closing.current)return;
     const owner=captureOwner,uid=captureInputs.uid,scope=checkedCaptureScope(captureScope.scope,captureScope.applications),scopeKey=JSON.stringify(scope);
@@ -470,6 +501,7 @@ function MainWindow() {
       const app=captureApplicationScope(scope,apps);
       await startConfirm({title:"5秒の録音前テストを開始しますか？",target:`${microphone.name} ／ ${scope.mode==="system"?"PCの再生音全体":app?.name}`,confirmLabel:"5秒テストを開始する",
         message:"マイクとPCの音を一時保存します。参加者の同意と録音権限を確認してください。入力の初期化が終わってから5秒録音し、停止後に各音声を再生できます。会議・解析結果は作りません。解析とモデル準備は安全な停止を待ちます。"+
+          (captureInputs.mode==="automatic"?"この5秒テストはOSの既定マイクを確認します。通常録音で会議アプリの別のマイクが選ばれた場合、その入力の検証にはなりません。":"")+
           (scope.mode==="system"?"PC音声には通知音や他の動画の音も含まれます。":"選択したアプリを取得します。ブラウザの他のタブの音も含まれる場合があります。終了・再起動時に別アプリへ切り替えません。")+
           (previous?"前のテスト音声は再生を停止して破棄します。":"")+(importNeedsConsent(importing)?"確認した音声取り込みを安全に取り消し、元ファイルと保存済み会議を保持します。":""),
         validate:()=>sameInputs()&&!root.current.baseWriteLocked&&root.current.state.kind==="ready"&&["idle","error"].includes(root.current.state.snapshot.phase),
@@ -683,6 +715,7 @@ function MainWindow() {
               onTitle={title=>setPreparation(current=>current&&!current.submitted?{...current,title}:current)} onStart={()=>void startRecording()} onStop={source=>void stopRecording(source)}
               onBack={()=>void withSavedEdits(()=>{setSelectedMeeting(null);setPreparation(null);setRestoredFilter(null);setScreen("meetings");})} onSettings={()=>void withSavedEdits(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
               inputs={captureAvailable?<CaptureInputSelection control={captureInputs} scopeControl={captureScope} locked={writeLocked||!!preparation?.submitted||state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)}/>:<p>録音ヘルパーが未配置です。署名済みバンドルのビルド後に利用できます。</p>}
+              activeMicrophone={captureAvailable&&activeMicrophoneInput?<ActiveMicrophoneSelection control={captureInputs} locked={writeLocked||!captureInputs.inputs} onSelect={value=>void selectRecordingMicrophone(value)} status={microphoneSelection} pending={microphoneSelection?.source==="pending"||microphoneRequest?.owner===microphoneSession&&(!microphoneSelection||microphoneSelection.requestRevision<microphoneRequest.revision)}/>:null}
               test={captureAvailable?<CaptureTestPanel control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
                 canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={()=>void startCaptureTest()} onCancel={()=>void cancelCaptureTest()} onDiscard={()=>void discardCaptureTest()}/>:null}

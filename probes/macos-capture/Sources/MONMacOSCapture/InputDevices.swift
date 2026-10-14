@@ -19,6 +19,16 @@ struct CaptureInputDevices: Encodable {
 }
 
 enum InputDevices {
+  enum AutomaticSource: Equatable {
+    case application
+    case systemDefault(reason: String)
+  }
+
+  struct AutomaticChoice {
+    let device: CaptureInputDevice
+    let source: AutomaticSource
+  }
+
   static func validUID(_ uid: String) -> Bool {
     !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && uid.utf8.count <= 1024
@@ -80,6 +90,71 @@ enum InputDevices {
     let matches = devices.filter(\.isDefault)
     guard matches.count == 1 else { throw ProbeError.capture("default microphone is unavailable") }
     return matches[0]
+  }
+
+  /// Read-only HAL metadata. This does not open any input stream. A process
+  /// object may not exist yet, and meeting apps can move input into a helper
+  /// process; callers must treat nil as unknown, not as proof of no microphone.
+  static func activeInputObjects(for pid: pid_t) throws -> [AudioObjectID]? {
+    guard pid > 0 else { throw ProbeError.usage("input process ID is invalid") }
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    var processID = pid
+    var processObject = AudioObjectID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioObjectID>.stride)
+    var property = address(kAudioHardwarePropertyTranslatePIDToProcessObject)
+    let result = withUnsafePointer(to: &processID) { pointer in
+      AudioObjectGetPropertyData(
+        system, &property, UInt32(MemoryLayout<pid_t>.stride), pointer,
+        &size, &processObject)
+    }
+    try check(result)
+    guard size == MemoryLayout<AudioObjectID>.stride else {
+      throw ProbeError.capture("input process metadata has an invalid size")
+    }
+    if processObject == kAudioObjectUnknown { return nil }
+    let running: UInt32 = try scalar(processObject, kAudioProcessPropertyIsRunningInput)
+    guard running != 0 else { return nil }
+    return try objects(
+      processObject, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+  }
+
+  /// Only one known, live device can override the system default. Empty,
+  /// duplicated or unrecognised process devices are deliberately inconclusive.
+  static func automaticChoice(
+    from devices: [CaptureInputDevice], processInputObjects: [AudioObjectID]?
+  ) throws -> AutomaticChoice {
+    if let processInputObjects {
+      let matching = devices.filter { processInputObjects.contains($0.objectID) }
+      if processInputObjects.count == 1, matching.count == 1 {
+        return AutomaticChoice(device: matching[0], source: .application)
+      }
+    }
+    let fallback = try choose(nil, from: devices)
+    let reason =
+      processInputObjects == nil
+      ? "application_input_unavailable"
+      : "application_input_ambiguous"
+    return AutomaticChoice(device: fallback, source: .systemDefault(reason: reason))
+  }
+
+  static func automaticChoice(
+    from devices: [CaptureInputDevice], application: CaptureApplicationIdentity?
+  ) throws -> AutomaticChoice {
+    guard let application else {
+      return AutomaticChoice(
+        device: try choose(nil, from: devices),
+        source: .systemDefault(reason: "mon_direct_recording"))
+    }
+    // Both checks prevent a PID reused during the HAL query from being
+    // mistaken for the originally selected meeting application.
+    guard (try? CaptureApplications.current(application)) != nil else {
+      return try automaticChoice(from: devices, processInputObjects: nil)
+    }
+    let objects = try? activeInputObjects(for: application.pid)
+    guard (try? CaptureApplications.current(application)) != nil else {
+      return try automaticChoice(from: devices, processInputObjects: nil)
+    }
+    return try automaticChoice(from: devices, processInputObjects: objects)
   }
 
   static func verifyDevice(

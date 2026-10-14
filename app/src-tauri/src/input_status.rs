@@ -163,6 +163,7 @@ fn valid_input(m: &Input, input: &str) -> bool {
             matches!(
                 reason,
                 "identity_changed"
+                    | "device_changed"
                     | "engine_changed"
                     | "device_disconnected"
                     | "identity_ambiguous"

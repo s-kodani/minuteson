@@ -1,7 +1,7 @@
 use crate::session::{RecordingPhase, RecordingSnapshot, SessionStore};
 use crate::storage::{RecordingConfig, Storage};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ struct ActiveCapture {
     levels: crate::input_levels::LevelReader,
     writes: crate::recording_writes::WriteReader,
     input_status: Arc<Mutex<crate::input_status::StatusReader>>,
+    selection_revision: u64,
 }
 
 #[derive(Default)]
@@ -74,7 +75,7 @@ fn recording_command(
     binary: &Path,
     output: &Path,
     parent_pid: u32,
-    microphone_uid: &str,
+    microphone_uid: Option<&str>,
     scope: &crate::capture_scope::CaptureScope,
     session_id: &str,
 ) -> Result<Command, String> {
@@ -96,12 +97,12 @@ fn recording_command(
         .arg("--parent-pid")
         .arg(parent_pid.to_string())
         .arg("--until-stopped")
-        .arg("--microphone-uid")
-        .arg(microphone_uid)
-        .arg("--input-level-owner")
-        .arg(session_id)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(uid) = microphone_uid {
+        command.arg("--microphone-uid").arg(uid);
+    }
+    command.arg("--input-level-owner").arg(session_id);
     if let Some(identity) = &scope.application {
         command
             .arg("--pid")
@@ -110,6 +111,99 @@ fn recording_command(
             .arg(serde_json::to_string(identity).map_err(|e| e.to_string())?);
     }
     Ok(command)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MicrophoneSelectionRequest<'a> {
+    schema_version: u32,
+    owner_id: &'a str,
+    revision: u64,
+    mode: &'static str,
+    uid: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MicrophoneSelectionStatus {
+    schema_version: u32,
+    owner_id: String,
+    revision: u64,
+    request_revision: u64,
+    mode: String,
+    #[serde(rename = "deviceUID")]
+    device_uid: String,
+    source: String,
+    fallback_reason: Option<String>,
+}
+
+fn parse_microphone_selection_status(
+    bytes: &[u8],
+    owner: &str,
+) -> Result<MicrophoneSelectionStatus, String> {
+    if bytes.is_empty() || bytes.len() > 4096 || !crate::input_levels::valid_owner(owner) {
+        return Err("マイク選択状態の対象または容量が不正です".into());
+    }
+    let value: MicrophoneSelectionStatus =
+        serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    if value.schema_version != 1
+        || value.owner_id != owner
+        || !(1..=9_007_199_254_740_991).contains(&value.revision)
+        || value.request_revision > 9_007_199_254_740_991
+        || !crate::storage::valid_microphone_uid(&value.device_uid)
+        || !match (
+            value.mode.as_str(),
+            value.source.as_str(),
+            value.fallback_reason.as_deref(),
+        ) {
+            ("fixed", "fixed" | "pending", None)
+            | ("automatic", "application", None)
+            | ("automatic", "pending", None) => true,
+            ("automatic", "systemDefault", Some(reason)) => matches!(
+                reason,
+                "mon_direct_recording"
+                    | "application_input_unavailable"
+                    | "application_input_ambiguous"
+            ),
+            _ => false,
+        }
+    {
+        return Err("マイク選択状態の内容が不正です".into());
+    }
+    Ok(value)
+}
+
+fn publish_microphone_selection(
+    output: &Path,
+    owner: &str,
+    revision: u64,
+    uid: Option<&str>,
+) -> Result<(), String> {
+    if !crate::input_levels::valid_owner(owner)
+        || revision == 0
+        || revision > 9_007_199_254_740_991
+        || uid.is_some_and(|value| !crate::storage::valid_microphone_uid(value))
+    {
+        return Err("マイク切替の対象または指定が不正です".into());
+    }
+    let data = serde_json::to_vec(&MicrophoneSelectionRequest {
+        schema_version: 1,
+        owner_id: owner,
+        revision,
+        mode: if uid.is_some() { "fixed" } else { "automatic" },
+        uid,
+    })
+    .map_err(|error| error.to_string())?;
+    if data.len() > 4096 {
+        return Err("マイク切替の要求が大きすぎます".into());
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(output).map_err(|e| e.to_string())?;
+    temporary.write_all(&data).map_err(|e| e.to_string())?;
+    temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+    temporary
+        .persist(output.join("microphone-selection.request"))
+        .map_err(|e| e.error.to_string())?;
+    Ok(())
 }
 
 impl RecorderController {
@@ -396,11 +490,16 @@ impl RecorderController {
     pub fn start(
         app: &AppHandle,
         meeting_id: &str,
-        microphone_uid: &str,
+        microphone_uid: Option<&str>,
         scope: &crate::capture_scope::CaptureScope,
     ) -> Result<RecordingSnapshot, String> {
         app.state::<Storage>().require_data_writable()?;
-        Self::inputs(app)?.require_microphone(microphone_uid)?;
+        let inputs = Self::inputs(app)?;
+        if let Some(uid) = microphone_uid {
+            inputs.require_microphone(uid)?;
+        } else {
+            inputs.require_automatic_microphone()?;
+        }
         Self::require_scope(app, scope)?;
         let binary = probe_path(app)?;
         let controller = app.state::<RecorderController>();
@@ -423,7 +522,7 @@ impl RecorderController {
                 .as_ref()
                 .map(|a| vec![a.pid])
                 .unwrap_or_default(),
-            microphone_device_uid: Some(microphone_uid.into()),
+            microphone_device_uid: microphone_uid.map(str::to_owned),
             target_application_identity: scope.application.clone(),
         };
         let session =
@@ -484,6 +583,7 @@ impl RecorderController {
             levels: Default::default(),
             writes,
             input_status: Arc::new(Mutex::new(input_status)),
+            selection_revision: 0,
         });
         let snapshot = publish_after_unlock(
             active,
@@ -510,6 +610,119 @@ impl RecorderController {
 
     pub fn stop_session(app: &AppHandle, session: &str) -> Result<RecordingSnapshot, String> {
         Self::stop_target(app, Some(session))
+    }
+
+    pub fn select_input(
+        app: &AppHandle,
+        session_id: &str,
+        microphone_uid: Option<&str>,
+    ) -> Result<u64, String> {
+        let inputs = Self::inputs(app)?;
+        if let Some(uid) = microphone_uid {
+            inputs.require_microphone(uid)?;
+        } else {
+            inputs.require_automatic_microphone()?;
+        }
+        let controller = app.state::<RecorderController>();
+        let mut active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません".to_string())?;
+        let current = active.as_mut().ok_or("切り替えられる録音がありません")?;
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        if current.stop_operation_id.is_some() {
+            return Err("録音停止中はマイクを切り替えられません".into());
+        }
+        if current
+            .child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?
+            .try_wait()
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            return Err("録音ヘルパーが終了しているため切り替えられません".into());
+        }
+        let revision = current
+            .selection_revision
+            .checked_add(1)
+            .filter(|revision| *revision <= 9_007_199_254_740_991)
+            .ok_or("マイク切替の履歴上限に達しました")?;
+        publish_microphone_selection(
+            &current.level_directory,
+            session_id,
+            revision,
+            microphone_uid,
+        )?;
+        current.selection_revision = revision;
+        Ok(revision)
+    }
+
+    pub fn selection_status(
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<MicrophoneSelectionStatus, String> {
+        let controller = app.state::<RecorderController>();
+        let (directory, child) = {
+            let active = controller
+                .0
+                .lock()
+                .map_err(|_| "録音ロックを取得できません".to_string())?;
+            let current = active.as_ref().ok_or("確認できる録音がありません")?;
+            require_level_session(
+                &current.session_id,
+                &app.state::<SessionStore>().snapshot(),
+                session_id,
+            )?;
+            (current.level_directory.clone(), current.child.clone())
+        };
+        let parent = crate::input_levels::open_capture_directory(&directory)?;
+        let file =
+            crate::input_levels::open_capture_file_at(&parent, "microphone-selection.status.json")?;
+        let metadata = file.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_file() || metadata.len() > 4096 {
+            return Err("マイク選択状態のファイルが不正です".into());
+        }
+        #[cfg(unix)]
+        if std::os::unix::fs::MetadataExt::nlink(&metadata) != 1 {
+            return Err("マイク選択状態のファイルの所有が不正です".into());
+        }
+        let mut bytes = Vec::new();
+        (&file)
+            .take(4097)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() as u64 != metadata.len() {
+            return Err("マイク選択状態が読込み中に変更されました".into());
+        }
+        let status = parse_microphone_selection_status(&bytes, session_id)?;
+        let active = controller
+            .0
+            .lock()
+            .map_err(|_| "録音ロックを取得できません".to_string())?;
+        let current = active.as_ref().ok_or("録音が終了しました")?;
+        if !Arc::ptr_eq(&current.child, &child) {
+            return Err("録音ヘルパーが変更されました".into());
+        }
+        require_level_session(
+            &current.session_id,
+            &app.state::<SessionStore>().snapshot(),
+            session_id,
+        )?;
+        if child
+            .lock()
+            .map_err(|_| "録音プロセスのロックに失敗しました")?
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err("録音ヘルパーが終了しました".into());
+        }
+        Ok(status)
     }
 
     fn stop_target(app: &AppHandle, expected: Option<&str>) -> Result<RecordingSnapshot, String> {
@@ -703,6 +916,7 @@ mod tests {
                 levels: Default::default(),
                 writes: crate::recording_writes::WriteReader::pin(&output).unwrap(),
                 input_status: reader.clone(),
+                selection_revision: 0,
             })),
             Mutex::new(()),
         );
@@ -769,7 +983,7 @@ mod tests {
                 Path::new("/tmp/probe"),
                 Path::new("/tmp/output"),
                 1234,
-                "usb",
+                Some("usb"),
                 &scope,
                 id
             )
@@ -789,7 +1003,7 @@ mod tests {
             binary,
             output,
             1234,
-            "USB input/名前 with spaces",
+            Some("USB input/名前 with spaces"),
             &scope,
             SESSION,
         )
@@ -825,6 +1039,120 @@ mod tests {
     }
 
     #[test]
+    fn automatic_microphone_command_omits_fixed_uid_but_keeps_owner() {
+        let scope = crate::capture_scope::CaptureScope {
+            mode: "system".into(),
+            application: None,
+        };
+        let command = recording_command(
+            Path::new("/tmp/probe"),
+            Path::new("/tmp/output"),
+            1234,
+            None,
+            &scope,
+            SESSION,
+        )
+        .unwrap();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert!(!args.contains(&"--microphone-uid"));
+        assert_eq!(
+            args[args
+                .iter()
+                .position(|arg| *arg == "--input-level-owner")
+                .unwrap()
+                + 1],
+            SESSION
+        );
+    }
+
+    #[test]
+    fn microphone_selection_request_replaces_only_owned_bounded_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        publish_microphone_selection(directory.path(), SESSION, 1, Some("usb-123")).unwrap();
+        let file = directory.path().join("microphone-selection.request");
+        let first: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(first["ownerId"], SESSION);
+        assert_eq!(first["mode"], "fixed");
+        assert_eq!(first["uid"], "usb-123");
+        publish_microphone_selection(directory.path(), SESSION, 2, None).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(second["revision"], 2);
+        assert_eq!(second["mode"], "automatic");
+        assert!(second["uid"].is_null());
+        assert!(publish_microphone_selection(directory.path(), "../wrong", 3, None).is_err());
+        assert!(publish_microphone_selection(directory.path(), SESSION, 0, None).is_err());
+        assert!(
+            publish_microphone_selection(directory.path(), SESSION, 3, Some("bad\nuid")).is_err()
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(file).unwrap()).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn microphone_selection_status_rejects_wrong_owner_or_unbounded_source() {
+        let valid = serde_json::json!({
+            "schemaVersion":1,"ownerId":SESSION,"revision":1,"requestRevision":0,
+            "mode":"automatic","deviceUID":"built-in","source":"systemDefault",
+            "fallbackReason":"application_input_unavailable"
+        });
+        assert_eq!(
+            parse_microphone_selection_status(&serde_json::to_vec(&valid).unwrap(), SESSION)
+                .unwrap()
+                .fallback_reason
+                .as_deref(),
+            Some("application_input_unavailable")
+        );
+        let mut pending = valid.clone();
+        pending["mode"] = serde_json::json!("fixed");
+        pending["source"] = serde_json::json!("pending");
+        pending["fallbackReason"] = serde_json::Value::Null;
+        assert!(
+            parse_microphone_selection_status(&serde_json::to_vec(&pending).unwrap(), SESSION)
+                .is_ok()
+        );
+        for (field, invalid) in [
+            ("ownerId", serde_json::json!("../other")),
+            ("revision", serde_json::json!(0)),
+            ("source", serde_json::json!("anyDevice")),
+            ("fallbackReason", serde_json::json!("arbitrary user text")),
+            ("deviceUID", serde_json::json!("bad\nuid")),
+        ] {
+            let mut value = valid.clone();
+            value[field] = invalid;
+            assert!(parse_microphone_selection_status(
+                &serde_json::to_vec(&value).unwrap(),
+                SESSION
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "Swift-generated fixture; run with MON_MIC_SELECTION_FIXTURE_DIR"]
+    fn swift_generated_microphone_selection_status_matches_native_reader() {
+        let directory = std::path::PathBuf::from(
+            std::env::var("MON_MIC_SELECTION_FIXTURE_DIR").expect("Swift fixture directory"),
+        );
+        let bytes = std::fs::read(directory.join("microphone-selection.status.json")).unwrap();
+        let result = parse_microphone_selection_status(&bytes, SESSION).unwrap();
+        assert_eq!(result.revision, 1);
+        assert_eq!(result.mode, "automatic");
+        assert_eq!(result.source, "systemDefault");
+        assert_eq!(result.device_uid, "built-in");
+        assert_eq!(
+            result.fallback_reason.as_deref(),
+            Some("application_input_unavailable")
+        );
+    }
+
+    #[test]
     fn application_command_binds_the_process_instance_as_one_json_argument() {
         let identity = crate::capture_scope::ApplicationIdentity {
             pid: 456,
@@ -839,7 +1167,7 @@ mod tests {
             Path::new("/tmp/probe"),
             Path::new("/tmp/output"),
             1234,
-            "usb",
+            Some("usb"),
             &scope,
             SESSION,
         )
@@ -872,7 +1200,7 @@ mod tests {
             Path::new("/tmp/probe"),
             Path::new("/tmp/output"),
             1234,
-            "usb",
+            Some("usb"),
             &malformed,
             SESSION
         )

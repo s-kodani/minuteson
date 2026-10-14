@@ -1658,7 +1658,7 @@ fn capture_available(window: WebviewWindow) -> Result<bool, String> {
 async fn start_recording(
     window: WebviewWindow,
     meeting_id: String,
-    microphone_uid: String,
+    microphone_uid: Option<String>,
     capture_scope: capture_scope::CaptureScope,
     new_title: Option<String>,
 ) -> Result<RecordingSnapshot, String> {
@@ -1676,7 +1676,12 @@ async fn start_recording(
                 return Err("別の録音が進行中です".into());
             }
             app.state::<Storage>().require_data_writable()?;
-            RecorderController::inputs(&app)?.require_microphone(&microphone_uid)?;
+            let inputs = RecorderController::inputs(&app)?;
+            if let Some(uid) = microphone_uid.as_deref() {
+                inputs.require_microphone(uid)?;
+            } else {
+                inputs.require_automatic_microphone()?;
+            }
             RecorderController::require_scope(&app, &capture_scope)?;
             if let Some(title) = new_title {
                 app.state::<Storage>()
@@ -1684,7 +1689,12 @@ async fn start_recording(
             }
             ImportController::prepare_recording(&app)?;
             let result = AnalysisController::prepare_recording(&app).and_then(|_| {
-                RecorderController::start(&app, &meeting_id, &microphone_uid, &capture_scope)
+                RecorderController::start(
+                    &app,
+                    &meeting_id,
+                    microphone_uid.as_deref(),
+                    &capture_scope,
+                )
             });
             if result.is_err() {
                 AnalysisController::recording_finished(&app);
@@ -1694,6 +1704,41 @@ async fn start_recording(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn select_recording_microphone(
+    window: WebviewWindow,
+    session_id: String,
+    microphone_uid: Option<String>,
+) -> Result<u64, String> {
+    if window.label() != "main" {
+        return Err("マイク切替はメイン画面で行ってください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::with_transition(&app, || {
+            RecorderController::select_input(&app, &session_id, microphone_uid.as_deref())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn get_recording_microphone_selection(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<recorder::MicrophoneSelectionStatus, String> {
+    if window.label() != "main" {
+        return Err("マイク選択状態はメイン画面で確認してください".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        RecorderController::selection_status(&app, &session_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2035,6 +2080,8 @@ pub fn run() {
                 get_capture_inputs,
                 get_capture_applications,
                 start_recording,
+                select_recording_microphone,
+                get_recording_microphone_selection,
                 stop_recording,
                 get_recording_confirmation,
                 request_recording_confirmation,

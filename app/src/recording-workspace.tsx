@@ -9,10 +9,10 @@ import {RecordingWriteStatus} from "./recording-write-status";
 import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,test,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
-  inputs:ReactNode;test?:ReactNode;notices:ReactNode;
+  inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
   const titleFocusOwner=useRef<string|null>(null);
@@ -43,6 +43,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
     {preparation&&!preparation.submitted&&<p>日時から仮の会議名を入れています。変更せずに開始できます。開始の確認前には会議や音声を保存しません。</p>}
     {active?<>
       <div className="clock" aria-label="録音経過時間">{formatElapsed(snapshot.elapsedMs)}</div>
+      {activeMicrophone}
       <dl className="recording-track-status"><div><dt>マイク</dt><dd><RecordingInputStatus input="microphone" owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/><InputLevelMeter label="マイク" level={levels.microphone}/></dd></div><div><dt>PCの音声</dt><dd><RecordingInputStatus input="system" owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/><InputLevelMeter label="PCの音声" level={levels.system}/></dd></div></dl>
       <p>接続状態は同じマイク・同じPC音声の取得対象についての最新報告です。未対応の取得方式では接続を推測しません。入力レベルは受信音声の測定値で、状態・測定値の更新が1秒を超えて止まると現在の値として表示しません。接続・復帰や入力レベルは保存の成功を示すものではありません。</p>
       <RecordingWriteStatus owner={["preparing","recording"].includes(phase)?snapshot.sessionId:null}/>

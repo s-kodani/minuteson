@@ -363,6 +363,7 @@ struct Manifest: Encodable {
   // native recovery UI; it must not claim all notifications were committed.
   var inputEventJournalError: String? = nil
   var inputEventJournalPersistence: InputJournalPersistence? = nil
+  var microphoneSelectionError: String? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 2,
@@ -1078,13 +1079,16 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let outputURL: URL
   private let lock = NSLock()
   private var file: AVAudioFile?
+  private var normalizer: MicrophonePCMNormalizer?
+  private var conversionAllowedUID: String?
   private var tapInstalled = false
   private var stats = TrackStats()
   private let clock: CaptureClockDomain?
   private let levelsEnabled: Bool
   private let testWindow: CaptureTestWindow?
 
-  private let requestedUID: String?
+  private var requestedUID: String?
+  private let applicationIdentity: CaptureApplicationIdentity?
   private let inputEventObserver: InputEventJournal.Observer?
   private let makeEngine: @Sendable () throws -> any MicrophoneCaptureEngine
   private let devices: @Sendable () throws -> CaptureInputDevices
@@ -1094,10 +1098,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private let mayContinue: @Sendable () -> Bool
   private let controlNow: @Sendable () -> ContinuousClock.Instant
   private var selectedDeviceID: AudioObjectID?
+  private var automaticSource: InputDevices.AutomaticSource?
   private(set) var deviceUID: String?
 
   init(
     outputURL: URL, clock: CaptureClockDomain? = nil, microphoneUID: String? = nil,
+    applicationIdentity: CaptureApplicationIdentity? = nil,
     levelsEnabled: Bool = false, testWindow: CaptureTestWindow? = nil,
     inputEventObserver: InputEventJournal.Observer? = nil,
     rawSegments: RawRecordingSegments? = nil,
@@ -1117,6 +1123,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     self.outputURL = outputURL
     self.clock = clock
     self.requestedUID = microphoneUID
+    self.applicationIdentity = applicationIdentity
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
     self.inputEventObserver = inputEventObserver
@@ -1131,7 +1138,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   func start() async throws {
-    let selected = try InputDevices.choose(requestedUID, from: devices().devices)
+    let available = try devices().devices
+    let automatic =
+      try requestedUID == nil
+      ? InputDevices.automaticChoice(from: available, application: applicationIdentity) : nil
+    let selected = try automatic?.device ?? InputDevices.choose(requestedUID, from: available)
     var authorization = permission()
     if authorization == .notDetermined {
       _ = await requestPermission()
@@ -1148,12 +1159,56 @@ final class MicrophoneRecorder: @unchecked Sendable {
       }
       recovery = try MicrophoneRecovery(uid: selected.uid, observe: inputEventObserver)
       deviceUID = selected.uid
+      automaticSource = automatic?.source
     }
     do {
       try configure(selected)
     } catch {
       stop()
       throw ProbeError.capture(CaptureFailureGuide.microphoneInitialization(error))
+    }
+  }
+
+  func selectInput(_ uid: String?) throws {
+    guard uid.map(InputDevices.validUID) ?? true else {
+      throw ProbeError.capture("requested microphone UID is invalid")
+    }
+    guard lock.withLock({ recovery?.status.state != "stopped" && recovery != nil }),
+      mayContinue()
+    else { throw ProbeError.capture("microphone selection is not active") }
+    requestedUID = uid
+    if uid != nil { lock.withLock { automaticSource = nil } }
+  }
+
+  func selectionStatus(owner: String, revision: Int64, requestRevision: Int64) throws
+    -> MicrophoneSelectionStatus
+  {
+    try lock.withLock {
+      guard let deviceUID else {
+        throw ProbeError.capture("microphone selection has no device")
+      }
+      let source: String
+      let fallbackReason: String?
+      if requestedUID != nil {
+        source = requestedUID == deviceUID ? "fixed" : "pending"
+        fallbackReason = nil
+      } else {
+        switch automaticSource {
+        case .application:
+          source = "application"
+          fallbackReason = nil
+        case .systemDefault(let reason):
+          source = "systemDefault"
+          fallbackReason = reason
+        case nil:
+          source = "pending"
+          fallbackReason = nil
+        }
+      }
+      return MicrophoneSelectionStatus(
+        ownerId: owner, revision: revision, requestRevision: requestRevision,
+        mode: requestedUID == nil ? "automatic" : "fixed", deviceUID: deviceUID,
+        source: source, fallbackReason: fallbackReason)
     }
   }
 
@@ -1174,11 +1229,17 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     try lock.withLock {
       if let file {
-        guard MicrophonePCMFormat.matches(file.processingFormat, format),
+        if MicrophonePCMFormat.matches(file.processingFormat, format),
           stats.sampleRate == format.sampleRate,
           stats.channels == format.channelCount
-        else {
-          throw RebindError.formatChanged
+        {
+          normalizer = nil
+        } else {
+          guard selected.uid == conversionAllowedUID,
+            let converter = MicrophonePCMNormalizer(
+              from: format, to: file.processingFormat)
+          else { throw RebindError.formatChanged }
+          normalizer = converter
         }
       } else {
         guard stats.frames == 0 else { throw ProbeError.capture("microphone writer was lost") }
@@ -1187,8 +1248,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
           interleaved: false)
         stats.sampleRate = format.sampleRate
         stats.channels = format.channelCount
+        normalizer = nil
       }
-      guard let file, MicrophonePCMFormat.matches(file.processingFormat, format) else {
+      guard let file,
+        normalizer != nil || MicrophonePCMFormat.matches(file.processingFormat, format)
+      else {
         throw RebindError.formatChanged
       }
       selectedDeviceID = selected.objectID
@@ -1283,9 +1347,18 @@ final class MicrophoneRecorder: @unchecked Sendable {
         guard let file = self.file else {
           throw ProbeError.capture("microphone CAF writer is closed")
         }
+        var savedWhen = when
+        let converted = self.normalizer != nil
+        if let normalizer = self.normalizer {
+          guard when.isHostTimeValid,
+            !when.isSampleTimeValid || when.sampleRate == normalizer.inputFormat.sampleRate
+          else { throw ProbeError.capture("changed microphone clock format is invalid") }
+          buffer = try normalizer.convert(buffer)
+          savedWhen = AVAudioTime(hostTime: when.hostTime)
+        }
         guard
           self.stats.acceptsMicrophonePCM(
-            buffer, at: when, processingFormat: file.processingFormat)
+            buffer, at: savedWhen, processingFormat: file.processingFormat)
         else {
           self.recovery?.interrupt("format_changed", unavailable: true)
           self.configurationChanged = true
@@ -1300,7 +1373,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
           return
         }
         var savedSourceFrame: Int64?
-        if when.isSampleTimeValid {
+        if !converted, when.isSampleTimeValid {
           let (frame, overflow) = when.sampleTime.addingReportingOverflow(sourceFrameOffset)
           guard !overflow else { throw ProbeError.capture("microphone frame offset overflows") }
           savedSourceFrame = frame
@@ -1604,7 +1677,42 @@ final class MicrophoneRecorder: @unchecked Sendable {
       suspend("permission_unavailable", unavailable: true)
       return
     }
-    let matches = report.devices.filter { $0.uid == uid }
+    let desired: CaptureInputDevice
+    do {
+      let automatic =
+        try requestedUID == nil
+        ? InputDevices.automaticChoice(
+          from: report.devices, application: applicationIdentity) : nil
+      desired = try automatic?.device ?? InputDevices.choose(requestedUID, from: report.devices)
+      lock.withLock { automaticSource = automatic?.source }
+    } catch {
+      let known = report.devices.filter { $0.uid == uid }
+      suspend(
+        requestedUID == nil
+          ? "device_disconnected"
+          : known.isEmpty ? "device_disconnected" : "identity_ambiguous",
+        unavailable: requestedUID == nil || !known.isEmpty)
+      return
+    }
+    if desired.uid != uid {
+      // The previous callback lock drains before a new engine is created.
+      // Recovery keeps its epoch and rejects any late callbacks from the old
+      // UID even when HAL later recycles a transient device object ID.
+      suspend("device_changed")
+      do {
+        try lock.withLock {
+          guard recovery != nil else { throw ProbeError.capture("microphone owner is missing") }
+          try recovery?.retarget(desired.uid)
+          deviceUID = desired.uid
+          conversionAllowedUID = desired.uid
+        }
+      } catch {
+        suspend("identity_ambiguous", unavailable: true)
+        return
+      }
+      lastRecoveryAttempt = nil
+    }
+    let matches = report.devices.filter { $0.uid == desired.uid }
     guard matches.count == 1 else {
       suspend(
         matches.isEmpty ? "device_disconnected" : "identity_ambiguous",
@@ -1745,6 +1853,10 @@ public enum CaptureCommand {
         if options.publishesInputStatus {
           try? FileManager.default.removeItem(
             at: options.output.appendingPathComponent("input-status.json"))
+          try? FileManager.default.removeItem(
+            at: options.output.appendingPathComponent("microphone-selection.request"))
+          try? FileManager.default.removeItem(
+            at: options.output.appendingPathComponent("microphone-selection.status.json"))
         }
       }
       let manifestURL = options.output.appendingPathComponent("manifest.json")
@@ -1765,6 +1877,10 @@ public enum CaptureCommand {
         try InputJournalStatusPublisher(
           output: options.output, owner: options.inputLevelOwner!, initial: $0.persistence())
       }
+      let microphoneSelection =
+        try options.publishesInputStatus
+        ? MicrophoneSelectionReader(output: options.output, owner: options.inputLevelOwner!) : nil
+      var publishedMicrophoneSelection: MicrophoneSelectionStatus?
       defer { journalStatus?.removeIfOwned() }
       let rawMic =
         options.publishesInputStatus
@@ -1779,7 +1895,9 @@ public enum CaptureCommand {
       let systemControlled = options.stopOnFile
       let mic = MicrophoneRecorder(
         outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
-        microphoneUID: options.microphoneUID, levelsEnabled: options.inputLevelOwner != nil,
+        microphoneUID: options.microphoneUID,
+        applicationIdentity: options.applicationIdentity,
+        levelsEnabled: options.inputLevelOwner != nil,
         testWindow: testWindow, inputEventObserver: inputEvents?.observer(.microphone),
         rawSegments: rawMic,
         mayContinue: {
@@ -1880,7 +1998,46 @@ public enum CaptureCommand {
               else { break }
               try system.resumeAfterClockRecovery(request)
             }
+            if let microphoneSelection {
+              do {
+                if let request = try microphoneSelection.next() {
+                  try mic.selectInput(request.uid)
+                  try microphoneSelection.acknowledge(request)
+                  manifest.microphoneSelectionError = nil
+                }
+              } catch {
+                let detail = "microphone selection request was rejected"
+                if manifest.microphoneSelectionError != detail {
+                  manifest.microphoneSelectionError = detail
+                  try write(manifest, to: manifestURL)
+                }
+              }
+            }
             mic.maintain()
+            if let owner = options.inputLevelOwner, let microphoneSelection {
+              do {
+                let revision = (publishedMicrophoneSelection?.revision ?? 0) + 1
+                let current = try mic.selectionStatus(
+                  owner: owner, revision: revision,
+                  requestRevision: microphoneSelection.revision)
+                let previous = publishedMicrophoneSelection
+                if previous?.requestRevision != current.requestRevision
+                  || previous?.mode != current.mode
+                  || previous?.deviceUID != current.deviceUID
+                  || previous?.source != current.source
+                  || previous?.fallbackReason != current.fallbackReason
+                {
+                  try current.publish(to: options.output)
+                  publishedMicrophoneSelection = current
+                }
+              } catch {
+                let detail = "microphone selection status could not be confirmed"
+                if manifest.microphoneSelectionError != detail {
+                  manifest.microphoneSelectionError = detail
+                  try write(manifest, to: manifestURL)
+                }
+              }
+            }
             if !options.usesStandaloneTapProbe { system.maintain() }
             let microphone = mic.snapshot()
             let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()

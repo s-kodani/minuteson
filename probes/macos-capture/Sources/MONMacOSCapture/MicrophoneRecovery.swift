@@ -1,9 +1,9 @@
 import CoreAudio
 import Foundation
 
-/// One frozen UID, not a name or the current default input. A binding token
-/// belongs to one engine incarnation; its queued callbacks cannot be adopted
-/// by a later engine even when Core Audio reuses a transient object ID.
+/// A binding token belongs to one engine incarnation; its queued callbacks
+/// cannot be adopted by a later engine even when Core Audio reuses an object ID.
+/// The control owner may retarget only after retiring the previous binding.
 struct MicrophoneRecovery {
   struct Binding: Equatable, Sendable {
     let uid: String
@@ -31,7 +31,7 @@ struct MicrophoneRecovery {
     }
   }
 
-  let uid: String
+  private(set) var uid: String
   private var epoch: UInt64 = 0
   private var interruptions: UInt64 = 0
   private var state = "reconnecting"
@@ -95,6 +95,13 @@ struct MicrophoneRecovery {
       throw ProbeError.capture("microphone binding is not connected")
     }
     return binding
+  }
+
+  mutating func retarget(_ newUID: String) throws {
+    guard !stopped, binding == nil, InputDevices.validUID(newUID) else {
+      throw ProbeError.capture("microphone input cannot be changed while bound or stopped")
+    }
+    uid = newUID
   }
 
   // A control-loop retry retires the engine but is not a new diagnosis.

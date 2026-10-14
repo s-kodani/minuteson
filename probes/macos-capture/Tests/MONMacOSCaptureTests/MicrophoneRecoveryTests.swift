@@ -32,6 +32,25 @@ final class MicrophoneRecoveryTests: XCTestCase {
     XCTAssertFalse(recovery.accepts(original))
   }
 
+  func testRetargetRequiresRetiredBindingAndPreservesEpochAndOldCallbackRejection() throws {
+    var recovery = try MicrophoneRecovery(uid: first.uid)
+    let old = try recovery.begin(first)
+    try recovery.activate(old)
+    XCTAssertThrowsError(try recovery.retarget(other.uid))
+    recovery.interrupt("device_changed")
+    try recovery.retarget(other.uid)
+    XCTAssertEqual(recovery.uid, other.uid)
+    XCTAssertThrowsError(try recovery.begin(first))
+    let next = try recovery.begin(other)
+    XCTAssertGreaterThan(next.epoch, old.epoch)
+    XCTAssertFalse(recovery.accepts(old))
+    XCTAssertThrowsError(try recovery.activate(old))
+    try recovery.activate(next)
+    XCTAssertTrue(recovery.accepts(next))
+    recovery.stop()
+    XCTAssertThrowsError(try recovery.retarget(first.uid))
+  }
+
   func testLateCallbacksAndRestartResultsCannotReactivateAnOldBinding() throws {
     var recovery = try MicrophoneRecovery(uid: first.uid)
     let firstToken = try recovery.begin(first)
