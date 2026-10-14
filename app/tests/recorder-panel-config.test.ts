@@ -25,10 +25,21 @@ test("mini close stays usable while stop confirmation keeps stop controls guarde
   const present=sourceWindow.split("let present =")[1].split("if let Err(error) = present()")[0];
   assert.match(present,/for label in \["main"\]/);
   assert.doesNotMatch(present,/\["main", "recorder"\]/);
-  assert.match(sourceWindow,/window.label\(\) != "recorder" \|\| window.is_visible\(\).unwrap_or\(false\)/);
+  assert.match(sourceWindow,/window.is_visible\(\).unwrap_or\(false\)\s*&& crate::recorder_panel::may_present\(app\)/);
   const permission=JSON.parse(source("../src-tauri/capabilities/recorder.json"));
   assert.deepEqual(permission.windows,["recorder"]);
   assert.ok(permission.permissions.includes("core:window:allow-start-dragging"));
+});
+test("native main focus and recording phase own mini visibility without a manual show command",()=>{
+  const lib=source("../src-tauri/src/lib.rs"),recorder=source("../src-tauri/src/recorder.rs"),panel=source("../src-tauri/src/recorder_panel.rs");
+  assert.match(lib,/WindowEvent::Focused\(focused\).*recorder_panel::main_focus_changed/s);
+  assert.match(lib,/window.hide\(\).*recorder_panel::synchronize\(window.app_handle\(\), Some\(false\)\)/s);
+  assert.doesNotMatch(lib,/show_recorder_preview/);
+  assert.match(recorder,/recording_confirmation_window::session_changed\(&handle, &snapshot\);\s*let _ = crate::recorder_panel::synchronize\(&handle, None\)/);
+  assert.doesNotMatch(recorder,/panel\.show\(\)/);
+  assert.match(panel,/RecordingPhase::Preparing \| RecordingPhase::Recording/);
+  assert.match(panel,/if !active \|\| focused \{/);
+  assert.match(panel,/\.dismissed\s*\.store\(true, Ordering::SeqCst\)/);
 });
 test("mini issue badge uses a separate grid row and adjacent buttons stay top aligned",()=>{
   const base=source("../src/style.css"), mini=source("../src/recorder-panel.css");

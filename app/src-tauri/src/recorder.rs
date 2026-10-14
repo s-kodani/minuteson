@@ -54,14 +54,6 @@ fn publish_after_unlock<G, T>(
     snapshot
 }
 
-fn should_show_panel(snapshot: &RecordingSnapshot, owner: &str) -> bool {
-    snapshot.session_id.as_deref() == Some(owner)
-        && matches!(
-            snapshot.phase,
-            RecordingPhase::Preparing | RecordingPhase::Recording
-        )
-}
-
 fn mark_started(store: &SessionStore, owner: &str) -> bool {
     store
         .update_if(|snapshot| {
@@ -510,19 +502,9 @@ impl RecorderController {
         );
         let worker_app = app.clone();
         let worker_session = session.id.clone();
-        // Supervision starts before scheduling the panel. A delayed/failed UI
-        // must never leave an exited helper and an unobserved preparing session.
+        // Supervision starts independently of the focus-driven panel. A
+        // delayed/failed UI must not leave an exited helper unobserved.
         std::thread::spawn(move || watch_probe(worker_app, child, worker_session, output));
-        let panel_app = app.clone();
-        let expected_session = session.id;
-        let _ = app.run_on_main_thread(move || {
-            let current = panel_app.state::<SessionStore>().snapshot();
-            if should_show_panel(&current, &expected_session) {
-                if let Some(panel) = panel_app.get_webview_window("recorder") {
-                    let _ = panel.show();
-                }
-            }
-        });
         Ok(snapshot)
     }
 
@@ -639,14 +621,13 @@ mod tests {
                     .try_lock()
                     .expect("capture held during notification");
                 require_level_session(SESSION, &store.snapshot(), SESSION).unwrap();
-                assert!(should_show_panel(snapshot, SESSION));
+                assert_eq!(snapshot.session_id.as_deref(), Some(SESSION));
                 store.update(|s| s.phase = RecordingPhase::Stopping);
             },
         );
         assert_eq!(started.phase, RecordingPhase::Preparing);
         assert_eq!(store.snapshot().phase, RecordingPhase::Stopping);
         assert!(!mark_started(&store, SESSION));
-        assert!(!should_show_panel(&store.snapshot(), SESSION));
     }
 
     #[test]
@@ -667,7 +648,6 @@ mod tests {
             s.phase = RecordingPhase::Preparing;
         });
         assert!(!mark_started(&store, SESSION));
-        assert!(!should_show_panel(&store.snapshot(), SESSION));
         for phase in [
             RecordingPhase::Idle,
             RecordingPhase::Error,
@@ -677,7 +657,6 @@ mod tests {
                 s.session_id = Some(SESSION.into());
                 s.phase = phase;
             });
-            assert!(!should_show_panel(&store.snapshot(), SESSION));
         }
     }
     #[test]
@@ -952,6 +931,7 @@ fn notify_session(app: &AppHandle) {
     let _ = app.run_on_main_thread(move || {
         let snapshot = handle.state::<SessionStore>().snapshot();
         crate::recording_confirmation_window::session_changed(&handle, &snapshot);
+        let _ = crate::recorder_panel::synchronize(&handle, None);
         let _ = handle.emit("session-changed", snapshot);
     });
 }

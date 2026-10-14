@@ -36,6 +36,7 @@ mod playback;
 mod recorder;
 mod recorder_info;
 mod recorder_operation_notices;
+mod recorder_panel;
 mod recording_confirmation;
 mod recording_confirmation_window;
 #[cfg(unix)]
@@ -1794,19 +1795,6 @@ async fn stop_recording(window: WebviewWindow) -> Result<RecordingSnapshot, Stri
 }
 
 #[tauri::command]
-fn show_recorder_preview(window: WebviewWindow) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("Only the main window can open the preview".into());
-    }
-    let panel = window
-        .app_handle()
-        .get_webview_window("recorder")
-        .ok_or("Recorder panel unavailable")?;
-    panel.show().map_err(|error| error.to_string())?;
-    panel.set_focus().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn hide_recorder_panel(window: WebviewWindow) -> Result<(), String> {
     if window.label() != "recorder" {
         return Err("Only the recorder panel can hide itself".into());
@@ -1824,7 +1812,9 @@ fn open_main_window(window: WebviewWindow) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or("Main window unavailable")?;
     main.show().map_err(|error| error.to_string())?;
-    main.set_focus().map_err(|error| error.to_string())
+    main.set_focus().map_err(|error| error.to_string())?;
+    recorder_panel::main_focus_changed(window.app_handle(), true);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1925,6 +1915,7 @@ pub fn run() {
         .manage(startup_attention::Startup::default())
         .manage(SessionStore::default())
         .manage(RecorderController::default())
+        .manage(recorder_panel::PanelVisibility::default())
         .manage(input_status::archived::ArchivedInputs::default())
         .manage(capture_test::CaptureTests::default())
         .manage(StopDecisionStore::default())
@@ -2097,7 +2088,6 @@ pub fn run() {
                 get_recording_confirmation,
                 request_recording_confirmation,
                 decide_recording_confirmation,
-                show_recorder_preview,
                 hide_recorder_panel,
                 open_main_window,
                 recorder_info::get_recorder_info,
@@ -2179,6 +2169,11 @@ pub fn run() {
                 }
                 return;
             }
+            if window.label() == "main" {
+                if let WindowEvent::Focused(focused) = event {
+                    recorder_panel::main_focus_changed(window.app_handle(), *focused);
+                }
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == recording_confirmation_window::LABEL {
                     api.prevent_close();
@@ -2192,6 +2187,7 @@ pub fn run() {
                         recording_confirmation_window::focus(window.app_handle());
                     } else if window.state::<SessionStore>().snapshot().is_active() {
                         let _ = window.hide();
+                        let _ = recorder_panel::synchronize(window.app_handle(), Some(false));
                     } else {
                         let _ =
                             window.emit("main-close-requested", serde_json::json!({"quit": false}));

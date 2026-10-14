@@ -38,7 +38,9 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
         {
             // A user-hidden mini panel stays hidden even if its stop decision
             // is subsequently cancelled. Visible openers keep their focus.
-            if window.label() != "recorder" || window.is_visible().unwrap_or(false) {
+            if window.label() != "recorder"
+                || window.is_visible().unwrap_or(false) && crate::recorder_panel::may_present(app)
+            {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -227,6 +229,7 @@ pub fn close_requested(app: &AppHandle) {
 pub fn hide_recorder(app: &AppHandle) -> Result<(), String> {
     // Visibility only: no recorder lock, state read, stop, save or decision.
     // Even failed help dismissal must not trap the panel on screen.
+    crate::recorder_panel::dismiss(app);
     app.get_webview_window("recorder")
         .ok_or("録音パネルがありません")?
         .hide()
