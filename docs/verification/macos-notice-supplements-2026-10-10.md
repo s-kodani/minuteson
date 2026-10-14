@@ -1,5 +1,11 @@
 # macOS依存通知文の版固定補完とソース参照
 
+## 2026-10-15 現行依存グラフの再照合
+
+現行checkoutで `python3 tools/mon_third_party_notices.py --output-dir /private/tmp/mon-notice-audit-20261015` をオフライン実行した。依存一覧は379件、`missingNoticeTexts` と `referenceOnlyPackages` はともに12件で、対象は `block2 0.6.2`、`dispatch2 0.3.1`、`objc2 0.6.4`、`objc2-app-kit`・`objc2-core-foundation`・`objc2-core-graphics`・`objc2-foundation`・`objc2-io-surface`・`objc2-quartz-core`・`objc2-web-kit` の各0.3.2、`objc2-encode 4.1.0`、`objc2-exception-helper 0.1.1`。以下の旧時点の275件はその時点の実測であり、現在の依存件数として使わない。再生成された一覧の `licenseReview` は `not_verified`、`distributionReady` は `false` のまま。
+
+補完indexは各crateの版・checksum・VCS commitに対応する上流 `LICENSE.md` とSPDXのMIT雛形を参照している。[固定commitの上流説明](https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md)は、crate群のライセンス選択肢を示す一方、Apple SDK由来の生成物の配布条件に疑問を明記する。これは個別著作権表示の収集や配布条件の確認に代わらない。雛形の年・名義を推定して `license_text` に格上げしたり、不足12件を解消済みと扱ったりしない。配布前には各版に対応する通知・選択するライセンス文面とApple SDK由来の条件を確認する必要がある。MON本体・別導入モデル／実行ファイル、Developer ID署名・公証等の別条件も残る。今回の照合ではアプリの実行、録音、署名、公証、モデル取得、データ変更を行っていない。
+
 ## 2026-10-11 MIT参照本文のオフライン同梱
 
 objc2の上流4commitの説明はMITを選択肢として示すが、12件の個別著作権通知の不足は解消していない。[SPDX v3.26.0のMIT template](https://github.com/spdx/license-list-data/blob/v3.26.0/text/MIT.txt)を参照用に追加した。HTTPS取得した原文と保存資料は全バイト一致、1087bytes／SHA256 `6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9`。著作権の年・名義placeholderを推測して置換しない。上流説明とApple SDKに関する注意も保持する。
