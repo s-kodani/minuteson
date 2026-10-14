@@ -200,6 +200,11 @@ mod tests {
         );
         e.model.size -= 1;
         assert!(Capacity::reviewed(&e.model).is_err());
+        e.model.sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db".into();
+        e.model.size = 491400032;
+        assert!(Capacity::reviewed(&e.model)
+            .unwrap_err()
+            .contains("minutes_model_limits_unknown"));
     }
     #[test]
     fn all_catalog_llms_bind_independent_exact_bytes_and_never_exceed_output_caps() {
@@ -240,7 +245,7 @@ mod tests {
             e.model.size += 1;
             assert!(Capacity::reviewed(&e.model).is_err());
         }
-        assert_eq!(seen.len(), 3);
+        assert_eq!(seen.len(), 2);
     }
     #[test]
     fn model_input_limit_is_independent_of_context_and_output_limits() {

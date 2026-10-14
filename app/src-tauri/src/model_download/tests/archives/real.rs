@@ -7,12 +7,6 @@ fn real_llama_catalog_archive_copy_and_cpu_with_reused_assets() {
 }
 
 #[test]
-#[ignore = "requires official reused assets and explicit synthetic CPU/Markdown generation permission"]
-fn real_qwen05_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets() {
-    llama_trial("llama-b11533-qwen25-05b-q4km");
-}
-
-#[test]
 #[ignore = "requires fixed official Q8 assets and explicit synthetic CPU/Markdown generation permission"]
 fn real_qwen_q8_catalog_copy_cpu_apply_and_markdown_roundtrip_with_reused_assets() {
     llama_trial("llama-b11533-qwen25-15b-q8");
@@ -225,6 +219,40 @@ fn trial_recipe_at(
     voice: Option<&Path>,
     native: Option<(&Path, &Path, &crate::storage::Storage)>,
 ) {
+    if let Some((_, models, storage)) = native {
+        let recipe_hash = recipe.hash().unwrap();
+        let existing = storage.list_model_placements().unwrap();
+        let matches = existing
+            .iter()
+            .filter(|entry| {
+                entry
+                    .download
+                    .as_ref()
+                    .is_some_and(|origin| origin.recipe_hash == recipe_hash)
+            })
+            .collect::<Vec<_>>();
+        assert!(matches.len() <= 1, "no duplicate native fixture model");
+        if let Some(entry) = matches.first() {
+            assert!(entry.placement_recorded && !entry.body_removed);
+            let check = entry.compatibility.as_ref().unwrap();
+            assert_eq!(
+                check.state,
+                crate::model_compatibility::CheckState::Succeeded
+            );
+            crate::model_application::preview(
+                storage,
+                models,
+                crate::storage::model_profiles::ProfileName::Standard,
+                &entry.package_id,
+                &entry.review_hash,
+                &check.operation_id,
+                &|| false,
+            )
+            .unwrap();
+            println!("{choice_id}: existing fixture model and successful CPU evidence reverified; no new placement");
+            return;
+        }
+    }
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
     let operation = id();
@@ -298,42 +326,6 @@ fn trial_recipe_at(
     let storage = native
         .map(|(_, _, existing)| existing)
         .unwrap_or_else(|| temporary_storage.as_ref().unwrap());
-    if native.is_some() {
-        let recipe_hash = recipe.hash().unwrap();
-        let existing = storage.list_model_placements().unwrap();
-        let matches = existing
-            .iter()
-            .filter(|entry| {
-                entry
-                    .download
-                    .as_ref()
-                    .is_some_and(|origin| origin.recipe_hash == recipe_hash)
-            })
-            .collect::<Vec<_>>();
-        assert!(matches.len() <= 1, "no duplicate native fixture model");
-        if let Some(entry) = matches.first() {
-            // Catalog metadata intentionally never asserts runtime readiness.
-            // Admission comes from the successful CPU proof and fresh preview.
-            assert!(entry.placement_recorded && !entry.body_removed);
-            let check = entry.compatibility.as_ref().unwrap();
-            assert_eq!(
-                check.state,
-                crate::model_compatibility::CheckState::Succeeded
-            );
-            crate::model_application::preview(
-                &storage,
-                &models,
-                crate::storage::model_profiles::ProfileName::Standard,
-                &entry.package_id,
-                &entry.review_hash,
-                &check.operation_id,
-                &|| false,
-            )
-            .unwrap();
-            println!("{choice_id}: existing fixture model and successful CPU evidence reverified; no new placement");
-            return;
-        }
-    }
     let package = id();
     let start = Instant::now();
     place(
@@ -583,8 +575,9 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
         .filter(|c| {
             [
                 "sherpa-1138-pyannote3-eres2net-base",
-                "llama-b11533-qwen25-05b-q4km",
+                "sherpa-1138-pyannote3-int8-eres2net-base",
                 "llama-b11533-qwen25-15b-q4km",
+                "llama-b11533-qwen25-15b-q8",
             ]
             .contains(&c["id"].as_str().unwrap())
         })
@@ -596,6 +589,10 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
         })
         .collect::<Vec<_>>();
     allowed.push(
+        // Historical fixture placement stays intact, but is no longer offered.
+        "36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e".to_string(),
+    );
+    allowed.extend(
         crate::model_bundled_runtime::Bundle::open(&PathBuf::from(
             std::env::var("MON_QA_ASR_BUNDLE").unwrap(),
         ))
@@ -603,11 +600,7 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
         .recipes()
         .unwrap()
         .into_iter()
-        .find(|(name, _)| name == "tiny")
-        .unwrap()
-        .1
-        .hash()
-        .unwrap(),
+        .map(|(_, recipe)| recipe.hash().unwrap()),
     );
     assert!(
         storage
@@ -619,7 +612,7 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                     .download
                     .as_ref()
                     .is_some_and(|origin| allowed.contains(&origin.recipe_hash))),
-        "only the four exact fixture recipes may already exist"
+        "only the approved fixture recipes may already exist"
     );
     assert!(storage
         .list_meetings()
@@ -629,45 +622,53 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
     let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").unwrap());
     let payload = PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").unwrap());
     let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").unwrap());
-    let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
-    let recipe = bundle
+    let small = PathBuf::from(std::env::var("MON_QA_ASR_SMALL").unwrap());
+    let extra = PathBuf::from(std::env::var("MON_QA_EXTRA_MODELS").unwrap());
+    let recipes = crate::model_bundled_runtime::Bundle::open(&bundle_root)
+        .unwrap()
         .recipes()
-        .unwrap()
-        .into_iter()
-        .find(|(name, _)| name == "tiny")
-        .unwrap()
-        .1;
-    bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
-    trial_recipe_at(
-        "whisper-194-tiny-multilingual",
-        recipe,
-        &|url| {
-            if url.ends_with("ggml-tiny.bin") {
-                tiny.clone()
-            } else if url.ends_with("README.md") {
-                payload.join("notices/whisper-model-card.md")
-            } else {
-                assert!(url.ends_with("/LICENSE"));
-                payload.join("notices/openai-whisper-MIT.txt")
-            }
-        },
-        4,
-        Some(bundle),
-        None,
-        Some((&meetings, &models, &storage)),
-    );
+        .unwrap();
+    for (name, recipe) in recipes {
+        let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
+        bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+        trial_recipe_at(
+            &format!("whisper-194-{name}-multilingual"),
+            recipe,
+            &|url| {
+                if url.ends_with("ggml-tiny.bin") {
+                    tiny.clone()
+                } else if url.ends_with("ggml-base.bin") {
+                    extra.join("ggml-base.bin")
+                } else if url.ends_with("ggml-small.bin") {
+                    small.clone()
+                } else if url.ends_with("ggml-medium.bin") {
+                    extra.join("ggml-medium.bin")
+                } else if url.ends_with("README.md") {
+                    payload.join("notices/whisper-model-card.md")
+                } else {
+                    assert!(url.ends_with("/LICENSE"));
+                    payload.join("notices/openai-whisper-MIT.txt")
+                }
+            },
+            4,
+            Some(bundle),
+            None,
+            Some((&meetings, &models, &storage)),
+        );
+    }
     let catalog: Value =
         serde_json::from_str(include_str!("../../../../../model-catalog/macos.json")).unwrap();
     let assets = PathBuf::from(std::env::var("MON_QA_SHERPA_ASSETS").unwrap());
     let notices = PathBuf::from(std::env::var("MON_QA_SHERPA_NOTICES").unwrap());
     let archive = PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").unwrap());
-    let qwen05 = PathBuf::from(std::env::var("MON_QA_QWEN_MODEL").unwrap());
     let qwen15 = PathBuf::from(std::env::var("MON_QA_QWEN15_MODEL").unwrap());
+    let qwen15_q8 = PathBuf::from(std::env::var("MON_QA_QWEN15_Q8_MODEL").unwrap());
     let license = PathBuf::from(std::env::var("MON_QA_QWEN_LICENSE").unwrap());
     for (choice_id, calls) in [
         ("sherpa-1138-pyannote3-eres2net-base", 7),
-        ("llama-b11533-qwen25-05b-q4km", 3),
+        ("sherpa-1138-pyannote3-int8-eres2net-base", 7),
         ("llama-b11533-qwen25-15b-q4km", 3),
+        ("llama-b11533-qwen25-15b-q8", 3),
     ] {
         let choice = catalog
             .as_array()
@@ -683,10 +684,10 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                 if url.ends_with(".tar.gz") {
                     archive.clone()
                 } else if url.ends_with(".gguf") {
-                    if choice_id == "llama-b11533-qwen25-15b-q4km" {
-                        qwen15.clone()
+                    if choice_id == "llama-b11533-qwen25-15b-q8" {
+                        qwen15_q8.clone()
                     } else {
-                        qwen05.clone()
+                        qwen15.clone()
                     }
                 } else if url.contains("/Qwen/") {
                     license.clone()
@@ -694,6 +695,8 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                     assets.join("sherpa.tar.bz2")
                 } else if url.ends_with("segmentation-3-0.tar.bz2") {
                     assets.join("segmentation.tar.bz2")
+                } else if url.ends_with("model.int8.onnx") {
+                    assets.join("model.int8.onnx")
                 } else if url.ends_with("16k.onnx") {
                     assets.join("embedding-base.onnx")
                 } else if url.contains("/k2-fsa/sherpa-onnx/") {
@@ -713,17 +716,19 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
             Some((&meetings, &models, &storage)),
         );
     }
-    assert_eq!(storage.list_model_placements().unwrap().len(), 4);
+    assert_eq!(storage.list_model_placements().unwrap().len(), 9);
     let profiles = storage.model_profiles().unwrap();
     assert_eq!(profiles[0].components.len(), 3);
     assert!(profiles[0].configuration_complete);
     assert!(profiles[0]
         .components
         .iter()
-        .any(|component| component.model_name == "Qwen2.5-1.5B-Instruct"
-            && component.engine == crate::model_inspection::Engine::Llama
-            && component.settings_match
-            && component.compatibility_current));
+        .any(
+            |component| component.model_name == "Qwen2.5-1.5B-Instruct Q8_0"
+                && component.engine == crate::model_inspection::Engine::Llama
+                && component.settings_match
+                && component.compatibility_current
+        ));
     assert!(profiles[1].components.is_empty());
     println!(
         "dedicated native fixture selected Qwen 1.5B; no download, capture, playback or normal QA mutation"

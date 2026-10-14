@@ -11,6 +11,10 @@ let unresolved: Pending | null = null;
 // fresh download replaces an uncertain writer or a retained download receipt.
 const downloads = new Map<string, DownloadReceipt>();
 const engines = [{ engine: "whisper.cpp", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
+// Retain the already installed package on disk, but do not offer the retired
+// 0.5B recipe again after it proved unreliable on actual utterance input.
+const retiredRecipeHashes = new Set(["36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"]);
+const isRetired = (entry: ModelPlacementEntry) => entry.download?.recipeHash != null && retiredRecipeHashes.has(entry.download.recipeHash);
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0 }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; compact?: boolean }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const [selection, setSelection] = useState<Record<string, string>>({});
@@ -70,7 +74,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const useModel = (engine: string, value: string) => {
     return run("モデルを準備しています", async () => {
     if (pending || unresolved) throw Error("前の準備の状態を確認してください。");
-    let entry = entries.find(item => item.packageId === value && item.engine === engine && item.placementRecorded && item.bodyRemoved !== true);
+    let entry = entries.find(item => item.packageId === value && item.engine === engine && item.placementRecorded && item.bodyRemoved !== true && !isRetired(item));
     const option = options.find(item => "official:" + item.id === value && item.review.manifest.engine === engine);
     if (!entry && option) {
       entry = entries.find(item => item.sourceType === "download" && item.download?.recipeHash === option.review.recipeHash && item.engine === engine && item.placementRecorded && item.bodyRemoved !== true);
@@ -121,22 +125,23 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   });
   const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
   const installed = entries.filter(item => item.placementRecorded && item.bodyRemoved !== true);
+  const selectableInstalled = installed.filter(item => !isRetired(item));
   const selectedProfile = profiles.find(item => item.name === "standard");
   return <section className="analysis-card model-inspection" aria-label="AIモデル">
     <h2>ローカルAI</h2>
     <div className="model-selection-list">{engines.map(({ engine, label }) => {
       const used = selectedProfile?.components.find(item => item.engine === engine);
-      const value = selection[engine] ?? used?.packageId ?? "";
-      const entry = installed.find(item => item.packageId === value);
+      const value = selection[engine] ?? (selectableInstalled.some(item => item.packageId === used?.packageId) ? used?.packageId : "") ?? "";
+      const entry = selectableInstalled.find(item => item.packageId === value);
       const option = options.find(item => "official:" + item.id === value);
       const available = !!entry || !!option && installed.some(item => item.download?.recipeHash === option.review.recipeHash);
       return <div className="model-selection-row" key={engine}><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {options.filter(item => item.review.manifest.engine === engine).map(item => <option key={item.id} value={"official:" + item.id}>{item.label}</option>)}
-        {installed.filter(item => item.engine === engine).map(item => <option key={item.packageId} value={item.packageId} disabled={item.sourceType !== "download" && !canReviewApplication(item)}>{item.modelName}</option>)}
+        {selectableInstalled.filter(item => item.engine === engine).map(item => <option key={item.packageId} value={item.packageId} disabled={item.sourceType !== "download" && !canReviewApplication(item)}>{item.modelName}</option>)}
       </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || used?.packageId === value && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{available ? "使用" : "ダウンロードして使用"}</button></div>;
     })}</div>
-    {!!installed.length && <section className="model-inventory" aria-label="導入済みモデル"><h3>導入済みモデル</h3><ul>{installed.map(item => <li key={item.packageId}><strong>{item.modelName}</strong><span>{selectedProfile?.components.some(component => component.packageId === item.packageId && component.settingsMatch && component.compatibilityCurrent) ? "使用中" : "導入済み"}</span></li>)}</ul></section>}
+    {!!installed.length && <section className="model-inventory" aria-label="導入済みモデル"><h3>導入済みモデル</h3><ul>{installed.map(item => <li key={item.packageId}><strong>{item.modelName}</strong><span>{isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => component.packageId === item.packageId && component.settingsMatch && component.compatibilityCurrent) ? "使用中" : "導入済み"}</span></li>)}</ul></section>}
     {busy && <p role="status">{busy}</p>}
     <ModelIssue label="モデルの準備" message={error} />
     {pending && <button type="button" disabled={!!busy || locked || recordingActive} onClick={() => void recheck()}>現在の状態を確認</button>}

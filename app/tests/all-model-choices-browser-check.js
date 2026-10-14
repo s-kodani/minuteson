@@ -3,7 +3,7 @@ async function (page) {
   const choices = [
     ["文字起こし", "whisper.cpp", ["whisper-synthetic-tiny", "whisper-synthetic-base", "whisper-synthetic-small", "whisper-synthetic-medium"]],
     ["話者分離", "sherpa-onnx", ["sherpa-1138-pyannote3-eres2net-base", "sherpa-1138-pyannote3-int8-eres2net-base"]],
-    ["議事録生成", "llama.cpp", ["llama-b11533-qwen25-15b-q4km", "llama-b11533-qwen25-05b-q4km", "llama-b11533-qwen25-15b-q8"]],
+    ["議事録生成", "llama.cpp", ["llama-b11533-qwen25-15b-q4km", "llama-b11533-qwen25-15b-q8"]],
   ];
   for (const [label, , ids] of choices) {
     const field = page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
@@ -15,7 +15,7 @@ async function (page) {
     }
   }
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 0, "selection started IO");
-  results.push("all nine model choices are selectable without automatic download or execution");
+  results.push("all eight model choices are selectable without automatic download or execution");
   const use = async (label, engine, id) => {
     const field = page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
     const row = page.locator('.model-selection-row').filter({ has: field });
@@ -32,7 +32,7 @@ async function (page) {
     }, label);
   };
   await use("文字起こし", "whisper.cpp", "whisper-synthetic-tiny");
-  await use("議事録生成", "llama.cpp", "llama-b11533-qwen25-05b-q4km");
+  await use("議事録生成", "llama.cpp", "llama-b11533-qwen25-15b-q4km");
   await use("話者分離", "sherpa-onnx", "sherpa-1138-pyannote3-int8-eres2net-base");
   const initial = await page.evaluate(() => structuredClone(window.modelDownloadFixture.profiles[0]));
   check(initial.configurationComplete && initial.components.length === 3, "applying another engine lost an existing component");
@@ -45,7 +45,7 @@ async function (page) {
   results.push("one-action setup and switching preserve one current global component for each engine");
   const recipes = await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").map(c => JSON.parse(c.args.definition)));
   check(recipes.length === 5, "model switch repeated a download");
-  check(recipes[1].manifest.files.find(f => f.role === "llm").expectedHash === "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db", "0.5B bytes not bound");
+  check(recipes[1].manifest.files.find(f => f.role === "llm").expectedHash === "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e", "1.5B Q4 bytes not bound");
   check(recipes[3].manifest.files.find(f => f.role === "llm").expectedHash === "d7efb072e7724d25048a4fda0a3e10b04bdef5d06b1403a1c93bd9f1240a63c8", "Q8 bytes not bound");
   check(recipes[2].manifest.files.find(f => f.role === "segmentation").expectedHash === "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d", "int8 segmentation not bound");
   const inventory = page.getByRole("region", { name: "導入済みモデル", exact: true });
@@ -66,6 +66,20 @@ async function (page) {
     check(metrics.length === 3 && metrics.every(m => m.s === 40 && m.b === 40 && m.right <= width), "controls differ or overflow");
   }
   results.push("reopening reads current models without repeating work; selectors and buttons retain matching heights at both widths");
-  await page.screenshot({ path: "all-model-choices.png" });
+  await page.evaluate(() => {
+    const fixture = window.modelDownloadFixture;
+    fixture.entries.push({ ...fixture.entries.find(item => item.engine === "llama.cpp"),
+      packageId: "55555555-5555-4555-8555-555555555555", modelName: "Qwen2.5-0.5B-Instruct Q4_K_M",
+      compatibility: null,
+      download: { operationId: "66666666-6666-4666-8666-666666666666", recipeHash: "36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e" } });
+    fixture.setVisible(false);
+  });
+  await page.getByRole("combobox").first().waitFor({ state: "hidden" });
+  await page.evaluate(() => window.modelDownloadFixture.setVisible(true));
+  await page.getByRole("region", { name: "導入済みモデル", exact: true }).waitFor();
+  check(await page.getByRole("combobox", { name: "議事録生成のモデル" }).locator("option", { hasText: "0.5B" }).count() === 0, "retired installed model was selectable");
+  check(await page.getByRole("region", { name: "導入済みモデル" }).getByText("Qwen2.5-0.5B-Instruct Q4_K_M").count() === 1, "retired files were hidden from inventory");
+  results.push("previously installed 0.5B stays visible in inventory but cannot be selected again");
+  await page.screenshot({ path: "output/playwright/model-choices-retired-20261014.png" });
   return { passed: results.length, results };
 }

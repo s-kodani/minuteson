@@ -3,6 +3,10 @@
 - 更新日: 2026-10-14
 - 基準: `docs/development-plan.md`
 
+## 2026年10月14日 残るMacモデル候補の統合
+
+実発言入力で未完成JSONになったQwen 0.5Bはユーザー指定により新規の選択・ダウンロード対象から外し、既存本体は削除せず「選択対象外」と表示する。Macの現行候補はWhisper 4種、話者分離2種、Qwen 1.5B Q4/Q8の計8種。停止した専用QAで既取得の公式素材をサイズ・SHA照合して配置し、全8候補のCPU確認・Mac設定画面での切替を確認した。medium/int8/Q8で22秒の合成WAVから3発言とMarkdown議事録を生成し、Whisper base/smallも同じ固定音声からそれぞれ4/6発言を保存した。冷起動後も各結果を保持した。通常QAの新しいアプリは `/private/tmp/mon-model-integration-final-qa.j7Kzpx/MON QA.app`。フロント864件とRust全体1838件が成功、Rustの84件は追加条件付きで対象外。正式な認識品質・多話者・60分性能の合格ではない。追加モデル取得、実録音、OS許可変更、CIは行っていない。[検証範囲と工程時間](verification/remaining-model-integration-2026-10-14.md)。
+
 ## 2026年10月14日 Mac専用QAの異常終了と保存管理の確認
 
 通常QAと識別子・保存先を分けた `MON Abnormal QA` で、合成会議1件の取り込み・日本語Markdownの明示保存・未保存追記・SIGKILL・再起動を確認した。保存済み本文、3音声資産、全47テーブルの全行・SQL定義、起動設定は不変で、未保存追記が保存済み本文へ混入しない。通常QAの会議・モデル・設定は対象にしていない。既存SIGKILL関連Rust35件も成功した。

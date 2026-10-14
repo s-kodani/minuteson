@@ -167,7 +167,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 5);
+  assert.equal(options.length, 4);
   assert.equal(options[0].review.manifest.engine, "llama.cpp");
   assert.deepEqual(options[0].tokenLimits, { maxInputTokens: 32768, maxOutputTokens: 8192, maxContextTokens: 32768, tokenizer: "utf8_byte_bpe" });
   assert.equal(options[1].tokenLimits, null);
@@ -181,7 +181,6 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   assert.equal(options[1].review.totalBytes, 75_117_137);
   assert.equal(options[1].review.recipeHash, "0996bb77a0fab2f604c97af2bde017cebe813e83529228be92778c4befd4a7c8");
   assert.deepEqual(options.slice(2).map(o => o.review.recipeHash), [
-    "36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e",
     "d8fcced97a1a295bce39eafe05a2411c58be3d7ab39dc286b549f008d3f06221",
     "7295993aa83e948a5f3fd36ca26992e7a9833a7a90208148b0d6bf3306064350",
   ]);
@@ -189,8 +188,8 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     assert.deepEqual(option.tokenLimits, options[0].tokenLimits);
     assert.match(option.label, /Qwen.*Q[48]/);
   }
-  assert.equal(options[4].tokenLimits, null);
-  assert.equal(options[4].review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
+  assert.equal(options[3].tokenLimits, null);
+  assert.equal(options[3].review.manifest.files.find(f => f.role === "segmentation")?.expectedHash,
     "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d");
   await assert.rejects(assertOfficialModelOptions([native[0], native[0]]));
   await assert.rejects(assertOfficialModelOptions([{ ...native[0], definition: JSON.stringify(recipe) }]));
