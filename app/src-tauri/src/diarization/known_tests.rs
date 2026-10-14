@@ -240,20 +240,6 @@ fn saved_run_worker_preserves_pcm_times_edits_and_matches_features_not_local_lab
                 .chunks_exact(2)
                 .all(|b| i16::from_le_bytes(b.try_into().unwrap()) == value));
         }
-        let review = storage
-            .speaker_reviews(crate::storage::SpeakerReviewRequest {
-                meeting_id: meeting.clone(),
-                analysis_id: id,
-                expected_content_hash: candidate.content_hash,
-                utterance_ids: vec![candidate.utterances[2].id.clone()],
-                include_intervals: true,
-                page: 0,
-            })
-            .unwrap();
-        assert_eq!(
-            serde_json::to_value(review).unwrap()["reviews"][0]["estimatedState"],
-            "needsSplit"
-        );
         assert_eq!(
             storage.load_current_analysis(&meeting).unwrap().unwrap(),
             original
@@ -895,26 +881,6 @@ fn saved_run_worker_keeps_real_overlap_and_refuses_requested_count_that_would_me
             .unwrap()
             .unwrap();
         assert_eq!(candidate.utterances[1].speaker_ids.len(), 2);
-        let review = storage
-            .speaker_reviews(crate::storage::SpeakerReviewRequest {
-                meeting_id: meeting,
-                analysis_id: id,
-                expected_content_hash: candidate.content_hash,
-                utterance_ids: vec![candidate.utterances[1].id.clone()],
-                include_intervals: true,
-                page: 0,
-            })
-            .unwrap();
-        let review = serde_json::to_value(review).unwrap();
-        assert_eq!(review["reviews"][0]["estimatedState"], "overlap");
-        assert_eq!(review["reviews"][0]["overlapCount"], 1);
-        assert_eq!(
-            review["reviews"][0]["overlaps"][0]["speakerIds"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
     }
 }
 

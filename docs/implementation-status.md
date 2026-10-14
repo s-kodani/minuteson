@@ -3,6 +3,10 @@
 - 更新日: 2026-10-14
 - 基準: `docs/development-plan.md`
 
+## 2026年10月14日 未使用の話者レビュー処理を削除
+
+廃止済みの文字起こし候補レビューにだけ使っていたRustの話者レビューAPIとブラウザー模擬応答を削除した。発言の音声再生が解析版と話者区間の変更を拒否する検査は保持。関連Rust17件成功・1件実モデル素材待ち、フロント828件成功、QA構築・署名検査が成功した。新QAは `/private/tmp/mon-speaker-review-cleanup-qa.uSQ0fZ/MON QA.app`。実録音・正式評価・Windows・配布署名は未検証。[検証記録](verification/unused-speaker-review-removal-2026-10-14.md)。
+
 ## 2026年10月14日 分離QAでのMacアプリ本体置換
 
 識別子と保存先を分離したQAに合成WAV1件・手入力Markdownを保存し、アプリのバックアップ1件を作成した。版0.1.0から同一識別子の0.1.1へ同じパスでアプリ本体だけを置換し、更新後の会議一覧・議事録プレビューと、停止後の全SQLite dump／原本WAV／FLACの一致を確認した。DB整合性ok、外部キー違反0行。製品コード変更はない。[操作・ハッシュ・検証境界](verification/mac-manual-update-synthetic-2026-10-14.md)。通常版・モデル設定・スキーマ変更・Developer ID／公証／DMG・Gatekeeper・実録音とCIは未検証で、M4-02全体の完了とはしない。

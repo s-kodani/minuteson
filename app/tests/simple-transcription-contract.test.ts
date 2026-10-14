@@ -15,6 +15,9 @@ test("removed editing and candidate commands are not exposed by the application"
   const ipc = native("lib.rs");
   for (const name of ["adopt_analysis_candidate", "restore_analysis_version", "get_analysis_preview", "get_analysis_version_draft", "undo_transcript_edit", "save_transcript_edit_recovery", "start_transcription", "start_diarization", "get_speaker_reviews"]) assert.ok(!ipc.includes(name), name);
   for (const file of ["diarization-panel.tsx", "analysis-flow.tsx", "speaker-review.tsx", "transcript-recovery-panel.tsx", "transcript-conflict-panel.tsx", "version-publication.tsx"]) assert.equal(existsSync(new URL(`../src/${file}`, import.meta.url)), false, file);
+  assert.doesNotMatch(native("storage.rs"), /mod speaker_review|use speaker_review/);
+  assert.equal(existsSync(new URL("../src-tauri/src/storage/speaker_review.rs", import.meta.url)), false);
+  for (const file of ["browser-fixture.js", "audio-deletion-browser-fixture.js"]) assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), "utf8"), /get_speaker_reviews/);
 });
 test("individual editing retains IME guards, selection, identity and retry barriers", () => {
   const view = source("transcript.tsx");

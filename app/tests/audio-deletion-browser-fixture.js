@@ -56,7 +56,6 @@ export const audioDeletionIPC = async (command, args) => {
   if (["get_analysis_jobs", "get_minutes_exports"].includes(command)) return [];
   if (command === "get_analysis_flow") return null;
   if (command === "get_minutes_versions") return { meetingLockVersion: 0, currentId: null, previousId: null, draft: null, versions: [] };
-  if (command === "get_speaker_reviews") return { analysisId: analysis.id, contentHash: analysis.contentHash, reviews: args.request.utteranceIds.map(utteranceId => ({ utteranceId, trackId: analysis.utterances[0].trackId, estimatedState: "unknown", manualAssignment: false, segmentCount: 0, overlapCount: 0, page: 0, pageCount: 1, segments: [], overlaps: [] })) };
   if (command === "review_meeting_audio_deletion" || command === "review_pending_audio_deletion") {
     if (f.blocker || f.snapshot.busy || (command === "review_meeting_audio_deletion" && (d.blocked || args.meetingId !== f.meetings[0].id))) throw Error("音声の停止・再検査が必要です");
     const p = command === "review_meeting_audio_deletion" ? makePreview() : { ...d.pendingPreview, confirmationId: crypto.randomUUID() };

@@ -181,10 +181,6 @@ mockIPC(async (command, args) => {
       if (args.expectedLockVersion !== fixture.diarizationPreferences.lockVersion) throw Error("模擬話者分離設定競合");
       fixture.diarizationPreferences = { ...fixture.diarizationPreferences, payload: structuredClone(args.payload), lockVersion: fixture.diarizationPreferences.lockVersion + 1 };
       return structuredClone(fixture.diarizationPreferences);
-    case "get_speaker_reviews": return { analysisId: args.request.analysisId, contentHash: args.request.expectedContentHash, reviews: args.request.utteranceIds.map(utteranceId => {
-      const review={utteranceId,trackId:"microphone",estimatedState:"unknown",manualAssignment:false,segmentCount:0,overlapCount:0,page:args.request.page,pageCount:1,segments:[],overlaps:[],...structuredClone(fixture.speakerReviews?.[utteranceId]??{})};
-      return args.request.includeIntervals?review:{...review,segments:[],overlaps:[]};
-    }) };
     case "rename_meeting": {
       const meeting=meetings.find(item=>item.id===args.id);
       if(fixture.failRename)throw Error("合成の会議名保存失敗");

@@ -50,7 +50,6 @@ mod recording_preparation;
 pub(crate) mod recordings;
 mod restored_input;
 mod revisions;
-mod speaker_review;
 mod transcription;
 pub(crate) use transcription::known::{KnownInput, Run as KnownRun};
 #[cfg(all(test, unix))]
@@ -80,7 +79,6 @@ pub(crate) use preferences::{AnalysisPreferences, PreferencesSnapshot};
 pub(crate) use recordings::valid_microphone_uid;
 pub use recordings::RecordingConfig;
 pub(crate) use revisions::CommittedAnalysis;
-pub(crate) use speaker_review::{SpeakerReviewRequest, SpeakerReviewResponse};
 pub(crate) use transcription::RecordedAudioPlan;
 pub(crate) use ui_preferences::{UiPreferences, UiPreferencesSnapshot};
 pub(crate) use vocabulary::{
