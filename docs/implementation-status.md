@@ -3,6 +3,10 @@
 - 更新日: 2026-10-14
 - 基準: `docs/development-plan.md`
 
+## 2026年10月14日 廃止済みモデル削除プレビューIPCを整理
+
+画面から撤去済みのモデル削除プレビューが公開Tauriコマンドに残っていたため、macOS実装・Windowsスタブ・コマンド登録を除去し、再公開を拒否する検査を追加した。内部の中断削除回復・所有確認は維持。フロント828件、関連Rust78件、型検査・ビルド、QA構築とアドホック署名検証が成功した。新QAは `/private/tmp/mon-model-preview-ipc-cleanup-qa.BG0xU5/MON QA.app`。実録音・正式評価・Windows固有部分・配布署名は未検証。[検証範囲と工程時間](verification/retired-model-deletion-ipc-2026-10-14.md)。
+
 ## 2026年10月14日 現行QAの録音なしMac画面確認
 
 更新QAを実際に起動し、会議一覧、合成会議の6発言、保存済みMarkdownと6再生区間の入口を確認して正常終了した。録音・再生・編集・保存は行わず、DBの起動前後比較やミニパネルの実録音動作を合格扱いにしない。配布通知文のobjc2系11件は個別確認待ちを維持する。[検証境界](verification/mac-qa-current-smoke-2026-10-14.md)。
