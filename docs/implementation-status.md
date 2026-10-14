@@ -3,6 +3,10 @@
 - 更新日: 2026-10-14
 - 基準: `docs/development-plan.md`
 
+## 2026年10月14日 現行QAの録音なしMac画面確認
+
+更新QAを実際に起動し、会議一覧、合成会議の6発言、保存済みMarkdownと6再生区間の入口を確認して正常終了した。録音・再生・編集・保存は行わず、DBの起動前後比較やミニパネルの実録音動作を合格扱いにしない。配布通知文のobjc2系11件は個別確認待ちを維持する。[検証境界](verification/mac-qa-current-smoke-2026-10-14.md)。
+
 ## 2026年10月14日 未使用の話者レビュー処理を削除
 
 廃止済みの文字起こし候補レビューにだけ使っていたRustの話者レビューAPIとブラウザー模擬応答を削除した。発言の音声再生が解析版と話者区間の変更を拒否する検査は保持。関連Rust17件成功・1件実モデル素材待ち、フロント828件成功、QA構築・署名検査が成功した。新QAは `/private/tmp/mon-speaker-review-cleanup-qa.uSQ0fZ/MON QA.app`。実録音・正式評価・Windows・配布署名は未検証。[検証記録](verification/unused-speaker-review-removal-2026-10-14.md)。
