@@ -12,7 +12,7 @@ async page => {
   const noWork=async()=>check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(c=>/^(start_|retry_|resume_analysis|cancel_analysis|regenerate_|publish_|adopt_|restore_)/.test(c.command))),"notification executed work");
   const history=()=>page.getByRole("dialog",{name:"通知一覧",exact:true});
   const openHistory=async()=>{await page.getByRole("button",{name:"通知一覧",exact:true}).click();await history().waitFor();};
-  const closeHistory=async()=>{await history().locator(":scope > .common-modal-dismiss-row > [data-dialog-cancel]").click();await history().waitFor({state:"hidden"});};
+  const closeHistory=async()=>{await history().getByRole("button",{name:"通知一覧を閉じる",exact:true}).click();await history().waitFor({state:"hidden"});};
 
   await boot();
   await page.evaluate(async()=>{const f=window.monBrowserFixture;f.notificationJobs=[f.makeNotificationJob({state:"succeeded",createdAt:1,updatedAt:2,outputAnalysisId:"historical"})];await f.emitNotification({state:"succeeded",outputAnalysisId:"forged-event"});});
@@ -101,10 +101,10 @@ async page => {
 
   await boot();await page.evaluate(async()=>{const f=window.monBrowserFixture;f.notificationJobs=Array.from({length:55},(_,i)=>f.makeNotificationJob({meetingId:"historical-"+i,meetingTitle:"履歴会議"+i,createdAt:1,updatedAt:2,state:"failed",errorCode:"engine-"+i}));await f.emitNotification();});
   await page.waitForFunction(()=>window.monBrowserFixture.notifications().length===0);
-  await openHistory();await page.waitForFunction(()=>document.querySelectorAll(".notifications-dialog[open] [data-history-id]").length===55);
+  await openHistory();await page.waitForFunction(()=>document.querySelectorAll(".notifications-popover:popover-open [data-history-id]").length===55);
   check(await history().locator("[data-history-id]").count()===55,"historical failures not available in history");
   await history().getByRole("button",{name:"エラー通知を削除",exact:true}).first().click();
-  await page.waitForFunction(()=>document.querySelectorAll(".notifications-dialog[open] [data-history-id]").length===54);
+  await page.waitForFunction(()=>document.querySelectorAll(".notifications-popover:popover-open [data-history-id]").length===54);
   await page.evaluate(()=>window.monBrowserFixture.emitNotification());
   check(await history().locator("[data-history-id]").count()===54,"deleted history returned on read");await noWork();
   results.push("55 historical failures stay quiet and accessible; menu deletion does not reappear on refresh");

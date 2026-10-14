@@ -42,7 +42,7 @@ export function IssueStatus(_props: { message: string | null | undefined; label:
 export function NotificationList({ visible, onOpen, locked=false }: { visible: boolean; onOpen?:(meetingId:string)=>Promise<void>;locked?:boolean }) {
   const history = useSyncExternalStore(toasts.subscribe, toasts.getHistorySnapshot);
   const current = useSyncExternalStore(toasts.subscribe, toasts.getSnapshot);
-  const restore = useRef(() => document.querySelector<HTMLButtonElement>('.notifications-dialog[open] [data-dialog-cancel]')?.focus({ preventScroll: true })).current;
+  const restore = useRef(() => document.querySelector<HTMLButtonElement>('.notifications-popover:popover-open [data-notification-close]')?.focus({ preventScroll: true })).current;
   return visible ? <section className="notification-list" aria-label="通知一覧の内容">
     {history.length===0?<p className="notification-empty">通知はありません。</p>:<div className="notification-rows">{history.map(notice=><NotificationHistoryRow key={notice.id} notice={notice} active={toasts.isActive(notice.key,notice.id)} onOpen={onOpen} locked={locked} restoreFocus={restore}/>)}</div>}
   </section>:null;

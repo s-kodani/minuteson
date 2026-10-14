@@ -10,6 +10,11 @@ async page=>{
   results.push("Sonner remains available while workspace history banners are removed");
   await page.getByRole("button",{name:"通知一覧",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"通知一覧",exact:true});await dialog.waitFor();
+  const trigger=page.getByRole("button",{name:"通知一覧",exact:true});
+  check(await page.locator(".sidebar button[aria-label='通知一覧']").count()===0,"notification trigger remains in sidebar");
+  check(await dialog.getAttribute("aria-modal")==="false"&&await dialog.getAttribute("popover")==="manual","notification history is still a modal");
+  const bellBox=await trigger.boundingBox(), popupBox=await dialog.boundingBox();
+  check(popupBox.y>=bellBox.y+bellBox.height&&popupBox.x+popupBox.width>=bellBox.x,"notification popup is not anchored below the top-right bell");
   check(await dialog.locator(".toast-card").filter({hasText:"一覧だけの通知"}).count()===6,"notification batch was truncated");
   check(await page.evaluate(()=>window.monBrowserFixture.draft===null),"opening menu saved unfinished transcription");
   results.push("all simultaneous notifications are listed without saving or replacing the current editor");
@@ -28,12 +33,16 @@ async page=>{
   for(const [width,theme]of [[1200,"light"],[400,"dark"]]){
     await page.setViewportSize({width,height:800});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
     const bounds=await dialog.boundingBox();check(bounds.x>=0&&bounds.x+bounds.width<=width&&bounds.y>=0&&bounds.y+bounds.height<=800,"menu outside viewport");
+    const anchor=await trigger.boundingBox();check(bounds.y>=anchor.y+anchor.height&&bounds.x+bounds.width>=anchor.x,"menu drifted away from bell");
     check(await dialog.evaluate(e=>e.scrollWidth<=e.clientWidth+1),"horizontal notification scroll");
     check(await dialog.locator(".toast-body p").first().evaluate(e=>getComputedStyle(e).display==="block"&&getComputedStyle(e).overflow==="visible"),"notification text clamped");
     await page.screenshot({path:`notification-menu-${width}-${theme}.png`});
   }
   results.push("wide/light and narrow/dark notification menus wrap complete text without horizontal scrolling");
   await page.keyboard.press("Escape");await dialog.waitFor({state:"hidden"});
+  check(await page.evaluate(()=>document.activeElement?.getAttribute("aria-label")==="通知一覧"),"Escape did not restore bell focus");
+  await trigger.click();await dialog.waitFor();await page.locator(".topbar .screen-navigation").click();await dialog.waitFor({state:"hidden"});
+  results.push("Escape restores bell focus; outside click dismisses the non-modal popup");
   check(await page.evaluate(()=>!window.monBrowserFixture.calls.some(c=>["start_recording","start_capture_test","start_model_download"].includes(c.command))),"notification browsing started capture/download");
   results.push("Escape closes only the list; notification browsing does not start capture or downloads");
   return {passed:results.length,results};
