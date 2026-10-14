@@ -200,7 +200,16 @@ fn missing_models_preserve_recording_and_stale_continue_is_rejected() {
     let flow = s.analysis_flow(&m).unwrap().unwrap();
     assert_eq!(flow.stage, "configuration");
     assert!(flow.plan.is_none());
-    assert!(flow.error_message.is_some());
+    assert!(flow
+        .error_message
+        .as_deref()
+        .unwrap()
+        .contains("文字起こしモデルが未導入"));
+    assert!(flow
+        .error_message
+        .as_deref()
+        .unwrap()
+        .contains("設定のローカルAI"));
     assert!(s.list_jobs(&m).unwrap().is_empty());
     assert_eq!(s.get_meeting(&m).unwrap().unwrap().lifecycle, "recorded");
     assert!(s.recorded_audio_plan(&m).is_ok());
@@ -211,6 +220,34 @@ fn missing_models_preserve_recording_and_stale_continue_is_rejected() {
     analysis_flow::continue_flow(&s, &m, flow.lock_version).unwrap();
     advance(&s);
     assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "configuration");
+}
+
+#[test]
+fn missing_speaker_model_explains_settings_and_resume_preserves_audio() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    let saved = s.diarization_preferences().unwrap();
+    let empty = s
+        .save_diarization_preferences(saved.lock_version, DiarizationPreferences::default())
+        .unwrap();
+    s.ensure_analysis_flow(&m).unwrap();
+    advance(&s);
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    assert_eq!(flow.stage, "configuration");
+    assert!(flow
+        .error_message
+        .as_deref()
+        .unwrap()
+        .contains("話者分離モデルが未導入"));
+    assert!(flow.plan.is_none());
+    assert!(s.list_jobs(&m).unwrap().is_empty());
+    assert!(s.recorded_audio_plan(&m).is_ok());
+    s.save_diarization_preferences(empty.lock_version, saved.payload)
+        .unwrap();
+    analysis_flow::continue_flow(&s, &m, flow.lock_version).unwrap();
+    advance(&s);
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "transcription");
+    assert!(s.recorded_audio_plan(&m).is_ok());
 }
 
 #[test]

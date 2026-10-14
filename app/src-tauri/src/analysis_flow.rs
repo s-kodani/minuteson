@@ -57,6 +57,18 @@ pub(crate) fn prepare(
         "high_accuracy" => (w.high_accuracy, d.high_accuracy),
         _ => return Err("未対応の解析プロファイルです".into()),
     };
+    // Empty defaults mean no model has been selected. Explain the actionable
+    // prerequisite before fingerprinting paths; configured models still pass
+    // all identity, file, compatibility and managed-selection verification.
+    if w.executable_path.is_empty() || w.model_path.is_empty() {
+        return Err("文字起こしモデルが未導入です。設定のローカルAIでモデルを選び、ダウンロードして使用してください。保存済み音声は保持しています".into());
+    }
+    if d.executable_path.is_empty()
+        || d.segmentation_model_path.is_empty()
+        || d.embedding_model_path.is_empty()
+    {
+        return Err("話者分離モデルが未導入です。設定のローカルAIでモデルを選び、ダウンロードして使用してください。保存済み音声は保持しています".into());
+    }
     let capture = |path: &str| Fingerprint::capture(std::path::Path::new(path), cancelled);
     let whisper = WhisperConfig {
         executable: capture(&w.executable_path)?,

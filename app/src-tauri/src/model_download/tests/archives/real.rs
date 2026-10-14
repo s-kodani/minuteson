@@ -200,8 +200,30 @@ fn trial_recipe(
     recipe: Recipe,
     local: &impl Fn(&str) -> PathBuf,
     expected_calls: usize,
+    bundle: Option<crate::model_bundled_runtime::Bundle>,
+    voice: Option<&Path>,
+) {
+    trial_recipe_at(
+        choice_id,
+        recipe,
+        local,
+        expected_calls,
+        bundle,
+        voice,
+        None,
+    );
+}
+
+// The opt-in native fixture uses the same staging, placement and CPU admission
+// as the transient trials. No registry rows or managed proofs are fabricated.
+fn trial_recipe_at(
+    choice_id: &str,
+    recipe: Recipe,
+    local: &impl Fn(&str) -> PathBuf,
+    expected_calls: usize,
     mut bundle: Option<crate::model_bundled_runtime::Bundle>,
     voice: Option<&Path>,
+    native: Option<(&Path, &Path, &crate::storage::Storage)>,
 ) {
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
@@ -262,9 +284,56 @@ fn trial_recipe(
         receipt.report.total_bytes
     );
     let meetings = tempfile::tempdir().unwrap();
-    let models = temp.path().canonicalize().unwrap().join("models");
-    let storage =
-        crate::storage::Storage::open_with_models(meetings.path().into(), models.clone()).unwrap();
+    let (meeting_root, models) = native
+        .map(|(meetings, models, _)| (meetings.to_path_buf(), models.to_path_buf()))
+        .unwrap_or_else(|| {
+            (
+                meetings.path().into(),
+                temp.path().canonicalize().unwrap().join("models"),
+            )
+        });
+    let temporary_storage = native
+        .is_none()
+        .then(|| crate::storage::Storage::open_with_models(meeting_root, models.clone()).unwrap());
+    let storage = native
+        .map(|(_, _, existing)| existing)
+        .unwrap_or_else(|| temporary_storage.as_ref().unwrap());
+    if native.is_some() {
+        let recipe_hash = recipe.hash().unwrap();
+        let existing = storage.list_model_placements().unwrap();
+        let matches = existing
+            .iter()
+            .filter(|entry| {
+                entry
+                    .download
+                    .as_ref()
+                    .is_some_and(|origin| origin.recipe_hash == recipe_hash)
+            })
+            .collect::<Vec<_>>();
+        assert!(matches.len() <= 1, "no duplicate native fixture model");
+        if let Some(entry) = matches.first() {
+            // Catalog metadata intentionally never asserts runtime readiness.
+            // Admission comes from the successful CPU proof and fresh preview.
+            assert!(entry.placement_recorded && !entry.body_removed);
+            let check = entry.compatibility.as_ref().unwrap();
+            assert_eq!(
+                check.state,
+                crate::model_compatibility::CheckState::Succeeded
+            );
+            crate::model_application::preview(
+                &storage,
+                &models,
+                crate::storage::model_profiles::ProfileName::Standard,
+                &entry.package_id,
+                &entry.review_hash,
+                &check.operation_id,
+                &|| false,
+            )
+            .unwrap();
+            println!("{choice_id}: existing fixture model and successful CPU evidence reverified; no new placement");
+            return;
+        }
+    }
     let package = id();
     let start = Instant::now();
     place(
@@ -324,7 +393,7 @@ fn trial_recipe(
         storage.list_model_placements().unwrap()[0].source_type,
         "download"
     );
-    if voice.is_some() {
+    if voice.is_some() || native.is_some() {
         // Configure the isolated test preferences before application so the
         // managed binding seals the same one-thread settings used by the job.
         let preferences = storage.analysis_preferences().unwrap();
@@ -348,17 +417,34 @@ fn trial_recipe(
     .unwrap();
     let applied =
         crate::model_application::apply(&storage, &models, &id(), &preview, &|| false).unwrap();
-    assert_eq!(applied.components.len(), 1);
-    assert!(
-        !applied.configuration_complete,
-        "one engine is not all three ready"
+    assert_eq!(
+        applied.components.len(),
+        if native.is_some() {
+            profiles[0].components.len()
+                + usize::from(
+                    !profiles[0]
+                        .components
+                        .iter()
+                        .any(|component| component.engine == recipe.manifest.engine),
+                )
+        } else {
+            1
+        }
     );
+    if native.is_none() {
+        assert!(
+            !applied.configuration_complete,
+            "one engine is not all three ready"
+        );
+    }
     assert_eq!(
         storage.model_profiles().unwrap()[1],
         profiles[1],
         "high accuracy stays unchanged"
     );
-    assert!(storage.list_meetings().unwrap().is_empty());
+    if native.is_none() {
+        assert!(storage.list_meetings().unwrap().is_empty());
+    }
     for (entry, source) in recipe.manifest.files.iter().zip(&recipe.sources) {
         if entry.role == crate::model_inspection::Role::Notice && source.archive.is_none() {
             assert_eq!(
@@ -375,10 +461,10 @@ fn trial_recipe(
             recipe.manifest.engine,
             crate::model_inspection::Engine::Whisper
         );
-        real_voiced_transcription(storage, models, voice, choice_id);
+        real_voiced_transcription(temporary_storage.unwrap(), models, voice, choice_id);
         return;
     }
-    if recipe.manifest.engine == crate::model_inspection::Engine::Llama {
+    if native.is_none() && recipe.manifest.engine == crate::model_inspection::Engine::Llama {
         let model = recipe
             .manifest
             .files
@@ -386,13 +472,264 @@ fn trial_recipe(
             .find(|file| file.role == crate::model_inspection::Role::Llm)
             .unwrap();
         crate::storage::markdown_generation_tests::real_managed_model_markdown_roundtrip(
-            storage,
+            temporary_storage.unwrap(),
             models,
             model.expected_hash.as_deref().unwrap(),
             choice_id,
         );
     }
     // Only test-owned copies are reclaimed by TempDir. Originals stay unchanged.
+}
+
+#[cfg(target_os = "macos")]
+fn native_fixture_storage(
+    meetings: &Path,
+    models: &Path,
+) -> (crate::bootstrap::Bootstrap, crate::storage::Storage) {
+    let config = PathBuf::from(std::env::var("MON_QA_NATIVE_CONFIG").unwrap());
+    // Keep the native bootstrap lock and admitted relocation history alive for
+    // the same lifetime as Storage. Never clear or bypass the write fence.
+    let bootstrap = crate::bootstrap::Bootstrap::open(&config, &config).unwrap();
+    assert_eq!(bootstrap.root(), meetings);
+    assert_eq!(bootstrap.view().unwrap().models_root, models);
+    let storage = bootstrap.open_storage().unwrap();
+    (bootstrap, storage)
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "explicit stopped MON Abnormal QA only; persists reused official models for native synthetic interruption checks"]
+fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
+    let config = PathBuf::from(std::env::var("MON_QA_NATIVE_CONFIG").expect("dedicated QA config"));
+    assert_eq!(config.canonicalize().unwrap(), config);
+    assert_eq!(
+        config.file_name().unwrap(),
+        "jp.mon.desktop.qa.abnormal20261014"
+    );
+    assert!(config.ends_with("Library/Application Support/jp.mon.desktop.qa.abnormal20261014"));
+    assert_eq!(
+        std::env::var("MON_QA_NATIVE_APP_STOPPED").unwrap(),
+        "confirmed"
+    );
+    let boot: Value =
+        serde_json::from_slice(&std::fs::read(config.join("bootstrap.json")).unwrap()).unwrap();
+    assert!(
+        boot["record"]["pendingMove"].is_null(),
+        "resolve native movement before model preparation"
+    );
+    let meetings = PathBuf::from(boot["record"]["current"]["path"].as_str().unwrap());
+    assert_eq!(meetings.canonicalize().unwrap(), meetings);
+    assert!(meetings.starts_with("/private/tmp"));
+    assert!(meetings
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("mon-mac-abnormal-native."));
+    assert!(meetings
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("MON-meetings-"));
+    let models = config.join("models");
+    if models.exists() {
+        assert_eq!(models.canonicalize().unwrap(), models);
+    } else {
+        assert!(std::fs::symlink_metadata(&models).is_err());
+    }
+    // Native Storage owns an exclusive SQLite lock. Inspect a private copy so
+    // this stopped-app preflight cannot leave WAL control files in its root.
+    {
+        let snapshot = tempfile::tempdir().unwrap();
+        for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
+            let source = meetings.join(name);
+            match std::fs::symlink_metadata(&source) {
+                Ok(meta) => {
+                    assert!(
+                        meta.file_type().is_file(),
+                        "unexpected database file: {name}"
+                    );
+                    std::fs::copy(&source, snapshot.path().join(name)).unwrap();
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound && name.ends_with("-wal") => {}
+                Err(error) => panic!("cannot inspect {name}: {error}"),
+            }
+        }
+        let db = rusqlite::Connection::open(snapshot.path().join("meetings.sqlite3")).unwrap();
+        db.execute_batch("PRAGMA main.locking_mode = EXCLUSIVE;")
+            .unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT (SELECT count(*) FROM recording_sessions)+(SELECT count(*) FROM processing_jobs WHERE state NOT IN ('succeeded','failed','cancelled'))",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "no recording or unfinished analysis jobs");
+    }
+    let (bootstrap, storage) = native_fixture_storage(&meetings, &models);
+    let catalog: Value =
+        serde_json::from_str(include_str!("../../../../../model-catalog/macos.json")).unwrap();
+    let mut allowed = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| {
+            [
+                "sherpa-1138-pyannote3-eres2net-base",
+                "llama-b11533-qwen25-05b-q4km",
+                "llama-b11533-qwen25-15b-q4km",
+            ]
+            .contains(&c["id"].as_str().unwrap())
+        })
+        .map(|c| {
+            Recipe::parse(&serde_json::to_vec(&c["recipe"]).unwrap())
+                .unwrap()
+                .hash()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    allowed.push(
+        crate::model_bundled_runtime::Bundle::open(&PathBuf::from(
+            std::env::var("MON_QA_ASR_BUNDLE").unwrap(),
+        ))
+        .unwrap()
+        .recipes()
+        .unwrap()
+        .into_iter()
+        .find(|(name, _)| name == "tiny")
+        .unwrap()
+        .1
+        .hash()
+        .unwrap(),
+    );
+    assert!(
+        storage
+            .list_model_placements()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.source_type == "download"
+                && entry
+                    .download
+                    .as_ref()
+                    .is_some_and(|origin| allowed.contains(&origin.recipe_hash))),
+        "only the four exact fixture recipes may already exist"
+    );
+    assert!(storage
+        .list_meetings()
+        .unwrap()
+        .iter()
+        .all(|m| m.title.starts_with("QA-abnormal-")));
+    let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").unwrap());
+    let payload = PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").unwrap());
+    let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").unwrap());
+    let mut bundle = crate::model_bundled_runtime::Bundle::open(&bundle_root).unwrap();
+    let recipe = bundle
+        .recipes()
+        .unwrap()
+        .into_iter()
+        .find(|(name, _)| name == "tiny")
+        .unwrap()
+        .1;
+    bundle.prepare(&bundle_root, &recipe, &|| false).unwrap();
+    trial_recipe_at(
+        "whisper-194-tiny-multilingual",
+        recipe,
+        &|url| {
+            if url.ends_with("ggml-tiny.bin") {
+                tiny.clone()
+            } else if url.ends_with("README.md") {
+                payload.join("notices/whisper-model-card.md")
+            } else {
+                assert!(url.ends_with("/LICENSE"));
+                payload.join("notices/openai-whisper-MIT.txt")
+            }
+        },
+        4,
+        Some(bundle),
+        None,
+        Some((&meetings, &models, &storage)),
+    );
+    let catalog: Value =
+        serde_json::from_str(include_str!("../../../../../model-catalog/macos.json")).unwrap();
+    let assets = PathBuf::from(std::env::var("MON_QA_SHERPA_ASSETS").unwrap());
+    let notices = PathBuf::from(std::env::var("MON_QA_SHERPA_NOTICES").unwrap());
+    let archive = PathBuf::from(std::env::var("MON_QA_LLAMA_ARCHIVE").unwrap());
+    let qwen05 = PathBuf::from(std::env::var("MON_QA_QWEN_MODEL").unwrap());
+    let qwen15 = PathBuf::from(std::env::var("MON_QA_QWEN15_MODEL").unwrap());
+    let license = PathBuf::from(std::env::var("MON_QA_QWEN_LICENSE").unwrap());
+    for (choice_id, calls) in [
+        ("sherpa-1138-pyannote3-eres2net-base", 7),
+        ("llama-b11533-qwen25-05b-q4km", 3),
+        ("llama-b11533-qwen25-15b-q4km", 3),
+    ] {
+        let choice = catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == choice_id)
+            .unwrap();
+        let recipe = Recipe::parse(&serde_json::to_vec(&choice["recipe"]).unwrap()).unwrap();
+        trial_recipe_at(
+            choice_id,
+            recipe,
+            &|url| {
+                if url.ends_with(".tar.gz") {
+                    archive.clone()
+                } else if url.ends_with(".gguf") {
+                    if choice_id == "llama-b11533-qwen25-15b-q4km" {
+                        qwen15.clone()
+                    } else {
+                        qwen05.clone()
+                    }
+                } else if url.contains("/Qwen/") {
+                    license.clone()
+                } else if url.ends_with("osx-arm64-shared-no-tts.tar.bz2") {
+                    assets.join("sherpa.tar.bz2")
+                } else if url.ends_with("segmentation-3-0.tar.bz2") {
+                    assets.join("segmentation.tar.bz2")
+                } else if url.ends_with("16k.onnx") {
+                    assets.join("embedding-base.onnx")
+                } else if url.contains("/k2-fsa/sherpa-onnx/") {
+                    notices.join("sherpa-Apache-2.0.txt")
+                } else if url.contains("/modelscope/3D-Speaker/") {
+                    notices.join("3DSpeaker-Apache-2.0.txt")
+                } else if url.ends_with("/ThirdPartyNotices.txt") {
+                    notices.join("onnxruntime-ThirdPartyNotices.txt")
+                } else {
+                    assert!(url.contains("/microsoft/onnxruntime/") && url.ends_with("/LICENSE"));
+                    notices.join("onnxruntime-MIT.txt")
+                }
+            },
+            calls,
+            None,
+            None,
+            Some((&meetings, &models, &storage)),
+        );
+    }
+    assert_eq!(storage.list_model_placements().unwrap().len(), 4);
+    let profiles = storage.model_profiles().unwrap();
+    assert_eq!(profiles[0].components.len(), 3);
+    assert!(profiles[0].configuration_complete);
+    assert!(profiles[0]
+        .components
+        .iter()
+        .any(|component| component.model_name == "Qwen2.5-1.5B-Instruct"
+            && component.engine == crate::model_inspection::Engine::Llama
+            && component.settings_match
+            && component.compatibility_current));
+    assert!(profiles[1].components.is_empty());
+    println!(
+        "dedicated native fixture selected Qwen 1.5B; no download, capture, playback or normal QA mutation"
+    );
+    drop(storage);
+    drop(bootstrap);
 }
 
 fn real_voiced_transcription(
