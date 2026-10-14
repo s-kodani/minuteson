@@ -44,23 +44,10 @@ export interface AnalysisJob {
   attempt: number;
 }
 
-export function canRetryJob(job: AnalysisJob, jobs: AnalysisJob[], kind: "transcription" | "minutes_generation" | "diarization" = "transcription"): boolean {
-  return job.kind === kind && ["failed", "cancelled"].includes(job.state)
-    && !jobs.some((child) => child.retryOfJobId === job.id && ["queued", "running", "pausing", "paused", "interrupted"].includes(child.state));
-}
-
 export function jobLabel(state: string): string {
   return ({ queued: "待機", running: "解析中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断", succeeded: "完了", failed: "失敗", cancelled: "取消済み" } as Record<string, string>)[state] ?? state;
 }
 
 export function engineConfigured(engine: EnginePreferences): boolean {
   return !!engine.executablePath.trim() && !!engine.modelPath.trim() && Number.isInteger(engine.threads) && engine.threads >= 1 && engine.threads <= 64;
-}
-
-// Never silently substitute a freshly fetched version for the version reviewed.
-export function assertReviewedVersion(state: VersionState, reviewed: { id: string; contentHash: string }, restoring: boolean): void {
-  const version = state.versions.find((item) => item.id === reviewed.id);
-  if (!version || version.contentHash !== reviewed.contentHash || (restoring ? state.previousId !== reviewed.id : version.publicationState !== "candidate")) {
-    throw new Error("確認した版が変更されています。プレビューを閉じ、再確認してください。");
-  }
 }

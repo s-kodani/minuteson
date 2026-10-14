@@ -87,7 +87,6 @@ button:disabled { opacity:.5; }
 .speaker-name-dialog label { display:grid; gap:8px; font-size:13px; }
 .speaker-name-dialog input { padding:10px 12px; border:1px solid var(--input-border); border-radius:8px; }
 .speaker-name-dialog .transcript-actions { justify-content:flex-end; }
-.speaker-merge-tools,.speaker-diarization-tools { border-top:1px solid var(--border); padding-top:12px; margin-top:12px; font-size:12px; }
 .transcript-search { padding-bottom:10px; border-bottom:1px solid var(--border); }
 .transcript-search>label { flex:1; }
 .transcript-search input { width:100%; padding:9px 12px; background:var(--surface); border:1px solid var(--input-border); border-radius:8px; font:inherit; }
@@ -148,7 +147,6 @@ button:disabled { opacity:.5; }
 @media(max-width:600px) {
   .transcript-options-display,.transcript-options-bulk-controls { grid-template-columns:minmax(0,1fr); }
 }
-.speaker-merge-tools>.options-modal-trigger,.speaker-diarization-tools>.options-modal-trigger { width:100%; text-align:left; }
 .utterance-row { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; }
 .utterance-row>.utterance-meta { grid-column:1; grid-row:1; min-width:0; min-height:32px; margin-bottom:8px; }
 .utterance-row>:not(.utterance-meta):not(.utterance-edit-tools) { grid-column:1 / -1; min-width:0; }
@@ -349,7 +347,6 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .transcript-state { flex:none; padding:24px 32px; }
 .preview-utterance-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; min-width:0; }
 .preview-utterance-meta>small { min-width:0; margin:0; overflow-wrap:anywhere; }
-.preview-utterance-meta .speaker-review-badges { margin:0; align-items:center; }
 .utterance-play-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:32px; height:32px; min-height:32px; padding:0; line-height:1; }
 .utterance-play-icon svg { display:block; flex:none; }
 .common-modal.analysis-dialog { width:min(980px,calc(100vw - 48px)); max-width:980px; }
@@ -551,20 +548,7 @@ button:disabled { opacity:.5; }
 .model-preparation-next>button { justify-self:start; max-width:100%; }
 /* Keep reference headings centered with their adjacent close action, and
    leave a real gap between expandable records and playback controls. */
-.analysis-jobs li>div:first-child,.speaker-review li>span { min-width:0; overflow-wrap:anywhere; }
-/* Nested count settings cannot rely on the outer dialog's grid to space
-   their own children. Keep conditional count inputs in the same track. */
-.options-dialog .diarization-panel { display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0; }
-.options-dialog .diarization-panel>.heading-with-info>h3 { margin:0; }
-.options-dialog .diarization-panel>.analysis-settings { margin:0; }
-.options-dialog .diarization-panel>:is(p,.analysis-jobs) { margin:0; }
-.options-dialog .diarization-panel>.analysis-jobs:empty { display:none; }
-.options-dialog .diarization-panel>button { justify-self:start; max-width:100%; }
-.options-dialog .diarization-tracks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:16px; min-width:0; margin:0; }
-.options-dialog .diarization-tracks:empty { display:none; }
-.options-dialog .diarization-tracks>div { display:grid; gap:12px; min-width:0; }
-.options-dialog .diarization-tracks label { display:grid; min-width:0; gap:8px; margin:0; }
-.options-dialog .diarization-tracks :is(input,select) { width:100%; max-width:none; }
+.analysis-jobs li>div:first-child { min-width:0; overflow-wrap:anywhere; }
 /* Recording preparation is outside a modal, but uses the same field sizing. */
 .recording-workspace input:not([type=checkbox]):not([type=range]),
 .capture-input-selection select {
@@ -588,9 +572,6 @@ button:disabled { opacity:.5; }
 .meeting-list-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; min-width:0; }
 .meeting-list-notice>button { flex:none; max-width:100%; }
 .common-modal .card-head>:is(h2,h3,h4) { min-width:0; margin:0; }
-@media(max-width:600px) {
-  .options-dialog .diarization-tracks { grid-template-columns:minmax(0,1fr); }
-}
 @media(max-width:760px) {
   .meeting-detail-content .transcript-split>.workspace-panel-shell { padding:12px 16px 0; }
   .meeting-detail-navigation { padding-inline:16px; }

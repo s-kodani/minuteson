@@ -14,7 +14,7 @@ test("meeting UI has no candidates, model preferences or global editing options"
 test("removed editing and candidate commands are not exposed by the application", () => {
   const ipc = native("lib.rs");
   for (const name of ["adopt_analysis_candidate", "restore_analysis_version", "get_analysis_preview", "get_analysis_version_draft", "undo_transcript_edit", "save_transcript_edit_recovery", "start_transcription", "start_diarization", "get_speaker_reviews"]) assert.ok(!ipc.includes(name), name);
-  for (const file of ["diarization-panel.tsx", "transcript-recovery-panel.tsx", "transcript-conflict-panel.tsx", "version-publication.tsx"]) assert.equal(existsSync(new URL(`../src/${file}`, import.meta.url)), false, file);
+  for (const file of ["diarization-panel.tsx", "analysis-flow.tsx", "speaker-review.tsx", "transcript-recovery-panel.tsx", "transcript-conflict-panel.tsx", "version-publication.tsx"]) assert.equal(existsSync(new URL(`../src/${file}`, import.meta.url)), false, file);
 });
 test("individual editing retains IME guards, selection, identity and retry barriers", () => {
   const view = source("transcript.tsx");
@@ -39,6 +39,9 @@ test("individual speaker controls save only explicit input", () => {
 test("imports no longer persist a meeting model profile", () => {
   const view = source("audio-import.tsx"), dto = native("audio_import.rs");
   assert.doesNotMatch(view, /import-analysis-profile|options:.*profile/);
+  assert.doesNotMatch(view, /get_analysis_preferences|get_diarization_preferences|engineConfigured|diarizationConfigured|共通用語とAI設定を再確認/);
+  assert.match(view, /全体設定で選んだモデルで文字起こしと話者分離を進めます/);
+  assert.match(view, /モデルが未導入でも音声は保持します/);
   assert.doesNotMatch(dto.slice(dto.indexOf("pub struct ImportOptions"), dto.indexOf("impl ImportOptions")), /pub profile/);
   assert.doesNotMatch(native("storage/imports.rs"), /fn flow_profile/);
   assert.match(native("storage/analysis_flows.rs"), /unwrap_or\("standard"\)/);

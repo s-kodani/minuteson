@@ -207,17 +207,6 @@ test("nested model settings reserve space between headings, fields, records and 
 });
 
 
-test("speaker count settings keep one spacing rhythm and full-width aligned fields", () => {
-  const css=source("prototype-alignment.css");
-  assert.match(css,/\.options-dialog \.diarization-panel \{ display:grid; gap:16px; min-width:0; margin:0; padding:0; border:0; \}/);
-  assert.match(css,/\.options-dialog \.diarization-panel>\.heading-with-info>h3 \{ margin:0; \}/);
-  assert.match(css,/\.options-dialog \.diarization-panel>\.analysis-settings \{ margin:0; \}/);
-  assert.match(css,/\.options-dialog \.diarization-tracks \{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\);[^}]*gap:16px;[^}]*margin:0;/);
-  assert.match(css,/\.options-dialog \.diarization-tracks label \{[^}]*gap:8px; margin:0;/);
-  assert.match(css,/\.options-dialog \.diarization-tracks :is\(input,select\) \{ width:100%; max-width:none; \}/);
-  assert.match(css,/@media\(max-width:600px\) \{\s*\.options-dialog \.diarization-tracks \{ grid-template-columns:minmax\(0,1fr\); \}/);
-});
-
 test("recording and capture settings reuse field metrics without doubling label margins", () => {
   const css=source("prototype-alignment.css");
   assert.match(css,/\.recording-workspace input:not\(\[type=checkbox\]\):not\(\[type=range\]\),\s*\.capture-input-selection select \{\s*min-height:40px; padding:9px 12px; font-size:13px; line-height:20px;/);
