@@ -13,7 +13,7 @@ const accepted=(r:QueueAttempt,who=a)=>({...r.notice,recipientId:who,delivery:{.
 const create=()=>new RecordingInputQueue(owner,a,"main");
 test("historical interruption is not current binding and fresh metadata cannot refresh capture evidence",()=>{
   const r=report();assert.deepEqual(checkedInputStatus(r,owner),r);
-  const s=new RecordingInputSession();s.reset(owner);s.accept(r,0);assert.equal(s.read(0).microphone.state,"connected");assert.equal(s.read(0).notices[0].kind,"interrupted");assert.equal(s.queued(),true);
+  const s=new RecordingInputSession();s.reset(owner);s.accept(r,0);assert.equal(s.read(0).microphone.state,"connected");assert.equal(s.read(0).notices[0].kind,"interrupted");
   assert.deepEqual(s.loss(),{microphone:0,system:0});assert.deepEqual(s.read(1001).notices,[]);
 });
 test("queued projection requires closed delivery fields, actual history and bounded loss",()=>{

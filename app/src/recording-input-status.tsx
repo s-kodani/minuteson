@@ -3,8 +3,7 @@ import {createContext,useContext,useEffect,useState,type ReactNode} from "react"
 import {useRecordingSession} from "./session";
 import {InputLevelClock} from "./input-level-state";
 import {RecordingInputSession,inputLabel,type InputKind,type VisibleInput,type InputNotice} from "./recording-input-state";
-import {RecordingInputReceipts,type NoticeAttempt,type NoticeReception} from "./recording-input-receipts";
-import {RecordingInputQueue,type QueueAttempt} from "./recording-input-queue";
+import {RecordingInputQueue,type QueueAttempt,type NoticeReception} from "./recording-input-queue";
 import {ToastNotice,IssueNotice,toasts} from "./toast";
 import {toastKey} from "./toast-state";
 import {InputJournalSession,journalMessage,type JournalView} from "./input-journal-state";
@@ -21,32 +20,24 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
     setView({...empty(),owner});try{session.reset(owner);}catch{return;}if(!owner||!isTauri())return;
     // A failed session bridge disposes this controller even if its WebView
     // survives. Reopening it must not impersonate a previously accepted receiver.
-    const receipts=new RecordingInputReceipts(owner,crypto.randomUUID(),windowLabel);
     const queue=new RecordingInputQueue(owner,crypto.randomUUID(),windowLabel);
     const journal=new InputJournalSession(owner);let journalInFlight=false;
     const now=()=>clock.read(performance.now(),Date.now());
     const journalStarted=now();let journalReplied=false;
     const journalView=(at:number)=>({...journal.read(at),ready:journalReplied||!Number.isFinite(at)||at-journalStarted>=1000});
     const paint=()=>{
-      if(disposed)return;const at=now(),raw=failed?unknown():session.read(at),queued=session.queued();
+      if(disposed)return;const at=now(),raw=failed?unknown():session.read(at);
       // The mini panel presents telemetry only. Do not receive or acknowledge
       // events it cannot show: unreceived events can still reach the main
       // window when it is opened, with native ownership/lease checks intact.
       if(windowLabel==="recorder"){setView({...empty(),owner,...raw,notices:[],loss:session.loss(),journal:journalView(at)});return;}
-      if(queued){const attempts=queue.observe(raw.notices,at);setView({owner,...raw,...queue.read(at),loss:session.loss(),journal:journalView(at),dismiss:input=>{if(!disposed){queue.dismiss(input);paint();}},rendered:(id,generation)=>{if(!disposed){queue.rendered(id,generation,now());paint();}}});for(const attempt of attempts)void deliver(attempt);}
-      else{const attempts=receipts.observe(raw.notices,at);setView({owner,...raw,...receipts.read(at),loss:session.loss(),journal:journalView(at),dismiss:input=>{if(!disposed){receipts.dismiss(input);paint();}},rendered:()=>{}});for(const attempt of attempts)void receive(attempt);}
+      const attempts=queue.observe(raw.notices,at);setView({owner,...raw,...queue.read(at),loss:session.loss(),journal:journalView(at),dismiss:input=>{if(!disposed){queue.dismiss(input);paint();}},rendered:(id,generation)=>{if(!disposed){queue.rendered(id,generation,now());paint();}}});for(const attempt of attempts)void deliver(attempt);
     };
     const deliver=async(attempt:QueueAttempt)=>{try{
       const command={receive:"receive_recording_input_notice",render:"render_recording_input_notice",close:"close_recording_input_notice"}[attempt.action];
       const value=await invoke(command,{sessionId:attempt.sessionId,noticeId:attempt.noticeId,recipientId:attempt.recipientId,generation:attempt.generation,...(attempt.action==="receive"?{receiveId:attempt.receiveId}:{})});
       if(disposed)return;queue.complete(attempt,value,now());paint();
     }catch{if(!disposed){queue.fail(attempt);paint();}}};
-    const receive=async(attempt:NoticeAttempt)=>{
-      try{
-        const value=await invoke("receive_recording_input_notice",{sessionId:attempt.sessionId,noticeId:attempt.noticeId,recipientId:attempt.recipientId});
-        if(disposed)return;paint();receipts.complete(attempt,value,now());paint();
-      }catch{if(!disposed){receipts.fail(attempt);paint();}}
-    };
     const poll=async()=>{if(disposed||inFlight)return;inFlight=true;const requestedAt=now();
       try{const report=await invoke("get_recording_input_status",{sessionId:owner});if(!disposed){session.accept(report,requestedAt);failed=false;}}
       catch{if(!disposed)failed=true;}finally{inFlight=false;paint();}
@@ -83,5 +74,5 @@ export function RecordingInputNotice({windowLabel}:{windowLabel:"main"}){
   const view=useContext(Context),notice=(input:InputKind)=>view.notices.find(n=>n.input===input&&n.target===windowLabel)??null;
   const microphone=notice("microphone"),system=notice("system"),closeMicrophone=()=>view.dismiss("microphone"),closeSystem=()=>view.dismiss("system");
     const entries:[InputKind,InputNotice|null,()=>void][]=[["microphone",microphone,closeMicrophone],["system",system,closeSystem]];
-    return <>{entries.map(([input,n,close])=><ToastNotice key={input} scope={view.owner??"recording-input"} type={`${input}-status`} message={n?`${n.delivery?"録音中の履歴：":""}${message(n)}`:""} level={n?.kind==="interrupted"?"warning":"info"} important={n?.kind==="interrupted"} eventId={n?.delivery?`${n.id}:${n.delivery.generation}`:n?.id} onClose={close} onRendered={n?.delivery?()=>view.rendered(n.id,n.delivery!.generation):undefined}/>)}{(["microphone","system"]as InputKind[]).map(input=><ToastNotice key={`${input}-loss`} scope={view.owner??"recording-input"} type={`${input}-history-loss`} message={view.loss[input]>0?`${input==="microphone"?"マイク":"PC音声"}の通知履歴の一部を保持できません。現在の取得状態と保存後の欠損範囲を確認してください。`:""} level="warning" important eventId={`${input}:${view.loss[input]}`}/>)}</>;
+    return <>{entries.map(([input,n,close])=><ToastNotice key={input} scope={view.owner??"recording-input"} type={`${input}-status`} message={n?`録音中の履歴：${message(n)}`:""} level={n?.kind==="interrupted"?"warning":"info"} important={n?.kind==="interrupted"} eventId={n?`${n.id}:${n.delivery.generation}`:undefined} onClose={close} onRendered={n?()=>view.rendered(n.id,n.delivery.generation):undefined}/>)}{(["microphone","system"]as InputKind[]).map(input=><ToastNotice key={`${input}-loss`} scope={view.owner??"recording-input"} type={`${input}-history-loss`} message={view.loss[input]>0?`${input==="microphone"?"マイク":"PC音声"}の通知履歴の一部を保持できません。現在の取得状態と保存後の欠損範囲を確認してください。`:""} level="warning" important eventId={`${input}:${view.loss[input]}`}/>)}</>;
 }

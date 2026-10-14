@@ -1,5 +1,5 @@
 import {checkedInputNoticeReceipt,validInputOwner,type InputKind,type InputNotice} from "./recording-input-state.ts";
-import type {NoticeReception} from "./recording-input-receipts.ts";
+export type NoticeReception="none"|"pending"|"unconfirmed"|"received";
 export type QueueAction="receive"|"render"|"close";
 export type QueueAttempt={sessionId:string;noticeId:string;recipientId:string;generation:number;receiveId:string;target:"main"|"recorder";input:InputKind;action:QueueAction;notice:InputNotice};
 type Head={notice:InputNotice;active:boolean;shown:boolean;renderIntent:boolean;confirmed:boolean;dismissed:boolean;closed:boolean;pending:Map<QueueAction,QueueAttempt>;last:Map<QueueAction,number>;failed:Map<QueueAction,QueueAttempt>};

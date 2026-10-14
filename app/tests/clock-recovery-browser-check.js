@@ -9,7 +9,8 @@ async page=>{
   const state=async value=>page.waitForFunction(v=>["microphone","system"].every(k=>document.querySelector(`[data-input-kind="${k}"]`)?.dataset.inputState===v),value);
   const set=async (value,epoch,count)=>page.evaluate(([value,epoch,count])=>{
     const f=window.closeFixture,status={state:value,sourceEpoch:epoch,interruptions:count,reason:value==="connected"?null:"clock_changed"};
-    f.inputStatus={schemaVersion:3,ownerId:f.recording.sessionId,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{...status},system:{...status},notices:[]};
+    f.queueState={lanes:{microphone:[],system:[]},closed:{},loss:{microphone:0,system:0}};
+    f.inputStatus={schemaVersion:4,ownerId:f.recording.sessionId,revision:(f.inputStatus?.revision??0)+1,reportAgeMs:0,microphone:{...status},system:{...status},notices:[],noticeLoss:f.queueState.loss};
   },[value,epoch,count]);
   try{
     await page.goto(root+"/");await page.waitForFunction(()=>!!window.closeFixture);

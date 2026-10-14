@@ -2,10 +2,10 @@
 export type MicrophoneStatus={state:"connected"|"disconnected"|"reconnecting"|"unavailable"|"stopped";sourceEpoch:number;interruptions:number;reason:string|null};
 export type InputKind="microphone"|"system";
 export type NoticeDelivery={sequence:number;generation:number;leaseAgeMs:number|null;rendered:boolean;status:MicrophoneStatus;receiveId:string|null};
-export type InputNotice={id:string;input:InputKind;target:"main"|"recorder";kind:"interrupted"|"recovered";interruptions:number;recipientId:string|null;delivery?:NoticeDelivery};
+export type InputNotice={id:string;input:InputKind;target:"main"|"recorder";kind:"interrupted"|"recovered";interruptions:number;recipientId:string|null;delivery:NoticeDelivery};
 export type NoticeLoss={microphone:number;system:number};
-export type InputStatus={schemaVersion:3|4;ownerId:string;revision:number;reportAgeMs:number;microphone:MicrophoneStatus;system:MicrophoneStatus|null;notices:InputNotice[];noticeLoss?:NoticeLoss};
-export type InputNoticeReceipt={schemaVersion:1|2;ownerId:string;noticeId:string;target:"main"|"recorder";recipientId:string;delivery?:NoticeDelivery};
+export type InputStatus={schemaVersion:4;ownerId:string;revision:number;reportAgeMs:number;microphone:MicrophoneStatus;system:MicrophoneStatus|null;notices:InputNotice[];noticeLoss:NoticeLoss};
+export type InputNoticeReceipt={schemaVersion:2;ownerId:string;noticeId:string;target:"main"|"recorder";recipientId:string;delivery:NoticeDelivery};
 export type VisibleInput={state:"unknown"|"stale"}|MicrophoneStatus;
 const owner=(v:unknown)=>typeof v==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(v);
 export const validInputOwner=owner;
@@ -40,29 +40,27 @@ export function checkedHistoricalInputNotice(value:unknown,expectedOwner:string)
   return {...n,delivery:{...delivery,status:{...delivery.status}}} as InputNotice;
 }
 export function checkedInputStatus(v:unknown,expectedOwner:string):InputStatus{
-  const queued=!!v&&typeof v==="object"&&(v as Record<string,unknown>).schemaVersion===4;
-  const r=record(v,["schemaVersion","ownerId","revision","reportAgeMs","microphone","system","notices",...(queued?["noticeLoss"]:[])]);
-  if(![3,4].includes(Number(r.schemaVersion))||!owner(r.ownerId)||r.ownerId!==expectedOwner||!integer(r.revision,1)||!integer(r.reportAgeMs))throw Error("入力状態の対象または版が不正です。");
+  const r=record(v,["schemaVersion","ownerId","revision","reportAgeMs","microphone","system","notices","noticeLoss"]);
+  if(r.schemaVersion!==4||!owner(r.ownerId)||r.ownerId!==expectedOwner||!integer(r.revision,1)||!integer(r.reportAgeMs))throw Error("入力状態の対象または版が不正です。");
   const microphone=input(r.microphone,"microphone"),system=r.system===null?null:input(r.system,"system");
   if(!Array.isArray(r.notices)||r.notices.length>2)throw Error("入力通知の形式が不正です。");
   const seen=new Set<InputKind>(),notices=r.notices.map(value=>{
-    const n=record(value,["id","input","target","kind","interruptions","recipientId",...(queued?["delivery"]:[])]);
+    const n=record(value,["id","input","target","kind","interruptions","recipientId","delivery"]);
     if(n.input!=="microphone"&&n.input!=="system"||seen.has(n.input as InputKind))throw Error("入力通知の対象が不正です。");
     const m=n.input==="microphone"?microphone:system;seen.add(n.input as InputKind);
     if(!m||typeof n.target!=="string"||!["main","recorder"].includes(n.target)||typeof n.kind!=="string"||!["interrupted","recovered"].includes(n.kind)||!integer(n.interruptions,1)||
       n.id!==`${r.ownerId}:${n.input}:${n.interruptions}:${n.kind}`||!(n.recipientId===null||owner(n.recipientId))||
-      (queued?Number(n.interruptions)>m.interruptions:n.interruptions!==m.interruptions||m.state==="stopped"||(n.kind==="recovered")!==(m.state==="connected")))throw Error("入力通知と取得状態が一致しません。");
-    if(queued){const d=checkedDelivery(n.delivery,n as InputNotice);if(d.status.sourceEpoch>m.sourceEpoch)throw Error("通知の取得世代が範囲外です。");n.delivery=d;}
+      Number(n.interruptions)>m.interruptions)throw Error("入力通知と取得状態が一致しません。");
+    const d=checkedDelivery(n.delivery,n as InputNotice);if(d.status.sourceEpoch>m.sourceEpoch)throw Error("通知の取得世代が範囲外です。");n.delivery=d;
     return n as InputNotice;
   });
-  let noticeLoss:NoticeLoss|undefined;
-  if(queued){const loss=record(r.noticeLoss,["microphone","system"]);if(!integer(loss.microphone)||!integer(loss.system)||Number(loss.microphone)>microphone.interruptions*2||Number(loss.system)>(system?.interruptions??0)*2)throw Error("通知履歴の保持範囲が不正です。");noticeLoss=loss as NoticeLoss;}
-  return {schemaVersion:queued?4:3,ownerId:r.ownerId as string,revision:r.revision as number,reportAgeMs:r.reportAgeMs as number,microphone,system,notices,...(queued?{noticeLoss}:{})};
+  const loss=record(r.noticeLoss,["microphone","system"]);if(!integer(loss.microphone)||!integer(loss.system)||Number(loss.microphone)>microphone.interruptions*2||Number(loss.system)>(system?.interruptions??0)*2)throw Error("通知履歴の保持範囲が不正です。");
+  return {schemaVersion:4,ownerId:r.ownerId as string,revision:r.revision as number,reportAgeMs:r.reportAgeMs as number,microphone,system,notices,noticeLoss:loss as NoticeLoss};
 }
-export function checkedInputNoticeReceipt(value:unknown,expectedOwner:string,noticeId:string,target:"main"|"recorder",expected?:InputNotice):InputNoticeReceipt{
-  const r=record(value,["schemaVersion","ownerId","noticeId","target","recipientId",...(expected?.delivery?["delivery"]:[])]);
-  if(r.schemaVersion!==(expected?.delivery?2:1)||!owner(r.ownerId)||r.ownerId!==expectedOwner||r.noticeId!==noticeId||r.target!==target||!owner(r.recipientId))throw Error("入力通知の受付結果が一致しません。");
-  if(expected?.delivery){const d=checkedDelivery(r.delivery,{...expected,recipientId:r.recipientId as string});if(d.sequence!==expected.delivery.sequence||d.generation!==expected.delivery.generation||!sameInput(d.status,expected.delivery.status))throw Error("通知受付の固定履歴が一致しません。");r.delivery=d;}
+export function checkedInputNoticeReceipt(value:unknown,expectedOwner:string,noticeId:string,target:"main"|"recorder",expected:InputNotice):InputNoticeReceipt{
+  const r=record(value,["schemaVersion","ownerId","noticeId","target","recipientId","delivery"]);
+  if(r.schemaVersion!==2||!owner(r.ownerId)||r.ownerId!==expectedOwner||r.noticeId!==noticeId||r.target!==target||!owner(r.recipientId))throw Error("入力通知の受付結果が一致しません。");
+  const d=checkedDelivery(r.delivery,{...expected,recipientId:r.recipientId as string});if(d.sequence!==expected.delivery.sequence||d.generation!==expected.delivery.generation||!sameInput(d.status,expected.delivery.status))throw Error("通知受付の固定履歴が一致しません。");r.delivery=d;
   return r as InputNoticeReceipt;
 }
 function backwards(m:MicrophoneStatus,old:MicrophoneStatus){return m.sourceEpoch<old.sourceEpoch||m.interruptions<old.interruptions||old.state==="stopped"&&!sameInput(m,old)||m.state==="connected"&&(["disconnected","unavailable"].includes(old.state)||m.interruptions>old.interruptions)&&m.sourceEpoch<=old.sourceEpoch;}
@@ -70,31 +68,30 @@ export class RecordingInputSession{
   private owner:string|null=null;private snapshot:InputStatus|null=null;private at=0;private age=0;private firstAt=0;private firstAge=0;private lastRead=0;private invalid=false;
   private floors=new Map<InputKind,InputNotice>();
   reset(value:string|null){if(value!==null&&!owner(value))throw Error("入力状態の録音IDが不正です。");this.owner=value;this.snapshot=null;this.at=0;this.age=0;this.firstAt=0;this.firstAge=0;this.lastRead=0;this.invalid=false;this.floors.clear();}
-  queued(){return this.snapshot?.schemaVersion===4;}
   loss():NoticeLoss{return this.snapshot?.noticeLoss??{microphone:0,system:0};}
   accept(value:unknown,at:number){
     if(!this.owner||this.invalid||!time(at)||at<this.at)throw Error("入力状態の時計または対象が不正です。");
     const next=checkedInputStatus(value,this.owner),prior=this.snapshot;
     if(prior&&next.revision<prior.revision)return false;
     if(prior){
-      if(next.schemaVersion!==prior.schemaVersion||next.noticeLoss&&(next.noticeLoss.microphone<(prior.noticeLoss?.microphone??0)||next.noticeLoss.system<(prior.noticeLoss?.system??0)))throw Error("通知の形式または保持範囲が逆行しました。");
+      if(next.noticeLoss.microphone<prior.noticeLoss.microphone||next.noticeLoss.system<prior.noticeLoss.system)throw Error("通知の保持範囲が逆行しました。");
       if(backwards(next.microphone,prior.microphone)||!!next.system!==!!prior.system||next.system&&prior.system&&backwards(next.system,prior.system))throw Error("入力の取得世代が逆行しました。");
-      for(const notice of next.notices){const old=notice.delivery?this.floors.get(notice.input):prior.notices.find(n=>n.id===notice.id);
-        if(notice.delivery&&old?.delivery){const d=notice.delivery,o=old.delivery;
+      for(const notice of next.notices){const old=this.floors.get(notice.input);
+        if(old){const d=notice.delivery,o=old.delivery;
           if(d.sequence<o.sequence||d.sequence===o.sequence&&(d.generation<o.generation||!sameInput(d.status,o.status)||
             o.rendered&&!d.rendered||d.generation===o.generation&&(notice.target!==old.target||old.recipientId!==null&&notice.recipientId!==old.recipientId)))throw Error("通知の履歴・受付先または表示確認が逆行しました。");
-        }else if(old?.recipientId&&notice.recipientId!==old.recipientId)throw Error("入力通知の受付先が変更されました。");}
+        }}
       if(next.revision===prior.revision){
         if(!sameInput(next.microphone,prior.microphone)||!sameInput(next.system,prior.system)||next.reportAgeMs<this.age)throw Error("同じ入力状態の版が変更されました。");
       }else{this.firstAt=at;this.firstAge=next.reportAgeMs;}
     }else{this.firstAt=at;this.firstAge=next.reportAgeMs;}
-    this.snapshot=next;for(const n of next.notices)if(n.delivery)this.floors.set(n.input,n);this.at=at;this.age=next.reportAgeMs;return true;
+    this.snapshot=next;for(const n of next.notices)this.floors.set(n.input,n);this.at=at;this.age=next.reportAgeMs;return true;
   }
   read(at:number):{microphone:VisibleInput;system:VisibleInput;notices:InputNotice[]}{
     if(!time(at)||at<this.lastRead||at<this.at)this.invalid=true;this.lastRead=at;
     if(this.invalid||!this.snapshot)return {microphone:{state:"unknown"},system:{state:"unknown"},notices:[]};
     if(Math.max(this.age+at-this.at,this.firstAge+at-this.firstAt)>1000)return {microphone:{state:"stale"},system:{state:"stale"},notices:[]};
-    return {microphone:this.snapshot.microphone,system:this.snapshot.system??{state:"unknown"},notices:this.snapshot.notices.map(n=>n.delivery?{...n,delivery:{...n.delivery,leaseAgeMs:n.delivery.leaseAgeMs===null?null:Math.min(Number.MAX_SAFE_INTEGER,n.delivery.leaseAgeMs+at-this.at)}}:n)};
+    return {microphone:this.snapshot.microphone,system:this.snapshot.system??{state:"unknown"},notices:this.snapshot.notices.map(n=>({...n,delivery:{...n.delivery,leaseAgeMs:n.delivery.leaseAgeMs===null?null:Math.min(Number.MAX_SAFE_INTEGER,n.delivery.leaseAgeMs+at-this.at)}}))};
   }
 }
 export function microphoneLabel(m:VisibleInput):string{

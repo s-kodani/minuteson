@@ -21,7 +21,7 @@ async page => {
     f.refreshInputStatus = true;
   }, [count, both, loss]);
   const reload = async () => {
-    await page.evaluate(() => window.closeFixture.persistInputReceiptFixture()); await page.reload(); await page.waitForFunction(() => !!window.closeFixture);
+    await page.evaluate(() => window.closeFixture.persistInputQueueFixture()); await page.reload(); await page.waitForFunction(() => !!window.closeFixture);
     if (!new URL(page.url()).searchParams.has("window")) await page.getByRole("button", { name: "録音画面へ", exact: true }).click();
   };
   try {
@@ -92,5 +92,5 @@ async page => {
     results.push("failed reads retain loss state without current connection proof; stop removes delivery and no capture is requested");
     return { passed: results.length, results };
   } catch (cause) { throw Error(`after ${results.length} cases: ${cause}; body=${await page.locator("body").innerText()}`); }
-  finally { await page.context().unrouteAll(); await page.evaluate(() => sessionStorage.removeItem("MON_INPUT_RECEIPT_FIXTURE")).catch(() => {}); }
+  finally { await page.context().unrouteAll(); await page.evaluate(() => sessionStorage.removeItem("MON_INPUT_QUEUE_FIXTURE")).catch(() => {}); }
 }

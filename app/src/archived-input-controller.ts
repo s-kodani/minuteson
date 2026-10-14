@@ -1,7 +1,7 @@
 import {ArchivedInputSession,checkedArchivedInputPage,type ArchivedInputRow} from "./archived-input-state.ts";
 import {RecordingInputQueue,type QueueAttempt} from "./recording-input-queue.ts";
 import type {InputKind,InputNotice,NoticeLoss} from "./recording-input-state.ts";
-import type {NoticeReception} from "./recording-input-receipts.ts";
+import type {NoticeReception} from "./recording-input-queue.ts";
 
 type Entry={row:ArchivedInputRow;session:ArchivedInputSession;queue:RecordingInputQueue;fresh:boolean;seen:boolean;error:boolean};
 export type ArchivedAttempt={entry:object;meetingId:string;attempt:QueueAttempt};
