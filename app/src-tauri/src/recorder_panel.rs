@@ -10,12 +10,18 @@ pub(crate) struct PanelVisibility {
     dismissed: AtomicBool,
 }
 
-fn wants_panel(snapshot: &RecordingSnapshot, main_focused: bool, dismissed: bool) -> bool {
+fn wants_panel(
+    snapshot: &RecordingSnapshot,
+    main_focused: bool,
+    dismissed: bool,
+    confirming: bool,
+) -> bool {
     matches!(
         snapshot.phase,
         RecordingPhase::Preparing | RecordingPhase::Recording
     ) && !main_focused
         && !dismissed
+        && !confirming
 }
 
 fn main_focused(app: &AppHandle) -> bool {
@@ -32,6 +38,7 @@ pub(crate) fn may_present(app: &AppHandle) -> bool {
         app.state::<PanelVisibility>()
             .dismissed
             .load(Ordering::SeqCst),
+        app.state::<StopDecisionStore>().snapshot().visible(),
     )
 }
 
@@ -71,17 +78,15 @@ pub(crate) fn synchronize(app: &AppHandle, focused: Option<bool>) -> Result<(), 
     let panel = app
         .get_webview_window("recorder")
         .ok_or("録音パネルがありません")?;
-    if !active || focused {
+    let confirming = app.state::<StopDecisionStore>().snapshot().visible();
+    if !wants_panel(&snapshot, focused, dismissed, confirming) {
         // If visibility cannot be read, still attempt to close: a stopped
         // recording must not leave an always-on-top panel behind.
         if panel.is_visible().unwrap_or(true) {
             panel.hide().map_err(|error| error.to_string())?;
             let _ = crate::recorder_info::hide(app, false);
         }
-    } else if wants_panel(&snapshot, focused, dismissed)
-        && !app.state::<StopDecisionStore>().snapshot().visible()
-        && !panel.is_visible().map_err(|error| error.to_string())?
-    {
+    } else if !panel.is_visible().map_err(|error| error.to_string())? {
         panel.show().map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -96,9 +101,10 @@ mod tests {
         let mut snapshot = RecordingSnapshot::default();
         for phase in [RecordingPhase::Preparing, RecordingPhase::Recording] {
             snapshot.phase = phase;
-            assert!(wants_panel(&snapshot, false, false));
-            assert!(!wants_panel(&snapshot, true, false));
-            assert!(!wants_panel(&snapshot, false, true));
+            assert!(wants_panel(&snapshot, false, false, false));
+            assert!(!wants_panel(&snapshot, true, false, false));
+            assert!(!wants_panel(&snapshot, false, true, false));
+            assert!(!wants_panel(&snapshot, false, false, true));
         }
         for phase in [
             RecordingPhase::Stopping,
@@ -107,7 +113,7 @@ mod tests {
             RecordingPhase::Error,
         ] {
             snapshot.phase = phase;
-            assert!(!wants_panel(&snapshot, false, false));
+            assert!(!wants_panel(&snapshot, false, false, false));
         }
     }
 }

@@ -36,11 +36,9 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
             .as_deref()
             .and_then(|label| app.get_webview_window(label))
         {
-            // A user-hidden mini panel stays hidden even if its stop decision
-            // is subsequently cancelled. Visible openers keep their focus.
-            if window.label() != "recorder"
-                || window.is_visible().unwrap_or(false) && crate::recorder_panel::may_present(app)
-            {
+            // Confirmation hides the mini panel. Restore it only if recording
+            // is still active and the user has not explicitly dismissed it.
+            if window.label() != "recorder" || crate::recorder_panel::may_present(app) {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -146,7 +144,10 @@ pub fn request_recording_confirmation(
             }
         }
         modal.show().map_err(|e| e.to_string())?;
-        modal.set_focus().map_err(|e| e.to_string())
+        modal.set_focus().map_err(|e| e.to_string())?;
+        // A panel failure must not block the stop confirmation itself.
+        let _ = crate::recorder_panel::synchronize(app, None);
+        Ok(())
     };
     if let Err(error) = present() {
         if created {
