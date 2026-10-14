@@ -222,24 +222,16 @@ impl RecorderController {
         });
         Self::verify_input_owner(app, session_id, &reader, &child)?;
         lease.validate_active()?;
-        let result = if crate::input_status::StatusReader::uses_queue(&report) {
-            input.queued_action(
-                &report,
-                notice_id,
-                recipient_id,
-                target,
-                visible,
-                generation.ok_or("通知の受付世代がありません")?,
-                action,
-                receive_id,
-            )
-        } else if matches!(action, crate::input_status::queue::Action::Receive)
-            && generation.is_none()
-        {
-            input.receive(&report, notice_id, recipient_id, target, visible)
-        } else {
-            Err("旧通知は表示確認キューに対応していません".into())
-        }?;
+        let result = input.queued_action(
+            &report,
+            notice_id,
+            recipient_id,
+            target,
+            visible,
+            generation.ok_or("通知の受付世代がありません")?,
+            action,
+            receive_id,
+        )?;
         lease.validate_active()?;
         app.state::<Storage>().require_data_writable()?;
         Self::verify_input_owner(app, session_id, &reader, &child)?;

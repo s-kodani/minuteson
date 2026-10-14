@@ -522,7 +522,6 @@ mod tests {
         assert!(reader
             .queued_action(&stale, id, A, "main", true, 1, Action::Render, None)
             .is_err());
-        assert!(!reader.receive(&snap, id, A, "main", true).is_ok());
         let reread = reader.read(OWNER, None).unwrap();
         assert_eq!(reread.notices[0].recipient_id.as_deref(), Some(A));
         assert!(!reread.notices[0].delivery.as_ref().unwrap().rendered);

@@ -33,7 +33,7 @@ check-input-journal:
 
 check-input-history:
 	@mon_history_dir=$$(mktemp -d /tmp/mon-input-history.XXXXXX) || exit 1; \
-	trap 'rm -f "$$mon_history_dir/input-status.json"; rmdir "$$mon_history_dir"' EXIT; \
+	trap 'rm -f "$$mon_history_dir/input-status.json" "$$mon_history_dir/input-notices.json" "$$mon_history_dir/input-notices.lock"; rmdir "$$mon_history_dir"' EXIT; \
 	env MON_INPUT_HISTORY_FIXTURE_DIR="$$mon_history_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputEventHistoryTests/testBothRapidTransitionsSurviveOneHeartbeatAndExportForRust && \
 	env MON_INPUT_HISTORY_FIXTURE_DIR="$$mon_history_dir" python3 tools/mon_rust_tests.py swift_generated_input_history -- --ignored
 
@@ -51,7 +51,7 @@ check-system-recovery:
 
 check-input-status:
 	@mon_status_dir=$$(mktemp -d /tmp/mon-input-status.XXXXXX) || exit 1; \
-	trap 'rm -f "$$mon_status_dir/input-status.json"; rmdir "$$mon_status_dir"' EXIT; \
+	trap 'rm -f "$$mon_status_dir/input-status.json" "$$mon_status_dir/input-notices.json" "$$mon_status_dir/input-notices.lock"; rmdir "$$mon_status_dir"' EXIT; \
 	env MON_INPUT_STATUS_FIXTURE_DIR="$$mon_status_dir" SWIFTPM_MODULECACHE_OVERRIDE=/tmp/mon-swift-module-cache CLANG_MODULE_CACHE_PATH=/tmp/mon-clang-module-cache swift test --package-path probes/macos-capture --disable-sandbox --filter InputStatusTests/testSwiftBindingHeartbeatPublishesActualPolicyAndExportsForNativeReader && \
 	env MON_INPUT_STATUS_FIXTURE_DIR="$$mon_status_dir" python3 tools/mon_rust_tests.py swift_generated_input_status -- --ignored
 

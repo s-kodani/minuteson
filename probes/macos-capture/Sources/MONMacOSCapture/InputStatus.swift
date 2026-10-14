@@ -28,12 +28,12 @@ struct InputStatusReport: Encodable, Sendable {
         || (status.interruptions > 0 && status.reason != nil))
   }
 
-  var schemaVersion: Int { microphoneHistory == nil ? 2 : 3 }
+  let schemaVersion = 3
   let ownerId: String
   let revision: Int64
   let microphone: MicrophoneRecovery.Status
   var system: SystemAudioRecovery.Status? = nil
-  var microphoneHistory: InputEventHistory? = nil
+  let microphoneHistory: InputEventHistory
   var systemHistory: InputEventHistory? = nil
 
   enum CodingKeys: String, CodingKey {
@@ -50,13 +50,11 @@ struct InputStatusReport: Encodable, Sendable {
     } else {
       try container.encodeNil(forKey: .system)
     }
-    if let microphoneHistory {
-      try container.encode(microphoneHistory, forKey: .microphoneHistory)
-      if let systemHistory {
-        try container.encode(systemHistory, forKey: .systemHistory)
-      } else {
-        try container.encodeNil(forKey: .systemHistory)
-      }
+    try container.encode(microphoneHistory, forKey: .microphoneHistory)
+    if let systemHistory {
+      try container.encode(systemHistory, forKey: .systemHistory)
+    } else {
+      try container.encodeNil(forKey: .systemHistory)
     }
   }
 
@@ -69,16 +67,12 @@ struct InputStatusReport: Encodable, Sendable {
         $0.sourceEpoch <= 9_007_199_254_740_991 && $0.interruptions <= 9_007_199_254_740_991
       }) ?? true
     else { throw ProbeError.capture("input status report owner or counters are invalid") }
-    if let microphoneHistory {
-      guard microphoneHistory.matches(microphone),
-        (system == nil) == (systemHistory == nil),
-        system.map({ systemHistory?.matches($0, input: "system") == true }) ?? true
-      else { throw ProbeError.capture("input status event history is inconsistent") }
-    } else if systemHistory != nil {
-      throw ProbeError.capture("input status event history requires both supported inputs")
-    }
+    guard microphoneHistory.matches(microphone),
+      (system == nil) == (systemHistory == nil),
+      system.map({ systemHistory?.matches($0, input: "system") == true }) ?? true
+    else { throw ProbeError.capture("input status event history is inconsistent") }
     let data = try JSONEncoder().encode(self)
-    guard data.count <= (schemaVersion == 2 ? 16 : 64) * 1024 else {
+    guard data.count <= 64 * 1024 else {
       throw ProbeError.capture("input status report exceeds limit")
     }
     return data

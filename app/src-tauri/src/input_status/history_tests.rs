@@ -240,7 +240,7 @@ fn newer_heartbeat_cannot_rewrite_recorded_events_reset_history_or_change_protoc
     legacy["revision"] = json!(21);
     legacy.as_object_mut().unwrap().remove("microphoneHistory");
     legacy.as_object_mut().unwrap().remove("systemHistory");
-    assert!(decode(&legacy).is_ok());
+    assert!(decode(&legacy).is_err());
     write(temp.path(), &legacy);
     assert!(reader.read(OWNER, None).is_err());
     write(temp.path(), &publication(200)); // explicit prefix eviction accepted

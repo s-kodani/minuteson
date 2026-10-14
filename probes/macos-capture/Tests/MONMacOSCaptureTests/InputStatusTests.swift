@@ -36,7 +36,8 @@ final class InputStatusTests: XCTestCase {
     try recovery.activate(first)
     func publish(_ revision: Int64) throws -> [String: Any] {
       try InputStatusReport(
-        ownerId: owner, revision: revision, microphone: recovery.status, system: system.status
+        ownerId: owner, revision: revision, microphone: recovery.status, system: system.status,
+        microphoneHistory: recovery.history, systemHistory: system.history
       )
       .publish(to: directory)
       return try XCTUnwrap(
@@ -46,8 +47,12 @@ final class InputStatusTests: XCTestCase {
     }
     let initial = try publish(1)
     XCTAssertEqual(
-      Set(initial.keys), ["schemaVersion", "ownerId", "revision", "microphone", "system"])
-    XCTAssertEqual(initial["schemaVersion"] as? Int, 2)
+      Set(initial.keys),
+      [
+        "schemaVersion", "ownerId", "revision", "microphone", "system", "microphoneHistory",
+        "systemHistory",
+      ])
+    XCTAssertEqual(initial["schemaVersion"] as? Int, 3)
     let connected = try XCTUnwrap(initial["microphone"] as? [String: Any])
     XCTAssertEqual(Set(connected.keys), ["state", "sourceEpoch", "interruptions", "reason"])
     XCTAssertTrue(connected["reason"] is NSNull)
@@ -84,7 +89,8 @@ final class InputStatusTests: XCTestCase {
       let output = URL(fileURLWithPath: export, isDirectory: true)
       XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: output.path).isEmpty)
       try InputStatusReport(
-        ownerId: owner, revision: 4, microphone: recovery.status, system: system.status
+        ownerId: owner, revision: 4, microphone: recovery.status, system: system.status,
+        microphoneHistory: recovery.history, systemHistory: system.history
       ).publish(
         to: output)
     }
@@ -99,7 +105,9 @@ final class InputStatusTests: XCTestCase {
     var recovery = try MicrophoneRecovery(uid: device.uid)
     let first = try recovery.begin(device)
     try recovery.activate(first)
-    let report = InputStatusReport(ownerId: owner, revision: 1, microphone: recovery.status)
+    let report = InputStatusReport(
+      ownerId: owner, revision: 1, microphone: recovery.status,
+      microphoneHistory: recovery.history)
     try report.publish(to: directory)
     let unsupported =
       try JSONSerialization.jsonObject(
@@ -110,13 +118,18 @@ final class InputStatusTests: XCTestCase {
     let before = try Data(contentsOf: path)
     for invalid in ["../outside", owner.uppercased(), "735027d4-a03e-13d3-830a-21e767dfaf88"] {
       XCTAssertThrowsError(
-        try InputStatusReport(ownerId: invalid, revision: 2, microphone: recovery.status).publish(
-          to: directory))
+        try InputStatusReport(
+          ownerId: invalid, revision: 2, microphone: recovery.status,
+          microphoneHistory: recovery.history
+        ).publish(to: directory))
     }
     for revision in [Int64(0), -1, 9_007_199_254_740_992] {
       XCTAssertThrowsError(
-        try InputStatusReport(ownerId: owner, revision: revision, microphone: recovery.status)
-          .publish(to: directory))
+        try InputStatusReport(
+          ownerId: owner, revision: revision, microphone: recovery.status,
+          microphoneHistory: recovery.history
+        )
+        .publish(to: directory))
     }
     for status in [
       MicrophoneRecovery.Status(
@@ -125,15 +138,18 @@ final class InputStatusTests: XCTestCase {
         state: "connected", sourceEpoch: 1, interruptions: 9_007_199_254_740_992, reason: nil),
     ] {
       XCTAssertThrowsError(
-        try InputStatusReport(ownerId: owner, revision: 2, microphone: status).publish(
-          to: directory))
+        try InputStatusReport(
+          ownerId: owner, revision: 2, microphone: status,
+          microphoneHistory: recovery.history
+        ).publish(to: directory))
     }
     XCTAssertEqual(try Data(contentsOf: path), before)
     let unsafe = SystemAudioRecovery.Status(
       state: "connected", sourceEpoch: 9_007_199_254_740_992, interruptions: 0, reason: nil)
     XCTAssertThrowsError(
       try InputStatusReport(
-        ownerId: owner, revision: 2, microphone: recovery.status, system: unsafe
+        ownerId: owner, revision: 2, microphone: recovery.status, system: unsafe,
+        microphoneHistory: recovery.history, systemHistory: InputEventHistory()
       ).publish(to: directory))
     XCTAssertEqual(try Data(contentsOf: path), before)
   }
@@ -153,7 +169,8 @@ final class InputStatusTests: XCTestCase {
           with: JSONEncoder().encode(
             InputStatusReport(
               ownerId: owner, revision: revision, microphone: microphone.status,
-              system: system.status
+              system: system.status, microphoneHistory: microphone.history,
+              systemHistory: system.history
             ))) as? [String: Any])
     }
     let interrupted = try encoded(1)
@@ -168,6 +185,10 @@ final class InputStatusTests: XCTestCase {
     XCTAssertEqual((stopped["system"] as? [String: Any])?["state"] as? String, "stopped")
     XCTAssertEqual((stopped["microphone"] as? [String: Any])?["state"] as? String, "connected")
     XCTAssertEqual(
-      Set(stopped.keys), ["schemaVersion", "ownerId", "revision", "microphone", "system"])
+      Set(stopped.keys),
+      [
+        "schemaVersion", "ownerId", "revision", "microphone", "system", "microphoneHistory",
+        "systemHistory",
+      ])
   }
 }

@@ -169,7 +169,8 @@ final class InputEventHistoryTests: XCTestCase {
         ownerId: owner, revision: 2, microphone: mic.status, system: initial,
         microphoneHistory: mic.history),
       InputStatusReport(
-        ownerId: owner, revision: 2, microphone: mic.status, systemHistory: mic.history),
+        ownerId: owner, revision: 2, microphone: mic.status,
+        microphoneHistory: mic.history, systemHistory: mic.history),
     ] {
       XCTAssertThrowsError(try invalid.publish(to: directory))
       XCTAssertEqual(try Data(contentsOf: path), before)

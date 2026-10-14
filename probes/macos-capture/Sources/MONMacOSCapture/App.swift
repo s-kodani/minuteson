@@ -1896,12 +1896,13 @@ public enum CaptureCommand {
             if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
               levelRevision += 1
               if options.publishesInputStatus,
-                let status = microphone.microphoneRecovery
+                let status = microphone.microphoneRecovery,
+                let history = microphone.inputEventHistory
               {
                 try? InputStatusReport(
                   ownerId: owner, revision: levelRevision, microphone: status,
                   system: systemStats.systemRecovery,
-                  microphoneHistory: microphone.inputEventHistory,
+                  microphoneHistory: history,
                   systemHistory: systemStats.inputEventHistory
                 )
                 .publish(to: options.output)
