@@ -920,8 +920,7 @@ fn saved_run_worker_keeps_real_overlap_and_refuses_requested_count_that_would_me
 
 #[test]
 #[ignore = "dedicated signed helper and fake C API; no live recording"]
-fn saved_run_worker_automatic_handoff_reaches_review_without_adopting_candidates_or_changing_draft()
-{
+fn saved_run_worker_automatic_handoff_preserves_existing_text_without_explicit_regeneration() {
     let (root, storage, meeting, unused) = worker_fixture("voice_fixture", None);
     storage
         .finish_job(&unused.id, 0, "cancelled", None)
@@ -975,9 +974,11 @@ fn saved_run_worker_automatic_handoff_reaches_review_without_adopting_candidates
         .unwrap()
         .unwrap();
     crate::analysis_flow::advance(&storage, &|| false, &|_| {}).unwrap();
+    let flow = storage.analysis_flow(&meeting).unwrap().unwrap();
+    assert_eq!(flow.stage, "attention", "{:?}", flow.error_message);
     assert_eq!(
-        storage.analysis_flow(&meeting).unwrap().unwrap().stage,
-        "review"
+        flow.error_message.as_deref(),
+        Some("既存の文字起こしと編集を保持しています。自動処理で上書きしません。")
     );
     let candidate = storage
         .load_visible_analysis(&meeting, &id)
