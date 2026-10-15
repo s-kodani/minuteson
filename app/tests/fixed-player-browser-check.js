@@ -29,6 +29,12 @@ async(page,capturePath,detailUI)=>{
   await slider().fill('144000');await player().getByRole('combobox',{name:'速度',exact:true}).selectOption('1.5');
   for(const theme of ['light','dark']){await detailUI.applyPlaybackTheme(theme);check(await slider().inputValue()==='144000'&&await player().getByRole('combobox',{name:'速度',exact:true}).inputValue()==='1.5','theme reset playback state');await page.screenshot({path:capturePath(`fixed-${theme}.png`)});}
   results.push('theme changes retain paused position speed and native token');
+  for(const palette of ['purple','monochrome']){
+    await page.evaluate(async colorTheme=>{const f=window.monBrowserFixture;f.uiPreferences.payload.colorTheme=colorTheme;f.uiPreferences.lockVersion++;await f.emitUiPreferences();},palette);
+    await page.waitForFunction(palette=>document.documentElement.dataset.colorTheme===palette,palette);
+    check(await slider().inputValue()==='144000'&&await player().getByRole('combobox',{name:'速度',exact:true}).inputValue()==='1.5'&&await player().evaluate(e=>e===window.monBrowserFixture.playerNode)&&await calls('prepare_utterance_playback')===prepared,'color change reset position speed player or token');
+  }
+  results.push('color changes retain paused position speed player node and native token');
   await row.getByRole('button',{name:'00:00:00の発言を編集',exact:true}).click();
   const text=row.getByRole('textbox',{name:'00:00:00の発言',exact:true});await text.fill('再生中も未確定本文を保持します。');
   await play();await pause();await text.evaluate(e=>{window.monBrowserFixture.textNode=e;e.setSelectionRange(3,8);});

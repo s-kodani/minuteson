@@ -4,10 +4,44 @@ fn payload(theme: Theme) -> UiPreferences {
     UiPreferences::V1 {
         schema_version: 1,
         theme,
+        color_theme: ColorTheme::Monochrome,
     }
 }
 fn rows(storage: &Storage) -> String {
     storage.connection.lock().unwrap().query_row("SELECT coalesce(json_group_array(json_array(key,value_json,content_hash,lock_version,updated_at)),'[]') FROM app_settings", [], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn ui_preferences_color_is_independent_persisted_and_version_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let meeting = storage.create_meeting("color must not edit content").unwrap();
+    let purple = UiPreferences::V1 { schema_version: 1, theme: Theme::Dark, color_theme: ColorTheme::Purple };
+    let saved = storage.save_ui_preferences(0, purple.clone()).unwrap();
+    assert_eq!(saved.lock_version, 1);
+    assert!(storage.save_ui_preferences(0, payload(Theme::Light)).is_err());
+    assert_eq!(storage.ui_preferences().unwrap().payload, purple);
+    drop(storage);
+    let storage = Storage::open(root.path().into()).unwrap();
+    assert_eq!(storage.ui_preferences().unwrap().payload, purple);
+    assert_eq!(storage.get_meeting(&meeting.id).unwrap(), Some(meeting));
+    assert_eq!(storage.save_ui_preferences(1, payload(Theme::Dark)).unwrap().lock_version, 2);
+    assert_eq!(storage.ui_preferences().unwrap().payload, payload(Theme::Dark));
+}
+
+#[test]
+fn ui_preferences_absent_color_defaults_without_rewriting_or_accepting_invalid_color() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let json = r#"{"schemaVersion":1,"theme":"dark"}"#;
+    storage.connection.lock().unwrap().execute("INSERT INTO app_settings VALUES(?1,?2,?3,1,1)", params![KEY,json,format!("{:x}",Sha256::digest(json.as_bytes()))]).unwrap();
+    let before = rows(&storage);
+    assert_eq!(storage.ui_preferences().unwrap().payload, payload(Theme::Dark));
+    assert_eq!(rows(&storage), before);
+    for color in ["null", "\"blue\"", "true", "1"] {
+        let json = format!(r#"{{"schemaVersion":1,"theme":"dark","colorTheme":{color}}}"#);
+        assert!(serde_json::from_str::<UiPreferences>(&json).is_err());
+    }
 }
 
 #[test]

@@ -26,6 +26,34 @@
   --warning-text: #fbbf24; --warning-surface: #33280d; --warning-border: #b45309;
   --info-text: #7dd3fc; --info-surface: #082f49; --backdrop: rgba(0,0,0,.65);
 }
+/* Missing color uses monochrome before preferences arrive. Purple keeps the
+   original palette; semantic recording/success/warning/error tokens stay. */
+:root:not([data-color-theme="purple"]):not([data-theme="dark"]) {
+  --background:#fafafa; --surface:#fff; --raised:#f4f4f5;
+  --text:#18181b; --secondary-text:#52525b; --muted:#71717a; --subtle:#71717a;
+  --border:#e4e4e7; --input-border:#d4d4d8;
+  --primary:#27272a; --primary-strong:#18181b; --on-primary:#fff;
+  --primary-border:#a1a1aa; --accent:#3f3f46; --selection:#e4e4e7; --focus:#52525b;
+  --backdrop:rgba(0,0,0,.55); --floating-shadow:0 16px 45px #0002;
+}
+:root[data-theme="dark"]:not([data-color-theme="purple"]) {
+  --background:#0f0f10; --surface:#18181b; --raised:#27272a;
+  --text:#fafafa; --secondary-text:#a1a1aa; --muted:#a1a1aa; --subtle:#a1a1aa;
+  --border:#3f3f46; --input-border:#71717a;
+  --primary:#e4e4e7; --primary-strong:#fafafa; --on-primary:#18181b;
+  --primary-border:#a1a1aa; --accent:#d4d4d8; --selection:#3f3f46; --focus:#d4d4d8;
+  --backdrop:rgba(0,0,0,.65); --floating-shadow:0 16px 45px #0005;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]):not([data-color-theme="purple"]) {
+    --background:#0f0f10; --surface:#18181b; --raised:#27272a;
+    --text:#fafafa; --secondary-text:#a1a1aa; --muted:#a1a1aa; --subtle:#a1a1aa;
+    --border:#3f3f46; --input-border:#71717a;
+    --primary:#e4e4e7; --primary-strong:#fafafa; --on-primary:#18181b;
+    --primary-border:#a1a1aa; --accent:#d4d4d8; --selection:#3f3f46; --focus:#d4d4d8;
+    --backdrop:rgba(0,0,0,.65); --floating-shadow:0 16px 45px #0005;
+  }
+}
 /* Avoid a light first paint while the default system setting is loading. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -177,6 +205,7 @@ dialog::backdrop { background: var(--backdrop); }
 .theme-settings { margin-bottom: 20px; }
 .theme-settings h2 { font-size: 17px; }
 .theme-choice { margin: 16px 0; }
+.theme-settings > .theme-choice { display:grid; grid-template-columns:84px minmax(0,220px); column-gap:12px; align-items:center; }
 .theme-read-notice { font-size: 12px; color: var(--danger-text); overflow-wrap: anywhere; }
 .mini-shell:has(.theme-read-notice) { overflow: auto; }
 .topbar { gap: 12px; }

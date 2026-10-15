@@ -3,8 +3,8 @@ async (page, capturePath = name => `/Users/skodani/Codebase/mon/output/playwrigh
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const nav = page.getByRole("navigation", { name:"メインナビゲーション", exact:true });
   const settings = page.getByRole("region", { name:"表示設定", exact:true });
-  const theme = settings.getByRole("combobox", { name:"テーマ", exact:true });
-  check(await settings.getByRole("combobox").count() === 1, "display settings must contain theme only");
+  const theme = settings.getByRole("combobox", { name:"表示モード", exact:true });
+  check(await settings.getByRole("combobox").count() === 2, "display settings must contain color and brightness only");
   check(await page.getByRole("combobox", {name:"本文の文字サイズ",exact:true}).count() === 0, "removed text-size control remains");
   check(await page.getByRole("checkbox", {name:"再生位置に追従",exact:true}).count() === 0, "removed follow control remains");
   check(await page.getByRole("banner").getByRole("combobox").count() === 0, "header theme selector returned");
@@ -14,7 +14,7 @@ async (page, capturePath = name => `/Users/skodani/Codebase/mon/output/playwrigh
     await page.waitForFunction(value => window.monBrowserFixture.uiPreferences?.payload.theme === value, value);
     check(await page.evaluate(() => {
       const p = window.monBrowserFixture.uiPreferences.payload;
-      return p.schemaVersion === 1 && Object.keys(p).sort().join() === "schemaVersion,theme";
+      return p.schemaVersion === 1 && Object.keys(p).sort().join() === "colorTheme,schemaVersion,theme";
     }), "theme save retained removed display fields");
     if (value !== "system") await page.waitForFunction(value => document.documentElement.dataset.theme === value, value);
   }

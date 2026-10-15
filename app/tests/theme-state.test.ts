@@ -1,9 +1,52 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertUiPreferences, resolveTheme, ThemeController, type ThemePreference } from "../src/theme-state.ts";
+import { assertUiPreferences, resolveTheme, ThemeController, type ThemePreference, type ColorTheme } from "../src/theme-state.ts";
 
-const snapshot = (theme: ThemePreference = "system", lockVersion = 0) => ({ id: "ui_preferences" as const, payload: { schemaVersion: 1 as const, theme }, lockVersion });
+const snapshot = (theme: ThemePreference = "system", lockVersion = 0, colorTheme: ColorTheme = "monochrome") => ({ id: "ui_preferences" as const, payload: { schemaVersion: 1 as const, theme, colorTheme }, lockVersion });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+
+test("missing color defaults to monochrome without changing saved brightness; invalid colors fail closed", () => {
+  assert.deepEqual(assertUiPreferences({ ...snapshot("dark", 2), payload: { schemaVersion: 1, theme: "dark" } }), snapshot("dark", 2));
+  for (const colorTheme of [null, "blue", "", true, {}, 1]) assert.throws(() => assertUiPreferences({ ...snapshot(), payload: { ...snapshot().payload, colorTheme } }));
+  assert.throws(() => assertUiPreferences(snapshot("system", 0, "purple")));
+});
+
+test("color and brightness save independently and survive a fresh controller", async () => {
+  let stored = snapshot(); const writes: unknown[] = [];
+  const bridge = { read: async () => stored, save: async (version: number, theme: ThemePreference, colorTheme: ColorTheme) => {
+    writes.push({ theme, colorTheme }); return stored = snapshot(theme, version + 1, colorTheme);
+  } };
+  const c = new ThemeController(bridge); await c.refresh();
+  await c.changeColor("purple"); await c.change("dark"); await c.changeColor("monochrome");
+  assert.deepEqual(writes, [{theme:"system",colorTheme:"purple"},{theme:"dark",colorTheme:"purple"},{theme:"dark",colorTheme:"monochrome"}]);
+  const restarted = new ThemeController(bridge); await restarted.refresh();
+  assert.deepEqual(restarted.getSnapshot().snapshot, snapshot("dark", 3));
+  assert.equal(restarted.getSnapshot().notice, null);
+});
+
+test("color retry merges only requested fields with a newer saved brightness", async () => {
+  let stored = snapshot(), fail = true;
+  const c = new ThemeController({ read: async () => stored, save: async (version, theme, colorTheme) => {
+    if (fail) throw Error("save failed"); return stored = snapshot(theme, version + 1, colorTheme);
+  } });
+  await c.refresh(); await c.changeColor("purple");
+  assert.equal(c.getSnapshot().snapshot?.payload.colorTheme, "monochrome");
+  assert.equal(c.getSnapshot().pendingPreferences?.colorTheme, "purple");
+  stored = snapshot("dark", 2); await c.refresh(); fail = false; await c.retry();
+  assert.deepEqual(c.getSnapshot().snapshot, snapshot("dark", 3, "purple"));
+});
+
+test("matching brightness alone cannot resolve an unknown color save", async () => {
+  let stored = snapshot(), unavailable = false, writes = 0;
+  const c = new ThemeController({ read: async () => { if (unavailable) throw Error("offline"); return stored; }, save: async () => { writes++; unavailable = true; throw Error("lost response"); } });
+  await c.refresh(); await c.changeColor("purple");
+  await c.change("dark"); assert.equal(writes, 1);
+  unavailable = false; await c.refresh();
+  assert.equal(c.getSnapshot().pendingPreferences?.colorTheme, "purple");
+  assert.equal(c.getSnapshot().snapshot?.payload.colorTheme, "monochrome");
+  stored = snapshot("system", 1, "purple"); await c.refresh();
+  assert.equal(c.getSnapshot().pendingPreferences, null); assert.equal(writes, 1);
+});
 
 test("theme resolves live OS changes only for system and validates exact versioned settings", () => {
   assert.equal(resolveTheme("system", false), "light"); assert.equal(resolveTheme("system", true), "dark");

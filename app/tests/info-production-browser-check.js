@@ -21,7 +21,7 @@ async (page,capturePath)=>{
   }
   results.push("retired maintenance/model-record help is absent from current settings");
   for(const theme of ["light","dark"]){
-    await page.getByRole("combobox",{name:"テーマ",exact:true}).selectOption(theme);
+    await page.getByRole("combobox",{name:"表示モード",exact:true}).selectOption(theme);
     await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
     for(const width of [360,960]){
       await page.setViewportSize({width,height:640});await info("バックアップと追加復元").click();

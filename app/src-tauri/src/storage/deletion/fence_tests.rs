@@ -200,7 +200,8 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
             0,
             UiPreferences::V1 {
                 schema_version: 1,
-                theme: Theme::Dark
+                theme: Theme::Dark,
+                color_theme: Default::default(),
             }
         )
         .is_err());
@@ -215,7 +216,8 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
             0,
             UiPreferences::V1 {
                 schema_version: 1,
-                theme: Theme::Light
+                theme: Theme::Light,
+                color_theme: Default::default(),
             }
         )
         .is_err());

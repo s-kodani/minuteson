@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { isTheme, resolveTheme, ThemeController } from "./theme-state";
+import { isTheme, isColorTheme, resolveTheme, ThemeController } from "./theme-state";
 import { InfoPopover } from "./info-popover";
 import { IssueStatus, ToastNotice } from "./toast";
 
@@ -9,7 +9,7 @@ const Context = createContext<ThemeController | null>(null);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [controller] = useState(() => new ThemeController({
     read: () => invoke("get_ui_preferences"),
-    save: (expectedLockVersion, theme) => invoke("save_ui_preferences", { expectedLockVersion, payload: { schemaVersion: 1, theme } }),
+    save: (expectedLockVersion, theme, colorTheme) => invoke("save_ui_preferences", { expectedLockVersion, payload: { schemaVersion: 1, theme, colorTheme } }),
   }));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [osDark, setOsDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -20,7 +20,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener("change", changed);
   }, []);
   const theme = resolveTheme(state.snapshot?.payload.theme ?? "system", osDark);
-  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  const colorTheme = state.snapshot?.payload.colorTheme ?? "monochrome";
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.colorTheme = colorTheme;
+  }, [theme, colorTheme]);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -43,7 +47,7 @@ export function useTheme() {
 export function ThemeSelection({ locked = false, compact = false, describedBy }: { locked?: boolean; compact?: boolean; describedBy?: string }) {
   const { controller, state } = useTheme();
   const id = useId();
-  return <label className={compact ? "theme-quick" : "theme-choice"} htmlFor={id}>{compact ? "表示テーマ" : "テーマ"}
+  return <label className={compact ? "theme-quick" : "theme-choice"} htmlFor={id}>表示モード
     <select id={id} aria-describedby={describedBy} value={state.pendingTheme ?? state.snapshot?.payload.theme ?? "system"} disabled={locked || state.busy || state.uncertain || !state.snapshot || !isTauri()} onChange={event => { if (isTheme(event.target.value)) void controller.change(event.target.value); }}>
       <option value="system">システム</option><option value="light">ライト</option><option value="dark">ダーク</option>
     </select>
@@ -51,12 +55,14 @@ export function ThemeSelection({ locked = false, compact = false, describedBy }:
 }
 export function ThemeSettingsPanel({ locked, compact = false }: { locked: boolean; compact?: boolean }) {
   const { controller, state } = useTheme();
+  const colorId = useId();
   return <section className="status-card theme-settings" aria-label="表示設定">
-    <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
+    <div className="heading-with-info"><h2>表示</h2><InfoPopover label="表示テーマ">カラーと明るさは別々に選べます。システムはOSの明るさに追従します。切り替えても編集中の内容・選択・音声の再生位置は保持します。ミニパネルも同じ保存済み設定を使います。</InfoPopover></div>
+    <label className="theme-choice" htmlFor={colorId}>カラー<select id={colorId} value={state.pendingPreferences?.colorTheme ?? state.snapshot?.payload.colorTheme ?? "monochrome"} disabled={locked || state.busy || state.uncertain || !state.snapshot || !isTauri()} onChange={event => { if (isColorTheme(event.target.value)) void controller.changeColor(event.target.value); }}><option value="monochrome">モノトーン</option><option value="purple">パープル</option></select></label>
     <ThemeSelection locked={locked} />
     <IssueStatus label="表示設定の読込・保存" message={state.error} />
-    {state.pendingTheme && !state.busy && <div className="analysis-actions">
-      {state.pendingTheme && <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.change(state.pendingTheme!)}>テーマの保存を再試行</button>}
+    {state.pendingPreferences && !state.busy && <div className="analysis-actions">
+      <button type="button" disabled={locked || state.uncertain || !state.snapshot} onClick={() => void controller.retry()}>テーマの保存を再試行</button>
     </div>}
   </section>;
 }

@@ -6,7 +6,7 @@ window.skipAudioDeletionFixtureMain = true;
 const { audioDeletionIPC } = await import("./audio-deletion-browser-fixture.js");
 mockWindows(new URLSearchParams(location.search).get("window") === "recorder" ? "recorder" : "main");
 const key = "MON_THEME_BROWSER_FIXTURE";
-const initial = { id: "ui_preferences", payload: { schemaVersion: 1, theme: "system" }, lockVersion: 0 };
+const initial = { id: "ui_preferences", payload: { schemaVersion: 1, theme: "system", colorTheme: "monochrome" }, lockVersion: 0 };
 const stored = () => JSON.parse(localStorage.getItem(key) || JSON.stringify(initial));
 const source = await audioDeletionIPC("get_current_analysis", { meetingId: window.dataFixture.meetings[0].id });
 let minutes = {meetingId:source.meetingId,markdown:"# テーマ確認用の議事録\n\n保存済みの点検日メモです。\n",contentHash:"b".repeat(64),lockVersion:1,operationId:crypto.randomUUID(),updatedAt:1791160000000};

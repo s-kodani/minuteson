@@ -2,7 +2,7 @@
 async (page,capturePath)=>{
   const results=[],check=(ok,message)=>{if(!ok)throw Error(message);};
   const host=page.locator('.toast-host'),settings=()=>page.getByRole('region',{name:'表示設定',exact:true});
-  const select=()=>settings().getByRole('combobox',{name:'テーマ',exact:true});
+  const select=()=>settings().getByRole('combobox',{name:'表示モード',exact:true});
   const nav=()=>page.locator('.sidebar');
   const count=()=>page.evaluate(()=>window.themeFixture.calls.filter(c=>c.command==='save_ui_preferences').length);
   const open=async()=>{await nav().getByRole('button',{name:'設定',exact:true}).click();await select().waitFor();};

@@ -1,12 +1,14 @@
 export type ThemePreference = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type UiPreferencesPayload = { schemaVersion: 1; theme: ThemePreference };
+export type ColorTheme = "monochrome" | "purple";
+export type UiPreferencesPayload = { schemaVersion: 1; theme: ThemePreference; colorTheme: ColorTheme };
 export interface UiPreferencesSnapshot { id: "ui_preferences"; payload: UiPreferencesPayload; lockVersion: number }
 export interface ThemeNotice { id: number; message: string; level: "success" | "info" }
 export interface ThemeState { snapshot: UiPreferencesSnapshot | null; pendingTheme: ThemePreference | null; pendingPreferences: UiPreferencesPayload | null; busy: boolean; uncertain: boolean; error: string; status: string; notice: ThemeNotice | null }
-export interface ThemeBridge { read(): Promise<unknown>; save(version: number, theme: ThemePreference): Promise<unknown> }
+export interface ThemeBridge { read(): Promise<unknown>; save(version: number, theme: ThemePreference, colorTheme: ColorTheme): Promise<unknown> }
 
 export function isTheme(value: unknown): value is ThemePreference { return value === "system" || value === "light" || value === "dark"; }
+export function isColorTheme(value: unknown): value is ColorTheme { return value === "monochrome" || value === "purple"; }
 const samePreferences = (a: UiPreferencesPayload, b: UiPreferencesPayload) => JSON.stringify(a) === JSON.stringify(b);
 export function resolveTheme(preference: ThemePreference, osDark: boolean): ResolvedTheme { return preference === "system" ? osDark ? "dark" : "light" : preference; }
 export function assertUiPreferences(value: unknown): UiPreferencesSnapshot {
@@ -14,9 +16,9 @@ export function assertUiPreferences(value: unknown): UiPreferencesSnapshot {
   if (!v || typeof v !== "object" || Array.isArray(v) || Object.keys(v).sort().join() !== "id,lockVersion,payload" || v.id !== "ui_preferences" || !Number.isSafeInteger(v.lockVersion) || v.lockVersion < 0 || !v.payload || typeof v.payload !== "object" || Array.isArray(v.payload) || !isTheme(v.payload.theme)) throw Error("表示設定の応答が不正です");
   const keys = Object.keys(v.payload).sort().join();
   let payload: UiPreferencesPayload;
-  if (v.payload.schemaVersion === 1 && keys === "schemaVersion,theme") payload = { schemaVersion:1,theme:v.payload.theme };
+  if (v.payload.schemaVersion === 1 && (keys === "schemaVersion,theme" || keys === "colorTheme,schemaVersion,theme" && isColorTheme(v.payload.colorTheme))) payload = { schemaVersion:1,theme:v.payload.theme,colorTheme:v.payload.colorTheme ?? "monochrome" };
   else throw Error("表示設定の応答が不正です");
-  if (v.lockVersion === 0 && (payload.schemaVersion !== 1 || payload.theme !== "system")) throw Error("未保存の表示設定が不正です");
+  if (v.lockVersion === 0 && (payload.theme !== "system" || payload.colorTheme !== "monochrome")) throw Error("未保存の表示設定が不正です");
   return { id:"ui_preferences",lockVersion:v.lockVersion,payload };
 }
 
@@ -29,6 +31,7 @@ export class ThemeController {
   private generation = 0;
   private noticeId = 0;
   private reading: Promise<void> | null = null;
+  private pendingChanges: Partial<Pick<UiPreferencesPayload, "theme" | "colorTheme">> | null = null;
   constructor(bridge: ThemeBridge) { this.bridge = bridge; }
   getSnapshot = (): ThemeState => this.value;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -36,7 +39,7 @@ export class ThemeController {
   private notify(message: string, level: ThemeNotice["level"]) { this.update({ notice: { id: ++this.noticeId, message, level } }); }
   clearNotice = (id: number) => { if (this.value.notice?.id === id) this.update({ notice: null }); };
   private requestedMatches(payload: UiPreferencesPayload) {
-    return this.value.pendingTheme !== null && payload.theme === this.value.pendingTheme;
+    return this.value.pendingPreferences !== null && samePreferences(payload, this.value.pendingPreferences);
   }
   private accept(snapshot: UiPreferencesSnapshot) {
     const current = this.value.snapshot;
@@ -54,6 +57,7 @@ export class ThemeController {
         if (generation !== this.generation) return;
         this.accept(snapshot);
         if (this.value.pendingPreferences && this.requestedMatches(snapshot.payload)) {
+          this.pendingChanges = null;
           this.update({ pendingTheme: null, pendingPreferences:null, error: "", status: "保存済みの表示設定を確認しました。" });
           this.notify("保存済みの表示設定を確認しました。", "info");
         }
@@ -67,36 +71,43 @@ export class ThemeController {
   reload = async () => {
     if (this.value.busy) return;
     const generation = this.generation;
+    this.pendingChanges = null;
     this.update({ pendingTheme: null, pendingPreferences:null, status: "", notice: null });
     await this.refresh();
     if (generation === this.generation && !this.value.busy && !this.value.uncertain && this.value.snapshot) this.notify("保存済みの表示設定を再読込しました。", "info");
   };
   change = async (theme: ThemePreference): Promise<void> => {
     if (!isTheme(theme)) throw Error("テーマが不正です");
-    const base = this.value.snapshot;
-    if (!base) return;
-    await this.savePreferences({ ...base.payload,theme },theme);
+    await this.saveChanges({ theme });
+  };
+  changeColor = async (colorTheme: ColorTheme): Promise<void> => {
+    if (!isColorTheme(colorTheme)) throw Error("カラーが不正です");
+    await this.saveChanges({ colorTheme });
   };
   retry = async (): Promise<void> => {
-    if (this.value.pendingTheme) await this.change(this.value.pendingTheme);
+    if (this.pendingChanges) await this.saveChanges(this.pendingChanges);
   };
-  private savePreferences = async (payload: UiPreferencesPayload, pendingTheme: ThemePreference): Promise<void> => {
+  private saveChanges = async (changes: Partial<Pick<UiPreferencesPayload, "theme" | "colorTheme">>): Promise<void> => {
     const base = this.value.snapshot;
     if (!base || this.value.busy || this.value.uncertain) return;
+    this.pendingChanges = { ...this.pendingChanges, ...changes };
+    const payload = { ...base.payload, ...this.pendingChanges };
     this.generation++;
-    this.update({ pendingTheme, pendingPreferences:payload, busy: true, error: "", status: "表示設定を保存しています。", notice: null });
+    this.update({ pendingTheme:payload.theme, pendingPreferences:payload, busy: true, error: "", status: "表示設定を保存しています。", notice: null });
     try {
-      const reply = await this.bridge.save(base.lockVersion,payload.theme);
+      const reply = await this.bridge.save(base.lockVersion,payload.theme,payload.colorTheme);
       const saved = assertUiPreferences(reply);
       const expected = base.lockVersion + (samePreferences(base.payload,payload) ? 0 : 1);
       if (!samePreferences(saved.payload,payload) || saved.lockVersion !== expected) throw Error("確認した表示設定と保存結果が一致しません");
       this.accept(saved);
+      this.pendingChanges = null;
       this.update({ pendingTheme: null, pendingPreferences:null, error: "", status: "表示設定を保存しました。" });
       this.notify("表示設定を保存しました。", "success");
     } catch (error) {
       try {
         this.accept(assertUiPreferences(await this.bridge.read()));
         if (this.value.snapshot && this.requestedMatches(this.value.snapshot.payload)) {
+          this.pendingChanges = null;
           this.update({ pendingTheme: null, pendingPreferences:null, error: "", status: "保存済みの表示設定を確認しました。" });
           this.notify("保存済みの表示設定を確認しました。", "info");
         }
