@@ -39,7 +39,7 @@ test("dock settings align with the first controls row rather than the whole mult
 
 test("playback status never adds a visible dock row, and preparation retains a same-size cancel control", () => {
   const player=source("transcript-audio.tsx");
-  assert.match(player,/<ToastNotice scope=\{meetingId\} type="playback-alignment" level="info" message=\{!preparing && info\?\.alignment === "unverified"/);
+  assert.doesNotMatch(player,/playback-alignment|同期未検証：トラック間の同期精度は未検証です/);
   assert.match(player,/<ToastNotice scope=\{meetingId\} type="playback-error"/);
   assert.doesNotMatch(player,/playback-alignment-note|\(info \|\| options.idleMeetingMode\) && !preparing/);
   assert.match(player,/preparing && <span className="sr-only" role="status"/);

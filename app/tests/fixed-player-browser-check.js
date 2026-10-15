@@ -17,6 +17,7 @@ async(page,capturePath,detailUI)=>{
   await play();check((await row.getAttribute('class')).includes('utterance-playing'),'playing row is not emphasized');await pause();
   check(await player().evaluate(e=>!e.closest('.content')&&!e.closest('.transcript-card'))&&!(await dock.innerText()).includes('同期未検証'),'player scrolls with body or includes an extra status row');
   results.push('utterance playback uses the shared dock and keeps alignment information out of its height');
+  check(await page.evaluate(async()=>{const {toasts}=await import('/src/toast.tsx');return [...toasts.getSnapshot(),...toasts.getHistorySnapshot()].every(t=>!t.key.includes('playback-alignment')&&!t.message.includes('同期未検証'));}),'utterance playback published an unwanted synchronization toast or history entry');results.push('utterance playback emits no synchronization toast or notification history entry');
   await player().evaluate(e=>window.monBrowserFixture.playerNode=e);const prepared=await calls('prepare_utterance_playback');
   for(const width of [1280,1200,960,360]){
     await page.setViewportSize({width,height:800});

@@ -220,7 +220,6 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     if (event.target !== event.currentTarget || appShortcut(event.nativeEvent) !== "playback" || overlayOpen(event.currentTarget) || preparing || locked || (!info && !options.idleMeetingMode)) return;
     event.preventDefault(); playFromBar();
   }}>
-    <ToastNotice scope={meetingId} type="playback-alignment" level="info" message={!preparing && info?.alignment === "unverified" ? "同期未検証：トラック間の同期精度は未検証です。" : ""} />
     <ToastNotice scope={meetingId} type="playback-error" level="error" message={error || snapshot.error ? `音声を再生できません: ${error || snapshot.error}` : ""} />
     {/* Keep the controls mounted; transient status must not add dock rows. */}
     {preparing && <span className="sr-only" role="status">保存音声を検証して再生を準備しています。取消は音声検証の区切りで反映します。</span>}
