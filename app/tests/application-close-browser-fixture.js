@@ -21,6 +21,7 @@ const f = window.closeFixture = {
   startLost: false, startBeforeCommitFailure:false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
   captureInputs:{schemaVersion:1,microphonePermission:"notDetermined",selectedMicrophoneUID:null,devices:[{uid:"built-in",name:"内蔵マイク",isDefault:true},{uid:"usb-123",name:"ヘッドセットのマイク",isDefault:false}]},
   failCaptureInputs:false,captureInputsDelay:0,holdCaptureInputs:false,pendingInputs:[],
+  microphoneSelection:null,recordingMicrophoneScope:null,
   captureApplications:{schemaVersion:1,systemPermission:"unknown",applications:[{pid:123,bundleIdentifier:"com.example.browser",launchTimeUs:1791100000000001,name:"会議ブラウザ"},{pid:456,bundleIdentifier:"com.example.other",launchTimeUs:1791100000000002,name:"会議ブラウザ"}]},
   failCaptureApplications:false,holdCaptureApplications:false,pendingApplications:[],mutateApplicationDuringFlush:false,mutateApplicationAtStart:false,
   inputLevels:null,holdInputLevels:false,pendingInputLevels:[],failInputLevels:false,refreshInputLevels:false,
@@ -187,11 +188,24 @@ mockIPC(async (command, args) => {
     if (f.cancelDataLost) throw Error("模擬データ取消受付の応答喪失");
     return clone(data.snapshot);
   }
+  if(command==="get_recording_microphone_selection"){
+    if(args.sessionId!==f.recording.sessionId||f.microphoneSelection?.ownerId!==args.sessionId)throw Error("模擬マイク選択状態は未確認");
+    return clone(f.microphoneSelection);
+  }
+  if(command==="select_recording_microphone"){
+    if(args.sessionId!==f.recording.sessionId||!["preparing","recording"].includes(f.recording.phase)||f.microphoneSelection?.ownerId!==args.sessionId)throw Error("模擬マイク選択の所有が変更");
+    const device=args.microphoneUid===null?f.captureInputs.devices.find(d=>d.isDefault):f.captureInputs.devices.find(d=>d.uid===args.microphoneUid);
+    if(!device||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
+    const automatic=args.microphoneUid===null,previous=f.microphoneSelection;
+    f.microphoneSelection={...previous,revision:previous.revision+1,requestRevision:previous.requestRevision+1,mode:automatic?"automatic":"fixed",deviceUID:device.uid,source:automatic?"systemDefault":"fixed",fallbackReason:automatic?(f.recordingMicrophoneScope?.mode==="application"?"application_input_unavailable":"mon_direct_recording"):null};
+    return f.microphoneSelection.requestRevision;
+  }
   if (command === "start_recording") {
     if(f.captureRecovery.phase!=="clear")throw Error("模擬テスト音声の回復が未完了");
     if(f.captureTest)throw Error("模擬テスト所有が残っています");
     if (!["idle", "error"].includes(f.recording.phase)||f.startBeforeCommitFailure) throw Error("模擬録音対象変更・受付前失敗");
-    if(!f.captureInputs.devices.some(d=>d.uid===args.microphoneUid)||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
+    const microphone=args.microphoneUid===null?f.captureInputs.devices.find(d=>d.isDefault):f.captureInputs.devices.find(d=>d.uid===args.microphoneUid);
+    if(!microphone||["denied","restricted"].includes(f.captureInputs.microphonePermission))throw Error("模擬マイク対象変更");
     if(f.mutateApplicationAtStart){f.captureApplications.applications[0].launchTimeUs++;f.mutateApplicationAtStart=false;}
     const scope=args.captureScope;
     if(!scope||!(scope.mode==="system"&&scope.application===null||scope.mode==="application"&&scope.application&&f.captureApplications.applications.some(a=>a.pid===scope.application.pid&&a.bundleIdentifier===scope.application.bundleIdentifier&&a.launchTimeUs===scope.application.launchTimeUs)))throw Error("模擬アプリ対象変更・全体へ切り替えていません");
@@ -202,6 +216,8 @@ mockIPC(async (command, args) => {
     const meeting=data.meetings.find(m=>m.id===args.meetingId);
     if(!meeting||meeting.lifecycle!=="draft"||meeting.sourceType!=null)throw Error("模擬録音対象変更");
     f.recording = { ...f.recording, revision: f.recording.revision + 1, phase: "preparing", meetingId: args.meetingId, sessionId: crypto.randomUUID() };
+    f.recordingMicrophoneScope=clone(scope);
+    f.microphoneSelection={schemaVersion:1,ownerId:f.recording.sessionId,revision:1,requestRevision:0,mode:args.microphoneUid===null?"automatic":"fixed",deviceUID:microphone.uid,source:args.microphoneUid===null?"systemDefault":"fixed",fallbackReason:args.microphoneUid===null?(scope.mode==="application"?"application_input_unavailable":"mon_direct_recording"):null};
     await emit("session-changed", clone(f.recording));
     if (f.startLost) throw Error("模擬録音開始受付の応答喪失");
     return null;

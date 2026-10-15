@@ -168,6 +168,11 @@ impl Storage {
         &self.root
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn verify_bootstrap_database(&self) -> Result<(), String> {
+        self.managed_anchor.verify_sqlite_header()
+    }
+
     pub(crate) fn restart_required(&self) -> bool {
         self.retired.load(std::sync::atomic::Ordering::Acquire)
             || self.deletion_fence.restart_required()

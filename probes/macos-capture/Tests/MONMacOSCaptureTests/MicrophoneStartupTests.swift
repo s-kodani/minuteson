@@ -240,7 +240,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let recorder = MicrophoneRecorder(
       outputURL: dir.appendingPathComponent("microphone.caf"), clock: try time.domain(),
       microphoneUID: nil, controlNow: control.read, makeEngine: factory.make,
-      devices: catalog.read)
+      devices: catalog.read, permission: { .authorized },
+      requestPermission: {
+        XCTFail("synthetic microphone switching must not request OS permission")
+        return false
+      })
     defer { recorder.stop() }
     try await recorder.start()
     control.settle(recorder)
@@ -288,7 +292,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       outputURL: dir.appendingPathComponent("microphone.caf"),
       clock: try time.domain(), microphoneUID: nil,
       rawSegments: raw, controlNow: control.read, makeEngine: factory.make,
-      devices: catalog.read)
+      devices: catalog.read, permission: { .authorized },
+      requestPermission: {
+        XCTFail("synthetic microphone switching must not request OS permission")
+        return false
+      })
     defer { recorder.stop() }
     try await recorder.start()
     control.settle(recorder)
@@ -337,7 +345,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let recorder = MicrophoneRecorder(
       outputURL: dir.appendingPathComponent("microphone.caf"), clock: try time.domain(),
       microphoneUID: nil, controlNow: control.read, makeEngine: factory.make,
-      devices: catalog.read)
+      devices: catalog.read, permission: { .authorized },
+      requestPermission: {
+        XCTFail("synthetic microphone switching must not request OS permission")
+        return false
+      })
     defer { recorder.stop() }
     try await recorder.start()
     control.settle(recorder)

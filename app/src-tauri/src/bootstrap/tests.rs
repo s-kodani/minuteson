@@ -47,6 +47,69 @@ fn tree_file(path: &Path, name: &str, content: &[u8]) {
 }
 
 #[test]
+fn bootstrap_live_identity_checks_preserve_database_posix_locks() {
+    use std::os::fd::AsRawFd;
+    for action in ["initialize", "reinitialize", "view"] {
+        let f = Fixture::new();
+        let bootstrap = Bootstrap::open(&f.config, &f.legacy).unwrap();
+        let storage = Storage::open(bootstrap.root().into()).unwrap();
+        if action != "initialize" {
+            bootstrap.initialize(&storage).unwrap();
+        }
+        let database = storage.root().join("meetings.sqlite3");
+        let held = File::open(&database).unwrap();
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_RDLCK;
+        lock.l_whence = libc::SEEK_SET as libc::c_short;
+        lock.l_start = 128;
+        lock.l_len = 1;
+        assert_eq!(
+            unsafe { libc::fcntl(held.as_raw_fd(), libc::F_SETLK, &lock) },
+            0
+        );
+        let probe = || {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::deletion::fs::sqlite_lock_tests::external_control_lock_fixture",
+                    "--ignored",
+                ])
+                .env("MON_CONTROL_LOCK_TEST_FILE", &database)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "bootstrap {action} released a database lock: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        };
+        probe();
+        match action {
+            "initialize" | "reinitialize" => bootstrap.initialize(&storage).unwrap(),
+            "view" => {
+                bootstrap.view().unwrap();
+            }
+            _ => unreachable!(),
+        }
+        probe();
+        let reader = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::tests::exclusive_wal_external_reader_fixture",
+                "--ignored",
+            ])
+            .env("MON_WAL_REOPEN_TEST_DATABASE", &database)
+            .output()
+            .unwrap();
+        assert!(
+            reader.status.success(),
+            "bootstrap {action} allowed an external SQLite reader: {}",
+            String::from_utf8_lossy(&reader.stdout)
+        );
+    }
+}
+
+#[test]
 fn bootstrap_fresh_initialization_separates_data_models_and_control_then_reopens_same_database() {
     let f = Fixture::new();
     tree_file(&f.legacy.join("models"), "model.bin", b"model remains");

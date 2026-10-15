@@ -40,12 +40,9 @@ pub(crate) struct Review {
     pub(crate) manifest: PackageManifest,
     pub(crate) sources: Vec<DownloadSource>,
     pub(crate) total_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) recipe_schema_version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) download_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) archive_bytes: Option<u64>,
+    pub(crate) recipe_schema_version: u32,
+    pub(crate) download_bytes: u64,
+    pub(crate) archive_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) bundled_bytes: Option<u64>,
     pub(crate) publisher_authenticity: &'static str,
@@ -70,13 +67,9 @@ impl Recipe {
             manifest: self.manifest.clone(),
             sources: self.sources.clone(),
             total_bytes: self.validate()?,
-            recipe_schema_version: (self.schema_version >= 2).then_some(self.schema_version),
-            download_bytes: (self.schema_version >= 2)
-                .then(|| self.transfer_bytes())
-                .transpose()?,
-            archive_bytes: (self.schema_version >= 2)
-                .then(|| self.archive_bytes())
-                .transpose()?,
+            recipe_schema_version: self.schema_version,
+            download_bytes: self.transfer_bytes()?,
+            archive_bytes: self.archive_bytes()?,
             bundled_bytes: (self.schema_version == 3)
                 .then(|| self.bundled_bytes())
                 .transpose()?,
@@ -152,7 +145,7 @@ impl Recipe {
         self.validate_for(Target::current()?)
     }
     fn validate_for(&self, target: Target) -> Result<u64, String> {
-        if !matches!(self.schema_version, 1 | 2 | 3) {
+        if !matches!(self.schema_version, 2 | 3) {
             return Err("ダウンロード定義の形式版が未対応です".into());
         }
         self.manifest.validate(target)?;
@@ -194,8 +187,7 @@ impl Recipe {
                 validate_url(&source.url)?;
             }
             if let Some(archive) = &source.archive {
-                if !matches!(self.schema_version, 2 | 3)
-                    || archive.format != "tar"
+                if archive.format != "tar"
                     || archive.expected_size == 0
                     || archive.expected_size > MAX_TOTAL
                     || !crate::model_inspection::relative(&archive.member_path)
@@ -298,22 +290,15 @@ impl Recipe {
     }
 }
 
-/// Included only in version-2 placement records. The already-stored manifest
-/// completes this recipe; no machine paths or execution capabilities travel.
+/// The already-stored manifest completes this recipe; no machine paths or
+/// execution capabilities travel.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct DownloadOrigin {
     operation_id: String,
     recipe_hash: String,
     sources: Vec<DownloadSource>,
-    #[serde(default = "legacy_schema", skip_serializing_if = "is_legacy_schema")]
     recipe_schema_version: u32,
-}
-fn legacy_schema() -> u32 {
-    1
-}
-fn is_legacy_schema(value: &u32) -> bool {
-    *value == 1
 }
 impl DownloadOrigin {
     pub(crate) fn matches(&self, operation: &str, recipe: &str) -> bool {

@@ -9,7 +9,7 @@ fn source() -> (tempfile::TempDir, tempfile::TempDir, Storage, String) {
 #[test]
 fn downloaded_provenance_survives_archive_restore_and_rebackup_without_installing_or_selecting_models(
 ) {
-    downloaded_history_roundtrip(1);
+    downloaded_history_roundtrip(2);
 }
 #[test]
 fn bundled_runtime_provenance_survives_restore_and_rebackup_without_current_app_resource_or_model_execution(
@@ -66,8 +66,8 @@ fn downloaded_history_roundtrip(schema: u32) {
                 } else {
                     format!("https://example.com/{}", file.relative_path)
                 },
-                archive: (schema == 3 && file.role == crate::model_inspection::Role::Executable)
-                    .then(|| crate::model_download_recipe::ArchiveMember {
+                archive: (file.role == crate::model_inspection::Role::Executable).then(|| {
+                    crate::model_download_recipe::ArchiveMember {
                         format: "tar".into(),
                         expected_size: 4096,
                         expected_hash: format!(
@@ -77,7 +77,8 @@ fn downloaded_history_roundtrip(schema: u32) {
                             )
                         ),
                         member_path: "bin/whisper-cli".into(),
-                    }),
+                    }
+                }),
             })
             .collect(),
     };

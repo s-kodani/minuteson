@@ -35,7 +35,7 @@ async (page,capturePath,detailUI)=>{
   results.push("blank and over-200 titles cannot start; 200 non-BMP characters match native title admission");
   await name().fill("二重送信しない会議");await start().click();await accept().dblclick();await modal().waitFor({state:"hidden"});
   const args=await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_recording").args);
-  check(args.newTitle==="二重送信しない会議"&&/^[0-9a-f-]{36}$/u.test(args.meetingId)&&args.microphoneUid==="built-in"&&args.captureScope.mode==="system"&&await count("start_recording")===1&&await count("create_meeting")===0,"new consent did not send one native start with fixed ID/title/inputs");
+  check(args.newTitle==="二重送信しない会議"&&/^[0-9a-f-]{36}$/u.test(args.meetingId)&&args.microphoneUid===null&&args.captureScope.mode==="system"&&await count("start_recording")===1&&await count("create_meeting")===0,"new consent did not send one native start with fixed ID/title and automatic microphone");
   check(await page.evaluate(id=>window.dataFixture.meetings.filter(m=>m.id===id).length===1,args.meetingId),"new accepted recording lacks exactly one meeting");
   check((await workspace().innerText()).includes("録音を準備しています")&&!await name().count()&&await start().isDisabled(),"canonical accepted phase was replaced with idle preparation");
   results.push("double consent sends one start request; native fixture creates the confirmed ID and the same central panel reports canonical preparation");

@@ -34,7 +34,7 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
     )
     .unwrap();
     let recipe = crate::model_download_recipe::Recipe {
-        schema_version: 1,
+        schema_version: 2,
         manifest: record.manifest.clone(),
         sources: record
             .manifest
@@ -43,7 +43,14 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
             .map(|file| crate::model_download_recipe::DownloadSource {
                 relative_path: file.relative_path.clone(),
                 url: format!("https://example.com/{}", file.relative_path),
-                archive: None,
+                archive: (file.role == crate::model_inspection::Role::Executable).then(|| {
+                    crate::model_download_recipe::ArchiveMember {
+                        format: "tar".into(),
+                        expected_size: 4096,
+                        expected_hash: format!("{:x}", Sha256::digest(b"synthetic origin archive")),
+                        member_path: "bin/whisper-cli".into(),
+                    }
+                }),
             })
             .collect(),
     };

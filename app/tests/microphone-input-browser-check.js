@@ -24,9 +24,9 @@ async (page, capturePath, detailUI) => {
   let stage="setup";
   try{
     stage="metadata-only";await boot();
-    check(await input().inputValue()==="built-in"&&await count("get_capture_inputs")===1&&await count("start_recording")===0,"initial catalog started capture or failed default choice");
+    check(await input().inputValue()===""&&await count("get_capture_inputs")===1&&await count("start_recording")===0,"initial catalog started capture or failed automatic choice");
     check((await section().innerText()).includes("実際の音声入力はまだ確認していません")&&(await section().innerText()).includes("5秒"),"metadata fabricated tested audio");
-    results.push("metadata-only catalog selects the OS default only on first use and never starts recording");
+    results.push("metadata-only catalog starts in automatic mode without pinning the OS default or starting recording");
 
     stage="explicit-cancel";await input().selectOption("usb-123");await start().click();await modal().waitFor();
     check((await modal().innerText()).includes("ヘッドセットのマイク")&&(await modal().innerText()).includes("PC音声は全体取得"),"confirmation omitted actual microphone or scope");
@@ -39,12 +39,24 @@ async (page, capturePath, detailUI) => {
     check(await count("start_recording")===1&&await page.evaluate(()=>window.closeFixture.calls.find(c=>c.command==="start_recording").args.microphoneUid==="usb-123"),"start lost stable UID or repeated request");
     results.push("consented double activation sends exactly one start with the exact microphone UID");
 
-    stage="saved-default-changed";await boot({selectedMicrophoneUID:"usb-123"});
-    check(await input().inputValue()==="usb-123","saved device replaced by OS default");
-    results.push("saved microphone selection wins over a changed OS default");
+    stage="active-switch";
+    const active=page.getByRole("combobox",{name:"録音中のマイク",exact:true});
+    await active.waitFor();await active.selectOption("built-in");
+    await page.waitForFunction(()=>window.closeFixture.microphoneSelection?.mode==="fixed"&&window.closeFixture.microphoneSelection.deviceUID==="built-in");
+    await page.evaluate(()=>window.closeFixture.recordChanged({phase:"recording"}));
+    await active.selectOption("");
+    await page.waitForFunction(()=>window.closeFixture.microphoneSelection?.mode==="automatic"&&window.closeFixture.microphoneSelection.requestRevision===2);
+    check(await count("start_recording")===1&&await count("select_recording_microphone")===2,"microphone switching restarted capture or duplicated a request");
+    results.push("preparing and recording allow fixed/automatic microphone switching without restarting capture");
 
-    stage="saved-missing";await boot({selectedMicrophoneUID:"disconnected-device"});
-    check(await input().inputValue()==="disconnected-device"&&await start().isDisabled()&&(await section().innerText()).includes("自動切替はしていません"),"missing saved device silently fell back");
+    stage="saved-default-changed";await boot({selectedMicrophoneUID:"usb-123"});
+    check(await input().inputValue()===""&&await start().isEnabled(),"old selected UID pinned the automatic default");
+    results.push("a previously selected UID does not override the new automatic initial mode");
+
+    stage="fixed-missing";await boot();await input().selectOption("usb-123");
+    await page.evaluate(()=>{window.closeFixture.captureInputs.devices=window.closeFixture.captureInputs.devices.filter(d=>d.uid!=="usb-123");});await refresh().click();
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="録音するマイク"]')?.disabled);
+    check(await input().inputValue()==="usb-123"&&await start().isDisabled()&&(await section().innerText()).includes("見つかりません"),"missing fixed device silently fell back");
     await input().selectOption("built-in");check(await start().isEnabled(),"explicit alternate device did not enable consent");
     results.push("disconnected saved UID blocks start until an alternate is explicitly selected");
 
@@ -84,7 +96,7 @@ async (page, capturePath, detailUI) => {
       results.push(`post-confirmation ${change} prevents start and preserves selected import without cancellation`);
     }
 
-    stage="late-after-navigation";await boot();
+    stage="late-after-navigation";await boot();await input().selectOption("built-in");
     await page.evaluate(()=>{window.closeFixture.holdCaptureInputs=true;window.closeFixture.captureInputs.devices=[];});await refresh().click();
     await page.waitForFunction(()=>window.closeFixture.pendingInputs.length===1);
     await page.locator('.sidebar').getByRole("button",{name:"会議一覧",exact:true}).click();

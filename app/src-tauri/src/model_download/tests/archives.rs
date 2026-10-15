@@ -1,35 +1,6 @@
 use super::*;
 mod real;
 
-// Deliberately minimal USTAR builder, not an extraction helper. Fixtures never
-// execute and malicious headers can be represented without touching the OS.
-fn tar(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {
-    let mut result = Vec::new();
-    for (name, bytes, kind) in entries {
-        let mut header = [0_u8; 512];
-        header[..name.len()].copy_from_slice(name.as_bytes());
-        header[100..108].copy_from_slice(b"0000755\0");
-        header[108..116].copy_from_slice(b"0000000\0");
-        header[116..124].copy_from_slice(b"0000000\0");
-        let length = format!("{:011o}\0", bytes.len());
-        header[124..136].copy_from_slice(length.as_bytes());
-        header[136..148].copy_from_slice(b"00000000000\0");
-        header[148..156].fill(b' ');
-        header[156] = *kind;
-        if *kind == b'1' || *kind == b'2' {
-            header[157..164].copy_from_slice(b"outside");
-        }
-        header[257..263].copy_from_slice(b"ustar\0");
-        header[263..265].copy_from_slice(b"00");
-        let checksum: u64 = header.iter().map(|n| *n as u64).sum();
-        header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
-        result.extend(header);
-        result.extend(*bytes);
-        result.resize(result.len().div_ceil(512) * 512, 0);
-    }
-    result.resize(result.len() + 1024, 0);
-    result
-}
 fn archive_recipe(bytes: &[u8]) -> Recipe {
     let mut value = recipe_value();
     value["schemaVersion"] = json!(2);
@@ -55,9 +26,14 @@ fn hybrid_bundle_stage_counts_network_only_and_keeps_v3_origin_after_readback_an
     value["manifest"]["engineVersion"] = json!("v1.9.4");
     value["sources"][0]["url"] = json!(crate::model_download_recipe::BUNDLED_WHISPER);
     value["sources"][0]["archive"] = json!({"format":"tar","expectedSize":bytes.len(),"expectedHash":hash(&bytes),"memberPath":"bin/whisper-cli"});
+    value["sources"][1]["url"] = json!("https://example.com/model");
+    value["sources"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("archive");
     let recipe = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     let review = recipe.review().unwrap();
-    assert_eq!(review.download_bytes, Some(MODEL.len() as u64));
+    assert_eq!(review.download_bytes, MODEL.len() as u64);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
@@ -137,8 +113,8 @@ fn archive_is_fetched_once_selected_regular_members_only_and_v2_origin_survives_
     let recipe = archive_recipe(&bytes);
     let review = recipe.review().unwrap();
     assert_eq!(review.total_bytes, (BIN.len() + MODEL.len()) as u64);
-    assert_eq!(review.download_bytes, Some(bytes.len() as u64));
-    assert_eq!(review.archive_bytes, Some(bytes.len() as u64));
+    assert_eq!(review.download_bytes, bytes.len() as u64);
+    assert_eq!(review.archive_bytes, bytes.len() as u64);
     let temp = tempfile::tempdir().unwrap();
     let root = private_root(&temp);
     let operation = id();

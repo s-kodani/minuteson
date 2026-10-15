@@ -15,8 +15,40 @@ const MODEL: &[u8] = b"not-a-real-model";
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+// Deliberately minimal USTAR fixture builder; no extracted fixture is run.
+fn tar(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {
+    let mut result = Vec::new();
+    for (name, bytes, kind) in entries {
+        let mut header = [0_u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[100..108].copy_from_slice(b"0000755\0");
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        let length = format!("{:011o}\0", bytes.len());
+        header[124..136].copy_from_slice(length.as_bytes());
+        header[136..148].copy_from_slice(b"00000000000\0");
+        header[148..156].fill(b' ');
+        header[156] = *kind;
+        if *kind == b'1' || *kind == b'2' {
+            header[157..164].copy_from_slice(b"outside");
+        }
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum: u64 = header.iter().map(|n| *n as u64).sum();
+        header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+        result.extend(header);
+        result.extend(*bytes);
+        result.resize(result.len().div_ceil(512) * 512, 0);
+    }
+    result.resize(result.len() + 1024, 0);
+    result
+}
+fn model_archive() -> Vec<u8> {
+    tar(&[("models/model.gguf", MODEL, b'0')])
+}
 fn recipe_value() -> Value {
-    json!({"schemaVersion":1,"manifest":{
+    let archive = model_archive();
+    json!({"schemaVersion":2,"manifest":{
         "schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test",
         "modelName":"synthetic","modelVersion":"1","quantization":null,
         "licenseRef":"synthetic fixture only","target":"macos_aarch64",
@@ -25,7 +57,7 @@ fn recipe_value() -> Value {
             {"relativePath":"models/model.gguf","role":"asr","expectedSize":MODEL.len(),"expectedHash":hash(MODEL)}
         ]},"sources":[
         {"relativePath":"bin/whisper","url":"https://example.com/bin"},
-        {"relativePath":"models/model.gguf","url":"https://example.com/model"}
+        {"relativePath":"models/model.gguf","url":"https://example.com/model.tar","archive":{"format":"tar","expectedSize":archive.len(),"expectedHash":hash(&archive),"memberPath":"models/model.gguf"}}
     ]})
 }
 fn recipe() -> Recipe {
@@ -138,7 +170,12 @@ fn future_placement_metadata_budget_is_rejected_before_directory_or_fetch() {
         files.push(
             json!({"relativePath":path,"role":role,"expectedSize":1,"expectedHash":"a".repeat(64)}),
         );
-        sources.push(json!({"relativePath":path,"url":format!("https://example.com/{}-{index}", "b".repeat(800))}));
+        let url = format!("https://example.com/{}-{index}", "b".repeat(800));
+        sources.push(if index == 1 {
+            json!({"relativePath":path,"url":url,"archive":{"format":"tar","expectedSize":512,"expectedHash":"a".repeat(64),"memberPath":"model"}})
+        } else {
+            json!({"relativePath":path,"url":url})
+        });
     }
     value["manifest"]["files"] = json!(files);
     value["sources"] = json!(sources);
@@ -167,11 +204,11 @@ fn future_placement_metadata_budget_is_rejected_before_directory_or_fetch() {
 #[test]
 fn recipe_sha_matches_frontend_canonical_unicode_golden_without_io() {
     // The same independently asserted golden exists in frontend unit tests.
-    let value = json!({"schemaVersion":1,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test","modelName":"合成取得素材","modelVersion":"1","quantization":null,"licenseRef":"synthetic fixture only","target":"macos_aarch64","files":[{"relativePath":"cli","role":"executable","expectedSize":16,"expectedHash":"a".repeat(64)},{"relativePath":"model","role":"asr","expectedSize":17,"expectedHash":"b".repeat(64)}]},"sources":[{"relativePath":"cli","url":"https://example.com/cli"},{"relativePath":"model","url":"https://example.com/model"}]});
+    let value = json!({"schemaVersion":2,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test","modelName":"合成取得素材","modelVersion":"1","quantization":null,"licenseRef":"synthetic fixture only","target":"macos_aarch64","files":[{"relativePath":"cli","role":"executable","expectedSize":16,"expectedHash":"a".repeat(64)},{"relativePath":"model","role":"asr","expectedSize":17,"expectedHash":"b".repeat(64)}]},"sources":[{"relativePath":"cli","url":"https://example.com/cli"},{"relativePath":"model","url":"https://example.com/model.tar","archive":{"format":"tar","expectedSize":100,"expectedHash":"a".repeat(64),"memberPath":"model"}}]});
     let recipe = Recipe::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
     assert_eq!(
         recipe.review().unwrap().recipe_hash,
-        "83d86a1f28ad309e2d0e0ceb70ba728541d8aec29a1963c2a8ceda0b23551226"
+        "6f1480c0ec46ee12daef6daa63fd1b53bac6317d3753d7a7236ac8e3c0e95f52"
     );
 }
 #[test]
@@ -292,7 +329,8 @@ fn synthetic_stage(root: &Path, operation: &str) -> DownloadReceipt {
         &|| false,
         &mut |_, _| {},
         &mut |url, _, _, output, _, notify| {
-            let body = if url.ends_with("/bin") { BIN } else { MODEL };
+            let archive = model_archive();
+            let body: &[u8] = if url.ends_with("/bin") { BIN } else { &archive };
             output.write_all(body).unwrap();
             notify(body.len() as u64);
             Ok(())
@@ -835,10 +873,11 @@ impl Server {
     }
     fn package() -> Self {
         Self::new(|request, stream, _| {
-            let body = if request.starts_with("GET /bin ") {
+            let archive = model_archive();
+            let body: &[u8] = if request.starts_with("GET /bin ") {
                 BIN
-            } else if request.starts_with("GET /model ") {
-                MODEL
+            } else if request.starts_with("GET /model.tar ") {
+                &archive
             } else {
                 response(stream, "400 Bad Request", "", b"wrong fixture path");
                 return;
@@ -942,6 +981,31 @@ fn recipe_review_binds_sources_sizes_hashes_license_and_target_without_readiness
 }
 
 #[test]
+fn download_origin_requires_explicit_current_recipe_schema() {
+    let recipe = recipe();
+    let origin = recipe.origin(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let manifest_hash = hash(&serde_json::to_vec(&recipe.manifest).unwrap());
+    origin.validate(&recipe.manifest, &manifest_hash).unwrap();
+    let value = serde_json::to_value(origin).unwrap();
+    assert_eq!(value["recipeSchemaVersion"], 2);
+    let mut missing = value.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("recipeSchemaVersion");
+    assert!(
+        serde_json::from_value::<crate::model_download_recipe::DownloadOrigin>(missing).is_err()
+    );
+    for version in [0, 1, 4] {
+        let mut changed = value.clone();
+        changed["recipeSchemaVersion"] = json!(version);
+        let parsed: crate::model_download_recipe::DownloadOrigin =
+            serde_json::from_value(changed).unwrap();
+        assert!(parsed.validate(&recipe.manifest, &manifest_hash).is_err());
+    }
+}
+
+#[test]
 fn recipe_rejects_unknown_schema_fields_paths_targets_and_missing_or_reordered_sources() {
     let mut cases = Vec::new();
     let mut add = |change: fn(&mut Value)| {
@@ -949,7 +1013,7 @@ fn recipe_rejects_unknown_schema_fields_paths_targets_and_missing_or_reordered_s
         change(&mut value);
         cases.push(value);
     };
-    add(|v| v["schemaVersion"] = json!(2));
+    add(|v| v["schemaVersion"] = json!(1));
     add(|v| v["extra"] = json!(true));
     add(|v| v["sources"][0]["headers"] = json!({"Authorization":"secret"}));
     add(|v| v["manifest"]["target"] = json!("windows_x86_64"));

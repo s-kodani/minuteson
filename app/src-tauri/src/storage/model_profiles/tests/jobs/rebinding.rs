@@ -586,7 +586,6 @@ fn check_execution<T>(spec: &JobSpec, run: impl FnOnce(Execution<'_>) -> T) -> T
                     .unwrap() as usize,
             ))
         }
-        _ => unreachable!(),
     }
 }
 fn value(binding: &Binding) -> serde_json::Value {

@@ -49,10 +49,10 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
-    assert_eq!(review.recipe_schema_version, Some(3));
-    assert_eq!(review.download_bytes, Some(487_606_226));
+    assert_eq!(review.recipe_schema_version, 3);
+    assert_eq!(review.download_bytes, 487_606_226);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
-    assert_eq!(review.archive_bytes, review.bundled_bytes);
+    assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
     assert_eq!(review.total_bytes, 487_606_226 + 48);
     assert!(!review.installed && !review.ready);
     assert_eq!(review.publisher_authenticity, "not_verified");

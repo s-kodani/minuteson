@@ -524,6 +524,22 @@ impl RootAnchor {
         self.verify()?;
         self.root.file.try_clone().map_err(|e| e.to_string())
     }
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage) fn verify_sqlite_header(&self) -> Result<(), String> {
+        use std::os::unix::fs::FileExt;
+        self.verify()?;
+        let mut header = [0_u8; 100];
+        self.database
+            .read_exact_at(&mut header, 0)
+            .map_err(|e| format!("登録済みDBのヘッダーを読めません。新しいDBにしません: {e}"))?;
+        if &header[..16] != b"SQLite format 3\0"
+            || !matches!(header[18], 1 | 2)
+            || !matches!(header[19], 1 | 2)
+        {
+            return Err("登録済みDBのヘッダーが不正です。自動初期化しません".into());
+        }
+        self.verify()
+    }
     pub(in crate::storage) fn directory(path: &Path) -> Result<Directory, String> {
         let root = Directory::root(path)?;
         // Reject aliases before SQLite could follow them and change an

@@ -129,7 +129,7 @@ impl Bootstrap {
             parent,
             parent_file,
             parent_identity,
-            current: Root::inspect(storage.root())?,
+            current: Root::bound(storage)?,
             revision: 0,
             manifest_hash: String::new(),
         };

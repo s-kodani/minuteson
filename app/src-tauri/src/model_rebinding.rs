@@ -101,7 +101,6 @@ fn preflight(
         JobKind::MinutesGeneration => {
             crate::generation::retry_preflight(storage, job, spec, cp, cancelled)
         }
-        _ => Err("モデル再照合の対象工程ではありません".into()),
     }
 }
 

@@ -118,7 +118,7 @@ struct Root {
     database: Identity,
 }
 impl Root {
-    fn inspect(path: &Path) -> Result<Self, String> {
+    fn metadata(path: &Path) -> Result<Self, String> {
         let d = directory(path)?;
         local(path)?;
         let m = std::fs::symlink_metadata(path.join("meetings.sqlite3"))
@@ -126,12 +126,29 @@ impl Root {
         if !regular(&m, false) {
             return Err("会議DBは単独の通常ファイルである必要があります".into());
         }
+        if m.len() < 100 {
+            return Err("登録済みDBのヘッダーを読めません。新しいDBにしません".into());
+        }
+        Ok(Self {
+            path: path.into(),
+            directory: Identity::read(&d)?,
+            database: Identity::read(&m)?,
+        })
+    }
+    // Only before SQLite opens this database (or for an inactive copy).
+    // Closing ANY descriptor for a live database drops this process's POSIX
+    // locks, even if SQLite owns another descriptor for the same inode.
+    fn inspect(path: &Path) -> Result<Self, String> {
+        let root = Self::metadata(path)?;
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(path.join("meetings.sqlite3"))
             .map_err(|e| e.to_string())?;
-        if !Identity::read(&m)?.matches(&file.metadata().map_err(|e| e.to_string())?) {
+        if !root
+            .database
+            .matches(&file.metadata().map_err(|e| e.to_string())?)
+        {
             return Err("会議DBが確認中に差し替えられています".into());
         }
         // SQLite treats a zero-byte file as a new database. Reject it BEFORE
@@ -146,14 +163,20 @@ impl Root {
         {
             return Err("登録済みDBのヘッダーが不正です。自動初期化しません".into());
         }
-        Ok(Self {
-            path: path.into(),
-            directory: Identity::read(&d)?,
-            database: Identity::read(&m)?,
-        })
+        root.verify()?;
+        Ok(root)
+    }
+    fn bound(storage: &Storage) -> Result<Self, String> {
+        storage.verify_bootstrap_database()?;
+        let root = Self::metadata(storage.root())?;
+        storage.verify_bootstrap_database()?;
+        Ok(root)
     }
     fn verify(&self) -> Result<(), String> {
-        if Self::inspect(&self.path)? != *self {
+        // Runtime checks verify identity without reopening the SQLite inode.
+        // Startup still inspects the header before Storage opens; binding a
+        // live Storage verifies it through its retained database descriptor.
+        if Self::metadata(&self.path)? != *self {
             return Err(
                 "起動設定に登録した保存先またはDBの実体が変更されています。自動修復しません".into(),
             );
@@ -611,9 +634,12 @@ impl Bootstrap {
             if l.record.current.path != storage.root() {
                 return Err("旧Storageは終了待ちです。保存先切替後に再起動してください".into());
             }
-            return l.record.current.verify();
+            if l.record.current != Root::bound(storage)? {
+                return Err("開いた会議DBの実体が起動設定と一致しません".into());
+            }
+            return Ok(());
         }
-        let root = Root::inspect(&self.selected)?;
+        let root = Root::bound(storage)?;
         // Stamp BEFORE publication, so an initialization crash or deletion of
         // bootstrap.json can never trigger automatic empty-root fallback.
         let mut lock = self.lock.try_clone().map_err(|e| e.to_string())?;

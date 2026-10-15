@@ -435,8 +435,7 @@ fn current(
     Ok(None)
 }
 
-// Decode just the engine used by the native producers. Older generic/internal
-// jobs without native parameters remain compatible, but cannot carry a proof.
+// Decode just the engine used by the current native producers.
 fn with_execution<T>(
     spec: &JobSpec,
     run: impl FnOnce(Execution<'_>) -> Result<T, String>,
@@ -463,7 +462,6 @@ fn with_execution<T>(
                 .ok_or("入力上限がありません")?;
             run(Execution::Llama(&e, b))
         }
-        _ => Err("管理モデルの対象工程が不正です".into()),
     }
 }
 fn flow_selection(
@@ -592,7 +590,6 @@ pub(in crate::storage) fn gate(db: &Connection, spec: &JobSpec) -> Result<(), St
         JobKind::Transcription => spec.parameters["engine"].is_object(),
         JobKind::Diarization => spec.parameters["diarization"]["engine"].is_object(),
         JobKind::MinutesGeneration => spec.parameters["generation"]["engine"].is_object(),
-        _ => false,
     };
     if !native {
         if spec.profile_snapshot.get("managedModel").is_some() {

@@ -10,7 +10,6 @@ const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
 pub enum JobKind {
     Transcription,
     Diarization,
-    TranscriptCleanup,
     MinutesGeneration,
 }
 
@@ -19,7 +18,6 @@ impl JobKind {
         match self {
             Self::Transcription => "transcription",
             Self::Diarization => "diarization",
-            Self::TranscriptCleanup => "transcript_cleanup",
             Self::MinutesGeneration => "minutes_generation",
         }
     }
@@ -233,18 +231,14 @@ impl Storage {
         &self,
         kind: Option<JobKind>,
     ) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(kind, false)
+        self.acquire_filtered_job(kind)
     }
 
     pub(crate) fn acquire_local_inference_job(&self) -> Result<Option<JobSnapshot>, String> {
-        self.acquire_filtered_job(None, true)
+        self.acquire_filtered_job(None)
     }
 
-    fn acquire_filtered_job(
-        &self,
-        kind: Option<JobKind>,
-        local_only: bool,
-    ) -> Result<Option<JobSnapshot>, String> {
+    fn acquire_filtered_job(&self, kind: Option<JobKind>) -> Result<Option<JobSnapshot>, String> {
         let mut connection = self
             .connection
             .lock()
@@ -266,9 +260,9 @@ impl Storage {
         // Preserve fixed historical jobs after audio deletion, but do not let
         // those queued entries starve another meeting or text-only work.
         let queued = {
-            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND (?1 IS NULL OR kind=?1) AND (?2=0 OR kind IN ('transcription','diarization','minutes_generation')) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
+            let mut query=transaction.prepare("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ('transcription','diarization','minutes_generation') AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097").map_err(|e|e.to_string())?;
             let mut rows = query
-                .query(params![kind.map(JobKind::as_str), local_only])
+                .query(params![kind.map(JobKind::as_str)])
                 .map_err(|e| e.to_string())?;
             let mut selected = None;
             let mut count = 0;
@@ -905,10 +899,8 @@ pub(super) fn enqueue_in_transaction(
     if !spec.profile_snapshot.is_object() || !spec.parameters.is_object() {
         return Err("処理設定はJSONオブジェクトが必要です".into());
     }
-    if matches!(
-        spec.kind,
-        JobKind::MinutesGeneration | JobKind::TranscriptCleanup | JobKind::Diarization
-    ) != spec.input_analysis_id.is_some()
+    if matches!(spec.kind, JobKind::MinutesGeneration | JobKind::Diarization)
+        != spec.input_analysis_id.is_some()
     {
         return Err("処理種別と入力解析版が一致しません".into());
     }
@@ -1163,6 +1155,38 @@ mod retry_tests;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn retired_transcript_cleanup_kind_is_not_a_current_job() {
+        assert!(serde_json::from_str::<JobKind>("\"transcript_cleanup\"").is_err());
+        for (wire, kind) in [
+            ("transcription", JobKind::Transcription),
+            ("diarization", JobKind::Diarization),
+            ("minutes_generation", JobKind::MinutesGeneration),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<JobKind>(json!(wire)).unwrap(),
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn queued_retired_job_does_not_preempt_current_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("現行ジョブ").unwrap();
+        let current = storage
+            .enqueue_job(audio_job(&meeting.id, "current-job"))
+            .unwrap();
+        let retired = uuid::Uuid::new_v4().to_string();
+        storage.connection.lock().unwrap().execute(
+            "INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,completed_units,total_units,attempt,created_at,updated_at) SELECT ?1,meeting_id,'transcript_cleanup','queued','retired-job',input_hash,profile_snapshot_json,parameters_json,spec_hash,0,total_units,1,created_at-1,updated_at FROM processing_jobs WHERE id=?2",
+            params![retired, current.id],
+        ).unwrap();
+        assert_eq!(storage.acquire_next_job().unwrap().unwrap().id, current.id);
+        assert_eq!(storage.get_job(&retired).unwrap().state, "queued");
+    }
 
     pub(super) fn audio_job(meeting_id: &str, operation_id: &str) -> JobSpec {
         JobSpec {

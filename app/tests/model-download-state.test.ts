@@ -4,8 +4,8 @@ import { canonicalRecipe, parseDownloadDefinition, downloadDigest, downloadByteT
 import { readFileSync } from "node:fs";
 import { placementLabel } from "../src/model-inspection-state.ts";
 const id = "11111111-1111-4111-8111-111111111111", other = "22222222-2222-4222-8222-222222222222", hash = "a".repeat(64);
-const recipe = canonicalRecipe({ schemaVersion: 1, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成素材", modelVersion: "1", licenseRef: "fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: hash }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: hash }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model" }] });
-async function review() { return assertDownloadReview({ manifest: recipe.manifest, sources: recipe.sources, recipeHash: await downloadDigest(recipe), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" }); }
+const recipe = canonicalRecipe({ schemaVersion: 2, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "test", modelName: "合成素材", modelVersion: "1", licenseRef: "fixture only", target: "macos_aarch64", files: [{ relativePath: "cli", role: "executable", expectedSize: 16, expectedHash: hash }, { relativePath: "model", role: "asr", expectedSize: 17, expectedHash: hash }] }, sources: [{ relativePath: "cli", url: "https://example.com/cli" }, { relativePath: "model", url: "https://example.com/model.tar", archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "model" } }] });
+async function review() { return assertDownloadReview({ manifest: recipe.manifest, sources: recipe.sources, recipeSchemaVersion: 2, ...downloadByteTotals(recipe), recipeHash: await downloadDigest(recipe), totalBytes: 33, installed: false, ready: false, publisherAuthenticity: "not_verified" }); }
 async function receipt() {
   const checked = await review(), manifestHash = await downloadDigest(recipe.manifest);
   const files = recipe.manifest.files.map(file => ({ relativePath: file.relativePath, role: file.role, actualSize: file.expectedSize, actualHash: file.expectedHash, expectedSizeChecked: true, expectedHashChecked: true }));
@@ -20,11 +20,11 @@ test("recipe canonical struct order and optional null bind regardless of input p
 test("canonical unicode recipe agrees with native Rust independent golden", async () => {
   const value = structuredClone(recipe);
   value.manifest.modelName = "合成取得素材"; value.manifest.licenseRef = "synthetic fixture only"; value.manifest.files[1].expectedHash = "b".repeat(64);
-  assert.equal(await downloadDigest(value), "83d86a1f28ad309e2d0e0ceb70ba728541d8aec29a1963c2a8ceda0b23551226");
+  assert.equal(await downloadDigest(value), "6f1480c0ec46ee12daef6daa63fd1b53bac6317d3753d7a7236ac8e3c0e95f52");
 });
 for (const field of ["schema", "missing-size", "missing-hash", "source-order", "total", "unknown", "byte-limit"]) test(`definition rejects ${field} before review`, () => {
   const value = structuredClone(recipe);
-  if (field === "schema") value.schemaVersion = 2 as 1;
+  if (field === "schema") value.schemaVersion = 1 as 2;
   else if (field === "missing-size") value.manifest.files[0].expectedSize = null as unknown as number;
   else if (field === "missing-hash") value.manifest.files[0].expectedHash = "";
   else if (field === "source-order") value.sources.reverse();
@@ -50,6 +50,17 @@ test("exact receipt and complete/incomplete readbacks never grant installed or r
   await assert.rejects(assertDownloadReadback({ state: "incomplete", review: checked, receipt: result }, id, checked.recipeHash));
   await assert.rejects(assertDownloadReadback({ state: "complete", review: checked, receipt: null }, id, checked.recipeHash));
 });
+test("current reviews require explicit schema and transfer/archive byte totals without legacy defaults", async () => {
+  for (const field of ["recipeSchemaVersion", "downloadBytes", "archiveBytes"]) {
+    const value = await review();
+    Reflect.deleteProperty(value, field);
+    await assert.rejects(assertDownloadReview(value));
+  }
+  for (const version of [1, 0, 4, "2", null]) {
+    const value = { ...await review(), recipeSchemaVersion: version };
+    await assert.rejects(assertDownloadReview(value));
+  }
+});
 for (const field of ["operation", "recipe", "manifest", "manifest-hash", "review-hash", "actual-hash", "actual-size", "flags", "order", "total", "ready"]) test(`receipt refuses forged ${field}`, async () => {
   const value = structuredClone(await receipt());
   if (field === "operation") value.operationId = other;
@@ -66,9 +77,9 @@ for (const field of ["operation", "recipe", "manifest", "manifest-hash", "review
   await assert.rejects(assertDownloadReceipt(value, id, await review()));
 });
 test("progress ignores wrong operation/hash/size, regressions and malformed values; 100% is only a number", async () => {
-  const checked = await review(), progress = { operationId: id, recipeHash: checked.recipeHash, totalBytes: 33, receivedBytes: 33 };
-  assert.equal(acceptDownloadProgress(progress, id, checked, 10), 33);
-  for (const bad of [null, { ...progress, operationId: other }, { ...progress, recipeHash: hash }, { ...progress, totalBytes: 34 }, { ...progress, receivedBytes: 34 }, { ...progress, receivedBytes: 9 }]) assert.equal(acceptDownloadProgress(bad, id, checked, 10), null);
+  const checked = await review(), progress = { operationId: id, recipeHash: checked.recipeHash, totalBytes: checked.downloadBytes, receivedBytes: checked.downloadBytes };
+  assert.equal(acceptDownloadProgress(progress, id, checked, 10), checked.downloadBytes);
+  for (const bad of [null, { ...progress, operationId: other }, { ...progress, recipeHash: hash }, { ...progress, totalBytes: checked.downloadBytes + 1 }, { ...progress, receivedBytes: checked.downloadBytes + 1 }, { ...progress, receivedBytes: 9 }]) assert.equal(acceptDownloadProgress(bad, id, checked, 10), null);
 });
 test("catalog is marker metadata only, keeps attention and rejects duplicates or fake support", () => {
   const entry = { operationId: id, recipeHash: hash, modelName: "fixture", modelVersion: "1", totalBytes: 33, state: "completion_recorded" };
@@ -100,6 +111,7 @@ function archivedRecipe() {
 function bundledRecipe() {
   const value = structuredClone(recipe); value.schemaVersion = 3; value.manifest.engineVersion = "v1.9.4";
   value.sources[0] = { ...value.sources[0], url: bundledWhisperSource, archive: { format: "tar", expectedSize: 100, expectedHash: hash, memberPath: "bin/whisper-cli" } };
+  value.sources[1] = { relativePath: "model", url: "https://example.com/model" };
   return canonicalRecipe(value);
 }
 test("hybrid bundle recipe separates wire traffic and storage; strict review and receipt survive readback", async () => {
@@ -118,7 +130,7 @@ test("hybrid bundle recipe separates wire traffic and storage; strict review and
 test("bundled source is a fixed native ID, not legacy network or arbitrary local input", () => {
   for (const variant of ["schema1", "schema2", "id", "member", "raw", "engine", "version", "target", "network-only", "network-asr"]) {
     const value = bundledRecipe();
-    if (variant === "schema1") value.schemaVersion = 1;
+    if (variant === "schema1") value.schemaVersion = 1 as 2;
     else if (variant === "schema2") value.schemaVersion = 2;
     else if (variant === "id") value.sources[0].url = "mon-bundled://other/runtime.tar";
     else if (variant === "member") value.sources[0].archive!.memberPath = "bin/other";
@@ -145,7 +157,7 @@ test("archive transfer is deduplicated, while installed payload and archive stor
 test("archive definition rejects duplicate members, mixed use, inconsistent metadata and invalid paths", () => {
   for (const variant of ["version", "duplicate", "raw", "size", "sha", "path", "format", "extra", "zero"]) {
     const value = archivedRecipe();
-    if (variant === "version") value.schemaVersion = 1;
+    if (variant === "version") value.schemaVersion = 1 as 2;
     else if (variant === "duplicate") value.sources[1].archive!.memberPath = value.sources[0].archive!.memberPath;
     else if (variant === "raw") delete value.sources[1].archive;
     else if (variant === "size") value.sources[1].archive!.expectedSize++;
