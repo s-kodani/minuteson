@@ -52,7 +52,6 @@ import { MeetingAudioControls } from "./meeting-audio";
 import {ActiveMicrophoneSelection,CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import {RecordingWorkspace} from "./recording-workspace";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
-import {RecordingWriteStatus} from "./recording-write-status";
 import {RecordingInputProvider,RecordingInputNotice,RecordingCompactInputs,RecordingJournalNotice,RecordingJournalCompactStatus} from "./recording-input-status";
 import {waitForCaptureTestStop} from "./capture-test-client";
 import {stopAllPlayback} from "./playback-barrier";
@@ -136,7 +135,7 @@ function RecorderPanel() {
         <span className="timer">{state.kind === "ready" ? formatElapsed(state.snapshot.elapsedMs) : "--:--:--"}</span>
       </div>
         {state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)&&<RecordingCompactInputs owner={state.snapshot.sessionId}/>}
-        <div className="mini-save-diagnostics">{state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?<><RecordingWriteStatus compact owner={state.snapshot.sessionId}/><RecordingJournalCompactStatus owner={state.snapshot.sessionId}/></>:<span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>}</div>
+        <div className="mini-save-diagnostics">{state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)?<RecordingJournalCompactStatus owner={state.snapshot.sessionId}/>:<span className="mini-note">{idle ? "待機中" : "録音状態はメイン画面と共通"}</span>}</div>
       </div>
       <div className="mini-bottom">
         {state.kind === "ready" && (state.snapshot.phase === "recording" || state.snapshot.phase === "preparing") && <IconButton label={state.snapshot.phase === "preparing" ? "中止" : "停止"} icon="stop" className="mini-action-icon mini-stop" onClick={event => void decision.request(false,event.currentTarget)} disabled={action.busy || decision.requestBusy || decision.visible || !decision.connected} />}

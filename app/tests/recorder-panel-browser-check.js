@@ -41,6 +41,7 @@ async (page, capturePath = path => `output/playwright/tap-panel-20261012/${path}
   for (const phase of phases) {
     snapshot = { ...snapshot, revision: snapshot.revision + 1, phase, sessionId: phase === "idle" ? null : "synthetic-session", meetingId: phase === "idle" ? null : "synthetic-meeting", errorMessage: phase === "error" ? "tap does not supply Float32 PCM / no system audio samples were received" : null };
     await boot();
+    check(await page.getByLabel("録音の書込み",{exact:true}).count()===0 && !(await page.locator('.mini-shell').innerText()).includes('書込みの確認が必要'), `${phase} mini retained write-diagnostic text`);
     const bounds = await page.locator(".mini-shell").evaluate(e => ({ overflow: e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight }));
     check(!bounds.overflow, `${phase} mini overflowed native geometry`);
     const buttons = await page.locator(".mini-bottom button").evaluateAll(list => list.map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));

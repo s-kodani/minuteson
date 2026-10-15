@@ -23,9 +23,8 @@ function label(value:VisibleWrite){
   if(value.state==="written")return `書込み確認: ${(value.ageMs/1000).toFixed(1)}秒前`;
   return {waiting:"書込み待ち",unavailable:"書込みを確認できません",stale:"書込みの更新を確認できません"}[value.state];
 }
-export function RecordingWriteStatus({owner,compact=false}:{owner:string|null;compact?:boolean}){
+export function RecordingWriteStatus({owner}:{owner:string|null}){
   const view=useWrites(owner),confirmed=view.microphone.state==="written"&&view.system.state==="written";
-  if(compact)return <span className="mini-note" aria-label="録音の書込み" title={`マイク: ${label(view.microphone)} ／ PCの音声: ${label(view.system)}`}>{confirmed?"両入力の書込みを確認":"書込みの確認が必要"}</span>;
   return <section aria-label="録音の書込み" className="recording-write-status">
     <p role="status">{confirmed?"この端末に保存中":"音声の書込みを確認しています"}</p>
     <dl className="recording-write-tracks"><div><dt>マイク</dt><dd data-write-state={view.microphone.state}>{label(view.microphone)}</dd></div><div><dt>PCの音声</dt><dd data-write-state={view.system.state}>{label(view.system)}</dd></div></dl>
