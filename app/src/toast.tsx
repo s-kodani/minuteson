@@ -28,8 +28,8 @@ export function ToastNotice({ scope, type, message, level = "success", important
   return null;
 }
 
-export function IssueNotice({ scope, type, message, label, action }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction; toastMessage?: string }) {
-  return <ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} />;
+export function IssueNotice({ scope, type, message, label, action, historyOnly }: { scope: string; type: string; message: string | null | undefined; label: string; children?: ReactNode; action?: ToastAction; toastMessage?: string; historyOnly?: boolean }) {
+  return <ToastNotice scope={scope} type={type} message={message ? `${label}: ${message}` : ""} level="error" action={action} historyOnly={historyOnly} />;
 }
 
 /** Retained state for sources whose one notification owner outlives a view. */

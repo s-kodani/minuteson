@@ -8,6 +8,9 @@ test("analysis polling resolves read failures without hiding action or native fl
   assert.match(panel,/setRefreshError\(""\);\s*\} catch \(cause\) \{ if \(!disposed\) setRefreshError\(String\(cause\)\); \}/);
   assert.match(panel,/await refreshRef\.current\(\); \}\s*catch \(cause\) \{ if \(!\(cause instanceof SavedEditsCancelled\)\) setError\(String\(cause\)\); \}/);
   assert.match(panel,/message=\{error \|\| refreshError \|\| flow\?\.errorMessage\}/);
+  assert.match(panel,/historyOnly=\{!error && !refreshError && flowHistoryOnly\}/);
+  assert.match(panel,/if \(previousFlow === undefined\) setFlowHistoryOnly\(true\)/);
+  assert.match(panel,/else if \(previousFlow !== receipt\) setFlowHistoryOnly\(false\)/);
 });
 test("background publication verifies recovery and does not clear a newer action error", () => {
   const source = readFileSync(new URL("../src/analysis-publication.ts", import.meta.url), "utf8");

@@ -21,6 +21,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const [flow, setFlow] = useState<AnalysisFlow | null>(null), [jobs, setJobs] = useState<AnalysisJob[]>([]);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [refreshError, setRefreshError] = useState("");
+  const [flowHistoryOnly, setFlowHistoryOnly] = useState(true);
   const completed = useRef<string | null>(null), running = useRef(false);
   const regeneration = useRef<RegenerationRequest | null>(null);
   const confirm = useActionConfirmation(false);
@@ -30,6 +31,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     alive.current = true;
     if (!isTauri()) return;
     let disposed = false, pending: Promise<void> | null = null, again = false;
+    let previousFlow: string | undefined;
     const stops: (() => void)[] = [];
     const refresh = (): Promise<void> => {
       if (disposed) return Promise.resolve();
@@ -39,6 +41,12 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
         try {
           const [next, nextJobs] = await Promise.all([invoke<AnalysisFlow | null>("get_analysis_flow", { meetingId }), invoke<AnalysisJob[]>("get_analysis_jobs", { meetingId })]);
           if (disposed) return;
+          // The first read is saved history, not a newly failed operation.
+          // Only changes observed while this view is open announce a toast.
+          const receipt = JSON.stringify([next?.id, next?.lockVersion, next?.errorMessage]);
+          if (previousFlow === undefined) setFlowHistoryOnly(true);
+          else if (previousFlow !== receipt) setFlowHistoryOnly(false);
+          previousFlow = receipt;
           setFlow(next); setJobs(nextJobs);
           const output = next?.stage === "review" ? next.diarizationJob?.outputAnalysisId : null;
           if (output && completed.current !== output) {
@@ -113,7 +121,7 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   </section>;
   return <>
     {pending && <p className="transcript-state" role="status">{flow?.stage === "diarization" ? "話者を整理しています" : "文字起こし中"}{active ? " · " + jobLabel(active.state) : ""}</p>}
-    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || refreshError || flow?.errorMessage} />
+    <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || refreshError || flow?.errorMessage} historyOnly={!error && !refreshError && flowHistoryOnly} />
     {renderTools ? renderTools(tools, null) : tools}
   </>;
 }
