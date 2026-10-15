@@ -58,6 +58,63 @@ async function (page) {
   check(await select.locator('option[value="44444444-4444-4444-8444-444444444444"]').evaluate(e => e.disabled), "unverified local executable can be selected");
   check(await count("inspect_model_package") === 0 && await count("place_model_package") === 0 && await count("select_model_files") === 0, "local import IPC was called");
   results.push("local import is removed; existing unverified runtimes cannot be executed silently");
+  // Each page load resets only this synthetic application's in-memory state.
+  // No network/model/OS permission work is performed by the fixture.
+  const recover = page.getByRole("button", { name: "現在の状態を確認", exact: true });
+  const start = () => asrRow.getByRole("button", { name: /^(ダウンロードして使用|使用)$/ }).click();
+  for (const mode of ["downloadFailure", "beforeIntentFailure", "placeFailure", "checkFailure", "applyFailure"]) {
+    await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+    await page.evaluate(mode => { window.modelDownloadFixture.mode = mode; }, mode);
+    await start(); await recover.waitFor();
+    const before = await count("start_model_download");
+    await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; });
+    await recover.click(); await recover.waitFor({state:"hidden",timeout:2000});
+    check(await count("start_model_download") === before && await count("apply_model_profile_application") <= 1, "status recovery performed new work");
+    await start();
+    await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
+    await page.waitForFunction(() => document.querySelector('.model-selection-row button')?.disabled);
+    check(await count("start_model_download") === before + (["downloadFailure", "beforeIntentFailure"].includes(mode) ? 1 : 0), `${mode}: completed download was repeated or explicit retry was blocked`);
+    if (mode === "downloadFailure") check(await page.evaluate(() => [...window.modelDownloadFixture.operations.values()].some(item => item.state === "incomplete")), "incomplete bytes were silently adopted/deleted");
+    results.push(`${mode}: confirmed terminal state releases the selector; explicit action retries only unfinished setup`);
+  }
+  for (const fault of ["failCancel", "failLifetime", "failCatalog", "readMissing", "forgedReadback"]) {
+    await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+    await page.evaluate(() => { window.modelDownloadFixture.mode = "lost"; });
+    await start(); await recover.waitFor();
+    await page.evaluate(fault => { window.modelDownloadFixture[fault] = true; }, fault);
+    await recover.click();
+    await page.waitForFunction(() => !document.querySelector('.model-inspection>button')?.disabled);
+    check(await recover.isVisible() && await select.isDisabled(), `${fault}: uncertain result released model selection`);
+    check(await count("start_model_download") === 1 && await count("place_downloaded_model") === 0, `${fault}: result checking replayed work`);
+    await page.evaluate(fault => { window.modelDownloadFixture[fault] = false; window.modelDownloadFixture.mode = "success"; }, fault);
+    await recover.click(); await recover.waitFor({state:"hidden"});
+    await start(); await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
+    check(await count("start_model_download") === 1, `${fault}: recovery discarded a completed download`);
+    results.push(`${fault}: unknown state remains fenced until valid readback, then reuses the completed download`);
+  }
+  await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+  await page.evaluate(() => { window.modelDownloadFixture.mode = "earlyLost"; });
+  await start(); await recover.waitFor(); await recover.click();
+  await page.waitForFunction(() => !document.querySelector('.model-inspection>button')?.disabled);
+  check(await recover.isVisible() && await select.isDisabled() && await count("read_model_download") === 0, "active download was treated as terminal");
+  await page.evaluate(() => { try { window.modelDownloadFixture.finish(); } catch {} window.modelDownloadFixture.mode = "success"; });
+  await recover.click(); await recover.waitFor({state:"hidden"});
+  check(await count("start_model_download") === 1, "stop/result checking automatically retried an incomplete download");
+  await start(); await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
+  check(await count("start_model_download") === 2, "explicit retry after confirmed stop did not finish");
+  results.push("active writer blocks readback; terminal cancellation allows only a new explicit action");
+
+  await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+  await page.evaluate(async () => { const f = window.modelDownloadFixture, id = await f.seed(); f.operations.get(id).state = "incomplete"; });
+  await start(); await page.waitForFunction(() => window.modelDownloadFixture.profiles[0].components.length === 1);
+  check(await count("start_model_download") === 1 && await count("cancel_model_inspection") === 1 && await count("read_model_download") === 1, "persisted incomplete staging blocked explicit retry or escaped verification");
+  results.push("previous incomplete staging is fenced and verified, not adopted, before a fresh explicit download");
+
+  await page.reload(); await select.waitFor(); await select.selectOption("official:synthetic-catalog");
+  await page.evaluate(() => { window.modelDownloadFixture.mode = "applyLost"; });
+  await start(); await recover.waitFor(); await recover.click(); await recover.waitFor({state:"hidden"});
+  check(await asrRow.getByRole("button").isDisabled() && await count("apply_model_profile_application") === 1, "lost successful application was replayed or left actionable as unapplied");
+  results.push("successful selection with a lost reply is read back as selected without reapplying");
   await page.screenshot({path:"simple-models.png"});
   return {passed:results.length,results};
 }

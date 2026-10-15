@@ -68,7 +68,7 @@ mockIPC(async (command, args) => {
   if (command === "check_model_compatibility") {
     const entry = f.entries.find((item: any) => item.packageId === args.packageId);
     if (!entry || entry.reviewHash !== args.expectedReviewHash) throw Error("模擬モデル不一致");
-    entry.compatibility = { operationId: args.token, packageId: entry.packageId, reviewHash: entry.reviewHash, adapterRevision: 1, state: "succeeded", errorMessage: null };
+    entry.compatibility = { operationId: args.token, packageId: entry.packageId, reviewHash: entry.reviewHash, adapterRevision: 1, state: f.mode === "checkFailure" ? "failed" : "succeeded", errorMessage: f.mode === "checkFailure" ? "模擬CPU確認失敗" : null };
     return structuredClone(entry.compatibility);
   }
   if (command === "preview_model_profile_application") {
@@ -85,6 +85,7 @@ mockIPC(async (command, args) => {
   if (command === "apply_model_profile_application") {
     const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);
     if (profile.profileVersion !== preview.expectedProfileVersion || profile.id !== preview.expectedProfileId) throw Error("模擬設定競合");
+    if (f.mode === "applyFailure") throw Error("模擬選択保存失敗");
     profile.id = args.token; profile.profileVersion++;
     profile.components = [...profile.components.filter((item: any) => item.engine !== entry.engine), { roles: componentRoles[entry.engine as keyof typeof componentRoles], packageId: entry.packageId, modelName: entry.modelName, modelVersion: entry.modelVersion, engine: entry.engine, checkOperationId: entry.compatibility.operationId, settingsMatch: true, compatibilityCurrent: true }];
     profile.configurationComplete = profile.components.length === 3;
@@ -113,9 +114,11 @@ mockIPC(async (command, args) => {
   }
   if (command === "start_model_download") {
     if (f.cancelled.has(args.token) || f.active.size) throw Error("模擬の取消済み・競合操作");
+    if (f.mode === "beforeIntentFailure") throw Error("模擬取得準備失敗");
     const review = await reviewed(args.definition); if (review.recipeHash !== args.expectedRecipeHash) throw Error("模擬定義SHAの不一致");
     f.active.add(args.token); const result = await receipt(args.token, review);
     const item = { review, state: "incomplete", receipt: result }; f.operations.set(args.token, item);
+    if (f.mode === "downloadFailure") { f.active.delete(args.token); throw Error("模擬通信失敗"); }
     const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) throw Error("模擬取得の中断・途中保全"); item.state = "complete"; return structuredClone(result); };
     if (f.mode === "earlyLost") { f.finish = finish; throw Error("処理は継続中だが開始応答が喪失"); }
     if (f.mode === "delay") return new Promise((resolve, reject) => { f.finish = () => { try { resolve(finish()); } catch (cause) { reject(cause); } }; });
@@ -125,6 +128,7 @@ mockIPC(async (command, args) => {
   if (command === "place_downloaded_model") {
     const item = f.operations.get(args.downloadId);
     if (!item || item.state !== "complete" || item.review.recipeHash !== args.expectedRecipeHash || item.receipt.report.reviewHash !== args.expectedReviewHash) throw Error("模擬コピー対象の不一致");
+    if (f.mode === "placeFailure") throw Error("模擬コピー失敗");
     f.active.add(args.token);
     const result = { packageId: args.token, reviewHash: args.expectedReviewHash, totalBytes: item.review.totalBytes, placementRecorded: true, engineCompatibility: "not_verified", ready: false };
     const finish = () => { f.active.delete(args.token); if (f.cancelled.has(args.token)) { f.placements.set(args.token, { ...result, placementRecorded: false }); throw Error("模擬コピー中断"); } f.placements.set(args.token, result); f.entries.push({ ...result, modelName: item.review.manifest.modelName, modelVersion: item.review.manifest.modelVersion, engine: item.review.manifest.engine, engineVersion: item.review.manifest.engineVersion, sourceType: "download", download: { operationId: args.downloadId, recipeHash: args.expectedRecipeHash }, compatibility: null }); return result; };

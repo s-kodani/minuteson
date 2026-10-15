@@ -2,10 +2,10 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { ModelIssue } from "./model-issue";
 import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, type ModelPlacementEntry, type ModelPlacementReceipt, type ModelCompatibilitySummary } from "./model-inspection-state";
-import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
+import { assertOfficialModelOptions, assertDownloadReceipt, assertDownloadReadback, assertDownloadLifetime, assertDownloadCatalog, assertDownloadCopyResult, type OfficialModelOption, type DownloadReceipt } from "./model-download-state";
 import { assertProfileCatalog, assertApplicationPreview, assertApplicationResult, canReviewApplication, type ModelApplicationPreview, type ModelProfileView } from "./model-profile-state";
 
-type Pending = { token: string; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
+type Pending = { token: string; stage: "download" | "place" | "check" | "preview" | "apply"; option?: OfficialModelOption; download?: DownloadReceipt; entry?: ModelPlacementEntry; preview?: ModelApplicationPreview };
 let unresolved: Pending | null = null;
 // A confirmed download is reusable after navigation. No automatic retry or
 // fresh download replaces an uncertain writer or a retained download receipt.
@@ -49,6 +49,11 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     if (!mounted.current || blocked.current) throw Error("準備の結果を確認してください。");
     retain(null); return value;
   };
+  const stop = async (token: string) => {
+    await invoke("cancel_model_inspection", { token });
+    const lifetime = assertDownloadLifetime(await invoke("get_model_download_lifetime", { token }));
+    if (lifetime.active || !lifetime.cancelled) throw Error("準備の停止完了を待っています。");
+  };
   const apply = async (entry: ModelPlacementEntry) => {
     if (!canReviewApplication(entry)) {
       await step("check", async token => {
@@ -82,12 +87,17 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         let receipt = downloads.get(option.review.recipeHash);
         if (!receipt) {
           const catalog = assertDownloadCatalog(await invoke("get_model_download_catalog", { token: crypto.randomUUID() }));
-          const matching = catalog.entries.filter(item => item.recipeHash === option.review.recipeHash);
-          const recorded = matching.find(item => item.state === "completion_recorded") ?? matching[0];
-          if (recorded) {
+          if (!catalog.supported) throw Error("この端末ではモデルをダウンロードできません。");
+          const matching = catalog.entries.filter(item => item.recipeHash === option.review.recipeHash)
+            .sort((a, b) => Number(b.state === "completion_recorded") - Number(a.state === "completion_recorded"));
+          for (const recorded of matching) {
+            // Fence delayed starts as well as active workers before deciding a
+            // previous attempt is terminal. Partial bytes are never adopted.
+            await stop(recorded.operationId);
             const read = await assertDownloadReadback(await invoke("read_model_download", { token: crypto.randomUUID(), downloadId: recorded.operationId, expectedRecipeHash: option.review.recipeHash }), recorded.operationId, option.review.recipeHash);
-            if (read.state !== "complete" || !read.receipt) throw Error("このモデルのダウンロードは未完了です。途中のファイルは保持しています。再取得は行いません。");
-            receipt = read.receipt; downloads.set(option.review.recipeHash, receipt);
+            if (read.state === "complete" && read.receipt) {
+              receipt = read.receipt; downloads.set(option.review.recipeHash, receipt); break;
+            }
           }
         }
         if (!receipt) receipt = await step("download", async token => {
@@ -98,7 +108,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         const placed = await step("place", async token => {
           const result = await invoke<ModelPlacementReceipt>("place_downloaded_model", { token, downloadId: downloaded.operationId, expectedRecipeHash: downloaded.recipeHash, expectedReviewHash: downloaded.report.reviewHash });
           assertPlacementReceipt(result, token, downloaded.report.reviewHash); return result;
-        }, { option });
+        }, { option, download: downloaded });
         entry = (await load()).placed.find(item => item.packageId === placed.packageId);
       }
     }
@@ -110,17 +120,32 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   };
   const recheck = () => run("モデルの状態を確認しています", async () => {
     const value = unresolved; if (!value) return;
-    await invoke("cancel_model_inspection", { token: value.token });
-    const lifetime = assertDownloadLifetime(await invoke("get_model_download_lifetime", { token: value.token }));
-    if (lifetime.active || !lifetime.cancelled) throw Error("準備の停止完了を待っています。");
+    await stop(value.token);
     if (value.stage === "download" && value.option) {
-      const result = await assertDownloadReadback(await invoke("read_model_download", { token: crypto.randomUUID(), downloadId: value.token, expectedRecipeHash: value.option.review.recipeHash }), value.token, value.option.review.recipeHash);
-      if (result.state !== "complete" || !result.receipt) throw Error("ダウンロードが未完了です。途中のファイルは保持しています。");
-      downloads.set(value.option.review.recipeHash, result.receipt);
+      const catalog = assertDownloadCatalog(await invoke("get_model_download_catalog", { token: crypto.randomUUID() }));
+      if (!catalog.supported) throw Error("この端末ではモデルの取得状態を確認できません。");
+      // Failure before the private staging directory was created has no result
+      // to read. A present but malformed directory remains an error, not absent.
+      if (catalog.entries.some(item => item.operationId === value.token)) {
+        const result = await assertDownloadReadback(await invoke("read_model_download", { token: crypto.randomUUID(), downloadId: value.token, expectedRecipeHash: value.option.review.recipeHash }), value.token, value.option.review.recipeHash);
+        if (result.state === "complete" && result.receipt) downloads.set(value.option.review.recipeHash, result.receipt);
+      }
     }
     const current = await load();
-    if (value.stage === "place" && !current.placed.some(item => item.packageId === value.token && item.placementRecorded && item.bodyRemoved !== true)) throw Error("取り込みの完了を確認できません。途中のファイルは保持しています。");
-    if (value.stage === "apply" && !current.catalog.find(item => item.name === "standard")?.components.some(item => item.packageId === value.entry?.packageId && item.checkOperationId === value.preview?.checkOperationId && item.settingsMatch && item.compatibilityCurrent)) throw Error("モデル選択の保存を確認できません。現在の設定は変更していません。");
+    if (value.stage === "place") {
+      const download = value.download;
+      if (!download) throw Error("元の取得結果を確認できません。");
+      const result = assertDownloadCopyResult(await invoke("get_downloaded_model_placement_result", { packageId: value.token, downloadId: download.operationId, expectedRecipeHash: download.recipeHash, expectedReviewHash: download.report.reviewHash }), value.token, download.report.reviewHash, download.report.totalBytes);
+      if (result.active || !result.cancelled) throw Error("取り込みの停止完了を待っています。");
+      if (result.receipt?.placementRecorded && !current.placed.some(item => item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded && item.bodyRemoved !== true)) throw Error("取り込み結果と現在のモデルが一致しません。");
+    }
+    if (value.stage === "apply" && value.entry && current.catalog.find(item => item.name === "standard")?.components.some(item => item.packageId === value.entry?.packageId && item.checkOperationId === value.preview?.checkOperationId && item.settingsMatch && item.compatibilityCurrent)) {
+      const entry = value.entry;
+      if (mounted.current) setSelection(selection => ({ ...selection, [entry.engine]: entry.packageId }));
+    }
+    // Stopped, unsuccessful operations are not successful model selections.
+    // Release the UI for a new explicit action; never replay apply/copy here.
+    // The next action loads current settings and builds a fresh bound preview.
     retain(null);
   });
   const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
