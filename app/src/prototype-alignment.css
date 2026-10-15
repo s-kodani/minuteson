@@ -434,6 +434,8 @@ button:disabled { opacity:.5; }
 .heading-with-info>label { margin:0; min-width:0; }
 .heading-with-info { gap:8px; }
 .analysis-card>.heading-with-info h2 { font-size:17px; }
+.speaker-count-fields { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.speaker-count-fields>label { display:grid; gap:8px; min-width:140px; max-width:100%; }
 .info-popover-head { align-items:center; }
 .info-popover .info-popover-head h3 { margin:0; }
 .version-row { flex-wrap:wrap; gap:12px; }

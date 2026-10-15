@@ -55,6 +55,8 @@ pub(crate) struct Request {
     pub meeting_id: String,
     pub operation_id: String,
     pub expected: Admission,
+    #[serde(default)]
+    pub speaker_counts: Vec<crate::diarization::TrackSettings>,
 }
 
 fn target(db: &Transaction<'_>, meeting: &str) -> Result<Option<Target>, String> {
@@ -129,7 +131,10 @@ fn replay(db: &Connection, request: &Request) -> Result<Option<AnalysisFlow>, St
         flow.plan.clone().ok_or("再生成の固定条件がありません")?,
         &flow.profile,
     )?;
-    if plan.replacement.as_ref() != request.expected.target.as_ref() {
+    if plan.replacement.as_ref() != request.expected.target.as_ref()
+        || plan.speaker_counts
+            != crate::analysis_flow::checked_speaker_counts(&request.speaker_counts)?
+    {
         return Err("同じ再生成操作の置き換え条件が一致しません".into());
     }
     Ok(Some(flow))
@@ -160,6 +165,7 @@ impl Storage {
         cancelled: &impl Fn() -> bool,
     ) -> Result<AnalysisFlow, String> {
         self.require_data_writable()?;
+        let speaker_counts = crate::analysis_flow::checked_speaker_counts(&request.speaker_counts)?;
         if Uuid::parse_str(&request.operation_id)
             .map_err(|_| "再生成の操作IDが不正です")?
             .to_string()
@@ -185,6 +191,17 @@ impl Storage {
         );
         let mut plan = crate::analysis_flow::prepare(self, "standard", cancelled)?;
         plan.replacement = request.expected.target.clone();
+        if !speaker_counts.is_empty() {
+            let source = self.recorded_analysis_input(&request.meeting_id)?.0;
+            if speaker_counts
+                .iter()
+                .any(|count| !source.tracks.iter().any(|t| t.id == count.track_id))
+            {
+                return Err("話者数を指定した音声がこの会議にありません".into());
+            }
+            plan.speaker_counts_manifest = Some(source.manifest_hash);
+            plan.speaker_counts = speaker_counts;
+        }
         let value = serde_json::to_value(&plan).map_err(|e| e.to_string())?;
         let json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
         let hash = format!("{:x}", Sha256::digest(json.as_bytes()));

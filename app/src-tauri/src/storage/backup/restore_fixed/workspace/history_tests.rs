@@ -21,10 +21,20 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
             .storage
             .create_transcript_draft(&f.meeting, &base.id)
             .unwrap();
+        let cli = f.root.path().join("sherpa-cli");
+        let script = std::fs::read_to_string(&cli)
+            .unwrap()
+            .replace("num_clusters=-1", "num_clusters=1");
+        std::fs::write(&cli, script).unwrap();
+        let audio = f.storage.recorded_analysis_input(&f.meeting).unwrap().0;
         let request = crate::storage::analysis_flows::regeneration::Request {
             meeting_id: f.meeting.clone(),
             operation_id: Uuid::new_v4().to_string(),
             expected: f.storage.regeneration_admission(&f.meeting).unwrap(),
+            speaker_counts: vec![crate::diarization::TrackSettings {
+                track_id: audio.tracks[0].id.clone(),
+                num_speakers: Some(1),
+            }],
         };
         f.storage.regenerate_analysis(&request, &|| false).unwrap();
         crate::analysis_flow::advance(&f.storage, &|| false, &|_| {}).unwrap();
@@ -67,6 +77,21 @@ fn analysis_flow_regeneration_backup_rebuilds_replacement_ids_and_preserves_stal
         assert_eq!(flow.stage, "attention");
         assert!(!flow.ready_to_publish);
         let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
+        assert_eq!(plan.speaker_counts[0].num_speakers, Some(1));
+        assert_eq!(
+            plan.speaker_counts[0].track_id,
+            ids.get("audio_tracks", &f.meeting, &audio.tracks[0].id)
+                .unwrap()
+        );
+        assert_eq!(
+            plan.speaker_counts_manifest.as_deref(),
+            Some(
+                fixed
+                    .audio_manifest_hash(&f.meeting, &audio.manifest_hash)
+                    .unwrap()
+                    .as_str()
+            )
+        );
         let target = plan.replacement.unwrap();
         assert_eq!(
             target.analysis_id,

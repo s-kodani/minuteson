@@ -20,6 +20,33 @@ pub(crate) struct Plan {
     pub(crate) sherpa_managed: Option<Snapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) replacement: Option<crate::storage::analysis_flows::regeneration::Target>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) speaker_counts: Vec<crate::diarization::TrackSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) speaker_counts_manifest: Option<String>,
+}
+
+pub(crate) fn checked_speaker_counts(
+    values: &[crate::diarization::TrackSettings],
+) -> Result<Vec<crate::diarization::TrackSettings>, String> {
+    if values.len() > 2
+        || values.iter().any(|v| {
+            v.track_id.is_empty()
+                || v.track_id.len() > 256
+                || v.track_id.contains('\0')
+                || v.num_speakers
+                    .is_some_and(|n| !(1..=crate::diarization::sherpa::MAX_SPEAKERS).contains(&n))
+        })
+    {
+        return Err("話者数は音声ごとに1〜100人、または自動で指定してください".into());
+    }
+    let mut result = values.to_vec();
+    result.sort_by(|a, b| a.track_id.cmp(&b.track_id));
+    if result.windows(2).any(|w| w[0].track_id == w[1].track_id) {
+        return Err("話者数を指定する音声が重複しています".into());
+    }
+    result.retain(|v| v.num_speakers.is_some());
+    Ok(result)
 }
 
 // Pure saved-plan decoding: never checks model availability or starts a CLI.
@@ -34,6 +61,17 @@ pub(crate) fn saved_plan(value: serde_json::Value, profile: &str) -> Result<Plan
     }
     plan.whisper.validate_settings()?;
     plan.sherpa.validate_settings(None)?;
+    if checked_speaker_counts(&plan.speaker_counts)? != plan.speaker_counts
+        || plan.speaker_counts.is_empty() != plan.speaker_counts_manifest.is_none()
+        || plan.speaker_counts_manifest.as_ref().is_some_and(|s| {
+            s.len() != 64
+                || !s
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    {
+        return Err("固定した話者数と保存音声の条件が不正です".into());
+    }
     if let Some(target) = &plan.replacement {
         target.validate()?;
     }
@@ -107,6 +145,8 @@ pub(crate) fn prepare(
         whisper_managed,
         sherpa_managed,
         replacement: None,
+        speaker_counts: vec![],
+        speaker_counts_manifest: None,
     })
 }
 
@@ -246,14 +286,31 @@ fn step(
                             .lock_version,
                         expected_draft: None,
                     };
-                    let tracks = storage
-                        .recorded_analysis_input(&flow.meeting_id)?
-                        .0
+                    let input = storage.recorded_analysis_input(&flow.meeting_id)?.0;
+                    if plan
+                        .speaker_counts_manifest
+                        .as_ref()
+                        .is_some_and(|hash| hash != &input.manifest_hash)
+                        || plan
+                            .speaker_counts
+                            .iter()
+                            .any(|count| !input.tracks.iter().any(|t| t.id == count.track_id))
+                    {
+                        return Err(
+                            "話者数を指定した後に保存音声が変わりました。生成し直してください"
+                                .into(),
+                        );
+                    }
+                    let tracks = input
                         .tracks
                         .iter()
                         .map(|t| crate::diarization::TrackSettings {
                             track_id: t.id.clone(),
-                            num_speakers: None,
+                            num_speakers: plan
+                                .speaker_counts
+                                .iter()
+                                .find(|count| count.track_id == t.id)
+                                .and_then(|count| count.num_speakers),
                         })
                         .collect();
                     crate::diarization::enqueue_source(

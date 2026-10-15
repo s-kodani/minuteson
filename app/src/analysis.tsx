@@ -22,11 +22,24 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   const [flowHistoryOnly, setFlowHistoryOnly] = useState(true);
+  const [countTracks, setCountTracks] = useState<{id:string;kind:string}[]>([]);
+  const [speakerCounts, setSpeakerCounts] = useState<Record<string,string>>({});
+  const [countsError, setCountsError] = useState("");
   const completed = useRef<string | null>(null), running = useRef(false);
   const regeneration = useRef<RegenerationRequest | null>(null);
   const confirm = useActionConfirmation(false);
   const alive = useRef(true);
   const refreshRef = useRef(async () => {});
+  useEffect(() => {
+    let disposed=false;
+    if(!recorded || !isTauri()) return;
+    void invoke<{tracks:{id:string;kind:string}[]}>("get_diarization_tracks",{meetingId}).then(value=>{
+      if(!value || !Array.isArray(value.tracks) || value.tracks.length>2 || value.tracks.some(t=>!t || typeof t.id!=="string" || !t.id || t.id.length>256 || !["mic","system","imported"].includes(t.kind)) || new Set(value.tracks.map(t=>t.id)).size!==value.tracks.length) throw Error("話者数を指定する音声を確認できません");
+      if(!disposed){setCountTracks(value.tracks);setCountsError("");}
+    }).catch(cause=>{if(!disposed)setCountsError(String(cause));});
+    return ()=>{disposed=true;};
+  },[meetingId,recorded]);
+  const selectedCounts = () => countTracks.filter(t=>speakerCounts[t.id]).map(t=>({trackId:t.id,numSpeakers:Number(speakerCounts[t.id])}));
   useEffect(() => {
     alive.current = true;
     if (!isTauri()) return;
@@ -104,10 +117,10 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
     }
     const expected = await invoke<RegenerationTarget>("get_transcription_regeneration_target", { meetingId });
     await confirm({ title: "文字起こしを再生成", target: `会議「${meetingTitle}」`,
-      message: "全体設定のモデルで文字起こしと話者分離をやり直します。成功すると現在の本文・話者の修正を置き換えます。失敗した場合や、処理中に編集した場合は現在の内容を保持します。議事録は変更しません。",
+      message: "全体設定のモデルで文字起こしと話者分離をやり直します。成功すると現在の本文・話者の修正を置き換えます。失敗した場合や、処理中に編集した場合は現在の内容を保持します。議事録は変更しません。" + (selectedCounts().length ? " 話者数：" + countTracks.map(t=>(countTracks.length===1?"音声":t.kind==="mic"?"マイク":"PC音声")+" "+(speakerCounts[t.id]?speakerCounts[t.id]+"人":"自動")).join("、") : ""),
       confirmLabel: "文字起こしを再生成", validate: () => alive.current,
       action: async () => {
-        const request = { meetingId, operationId: crypto.randomUUID(), expected };
+        const request = { meetingId, operationId: crypto.randomUUID(), expected, speakerCounts:selectedCounts() };
         regeneration.current = request;
         await submitRegeneration(request);
       },
@@ -115,13 +128,20 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   });
   const tools = <section className="analysis-card" aria-label="文字起こし操作">
     <h2>文字起こし</h2><p>全体設定のモデルを使います。完了した結果は発言一覧に保存します。</p>
-    {!hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(action))}>文字起こしを生成</button>}
+    <div className="speaker-count-fields">{countTracks.map(track=><label key={track.id}>{countTracks.length===1?"話者数":track.kind==="mic"?"マイクの話者数":"PC音声の話者数"}<select value={speakerCounts[track.id]??""} disabled={locked || busy || recordingActive || pending || !!regeneration.current} onChange={event=>setSpeakerCounts(current=>({...current,[track.id]:event.target.value}))}><option value="">自動</option>{Array.from({length:100},(_,i)=><option key={i+1} value={i+1}>{i+1}人</option>)}</select></label>)}</div>
+    {!hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(async()=>{
+      if(!selectedCounts().length){await action();return;}
+      const expected=await invoke<RegenerationTarget>("get_transcription_regeneration_target",{meetingId});
+      const request={meetingId,operationId:crypto.randomUUID(),expected,speakerCounts:selectedCounts()};
+      regeneration.current=request;await submitRegeneration(request);
+    }))}>文字起こしを生成</button>}
     {(hasTranscript || flow?.stage === "review" || flow?.replacementRequested || regeneration.current) && <button type="button" disabled={locked || busy || recordingActive || !recorded || pending} onClick={() => void regenerate()}>文字起こしを再生成</button>}
     {active && ["paused", "interrupted"].includes(active.state) && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void run(() => invoke("resume_analysis_job", { jobId: active.id }))}>再開</button>}
   </section>;
   return <>
     {pending && <p className="transcript-state" role="status">{flow?.stage === "diarization" ? "話者を整理しています" : "文字起こし中"}{active ? " · " + jobLabel(active.state) : ""}</p>}
     <IssueNotice scope={meetingId} type="analysis-operation" label="文字起こし" message={error || refreshError || flow?.errorMessage} historyOnly={!error && !refreshError && flowHistoryOnly} />
+    <IssueNotice scope={meetingId} type="speaker-count-input" label="話者数の音声確認" message={countsError} />
     {renderTools ? renderTools(tools, null) : tools}
   </>;
 }

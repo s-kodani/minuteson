@@ -15,6 +15,86 @@ fn request(s: &Storage, meeting: &str) -> Request {
         meeting_id: meeting.into(),
         operation_id: Uuid::new_v4().to_string(),
         expected: s.regeneration_admission(meeting).unwrap(),
+        speaker_counts: vec![],
+    }
+}
+
+#[test]
+fn regeneration_explicit_speaker_count_is_frozen_and_replay_cannot_change_it() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    let cli = root.path().join("sherpa-cli");
+    let script = std::fs::read_to_string(&cli)
+        .unwrap()
+        .replace("num_clusters=-1", "num_clusters=5");
+    std::fs::write(&cli, script).unwrap();
+    let before = s.diarization_preferences().unwrap();
+    let track = s.recorded_analysis_input(&m).unwrap().0.tracks[0]
+        .id
+        .clone();
+    let mut r = request(&s, &m);
+    r.speaker_counts = vec![crate::diarization::TrackSettings {
+        track_id: track,
+        num_speakers: Some(5),
+    }];
+    let flow = s.regenerate_analysis(&r, &|| false).unwrap();
+    assert_eq!(
+        flow.plan.as_ref().unwrap()["speakerCounts"][0]["numSpeakers"],
+        5
+    );
+    assert_eq!(s.regeneration_replay(&r).unwrap().unwrap().id, flow.id);
+    r.speaker_counts[0].num_speakers = Some(4);
+    assert!(s.regeneration_replay(&r).is_err());
+    advance(&s);
+    transcribe(&s);
+    advance(&s);
+    let job = s
+        .analysis_flow(&m)
+        .unwrap()
+        .unwrap()
+        .diarization_job
+        .unwrap();
+    assert_eq!(
+        s.fixed_job_input(&job.id).unwrap().0.parameters["diarization"]["tracks"][0]["numSpeakers"],
+        5
+    );
+    diarize(&s);
+    advance(&s);
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "review");
+    assert_eq!(s.diarization_preferences().unwrap().payload, before.payload);
+    assert_eq!(
+        s.diarization_preferences().unwrap().lock_version,
+        before.lock_version
+    );
+    let next = s.regenerate_analysis(&request(&s, &m), &|| false).unwrap();
+    assert!(next.plan.as_ref().unwrap().get("speakerCounts").is_none());
+}
+
+#[test]
+fn regeneration_invalid_speaker_counts_and_foreign_tracks_never_start_a_flow() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    let track = s.recorded_analysis_input(&m).unwrap().0.tracks[0]
+        .id
+        .clone();
+    for values in [
+        vec![(track.clone(), Some(0))],
+        vec![(track.clone(), Some(101))],
+        vec![("foreign".into(), Some(5))],
+        vec![(track.clone(), Some(5)), (track.clone(), Some(4))],
+    ] {
+        let mut r = request(&s, &m);
+        r.speaker_counts = values
+            .into_iter()
+            .map(
+                |(track_id, num_speakers)| crate::diarization::TrackSettings {
+                    track_id,
+                    num_speakers,
+                },
+            )
+            .collect();
+        assert!(s.regenerate_analysis(&r, &|| false).is_err());
+        assert!(s.analysis_flow(&m).unwrap().is_none());
     }
 }
 

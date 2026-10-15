@@ -1,6 +1,6 @@
 use crate::local_engine::{Fingerprint, OwnedCommand, StableFile};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::Path;
@@ -192,7 +192,9 @@ pub(crate) fn parse_output(
             .parse::<u32>()
             .map_err(|_| "話者ラベルが不正です")?;
         if speaker_text != format!("{speaker:02}")
-            || speaker >= MAX_SPEAKERS
+            // Native cluster labels can be sparse. Their numeric value is
+            // not the number of speakers; bound labels and count separately.
+            || speaker as usize >= MAX_SEGMENTS
             || num_speakers.is_some_and(|n| speaker >= n)
             || start_us >= duration_us
             || end_us <= start_us
@@ -213,8 +215,22 @@ pub(crate) fn parse_output(
             speaker,
         });
     }
-    // A filtered cluster need not appear in the final segments. Keep the
-    // native labels, including gaps; empty output may legitimately be silence.
+    let labels: BTreeSet<_> = result.iter().map(|s| s.speaker).collect();
+    if labels.len() > MAX_SPEAKERS as usize {
+        return Err(format!(
+            "自動推定した話者クラスタが多すぎます（{}個、上限{}個）。実人数ではなく過剰な分割の可能性があるため、話者分離結果を保存しませんでした。保存済み音声と本文は保持しています",
+            labels.len(), MAX_SPEAKERS
+        ));
+    }
+    // Preserve already bounded labels. If filtering leaves large sparse IDs,
+    // renumber deterministically without merging distinct speakers or turns.
+    if labels.last().is_some_and(|label| *label >= MAX_SPEAKERS) {
+        let labels: Vec<_> = labels.into_iter().collect();
+        for segment in &mut result {
+            segment.speaker = labels.binary_search(&segment.speaker).unwrap() as u32;
+        }
+    }
+    // Empty output may legitimately be silence. Stored IDs remain bounded.
     validate_saved_segments(&result, num_speakers, duration_us)?;
     Ok(result)
 }

@@ -175,7 +175,7 @@ fn rejects_wrong_protocol_identity_settings_order_times_labels_and_extra_columns
         "1.000 -- 1.001 speaker_00\n",
         "999999999999999999999.000 -- 1.000 speaker_00\n",
         "0.000 -- 0.100 speaker_-1\n",
-        "0.000 -- 0.100 speaker_100\n",
+        "0.000 -- 0.100 speaker_100000\n",
         "0.000 -- 0.100 speaker_0\n",
         "0.000 -- 0.100 speaker_+0\n",
         "0.000 -- 0.100 speaker_00 confidence=0.95\n",
@@ -231,6 +231,47 @@ fn rejects_wrong_protocol_identity_settings_order_times_labels_and_extra_columns
     bad = config.clone();
     bad.min_duration_off_ms = 60_001;
     assert!(bad.validate(None).is_err());
+}
+
+#[test]
+fn sparse_native_labels_are_not_mistaken_for_speaker_counts() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path());
+    let parsed = parse_output(
+        &output(
+            &config,
+            None,
+            "0.000 -- 0.500 speaker_896\n0.100 -- 0.400 speaker_101\n0.500 -- 0.900 speaker_896\n",
+        ),
+        &config,
+        None,
+        1_000_000,
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.iter().map(|s| s.speaker).collect::<Vec<_>>(),
+        vec![1, 0, 1]
+    );
+    assert_eq!((parsed[1].start_us, parsed[1].end_us), (100_000, 400_000));
+    assert!(parse_output(
+        &output(&config, Some(5), "0.000 -- 0.100 speaker_896\n"),
+        &config,
+        Some(5),
+        1_000_000
+    )
+    .is_err());
+}
+
+#[test]
+fn excessive_clusters_report_count_without_inventing_a_speaker_number() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path());
+    let rows = (0..101)
+        .map(|i| format!("0.000 -- 0.100 speaker_{i:02}\n"))
+        .collect::<String>();
+    let error = parse_output(&output(&config, None, &rows), &config, None, 1_000_000).unwrap_err();
+    assert!(error.contains("101個"));
+    assert!(error.contains("実人数ではなく"));
 }
 
 #[cfg(unix)]

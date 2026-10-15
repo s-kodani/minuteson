@@ -320,6 +320,7 @@ fn failed_diarization_keeps_saved_input_and_requires_a_fresh_global_generation()
         meeting_id: m.clone(),
         operation_id: Uuid::new_v4().to_string(),
         expected: s.regeneration_admission(&m).unwrap(),
+        speaker_counts: vec![],
     };
     s.regenerate_analysis(&next, &|| false).unwrap();
     advance(&s);

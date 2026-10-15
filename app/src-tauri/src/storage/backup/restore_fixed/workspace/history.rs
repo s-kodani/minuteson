@@ -148,8 +148,19 @@ impl FixedWorkspace {
                         }
                         draft.id = fixed.ids.get("working_drafts", &old.meeting, &draft.id)?;
                     }
-                    rebuilt_plan = Some(serde_json::to_string(&plan).map_err(|e| e.to_string())?);
                 }
+                for count in &mut plan.speaker_counts {
+                    count.track_id =
+                        fixed
+                            .ids
+                            .get("audio_tracks", &old.meeting, &count.track_id)?;
+                }
+                plan.speaker_counts
+                    .sort_by(|a, b| a.track_id.cmp(&b.track_id));
+                if let Some(hash) = &mut plan.speaker_counts_manifest {
+                    *hash = fixed.audio_manifest_hash(&old.meeting, hash)?;
+                }
+                rebuilt_plan = Some(serde_json::to_string(&plan).map_err(|e| e.to_string())?);
             }
             let new_hash = rebuilt_plan
                 .as_ref()
@@ -285,7 +296,24 @@ impl FixedWorkspace {
                 let settings: Vec<crate::diarization::TrackSettings> =
                     serde_json::from_value(source.parameters["diarization"]["tracks"].clone())
                         .map_err(|e| e.to_string())?;
-                if engine != plan.sherpa || settings.iter().any(|t| t.num_speakers.is_some()) {
+                if engine != plan.sherpa
+                    || settings.iter().any(|t| {
+                        t.num_speakers
+                            != plan
+                                .speaker_counts
+                                .iter()
+                                .find(|c| c.track_id == t.track_id)
+                                .and_then(|c| c.num_speakers)
+                    })
+                    || plan
+                        .speaker_counts
+                        .iter()
+                        .any(|c| !settings.iter().any(|t| t.track_id == c.track_id))
+                    || plan.speaker_counts_manifest.as_ref().is_some_and(|hash| {
+                        source.parameters["diarization"]["source"]["manifestHash"].as_str()
+                            != Some(hash.as_str())
+                    })
+                {
                     return Err("話者分離条件が解析工程の固定計画と一致しません".into());
                 }
                 let trans = flow

@@ -6,4 +6,5 @@ export interface RegenerationRequest {
   meetingId: string;
   operationId: string;
   expected: RegenerationTarget;
+  speakerCounts?: {trackId:string;numSpeakers:number|null}[];
 }
