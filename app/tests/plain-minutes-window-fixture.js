@@ -60,6 +60,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "list_restored_meeting_ids") return [];
         if (cmd === "get_audio_import") return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName:null, saved: null, errorMessage: null };
         if (cmd === "get_analysis_flow") return null;
+        if (cmd === "get_meeting_audio_summary") return {schemaVersion:1,durationUs:3600000000,modes:["mic","system","both"]};
         if (cmd === "get_current_analysis" || cmd === "get_analysis_preview") return args.meetingId === "m2" ? null : copy(analysis);
         if (cmd === "get_transcript_draft" || cmd === "get_analysis_version_draft") return args.meetingId === "m2" ? null : (await import("/tests/transcript-recovery-browser-fixture.js")).stampFixtureDraft(data.td);
         if (cmd === "save_transcript_draft") { if (args.expectedLockVersion !== data.td.lockVersion) throw Error("stale transcript"); data.td.payload=copy(args.payload); data.td.lockVersion++; return (await import("/tests/transcript-recovery-browser-fixture.js")).stampFixtureDraft(data.td); }

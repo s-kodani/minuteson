@@ -147,6 +147,9 @@ mockIPC(async (command, args) => {
     case "get_audio_import": return { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, saved: null, errorMessage: null };
     case "get_model_placements": return [];
     case "get_model_profiles": return ["standard", "high_accuracy"].map(name => ({ name, id: null, profileVersion: 0, components: [], configurationComplete: false }));
+    case "get_meeting_audio_summary":
+      if(fixture.meetingSummaryFailure) throw Error("模擬の保存音声確認失敗");
+      return {schemaVersion:1,durationUs:fixture.meetingAudio.endUs,modes:fixture.meetingPlaybackModes??(meetings.find(m=>m.id===args.meetingId)?.sourceType==="audio_import"?["imported"]:["mic","system","both"])};
     case "get_analysis_flow":
       if(fixture.regenerationReadFail)throw Error("模擬解析状態読込失敗");
       return args.meetingId===meetings[0].id?structuredClone(fixture.analysisFlow??null):null;

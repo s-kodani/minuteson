@@ -1,9 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { meetingPlaybackModes, meetingPlaybackLabel, validateMeetingPlayback } from "../src/meeting-playback-state.ts";
+import { meetingPlaybackModes, meetingPlaybackLabel, preferredMeetingPlaybackMode, validateMeetingPlayback } from "../src/meeting-playback-state.ts";
 import type { PlaybackInfo } from "../src/playback.ts";
 
 const info: PlaybackInfo = { token:"meeting", sampleRate:48000, channels:1, totalFrames:172800000, startUs:0, endUs:3600000000, trackKind:"both", alignment:"unverified" };
+
+test("default playback uses only available saved tracks including PC-silent recordings", () => {
+  assert.equal(preferredMeetingPlaybackMode(["mic"]), "mic");
+  assert.equal(preferredMeetingPlaybackMode(["system"]), "system");
+  assert.equal(preferredMeetingPlaybackMode(["mic", "system", "both"]), "both");
+  assert.equal(preferredMeetingPlaybackMode(["imported"]), "imported");
+  assert.equal(preferredMeetingPlaybackMode([]), null);
+});
 
 test("meeting source modes are explicit and imported channels do not imply mic/system", () => {
   assert.deepEqual(meetingPlaybackModes("recording"), ["mic", "system", "both"]);

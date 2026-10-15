@@ -7,7 +7,9 @@ test("initial meeting bar is present without mounting a second playback entry or
   const meeting=source("meeting-audio.tsx"), player=source("transcript-audio.tsx");
   assert.match(meeting,/idleMeetingMode:mode/);
   assert.doesNotMatch(meeting,/meeting-audio-start|会議全体を再生/);
-  assert.match(meeting,/useEffect\(\(\) => \{ audio.clear\(\); setMode\(/);
+  assert.match(meeting,/audio.clear\(\); setModes\(\[\]\); setSummaryError\(""\)/);
+  assert.match(meeting,/get_meeting_audio_summary/);
+  assert.match(meeting,/preferredMeetingPlaybackMode\(summary.modes\)/);
   assert.match(player,/const idleMeeting = meetingScope && options.idleMeetingMode && !surface\?\.occupied/);
   assert.match(player,/\(selected \|\| idleMeeting\) && <div className="audio-player"/);
   assert.match(player,/if \(locked \|\| preparing\) return;\s*if \(info\) toggle\(\); else if \(options.idleMeetingMode\) void startMeeting\(options.idleMeetingMode\)/);
@@ -51,7 +53,7 @@ test("playback status never adds a visible dock row, and preparation retains a s
 test("return to full meeting is explicit, paused and stays in the playback settings modal", () => {
   const meeting=source("meeting-audio.tsx"), player=source("transcript-audio.tsx");
   assert.match(meeting,/<OptionsModal label="再生設定" icon="more"/);
-  assert.match(meeting,/disabled=\{locked \|\| audio.preparing\} onClick=\{\(\) => void audio.startMeeting\(mode, false, false\)\}/);
+  assert.match(meeting,/disabled=\{locked \|\| !available \|\| audio.preparing\} onClick=\{\(\) => void audio.startMeeting\(mode, false, false\)\}/);
   assert.match(player,/const startMeeting = \(mode: MeetingPlaybackMode, preserve = false, playing = true\)/);
   assert.match(player,/: \{ frame:0, rate:current.rate, playing \}/);
   assert.match(player,/if \(!meeting \|\| restore\?\.playing !== false\) await player.play\(\)/);

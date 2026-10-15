@@ -8,6 +8,13 @@ export function meetingPlaybackModes(sourceType?: "recording" | "audio_import" |
   return sourceType === "recording" ? ["mic", "system", "both"] : sourceType === "audio_import" ? ["imported"] : [];
 }
 
+// Prefer both only when both saved sources actually exist. Never manufacture
+// a missing PC track or change an explicitly selected mode after preparation.
+export function preferredMeetingPlaybackMode(modes: readonly MeetingPlaybackMode[]): MeetingPlaybackMode | null {
+  return modes.includes("imported") ? "imported" : modes.includes("both") ? "both"
+    : modes.includes("mic") ? "mic" : modes.includes("system") ? "system" : null;
+}
+
 export function meetingPlaybackLabel(mode: MeetingPlaybackMode): string {
   return { mic:"マイク音声", system:"PC音声", both:"マイク＋PC音声", imported:"取り込み音声" }[mode];
 }
