@@ -1,6 +1,8 @@
 //! Whole-track and independent saved-run native diarization. Local numeric
 //! labels alone never identify a person across runs, tracks or meetings.
 mod restore;
+pub(crate) mod sensitivity;
+pub(crate) mod runtime;
 // Feature matching is limited to one track; legacy conditions remain unchanged.
 mod clustering;
 // Separate helper identity, without changing legacy managed SherpaConfig files.
@@ -47,6 +49,8 @@ pub(crate) struct StartRequest {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
+    #[serde(default)]
+    pub speech_sensitivity_milli: i32,
 }
 
 impl StartRequest {
@@ -69,6 +73,7 @@ impl StartRequest {
             window_shift_milli: self.window_shift_milli,
             min_duration_on_ms: self.min_duration_on_ms,
             min_duration_off_ms: self.min_duration_off_ms,
+            speech_sensitivity_milli: self.speech_sensitivity_milli,
         };
         enqueue(storage, self.input, engine, &self.profile, self.tracks)
     }
@@ -134,6 +139,8 @@ pub(crate) fn retry_preflight(
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     source: RecordedAudioPlan,
     engine: SherpaConfig,
     tracks: Vec<TrackSettings>,
@@ -403,6 +410,12 @@ pub(crate) fn enqueue_source(
         serde_json::json!({"profile":profile,"engine":"sherpa-onnx","segmentationSha256":engine.segmentation_model.sha256,"embeddingSha256":engine.embedding_model.sha256,"qualityStatus":"unverified"}),
         selected,
     )?;
+    let resident_runtime = crate::local_engine::resident::prepare_job(
+        storage,
+        &request.meeting_id,
+        &request.operation_id,
+        "sherpa",
+    )?;
     let configure = move |input: &DiarizationInput| -> Result<(serde_json::Value, i64), String> {
         if input.audio_manifest_hash != source.manifest_hash {
             return Err("文字起こしと保存音声の由来が一致しません".into());
@@ -417,6 +430,7 @@ pub(crate) fn enqueue_source(
             }
         }
         let parameters = Parameters {
+            resident_runtime,
             source,
             engine,
             tracks,
@@ -445,6 +459,10 @@ fn checked_parameters(storage: &Storage, spec: &JobSpec, job: &str) -> Result<Pa
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let input = storage.load_diarization_input(job)?;
     let parameters = envelope.diarization;
+    if let Some(runtime) = &parameters.resident_runtime {
+        runtime.accepts("sherpa")?;
+    }
+
     if spec.kind != JobKind::Diarization
         || envelope.schema_version != 1
         || envelope.request.meeting_id != spec.meeting_id
@@ -624,17 +642,32 @@ fn load_output(
     Ok(segments)
 }
 
+#[cfg(test)]
 pub(crate) fn process(
     storage: &Storage,
     job_id: &str,
     stopping: &impl Fn() -> bool,
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
+    process_observed(storage, job_id, stopping, progress, &|_| {})
+}
+
+pub(crate) fn process_observed(
+    storage: &Storage,
+    job_id: &str,
+    stopping: &impl Fn() -> bool,
+    progress: &impl Fn(JobSnapshot),
+    runtime_progress: &impl Fn(runtime::Progress),
+) -> Result<Option<String>, String> {
     let (spec, raw) = storage.fixed_job_input(job_id)?;
     if spec.parameters["schemaVersion"] == 2 {
-        return known::process(storage, job_id, stopping, progress);
+        return known::process_observed(storage, job_id, stopping, progress, runtime_progress);
     }
     let parameters = checked_parameters(storage, &spec, job_id)?;
+    let _resident = crate::local_engine::resident::Scope::enter(
+        storage.root(),
+        parameters.resident_runtime.as_ref(),
+    )?;
     let job = storage.get_job(job_id)?;
     let mut checkpoint = checked_checkpoint(&job, raw)?;
     let cancelled = || {
@@ -677,17 +710,20 @@ pub(crate) fn process(
                 Execution::Sherpa(&parameters.engine),
                 &cancelled,
             )?;
-            let Some(parsed) = sherpa::run_track(
+            let observer = runtime::Observer::new(&job, index, runtime_progress);
+            let Some(parsed) = sherpa::run_track_observed(
                 &runtime,
                 parameters.tracks[index].num_speakers,
                 &directory,
                 native_duration,
                 Duration::from_secs(24 * 3600),
                 &cancelled,
+                &|value| observer.emit(value, false),
             )?
             else {
                 return Ok(None);
             };
+            observer.emit(10_000, true);
             if cancelled() {
                 return Ok(None);
             }

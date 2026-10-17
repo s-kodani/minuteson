@@ -155,6 +155,7 @@ fn fixture_version(
     );
     let plan = plan::build_with_system(&old_input, limit, version, extract_system).unwrap();
     let p = Parameters {
+        resident_runtime: None,
         schema_version: 7,
         prompt_version: version,
         prompt_snapshot,
@@ -652,4 +653,25 @@ fn custom_prompt_backup_replays_without_settings_and_rejects_changed_snapshot() 
             json!("別の設定");
         assert!(f.run(&crate::test_support::never_cancelled).is_err());
     }
+}
+
+#[test]
+fn resident_markdown_restore_preserves_worker_identity_and_rejects_substitution() {
+    let mut f = fixture(false, false, false);
+    let runtime = json!({"protocol":1,"engine":"llama","name":"mon-llama-worker","bytes":1234,"sha256":"a".repeat(64)});
+    f.old_spec.parameters["generation"]["residentRuntime"] = runtime.clone();
+    f.new_spec.parameters["generation"]["residentRuntime"] = runtime.clone();
+    let before = f.value.clone();
+    assert!(f.run(&|| false).is_ok());
+    assert_eq!(
+        f.old_spec.parameters["generation"]["residentRuntime"],
+        runtime
+    );
+    assert_eq!(
+        f.new_spec.parameters["generation"]["residentRuntime"],
+        runtime
+    );
+    assert_eq!(f.value, before);
+    f.new_spec.parameters["generation"]["residentRuntime"]["sha256"] = json!("b".repeat(64));
+    assert!(f.run(&|| false).is_err());
 }

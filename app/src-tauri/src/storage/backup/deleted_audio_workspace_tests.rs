@@ -114,6 +114,7 @@ fn deleted_audio_workspace_publishes_fixed_jobs_drafts_minutes_and_missing_sourc
         window_shift_milli: 500,
         min_duration_on_ms: 200,
         min_duration_off_ms: 100,
+        speech_sensitivity_milli: 0,
     };
     let request = crate::storage::MinutesJobRequest {
         meeting_id: meeting.clone(),
@@ -271,6 +272,7 @@ fn deleted_audio_workspace_rebuilds_saved_whisper_result_and_deleted_pcm_without
         )
         .unwrap(),
         vad_model: None,
+        vad_options: None,
         threads: 1,
         use_gpu: false,
         prompt: "点検日".into(),

@@ -27,6 +27,7 @@ pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) ->
             enabled: true,
         }],
         expected_global_version: None,
+        num_speakers: None,
     };
     let (import, _, _) =
         super::super::super::imports::tests::pending_configured(storage, operation, &options);

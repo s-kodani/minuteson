@@ -318,6 +318,7 @@ fn voice_registration_history_does_not_resurrect_a_deleted_person_or_block_resto
             window_shift_milli: 100,
             min_duration_on_ms: 0,
             min_duration_off_ms: 0,
+            speech_sensitivity_milli: 0,
         },
         extractor: crate::diarization::embedding::ExtractorConfig {
             helper: fp.clone(),

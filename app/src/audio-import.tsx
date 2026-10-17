@@ -14,6 +14,7 @@ import { effectiveVocabulary,validVocabulary,type VocabularyEntry } from "./voca
 import { formatElapsed } from "./session";
 import { OperationProgressBar, usePublishProgress } from "./operation-progress";
 import { importProgress } from "./operation-progress-state";
+import { SpeakerCountSelect } from "./speaker-count-select";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
 export function AudioImportPanel({locked,recordingActive,visible,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
@@ -24,6 +25,7 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   const [snapshot,setSnapshot]=useState<ImportSnapshot|null>(null);
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [title,setTitle]=useState("");
+  const [numSpeakers,setNumSpeakers]=useState<number|null>(null);
   const [terms,setTerms]=useState<VocabularyEntry[]>([]),[common,setCommon]=useState<Book|null>(null);
   const [vocabularyOpen,setVocabularyOpen]=useState(false);
   const vocabularyTrigger=useRef<HTMLButtonElement>(null);
@@ -37,8 +39,8 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
   usePublishProgress("audio-import", [progress]);
   const accept=(next:ImportSnapshot)=>setSnapshot(current=>acceptImport(current,next));
   snapshotRef.current=snapshot;
-  const inputRef = useRef({ title, terms });
-  inputRef.current = { title, terms };
+  const inputRef = useRef({ title, terms, numSpeakers });
+  inputRef.current = { title, terms, numSpeakers };
   useEffect(()=>{
     mounted.current=true;
     if(!isTauri())return;
@@ -79,14 +81,14 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
     const change = async (propagateFailure = false) => {
       const action = async()=>{
         if (!open) opener.current=sourceOpener;
-        setError("");setOpenFailed(false);setVocabularyOpen(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");
+        setError("");setOpenFailed(false);setVocabularyOpen(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");setNumSpeakers(null);
         try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
         catch(cause){setError(String(cause)); if (propagateFailure) throw cause;}finally{setBusy(false);}
       };
       if (propagateFailure) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
     };
     try {
-      if (open && (terms.length || title)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
+      if (open && (terms.length || title || numSpeakers!==null)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・話者数・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true) });
       else await change();
     } catch (cause) { if (mounted.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); } finally { selecting.current=false; }
   };
@@ -108,13 +110,13 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
     if(snapshotRef.current?.busy||busy){setError("取り込みの取消・保存が完了してから閉じてください。");return;}
     const s = snapshotRef.current, expected = JSON.stringify(inputRef.current);
     const dismiss = async () => { if (s?.token && s.phase === "ready") await cancelNative(s); setOpen(false); };
-    if ((terms.length || title) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss });
+    if ((terms.length || title || numSpeakers!==null) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss });
     else try { await dismiss(); } catch { /* error stays visible */ }
   };
   const start=async()=>{
     if(!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)||!snapshot?.token)return;
     await withSavedEdits(async()=>{setBusy(true);setError("");try{
-      accept(await invoke<ImportSnapshot>("start_audio_import",{request:{token:snapshot.token,title:title.trim(),options:{meetingVocabulary:terms,expectedGlobalVersion:common!.lockVersion}}}));
+      accept(await invoke<ImportSnapshot>("start_audio_import",{request:{token:snapshot.token,title:title.trim(),options:{meetingVocabulary:terms,expectedGlobalVersion:common!.lockVersion,numSpeakers}}}));
     }catch(cause){setError(String(cause));}finally{setBusy(false);}});
   };
   const disabled=busy||locked||confirm.pending||!!snapshot?.busy||recordingActive||!!snapshot?.recordingBlocked;
@@ -146,6 +148,8 @@ export function AudioImportPanel({locked,recordingActive,visible,showNewRecordin
       {(error||snapshot?.errorMessage)&&<p className="action-error" role="alert">{error||snapshot?.errorMessage}</p>}
       {openFailed&&snapshot?.saved&&<button type="button" onClick={()=>void openSaved(snapshot.saved!.meetingId)}>保存した会議を開く</button>}
       <fieldset disabled={disabled||!!snapshot?.saved}><label><span className="import-field-label">会議名</span><input value={title} maxLength={200} onChange={e=>setTitle(e.target.value)}/></label>
+        <div className="speaker-count-fields"><SpeakerCountSelect label="話者数" value={numSpeakers} onChange={setNumSpeakers}/></div>
+        <p>人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。この音声の初回の話者分離に適用します。</p>
         <p>音声の保存後、全体設定で選んだモデルで文字起こしと話者分離を進めます。モデルが未導入でも音声は保持します。</p>
         <div className="import-vocabulary-entry"><button ref={vocabularyTrigger} type="button" className="small-secondary" aria-haspopup="dialog" aria-controls={scope?.id??"audio-import-dialog"} aria-expanded={vocabularyOpen} onClick={event=>{event.currentTarget.focus({preventScroll:true});setVocabularyOpen(true);}}>会議の用語（任意）</button><InfoPopover label="取り込みの用語" details={<p>開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。登録は認識ヒントであり、自動置換・精度向上の保証ではありません。実際の解析開始時の用語をジョブに固定し、後からの編集は過去の結果を変更しません。</p>}>登録した用語を会議別の認識ヒントとして保存します。自動置換・精度向上の保証ではありません。後からの編集は過去の結果を変更しません。</InfoPopover></div>
       </fieldset>

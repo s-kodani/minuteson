@@ -40,7 +40,7 @@ fn fixture(engine: Engine, script: Option<&str>) -> Fixture {
         Engine::Llama=>"printf '{\"ok\":true}'".into(),
         Engine::Sherpa=> {
             let proof=|name: &str| {let mut p=Fingerprint::capture(&source.path().join(name),&||false).unwrap();p.path=models.join(&package).join(name);p};
-            let config=crate::diarization::sherpa::SherpaConfig {executable:proof("seg.onnx"),segmentation_model:proof("seg.onnx"),embedding_model:proof("embed.onnx"),runtime_libraries:vec![],threads:1,cluster_threshold_milli:500,window_shift_milli:500,min_duration_on_ms:300,min_duration_off_ms:500};
+            let config=crate::diarization::sherpa::SherpaConfig {executable:proof("seg.onnx"),segmentation_model:proof("seg.onnx"),embedding_model:proof("embed.onnx"),runtime_libraries:vec![],threads:1,cluster_threshold_milli:500,window_shift_milli:500,min_duration_on_ms:300,min_duration_off_ms:500,speech_sensitivity_milli:0};
             format!("printf '%s\\nStarted\\n' '{}'",config.expected_header(None))
         },
     };

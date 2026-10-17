@@ -167,6 +167,7 @@ fn run(
                 executable,
                 model: one(record, package, Role::Asr)?,
                 vad_model: fingerprints(record, package, Role::Vad).into_iter().next(),
+                vad_options: record.files.iter().any(|f| f.role == Role::Vad).then(Default::default),
                 threads: 1,
                 use_gpu: false,
                 prompt: String::new(),
@@ -193,6 +194,7 @@ fn run(
                 window_shift_milli: 500,
                 min_duration_on_ms: 300,
                 min_duration_off_ms: 500,
+                speech_sensitivity_milli: 0,
             };
             crate::diarization::sherpa::run_track(
                 &config,

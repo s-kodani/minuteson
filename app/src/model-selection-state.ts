@@ -6,7 +6,7 @@ const modelRoles = new Set(["llm", "asr", "vad", "segmentation", "speaker_embedd
 const retiredRecipes = new Set(["36416d1eeca501fdc083e2b31c9f49b4258342174b0f7d52798aa14b827dc44e"]);
 export const isRetiredModel = (entry: ModelPlacementEntry) => entry.download != null && retiredRecipes.has(entry.download.recipeHash);
 function identity(engine: string, files: { role: string; size: number; sha256: string }[]): string | null {
-  const models = files.filter(file => modelRoles.has(file.role));
+  const models = files.filter(file => modelRoles.has(file.role) && !(engine === "whisper.cpp" && file.role === "vad"));
   if (!models.length || models.some(file => !Number.isSafeInteger(file.size) || file.size <= 0 || !/^[0-9a-f]{64}$/u.test(file.sha256))) return null;
   return JSON.stringify([engine, models.map(file => [file.role, file.size, file.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
 }

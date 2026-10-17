@@ -50,7 +50,8 @@ pub(crate) fn restore_saved_results(
                 .validate_settings(track.num_speakers)?;
         }
     }
-    if before.diarization.engine != after.diarization.engine
+    if before.diarization.resident_runtime != after.diarization.resident_runtime
+        || before.diarization.engine != after.diarization.engine
         || old.profile_snapshot != new.profile_snapshot
         || old.total_units != new.total_units
         || job.kind != "diarization"

@@ -139,6 +139,7 @@ fn options() -> audio_import::ImportOptions {
             enabled: true,
         }],
         expected_global_version: Some(0),
+        num_speakers: None,
     }
 }
 
@@ -789,4 +790,28 @@ fn native_import_all_formats_are_content_detected_and_survive_external_source_mo
     )
     .is_err());
     assert!(s.list_meetings().unwrap().is_empty());
+}
+
+#[test]
+fn initial_import_rejects_out_of_range_speaker_counts_before_saving() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    for count in [0, 101, u32::MAX] {
+        let configured = audio_import::ImportOptions {
+            num_speakers: Some(count),
+            ..Default::default()
+        };
+        assert!(configured.validate().is_err());
+    }
+    let configured = audio_import::ImportOptions {
+        num_speakers: Some(5),
+        ..Default::default()
+    };
+    let (import, _, _) = pending_configured(&s, "count-replay", &configured);
+    assert_eq!(
+        super::read_options(&s.connection.lock().unwrap(), &import.id)
+            .unwrap()
+            .num_speakers,
+        Some(5)
+    );
 }

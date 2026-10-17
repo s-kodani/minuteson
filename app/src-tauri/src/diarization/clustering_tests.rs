@@ -782,3 +782,38 @@ fn empty_support_cancellation_and_out_of_run_frames_fail_closed() {
         .is_err());
     }
 }
+
+#[test]
+fn automatic_merge_threshold_relaxes_clustering_without_affecting_requested_counts_or_overlaps() {
+    let groups = [key(0, 0), key(1, 0)];
+    let features = [feature(0, 0, &[1.0, 0.0]), feature(1, 0, &[0.0, 1.0])];
+    let run = |requested, threshold| {
+        cluster(
+            &groups,
+            &features,
+            &[],
+            requested,
+            threshold,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap()
+    };
+    assert_eq!(run(None, 500).observed_speakers, 2);
+    assert_eq!(run(None, 1300).observed_speakers, 1);
+    assert_eq!(run(Some(2), 500), run(Some(2), 1300));
+    let overlapping = [key(0, 0), key(0, 1)];
+    let overlapping_features = [feature(0, 0, &[1.0, 0.0]), feature(0, 1, &[1.0, 0.0])];
+    assert_eq!(
+        cluster(
+            &overlapping,
+            &overlapping_features,
+            &[(key(0, 0), key(0, 1))],
+            None,
+            1300,
+            &crate::test_support::never_cancelled
+        )
+        .unwrap()
+        .observed_speakers,
+        2
+    );
+}

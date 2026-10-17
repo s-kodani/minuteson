@@ -217,7 +217,10 @@ fn run(args: &[std::ffi::OsString]) -> Result<i32, String> {
     }
     let child = Command::new(program)
         .args(&args[5..])
-        .stdin(Stdio::null())
+        // Legacy launches already provide /dev/null. Resident workers receive
+        // their anonymous request pipe; the independent owner FD still closes
+        // on exec, so a worker cannot conceal the parent's death.
+        .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .process_group(0)

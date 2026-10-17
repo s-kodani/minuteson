@@ -1,4 +1,6 @@
+import type { VadOptions } from "./vad-state.ts";
 export interface EnginePreferences {
+  vadOptions?: VadOptions;
   executablePath: string;
   modelPath: string;
   vadModelPath: string | null;

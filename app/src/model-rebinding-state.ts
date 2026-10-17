@@ -1,3 +1,4 @@
+import { checkedVadOptions, type VadOptions } from "./vad-state.ts";
 import type { AnalysisJob } from "./analysis-state.ts";
 import type { ModelFileReport, ModelPlacementEntry } from "./model-inspection-state.ts";
 import { canReviewApplication } from "./model-profile-state.ts";
@@ -9,7 +10,7 @@ export interface RebindingJob extends AnalysisJob {
 export interface JobModelPreview {
   schemaVersion: 1; source: RebindingJob; checkpointHash: string; reviewHash: string;
   logicalConditions: {
-    profile: "standard" | "high_accuracy"; engine: string; configuration: Record<string, number | boolean>;
+    profile: "standard" | "high_accuracy"; engine: string; configuration: Record<string, number | boolean | VadOptions>;
     vocabularyHint: { characters: number; sha256: string } | null;
     trackSettings: { trackId: string; numSpeakers: number | null }[] | null;
   };
@@ -85,7 +86,9 @@ export function assertJobModelPreview(p: JobModelPreview, meetingId: string, job
     "llama.cpp": ["threads", "contextTokens", "predictionTokens", "gpuLayers", "seed", "promptBudget"],
   };
   const keys = configurationKeys[conditions.engine];
-  if (Object.keys(conditions.configuration).length !== keys.length || keys.some(k => !Object.hasOwn(conditions.configuration, k)
+  const vad = conditions.engine === "whisper.cpp" ? conditions.configuration.vadOptions : undefined;
+  if (vad !== undefined) checkedVadOptions(vad);
+  if (Object.keys(conditions.configuration).length !== keys.length + Number(vad !== undefined) || keys.some(k => !Object.hasOwn(conditions.configuration, k)
     || (k === "useGpu" ? typeof conditions.configuration[k] !== "boolean" : !integer(conditions.configuration[k])))
     || Number(conditions.configuration.threads) < 1 || Number(conditions.configuration.threads) > 64) fail();
   if (job.kind === "transcription" ? !conditions.vocabularyHint || !integer(conditions.vocabularyHint.characters) || !sha(conditions.vocabularyHint.sha256) : conditions.vocabularyHint !== null) fail();

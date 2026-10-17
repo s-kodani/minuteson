@@ -21,6 +21,8 @@ pub struct WhisperConfig {
     pub executable: Fingerprint,
     pub model: Fingerprint,
     pub vad_model: Option<Fingerprint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_options: Option<super::vad::VadOptions>,
     pub threads: u32,
     pub use_gpu: bool,
     pub prompt: String,
@@ -28,6 +30,9 @@ pub struct WhisperConfig {
 
 impl WhisperConfig {
     pub(crate) fn validate_settings(&self) -> Result<(), String> {
+        if let Some(options) = self.vad_options {
+            options.validate()?;
+        }
         if !(1..=64).contains(&self.threads) || self.prompt.chars().count() > 8000 {
             return Err("文字起こしのスレッド数または用語ヒントが不正です".into());
         }
@@ -177,7 +182,7 @@ pub fn run_unit(
 
 // Suppress non-speech tokens during decoding, never delete recognized words.
 // The caller fixes this choice in the job, rather than changing old replays.
-pub(super) fn run_unit_with_suppression(
+pub(crate) fn run_unit_with_suppression(
     config: &WhisperConfig,
     directory: &Path,
     duration_us: i64,
@@ -188,9 +193,7 @@ pub(super) fn run_unit_with_suppression(
     if cancelled() {
         return Ok(None);
     }
-    if !(1..=64).contains(&config.threads) || config.prompt.chars().count() > 8000 {
-        return Err("文字起こし設定が不正です".into());
-    }
+    config.validate_settings()?;
     let mut watched = vec![
         StableFile::watch(&config.executable)?,
         StableFile::watch(&config.model)?,
@@ -255,12 +258,24 @@ pub(super) fn run_unit_with_suppression(
     if !config.prompt.is_empty() {
         command.arg("--prompt").arg(&config.prompt);
     }
-    if let Some(vad) = &config.vad_model {
-        command.arg("--vad").arg("--vad-model").arg(&vad.path);
+    if config.vad_options.is_none_or(|v| v.enabled) {
+        if let Some(vad) = &config.vad_model {
+            command.arg("--vad").arg("--vad-model").arg(&vad.path);
+            if let Some(options) = config.vad_options {
+                options.args(command);
+            }
+        } else if config.vad_options.is_some() {
+            return Err("VADモデルが導入されていません。設定から追加してください".into());
+        }
     }
-    let mut child = launch
-        .spawn()
-        .map_err(|e| format!("whisper.cppを起動できません: {e}"))?;
+    let mut child = crate::local_engine::resident::Run::spawn(
+        &mut launch,
+        "whisper",
+        &directory,
+        "stdout.log",
+        "stderr.log",
+    )
+    .map_err(|e| format!("whisper.cppを起動できません: {e}"))?;
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -277,7 +292,7 @@ pub(super) fn run_unit_with_suppression(
         if json.exists() && json.metadata().map_err(|e| e.to_string())?.len() > MAX_JSON_BYTES {
             return Err("文字起こし出力が上限を超えました".into());
         }
-        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("whisper.cppが失敗しました: {status}"));
             }
@@ -346,6 +361,7 @@ mod tests {
                 .unwrap(),
                 model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
                 vad_model: None,
+                vad_options: None,
                 threads: 1,
                 use_gpu: false,
                 prompt: "登録用語".into(),
@@ -567,6 +583,7 @@ mod tests {
             executable: Fingerprint::capture(&cli, &crate::test_support::never_cancelled).unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
+            vad_options: None,
             threads: 4,
             use_gpu: false,
             prompt: String::new(),
@@ -636,6 +653,7 @@ mod tests {
                 .unwrap(),
             model: proof,
             vad_model: None,
+            vad_options: None,
             threads: 1,
             use_gpu: false,
             prompt: String::new(),
@@ -669,6 +687,7 @@ mod tests {
                 .unwrap(),
             model: Fingerprint::capture(&model, &crate::test_support::never_cancelled).unwrap(),
             vad_model: None,
+            vad_options: None,
             threads: 1,
             use_gpu: false,
             prompt: "点検日; $(false)".into(),

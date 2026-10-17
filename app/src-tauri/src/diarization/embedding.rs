@@ -334,9 +334,14 @@ fn run_inner(
         .arg(end.to_string())
         .arg("--threads")
         .arg(engine.threads.to_string());
-    let mut child = launch
-        .spawn()
-        .map_err(|e| format!("特徴量抽出を起動できません: {e}"))?;
+    let mut child = crate::local_engine::resident::Run::spawn(
+        &mut launch,
+        "embedding",
+        &directory,
+        "embedding.stdout.json",
+        "embedding.stderr.log",
+    )
+    .map_err(|e| format!("特徴量抽出を起動できません: {e}"))?;
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -347,7 +352,7 @@ fn run_inner(
         }
         stdout.check()?;
         stderr.check()?;
-        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("特徴量抽出が失敗しました: {status}"));
             }

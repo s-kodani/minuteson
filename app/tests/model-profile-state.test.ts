@@ -92,3 +92,32 @@ test("CPU tuning requires the explicit requested thread count and cannot change 
   }
   assert.throws(() => assertApplicationPreview({ ...preview, diarizationThreads: 8 }, entry, "standard", empty, 8));
 });
+
+test("automatic merge tuning binds the selected model and exact threshold without changing CPU or other conditions", () => {
+  const settings = { executablePath: "/app/models/sherpa", segmentationModelPath: "/app/models/seg.onnx", embeddingModelPath: "/app/models/emb.onnx", runtimeLibraryPaths: ["/app/models/lib.dylib"], threads: 8, clusterThresholdMilli: 500, windowShiftMilli: 100, minDurationOnMs: 0, minDurationOffMs: 0 };
+  const current: ModelProfileView = { ...applied, components: [{ ...component, engine: "sherpa-onnx", roles: ["segmentation", "speaker_embedding"] }] };
+  const p: ModelApplicationPreview = { ...preview, expectedProfileId: current.id, expectedProfileHash: "c".repeat(64), expectedProfileVersion: current.profileVersion, before: { engine: "sherpa-onnx", settings }, after: { engine: "sherpa-onnx", settings: { ...settings, clusterThresholdMilli: 1300 } }, diarizationClusterThresholdMilli: 1300 };
+  const e = { ...entry, engine: "sherpa-onnx" as const };
+  assert.doesNotThrow(() => assertApplicationPreview(p,e,"standard",current,undefined,1300));
+  assert.throws(() => assertApplicationPreview(p,e,"standard",current));
+  for (const threshold of [-1,2001,1.3,1500,NaN]) assert.throws(() => assertApplicationPreview(p,e,"standard",current,undefined,threshold));
+  for (const patch of [{threads:4},{clusterThresholdMilli:1500},{minDurationOnMs:300},{windowShiftMilli:500},{embeddingModelPath:"/app/models/other.onnx"}]) {
+    assert.throws(() => assertApplicationPreview({...p,after:{engine:"sherpa-onnx",settings:{...settings,clusterThresholdMilli:1300,...patch}}},e,"standard",current,undefined,1300));
+  }
+  assert.throws(() => assertApplicationPreview(p,e,"standard",{...current,components:[{...current.components[0],settingsMatch:false}]},undefined,1300));
+  assert.throws(() => assertApplicationPreview({...preview,diarizationClusterThresholdMilli:1300},entry,"standard",empty,undefined,1300));
+  assert.doesNotThrow(() => assertAppliedPreferences({lockVersion:6,payload:{standard:p.after.settings,highAccuracy:settings}},p));
+  assert.throws(() => assertAppliedPreferences({lockVersion:6,payload:{standard:settings,highAccuracy:p.after.settings}},p));
+});
+
+test("VAD options bind the request and readback without accepting changes to other settings", () => {
+  const options = { enabled:false,thresholdMilli:750,minSpeechDurationMs:450,minSilenceDurationMs:100,maxSpeechDurationS:30,speechPadMs:30,samplesOverlapMs:100 };
+  const e = {...entry,modelFiles:[{role:"vad",size:885098,sha256:"a".repeat(64)}]};
+  const p: ModelApplicationPreview = {...preview,whisperVadOptions:options,after:{engine:"whisper.cpp",settings:{...after.settings,vadModelPath:"/app/models/vad",vadOptions:options}}};
+  assert.doesNotThrow(()=>assertApplicationPreview(p,e,"standard",empty,undefined,undefined,options));
+  assert.throws(()=>assertApplicationPreview(p,e,"standard",empty));
+  assert.throws(()=>assertApplicationPreview({...p,whisperVadOptions:{...options,thresholdMilli:800}},e,"standard",empty,undefined,undefined,options));
+  assert.throws(()=>assertApplicationPreview({...p,after:{engine:"whisper.cpp",settings:{...after.settings,threads:1,vadOptions:options}}},e,"standard",empty,undefined,undefined,options));
+  assert.throws(()=>assertApplicationPreview(p,{...e,engine:"llama.cpp"},"standard",empty,undefined,undefined,options));
+  assert.doesNotThrow(()=>assertAppliedPreferences({lockVersion:6,payload:{standard:p.after.settings,highAccuracy:before.settings}},p));
+});

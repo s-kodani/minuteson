@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JobNotificationTracker, assertNotificationJobs, verifiedJobOutput, type NotificationJob } from "../src/job-notification-state.ts";
+import { JobNotificationTracker, jobFailureDetail, assertNotificationJobs, verifiedJobOutput, type NotificationJob } from "../src/job-notification-state.ts";
 const job = (patch: Partial<NotificationJob> = {}): NotificationJob => ({ id: "job", kind: "transcription", meetingId: "meeting", meetingTitle: "会議A", operationId: "operation", inputHash: "b".repeat(64), specHash: "a".repeat(64), state: "queued", createdAt: 100, updatedAt: 100, attempt: 1, retryOfJobId: null, completedUnits: 0, totalUnits: 2, errorCode: null, pauseReason: null, outputAnalysisId: null, outputMinutesId: null, ...patch });
 test("direct Markdown success needs an exact receipt and never announces a candidate",()=>{
   const tracker=new JobNotificationTracker(50);tracker.ingest([job({kind:"minutes_generation"})]);
@@ -105,4 +105,10 @@ test("saved minutes have a success notice without a format warning", () => {
   assert.equal(event.message, "「会議A」の議事録を保存しました");
   assert.equal(tracker.confirmOutput(done, "markdown"), null);
   assert.throws(() => verifiedJobOutput(done, { ...proof, job: { ...done, meetingId: "foreign" } }));
+});
+
+test("retained transcription quality failure explains why no result was adopted", () => {
+  assert.match(jobFailureDetail("transcription_quality_failed"), /反復が残ったため停止/);
+  assert.match(jobFailureDetail("transcription_quality_failed"), /採用していません/);
+  assert.equal(jobFailureDetail("engine_failed"), "engine_failed");
 });

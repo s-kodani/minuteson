@@ -8,10 +8,12 @@ import {InputLevelMeter,useRecordingLevels} from "./input-levels";
 import {RecordingWriteStatus} from "./recording-write-status";
 import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
+import {SpeakerCountSelect} from "./speaker-count-select";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
+export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onSpeakerCounts,onStart,onStop,onBack,onSettings,onConfirmResult,inputs,activeMicrophone,test,notices}:{
   preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onBack:()=>void;onSettings:()=>void;onConfirmResult:()=>void;
+  onSpeakerCounts:(counts:RecordingPreparation["speakerCounts"])=>void;
   inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;notices:ReactNode;
 }){
   const titleField=useRef<HTMLInputElement>(null);
@@ -50,6 +52,13 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       <InfoPopover label="録音後の解析" details={<p>音声の保存が完了してから文字起こしと話者分離を進めます。準備済みモデルがない場合も音声を保持し、モデル準備後に解析できます。</p>}>解析は録音の保存完了後に行います。</InfoPopover>
     </>:<>
       {inputs}
+      {preparation&&<>
+        <div className="speaker-count-fields">
+          <SpeakerCountSelect label="マイクの話者数" value={preparation.speakerCounts.mic} disabled={locked||preparation.submitted} onChange={mic=>onSpeakerCounts({...preparation.speakerCounts,mic})}/>
+          <SpeakerCountSelect label="PC音声の話者数" value={preparation.speakerCounts.system} disabled={locked||preparation.submitted} onChange={system=>onSpeakerCounts({...preparation.speakerCounts,system})}/>
+        </div>
+        <p>録音終了後の話者分離に使います。人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。各音声に実際に入る人数を指定してください。</p>
+      </>}
       {test}
       <p>録音とAIモデルの準備は別です。モデル未準備でも録音できます。音声保存後の解析にはモデルの準備が必要です。</p>
       <button type="button" className="small-secondary" disabled={locked} onClick={onSettings}>AIモデルの設定を開く</button>

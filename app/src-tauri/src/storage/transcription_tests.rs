@@ -6,6 +6,8 @@ use crate::transcription::{
     RetryRequest,
 };
 use std::os::unix::fs::PermissionsExt;
+#[path = "transcription_tests/guard_tests.rs"]
+mod guard_tests;
 #[path = "transcription_tests/known_tests.rs"]
 pub(crate) mod known_tests;
 
@@ -64,6 +66,7 @@ pub(crate) fn fixture(root: &Path, seconds: i64) -> (Storage, String, WhisperCon
         executable: Fingerprint::capture(&cli_path, &crate::test_support::never_cancelled).unwrap(),
         model: Fingerprint::capture(&model_path, &crate::test_support::never_cancelled).unwrap(),
         vad_model: None,
+        vad_options: None,
         threads: 1,
         use_gpu: false,
         prompt: "点検日".into(),
@@ -381,7 +384,7 @@ fn registered_vocabulary_reaches_cli_as_a_fixed_argument_without_text_substituti
         .unwrap()
         .to_string();
     assert_eq!(spec.parameters["schemaVersion"], 2);
-    assert_eq!(spec.parameters["recognitionPolicy"], "suppressNonSpeechV1");
+    assert_eq!(spec.parameters["recognitionPolicy"], "guardedVocabularyV2");
     assert_eq!(
         spec.parameters.get("accelerationPolicy"),
         cfg!(target_os = "macos").then_some(&serde_json::json!("autoMetalV1"))
@@ -934,4 +937,79 @@ fn real_whisper_worker_persists_output_checkpoint_and_candidate() {
         .utterances
         .is_empty());
     eprintln!("real whisper.cpp worker integration: {} verified utterances, 1 durable unit, candidate adopted manually; cancelled job retried with all result assets reused and current edits preserved", view.utterances.len());
+}
+
+#[test]
+fn resident_transcription_keeps_durable_units_across_cold_resume() {
+    use crate::local_engine::resident::tests::{fixture as worker_fixture, Admission};
+    let script = r#"import sys,json,os,pathlib
+for line in sys.stdin:
+ r=json.loads(line)
+ if r['op']=='shutdown': break
+ if r['op']=='init':
+  print(json.dumps({'protocol':1,'id':r['id'],'op':'ready'}),flush=True);continue
+ args=r['args']; model=args[args.index('--model')+1]
+ root=pathlib.Path(__file__).parent.parent.parent
+ with (root/'calls').open('a') as f: f.write(str(os.getpid())+' '+r['directory']+'\n')
+ result={'model':{'multilingual':True},'params':{'model':model,'language':'ja','translate':False},'transcription':[{'offsets':{'from':2500,'to':3000},'text':'点検日です'}]}
+ pathlib.Path(r['directory'],'result.json').write_text(json.dumps(result))
+ print(json.dumps({'protocol':1,'id':r['id'],'op':'done'}),flush=True)
+"#;
+    let (_tmp, root, snapshot) = worker_fixture(script);
+    let (storage, meeting, config) = fixture(&root, 124);
+    let job;
+    {
+        let _admission = Admission::enter(snapshot.clone());
+        job = enqueue(
+            &storage,
+            &meeting,
+            "resident-cold",
+            config.clone(),
+            "standard",
+        )
+        .unwrap();
+    }
+    let saved_spec = storage.fixed_job_input(&job.id).unwrap().0;
+    assert_eq!(
+        saved_spec.parameters["residentRuntime"],
+        serde_json::to_value(&snapshot).unwrap()
+    );
+    // The same operation preserves its frozen runtime even without admission override.
+    assert_eq!(
+        enqueue(&storage, &meeting, "resident-cold", config, "standard")
+            .unwrap()
+            .id,
+        job.id
+    );
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &job.id, &|| false, &|j| {
+        if j.completed_units == 1 && j.state == "running" {
+            storage.request_job_pause(&job.id, "user").unwrap();
+        }
+    })
+    .unwrap()
+    .is_none());
+    assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 1);
+    let saved = storage.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0].clone();
+    let calls = root.join("calls");
+    assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 1);
+    drop(storage);
+    let storage = Storage::open(root.clone()).unwrap();
+    storage.resume_job(&job.id).unwrap();
+    storage.acquire_next_job().unwrap().unwrap();
+    assert!(process(&storage, &job.id, &|| false, &|_| {})
+        .unwrap()
+        .is_some());
+    assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
+    assert_eq!(
+        storage.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0],
+        saved
+    );
+    let history = std::fs::read_to_string(&calls).unwrap();
+    let lines: Vec<_> = history.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_ne!(
+        lines[0].split_whitespace().next(),
+        lines[1].split_whitespace().next()
+    );
 }

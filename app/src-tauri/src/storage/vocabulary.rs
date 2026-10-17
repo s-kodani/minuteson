@@ -223,15 +223,50 @@ pub(super) fn verify_saved_books(connection: &Connection) -> Result<(), String> 
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn compile(entries: &[FixedEntry], extra: &str) -> Result<String, String> {
+    compile_method(entries, extra, "whisper-initial-prompt-v1")
+}
+
+pub(super) fn compile_method(
+    entries: &[FixedEntry],
+    extra: &str,
+    method: &str,
+) -> Result<String, String> {
     let mut prompt = extra.to_owned();
     if !entries.is_empty() {
         if !prompt.is_empty() {
             prompt.push('\n');
         }
-        prompt.push_str("会議の用語（表記・読みの認識ヒント。無条件な本文置換ではありません）: ");
-        let terms:Vec<_> = entries.iter().map(|e|serde_json::json!({"term":e.entry.term,"reading":e.entry.reading,"note":e.entry.note})).collect();
-        prompt.push_str(&serde_json::to_string(&terms).map_err(|e| e.to_string())?);
+        match method {
+            "whisper-initial-prompt-v1" => {
+                prompt.push_str(
+                    "会議の用語（表記・読みの認識ヒント。無条件な本文置換ではありません）: ",
+                );
+                let terms:Vec<_> = entries.iter().map(|e|serde_json::json!({"term":e.entry.term,"reading":e.entry.reading,"note":e.entry.note})).collect();
+                prompt.push_str(&serde_json::to_string(&terms).map_err(|e| e.to_string())?);
+            }
+            "whisper-vocabulary-v2" => {
+                for (index, item) in entries.iter().enumerate() {
+                    if index > 0 {
+                        prompt.push('\n');
+                    }
+                    prompt.push_str(&item.entry.term);
+                    if let Some(reading) = &item.entry.reading {
+                        prompt.push('（');
+                        prompt.push_str(reading);
+                        prompt.push('）');
+                    }
+                }
+            }
+            _ => return Err("未対応の用語ヒント方式です".into()),
+        }
+    }
+    if !matches!(
+        method,
+        "whisper-initial-prompt-v1" | "whisper-vocabulary-v2"
+    ) {
+        return Err("未対応の用語ヒント方式です".into());
     }
     if prompt.chars().count() > 8000 || prompt.contains('\0') {
         return Err("登録用語と今回のヒントを合わせた入力が8000文字を超えるか不正です。用語を省略せず停止しました。不要な用語を無効にしてください".into());
@@ -258,7 +293,6 @@ impl VocabularySnapshot {
         if items.len() > 1000
             || self.schema_version != 1
             || Uuid::parse_str(&self.id).is_err()
-            || self.method != "whisper-initial-prompt-v1"
             || self.stamp.global_version < 0
             || self.stamp.meeting_version < 0
             || self.entries.iter().any(|e| {
@@ -266,7 +300,8 @@ impl VocabularySnapshot {
                     || e.entry_version <= 0
                     || !e.entry.enabled
             })
-            || self.actual_prompt != compile(&self.entries, &self.extra_prompt)?
+            || self.actual_prompt
+                != compile_method(&self.entries, &self.extra_prompt, &self.method)?
             || self.content_hash != self.digest()?
         {
             return Err("固定用語ヒントの形式・内容ハッシュが不正です".into());
@@ -420,9 +455,9 @@ impl Storage {
                 id: Uuid::new_v4().to_string(),
                 meeting_id: meeting.into(),
                 stamp,
-                actual_prompt: compile(&entries, extra)?,
+                actual_prompt: compile_method(&entries, extra, "whisper-vocabulary-v2")?,
                 entries,
-                method: "whisper-initial-prompt-v1".into(),
+                method: "whisper-vocabulary-v2".into(),
                 extra_prompt: extra.into(),
                 content_hash: String::new(),
             };

@@ -190,11 +190,14 @@ impl AnalysisController {
                             &stopping,
                             &|job| emit(app, job),
                         ),
-                        "diarization" => crate::diarization::process(
+                        "diarization" => crate::diarization::process_observed(
                             &app.state::<Storage>(),
                             &job.id,
                             &stopping,
                             &|job| emit(app, job),
+                            &|runtime| {
+                                let _ = app.emit("diarization-runtime-progress", runtime);
+                            },
                         ),
                         _ => Err("未対応の解析工程です".into()),
                     };
@@ -219,6 +222,13 @@ impl AnalysisController {
                                     "diarization" => "diarization_failed",
                                     "voice_registration" | "voice_matching" => {
                                         "voice_processing_failed"
+                                    }
+                                    "transcription"
+                                        if error.starts_with(
+                                            crate::transcription::QUALITY_FAILURE_PREFIX,
+                                        ) =>
+                                    {
+                                        "transcription_quality_failed"
                                     }
                                     _ => "transcription_failed",
                                 }),

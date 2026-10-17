@@ -116,7 +116,9 @@ pub(crate) async fn start_model_download(
             let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("model-downloads");
             let mut last = None::<std::time::Instant>;
             let bundled = app.path().resource_dir().map_err(|e| e.to_string())?.join("asr-runtime");
-            let receipt = crate::model_download::download_with_bundle(&root, &bundled, &operation, &recipe, &expected_recipe_hash, &|| cancelled(), &mut |received, total| {
+            let reuse_root = root.parent().ok_or("モデル管理領域がありません")?.join("models");
+            let reusable = app.state::<crate::storage::Storage>().list_model_placements()?;
+            let receipt = crate::model_download::download_with_bundle_reuse(&root, &bundled, Some((&reuse_root, &reusable)), &operation, &recipe, &expected_recipe_hash, &|| cancelled(), &mut |received, total| {
                 if received == 0 || received == total || last.is_none_or(|time| time.elapsed().as_millis() >= 200) {
                     last = Some(std::time::Instant::now());
                     // Progress is informational, never a success receipt. Lost

@@ -252,6 +252,50 @@ def asr_module():
     return runtime
 
 
+WORKER_NAMES = ("mon-whisper-worker", "mon-llama-worker", "mon-sherpa-worker")
+
+def verify_inference_runtime(app, team=None):
+    root = private_path(app / "Contents/Resources/inference-runtime", directory=True)
+    index_file = private_path(root / "runtime-index.json")
+    if index_file.stat().st_size > 65536:
+        raise ValueError("worker index exceeds the metadata limit")
+    index = json.loads(index_file.read_text())
+    if not isinstance(index, list) or len(index) != 3:
+        raise ValueError("worker index is incomplete")
+    expected = dict(zip(("whisper", "llama", "sherpa"), WORKER_NAMES))
+    if {item.get("engine") for item in index} != set(expected):
+        raise ValueError("worker index engines differ")
+    runtime = asr_module()
+    for item in index:
+        if (set(item) != {"protocol", "engine", "name", "bytes", "sha256"}
+                or item["protocol"] != 1 or item["name"] != expected[item["engine"]]):
+            raise ValueError("worker identity is invalid")
+        binary = private_path(root / item["name"])
+        if binary.stat().st_size != item["bytes"] or digest(binary) != item["sha256"]:
+            raise ValueError("worker bytes differ from the fixed index")
+        runtime.verify_binary(binary)
+        if team is not None:
+            policy = "embedding.plist" if item["engine"] == "sherpa" else "main.plist"
+            verify_signature(binary, team, runtime=True,
+                             entitlements=REPOSITORY / "app/src-tauri/release-entitlements" / policy)
+    for notice in ("whisper-MIT.txt", "llama-MIT.txt", "nlohmann-MIT.txt", "sherpa-Apache-2.0.txt", "build-info.json"):
+        if not private_path(root / notice).stat().st_size:
+            raise ValueError("worker provenance or license notice is missing")
+    return index
+
+def sign_inference_runtime(app, identity, team, policy):
+    index = verify_inference_runtime(app)
+    root = app / "Contents/Resources/inference-runtime"
+    for item in index:
+        binary = root / item["name"]
+        sign(binary, identity, team, policy / ("embedding.plist" if item["engine"] == "sherpa" else "main.plist"))
+        item["bytes"], item["sha256"] = binary.stat().st_size, digest(binary)
+    # Final signed bytes are the identities frozen into future jobs. This runs
+    # only in the private release copy, before sealing the enclosing app.
+    (root / "runtime-index.json").write_text(json.dumps(index, indent=2) + "\n")
+    return verify_inference_runtime(app, team)
+
+
 def sign_asr_runtime(app, identity, team, policy):
     """Reseal the CLI in our copied, not-yet-signed app; never change the cache."""
     credentials(identity, team, None)
@@ -349,8 +393,10 @@ def build(output, identity, team, profile, environment):
         capture, embedding = layout(app, version)
         verify_notices(app)
         verify_asr_runtime(app)
+        verify_inference_runtime(app)
         started = time.monotonic()
         sign_asr_runtime(app, identity, team, policy)
+        sign_inference_runtime(app, identity, team, policy)
         sign(capture, identity, team, policy / "capture.plist")
         sign(embedding, identity, team, policy / "embedding.plist")
         sign(app, identity, team, policy / "main.plist")
@@ -384,6 +430,7 @@ def build(output, identity, team, profile, environment):
         verify_signature(dmg, team, runtime=False)
         dependency_notices = verify_notices(app)
         asr_runtime = verify_asr_runtime(app, team)
+        verify_inference_runtime(app, team)
         # Only this newly-created cache is reclaimed, after all owned commands
         # have returned and final artifacts are verified. Failures preserve it.
         now = cache.lstat()

@@ -16,17 +16,21 @@ use std::time::{Duration, Instant};
 pub(crate) struct ImportOptions {
     pub meeting_vocabulary: Vec<crate::storage::VocabularyEntry>,
     pub expected_global_version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_speakers: Option<u32>,
 }
 impl Default for ImportOptions {
     fn default() -> Self {
         Self {
             meeting_vocabulary: vec![],
             expected_global_version: None,
+            num_speakers: None,
         }
     }
 }
 impl ImportOptions {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        crate::storage::recordings::SpeakerCounts::validate_count(self.num_speakers)?;
         if self.expected_global_version.is_some_and(|v| v < 0) {
             return Err("取り込みの用語版が不正です".into());
         }

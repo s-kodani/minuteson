@@ -1,3 +1,6 @@
+import { VadSettings } from "./vad-settings";
+import { checkedVadOptions, defaultVadOptions, type VadOptions } from "./vad-state";
+import type { AnalysisPreferences, EnginePreferences } from "./analysis-state";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
@@ -15,11 +18,14 @@ let unresolved: Pending | null = null;
 // A confirmed download is reusable after navigation. No automatic retry or
 // fresh download replaces an uncertain writer or a retained download receipt.
 const downloads = new Map<string, DownloadReceipt>();
+const automaticMergeChoices = [{value:500,label:"従来（分けやすい）"},{value:900,label:"ややまとめる"},{value:1100,label:"まとめる"},{value:1300,label:"強くまとめる"},{value:1500,label:"さらに強くまとめる"}];
 const engines = [{ engine: "whisper.cpp", label: "文字起こし" }, { engine: "sherpa-onnx", label: "話者分離" }, { engine: "llama.cpp", label: "議事録生成" }];
 export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, visible = true, stopRequested }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; compact?: boolean; visible?: boolean; stopRequested?: boolean }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
+  const [whisperPreferences, setWhisperPreferences] = useState<EnginePreferences | null>(null);
   const [selection, setSelection] = useState<Record<string, string>>({});
   const [cpuThreads, setCpuThreads] = useState<number | null>(null), [threadChoice, setThreadChoice] = useState("");
+  const [clusterThreshold, setClusterThreshold] = useState<number | null>(null), [thresholdChoice, setThresholdChoice] = useState("");
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [pending, setPending] = useState<Pending | null>(unresolved);
   const [target, setTarget] = useState("ローカルAI"), [transfer, setTransfer] = useState<TransferProgress | null>(null);
   const [waitingToken, setWaitingToken] = useState<string | null>(null);
@@ -60,14 +66,28 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   const profileId = profiles.find(item => item.name === "standard")?.id;
   useEffect(() => {
     let active = true;
-    setCpuThreads(null);
+    setCpuThreads(null); setClusterThreshold(null);
     if (visible && isTauri() && selectedDiarization) void invoke<{ lockVersion: number; payload: DiarizationPreferences }>("get_diarization_preferences").then(value => {
       const threads = value?.payload?.standard?.threads;
       if (!Number.isInteger(threads) || threads < 1 || threads > 64) throw Error("話者分離のCPU使用量を確認できません。");
-      if (active) { setCpuThreads(threads); setThreadChoice(String(threads)); }
+      const threshold = value?.payload?.standard?.clusterThresholdMilli;
+      if (!Number.isInteger(threshold) || threshold < 0 || threshold > 2000) throw Error("自動の話者統合の強さを確認できません。");
+      if (active) { setCpuThreads(threads); setThreadChoice(String(threads)); setClusterThreshold(threshold); setThresholdChoice(String(threshold)); }
     }).catch(cause => { if (active) setError(String(cause)); });
     return () => { active = false; };
   }, [visible, profileId, selectedDiarization?.packageId]);
+  const selectedWhisper = profiles.find(item => item.name === "standard")?.components.find(item => item.engine === "whisper.cpp");
+  useEffect(() => {
+    let active = true;
+    setWhisperPreferences(null);
+    if (visible && isTauri() && selectedWhisper) void invoke<{ payload: AnalysisPreferences }>("get_analysis_preferences").then(value => {
+      const preferences = value?.payload?.standard;
+      if (!preferences || !(preferences.vadModelPath === null || typeof preferences.vadModelPath === "string")) throw Error("VAD設定を確認できません。");
+      if (preferences.vadOptions !== undefined) checkedVadOptions(preferences.vadOptions);
+      if (active) setWhisperPreferences(preferences);
+    }).catch(cause => { if (active) setError(String(cause)); });
+    return () => { active = false; };
+  }, [visible, profileId, selectedWhisper?.packageId]);
   useEffect(() => { if (mustStop && unresolved) void invoke("cancel_model_inspection", { token: unresolved.token }).catch(() => {}); }, [mustStop]);
   const run = async (label: string, action: () => Promise<void>) => {
     if (running.current || locked || blocked.current || !isTauri()) return;
@@ -89,7 +109,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     const lifetime = assertDownloadLifetime(await invoke("get_model_download_lifetime", { token }));
     if (lifetime.active || !lifetime.cancelled) throw Error("準備の停止完了を待っています。");
   };
-  const apply = async (entry: ModelPlacementEntry, diarizationThreads?: number) => {
+  const apply = async (entry: ModelPlacementEntry, diarizationThreads?: number, diarizationClusterThresholdMilli?: number, whisperVadOptions?: VadOptions) => {
     if (!canReviewApplication(entry)) {
       await step("check", async token => {
         const result = await invoke<ModelCompatibilitySummary>("check_model_compatibility", { token, packageId: entry.packageId, expectedReviewHash: entry.reviewHash });
@@ -103,13 +123,14 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     }
     const current = (await load()).catalog.find(item => item.name === "standard")!;
     const preview = await step("preview", async token => {
-      const value = await invoke<ModelApplicationPreview>("preview_model_profile_application", { token, profile: "standard", packageId: entry.packageId, expectedReviewHash: entry.reviewHash, checkOperationId: entry.compatibility!.operationId, ...(diarizationThreads === undefined ? {} : { diarizationThreads }) });
-      assertApplicationPreview(value, entry, "standard", current, diarizationThreads); return value;
+      const value = await invoke<ModelApplicationPreview>("preview_model_profile_application", { token, profile: "standard", packageId: entry.packageId, expectedReviewHash: entry.reviewHash, checkOperationId: entry.compatibility!.operationId, ...(whisperVadOptions === undefined ? {} : { whisperVadOptions }), ...(diarizationThreads === undefined ? {} : { diarizationThreads }), ...(diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli }) });
+      assertApplicationPreview(value, entry, "standard", current, diarizationThreads, diarizationClusterThresholdMilli, whisperVadOptions); return value;
     }, { entry });
     await step("apply", async token => {
       const value = await invoke<ModelProfileView>("apply_model_profile_application", { token, preview });
       assertApplicationResult(value, token, preview);
-      if (diarizationThreads !== undefined) assertAppliedPreferences(await invoke("get_diarization_preferences"), preview);
+      if (diarizationThreads !== undefined || diarizationClusterThresholdMilli !== undefined) assertAppliedPreferences(await invoke("get_diarization_preferences"), preview);
+      if (whisperVadOptions !== undefined) assertAppliedPreferences(await invoke("get_analysis_preferences"), preview);
       return value;
     }, { entry, preview });
   };
@@ -188,11 +209,12 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       if (result.receipt?.placementRecorded && !current.placed.some(item => item.packageId === value.token && item.reviewHash === download.report.reviewHash && item.placementRecorded && item.bodyRemoved !== true)) throw Error("取り込み結果と現在のモデルが一致しません。");
     }
     if (value.stage === "apply" && value.entry && current.catalog.find(item => item.name === "standard")?.components.some(item => item.packageId === value.entry?.packageId && item.checkOperationId === value.preview?.checkOperationId && item.settingsMatch && item.compatibilityCurrent)) {
-      if (value.preview?.diarizationThreads !== undefined) {
+      if (value.preview && (value.preview.diarizationThreads !== undefined || value.preview.diarizationClusterThresholdMilli !== undefined)) {
         const profile = current.catalog.find(item => item.name === "standard");
         if (profile?.id === value.token) assertAppliedPreferences(await invoke("get_diarization_preferences"), value.preview);
         else if (profile?.id !== value.preview.expectedProfileId) throw Error("話者分離の設定が別の操作で変更されています。現在の設定を確認してください。");
       }
+      if (value.preview?.whisperVadOptions !== undefined && current.catalog.find(item => item.name === "standard")?.id === value.token) assertAppliedPreferences(await invoke("get_analysis_preferences"), value.preview);
       const entry = value.entry;
       if (mounted.current) setSelection(selection => ({ ...selection, [entry.engine]: entry.packageId }));
     }
@@ -215,11 +237,21 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
       const value = choice?.value ?? "";
       const entry = choice?.entry;
       const available = !!entry;
+      const needsVad = engine === "whisper.cpp" && !entry && !!choice?.packageIds.some(id => entries.find(e => e.packageId === id)?.modelFiles?.some(f => f.role === "asr")) && !!choice?.option?.review.manifest.files.some(f => f.role === "vad");
       return <div className="model-selection-row" key={engine}><label>{label}<select aria-label={label + "のモデル"} value={value} disabled={disabled} onChange={event => setSelection(current => ({ ...current, [engine]: event.target.value }))}>
         <option value="">モデルを選択</option>
         {choices.map(item => <option key={item.value} value={item.value} disabled={!item.option && !!item.entry && item.entry.sourceType !== "download" && !canReviewApplication(item.entry)}>{item.label}</option>)}
-      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || !!entry && used?.packageId === entry.packageId && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{available ? "使用" : "ダウンロードして使用"}</button></div>;
+      </select></label><button type="button" disabled={disabled || !value || !!entry && entry.sourceType !== "download" && !canReviewApplication(entry) || !!entry && used?.packageId === entry.packageId && used.settingsMatch && used.compatibilityCurrent} onClick={() => void useModel(engine, value)}>{needsVad ? "VADを追加して使用" : available ? "使用" : "ダウンロードして使用"}</button></div>;
     })}</div>
+    {selectedWhisper && whisperPreferences && <VadSettings
+      value={whisperPreferences.vadOptions ?? { ...defaultVadOptions, enabled: !!whisperPreferences.vadModelPath }}
+      available={!!whisperPreferences.vadModelPath}
+      disabled={disabled || !selectedWhisper.settingsMatch || !selectedWhisper.compatibilityCurrent}
+      onApply={options => void run("VAD設定を保存しています", async () => {
+        const entry = entries.find(item => item.packageId === selectedWhisper.packageId);
+        if (!entry || !canReviewApplication(entry)) throw Error("使用中の文字起こしモデルを確認できません。");
+        setTarget("発話区間検知（VAD）"); await apply(entry, undefined, undefined, options);
+      })} />}
     {selectedDiarization && <div className="diarization-performance">
       <div className="model-selection-row"><label>話者分離のCPU使用量<select aria-label="話者分離のCPU使用量" value={threadChoice} disabled={disabled || cpuThreads === null} onChange={event => setThreadChoice(event.target.value)}>
         {cpuThreads !== null && ![4, 8].includes(cpuThreads) && <option value={cpuThreads}>現在の設定（{cpuThreads}スレッド）</option>}
@@ -230,6 +262,15 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
         setTarget("話者分離"); await apply(entry, Number(threadChoice));
       })}>CPU使用量を適用</button></div>
       <p>同じモデルでCPUの使用量を調整します。変更は次に開始する処理から適用します。</p>
+      <div className="model-selection-row"><label>自動の話者統合<select aria-label="自動の話者統合" value={thresholdChoice} disabled={disabled || clusterThreshold === null} onChange={event => setThresholdChoice(event.target.value)}>
+        {clusterThreshold !== null && !automaticMergeChoices.some(choice => choice.value === clusterThreshold) && <option value={clusterThreshold}>現在の設定（{clusterThreshold / 1000}）</option>}
+        {automaticMergeChoices.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+      </select></label><button type="button" disabled={disabled || clusterThreshold === null || !thresholdChoice || Number(thresholdChoice) === clusterThreshold || !selectedDiarization.settingsMatch || !selectedDiarization.compatibilityCurrent} onClick={() => void run("自動の話者統合の強さを保存しています", async () => {
+        const entry = entries.find(item => item.packageId === selectedDiarization.packageId);
+        if (!entry || !canReviewApplication(entry)) throw Error("使用中の話者モデルを確認できません。");
+        setTarget("自動の話者統合"); await apply(entry, undefined, Number(thresholdChoice));
+      })}>統合の強さを適用</button></div>
+      <p>人数が「自動」のときのまとめやすさを調整します。強くすると話者の増えすぎを抑えられますが、別人を同じ話者にまとめる場合があります。次に開始する処理から適用します。</p>
     </div>}
     {!!inventory.length && <section className="model-inventory" aria-label="導入済みモデル"><h3>導入済みモデル</h3><ul>{inventory.map(({ entry: item, entries: group }) => <li key={item.packageId}><strong>{modelDisplayName(item, options)}</strong><span>{isRetired(item) ? "選択対象外" : selectedProfile?.components.some(component => group.some(entry => entry.packageId === component.packageId) && component.settingsMatch && component.compatibilityCurrent) ? "使用中" : "導入済み"}</span></li>)}</ul></section>}
     <ModelIssue label="モデルの準備" message={error} />

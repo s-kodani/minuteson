@@ -112,6 +112,7 @@ pub(crate) fn prepare(
         executable: capture(&w.executable_path)?,
         model: capture(&w.model_path)?,
         vad_model: w.vad_model_path.as_deref().map(capture).transpose()?,
+        vad_options: w.vad_options,
         threads: w.threads,
         use_gpu: w.use_gpu,
         prompt: String::new(),
@@ -130,6 +131,7 @@ pub(crate) fn prepare(
         window_shift_milli: d.window_shift_milli,
         min_duration_on_ms: d.min_duration_on_ms,
         min_duration_off_ms: d.min_duration_off_ms,
+        speech_sensitivity_milli: d.speech_sensitivity_milli,
     };
     whisper.verify(cancelled)?;
     sherpa.verify(cancelled)?;
@@ -202,7 +204,12 @@ fn step(
             .map(Some)
     };
     if flow.stage == "pending" {
-        let plan = prepare(storage, &flow.profile, cancelled)?;
+        let mut plan = prepare(storage, &flow.profile, cancelled)?;
+        let input = storage.recorded_analysis_input(&flow.meeting_id)?.0;
+        plan.speaker_counts = storage.initial_speaker_counts(&flow.meeting_id, &input.tracks)?;
+        if !plan.speaker_counts.is_empty() {
+            plan.speaker_counts_manifest = Some(input.manifest_hash);
+        }
         return save(
             "transcription",
             Some(serde_json::to_value(plan).map_err(|e| e.to_string())?),

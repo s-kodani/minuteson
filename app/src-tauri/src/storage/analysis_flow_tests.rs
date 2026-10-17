@@ -38,6 +38,7 @@ pub(in crate::storage) fn fixture(root: &Path) -> (Storage, String) {
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     };
     let output = format!(
         "{}\nStarted\n0.000 -- 4.000 speaker_00\n",
@@ -85,6 +86,7 @@ fn imported_meeting_uses_global_settings_not_import_profile() {
     let options = crate::audio_import::ImportOptions {
         meeting_vocabulary: vec![],
         expected_global_version: Some(0),
+        num_speakers: None,
     };
     let (import, _, _) =
         super::super::imports::tests::pending_configured(&s, "global-import", &options);
@@ -462,6 +464,7 @@ fn handoff_and_adoption_protect_existing_current_and_saved_edits() {
         executable_path: w.executable_path.into(),
         model_path: w.model_path.into(),
         vad_model_path: None,
+        vad_options: None,
         threads: 1,
         use_gpu: false,
         profile: "standard".into(),
@@ -539,6 +542,7 @@ fn unrelated_candidate_cannot_be_a_fixed_input_without_a_flow_and_original_check
         executable_path: w.executable_path.into(),
         model_path: w.model_path.into(),
         vad_model_path: None,
+        vad_options: None,
         threads: 1,
         use_gpu: false,
         profile: "standard".into(),
@@ -565,4 +569,120 @@ fn unrelated_candidate_cannot_be_a_fixed_input_without_a_flow_and_original_check
         .is_err());
     assert_eq!(s.list_jobs(&m).unwrap().len(), 1);
     assert!(s.load_current_analysis(&m).unwrap().is_none());
+}
+
+#[test]
+fn initial_import_speaker_count_survives_reopen_and_reaches_diarization() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, _) = fixture(root.path());
+    let cli = root.path().join("sherpa-cli");
+    let script = std::fs::read_to_string(&cli)
+        .unwrap()
+        .replace("num_clusters=-1", "num_clusters=5");
+    std::fs::write(&cli, script).unwrap();
+    let before = s.diarization_preferences().unwrap();
+    let options = crate::audio_import::ImportOptions {
+        num_speakers: Some(5),
+        ..Default::default()
+    };
+    let (import, _, _) =
+        super::super::imports::tests::pending_configured(&s, "initial-count", &options);
+    s.finalize_audio_import(&import.id).unwrap();
+    let m = import.meeting_id;
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    advance(&s);
+    let input = s.recorded_analysis_input(&m).unwrap().0;
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
+    assert_eq!(plan.speaker_counts.len(), 1);
+    assert_eq!(plan.speaker_counts[0].track_id, input.tracks[0].id);
+    assert_eq!(plan.speaker_counts[0].num_speakers, Some(5));
+    assert_eq!(plan.speaker_counts_manifest, Some(input.manifest_hash));
+    transcribe(&s);
+    advance(&s);
+    let job = s
+        .analysis_flow(&m)
+        .unwrap()
+        .unwrap()
+        .diarization_job
+        .unwrap();
+    assert_eq!(
+        s.fixed_job_input(&job.id).unwrap().0.parameters["diarization"]["tracks"][0]["numSpeakers"],
+        5
+    );
+    diarize(&s);
+    advance(&s);
+    assert_eq!(s.analysis_flow(&m).unwrap().unwrap().stage, "review");
+    assert!(s.load_current_analysis(&m).unwrap().is_some());
+    assert_eq!(s.diarization_preferences().unwrap().payload, before.payload);
+}
+
+#[test]
+fn initial_recording_speaker_counts_bind_each_track_after_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let (s, m) = fixture(root.path());
+    let audio_dir = PathBuf::from("meetings").join(&m).join("audio");
+    let system_path = audio_dir.join("system.caf");
+    std::fs::copy(
+        root.path().join(audio_dir.join("mic.caf")),
+        root.path().join(&system_path),
+    )
+    .unwrap();
+    let system_asset = s
+        .register_ready_meeting_asset(&m, &system_path, "audio/x-caf")
+        .unwrap();
+    {
+        let db = s.connection.lock().unwrap();
+        db.execute(
+            "UPDATE recording_sessions SET capture_config_json=?1 WHERE meeting_id=?2",
+            params![
+                serde_json::json!({"speakerCounts":{"mic":1,"system":5}}).to_string(),
+                m
+            ],
+        )
+        .unwrap();
+        db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) SELECT 'system-track',meeting_id,session_id,'system',format,sample_rate,channels,state,created_at,updated_at FROM audio_tracks WHERE meeting_id=?1", params![m]).unwrap();
+        db.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT 'system-chunk',meeting_id,'system-track',?2,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE meeting_id=?1", params![m,system_asset.id]).unwrap();
+    }
+    s.ensure_analysis_flow(&m).unwrap();
+    drop(s);
+    let s = Storage::open(root.path().into()).unwrap();
+    advance(&s);
+    let flow = s.analysis_flow(&m).unwrap().unwrap();
+    let plan = crate::analysis_flow::saved_plan(flow.plan.unwrap(), "standard").unwrap();
+    let input = s.recorded_analysis_input(&m).unwrap().0;
+    assert_eq!(plan.speaker_counts.len(), 2);
+    for track in &input.tracks {
+        assert_eq!(
+            plan.speaker_counts
+                .iter()
+                .find(|c| c.track_id == track.id)
+                .unwrap()
+                .num_speakers,
+            Some(if track.kind == "mic" { 1 } else { 5 })
+        );
+    }
+    assert_eq!(plan.speaker_counts_manifest, Some(input.manifest_hash));
+    transcribe(&s);
+    advance(&s);
+    let job = s
+        .analysis_flow(&m)
+        .unwrap()
+        .unwrap()
+        .diarization_job
+        .unwrap();
+    let fixed = s.fixed_job_input(&job.id).unwrap().0;
+    for track in &input.tracks {
+        let count = fixed.parameters["diarization"]["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["trackId"] == track.id)
+            .unwrap();
+        assert_eq!(
+            count["numSpeakers"],
+            if track.kind == "mic" { 1 } else { 5 }
+        );
+    }
 }

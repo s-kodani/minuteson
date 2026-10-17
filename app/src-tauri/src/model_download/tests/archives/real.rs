@@ -115,14 +115,14 @@ fn real_whisper_hybrid_catalog_copy_cpu_and_test_owned_apply_with_reused_assets(
                 payload.join("notices/openai-whisper-MIT.txt")
             }
         },
-        4,
+        7,
         Some(bundle),
         None,
     );
 }
 
 #[test]
-#[ignore = "requires all four fixed Whisper assets, the app-owned runtime, and explicit synthetic CPU permission"]
+#[ignore = "requires all six fixed Whisper assets, the app-owned runtime, and explicit synthetic CPU permission"]
 fn real_all_whisper_variants_copy_cpu_and_apply_with_reused_assets() {
     all_whisper_trials(None);
 }
@@ -148,8 +148,10 @@ fn all_whisper_trials(voice: Option<&Path>) {
     let bundle_root = PathBuf::from(std::env::var("MON_QA_ASR_BUNDLE").expect("app runtime"));
     let payload =
         PathBuf::from(std::env::var("MON_QA_ASR_PAYLOAD").expect("small payload and notices"));
-    let extra =
-        PathBuf::from(std::env::var("MON_QA_EXTRA_MODELS").expect("fixed base and medium assets"));
+    let extra = PathBuf::from(
+        std::env::var("MON_QA_EXTRA_MODELS")
+            .expect("fixed base, medium, large-v3 and large-v3-turbo assets"),
+    );
     let tiny = PathBuf::from(std::env::var("MON_QA_ASR_TINY").expect("fixed tiny asset"));
     let choices = crate::model_bundled_runtime::Bundle::open(&bundle_root)
         .unwrap()
@@ -160,14 +162,23 @@ fn all_whisper_trials(voice: Option<&Path>) {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        ["tiny", "base", "small", "medium"]
+        [
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v3",
+            "large-v3-turbo"
+        ]
     );
     // Keep only one variant's staging and managed copies alive at a time.
     // Exercise the same recipe, placement and CPU admission for every variant.
     for (name, recipe) in choices {
         let model = match name.as_str() {
             "tiny" => tiny.clone(),
-            "base" | "medium" => extra.join(format!("ggml-{name}.bin")),
+            "base" | "medium" | "large-v3" | "large-v3-turbo" => {
+                extra.join(format!("ggml-{name}.bin"))
+            }
             "small" => payload.join("models/ggml-small.bin"),
             _ => panic!("unexpected Whisper variant"),
         };
@@ -188,7 +199,7 @@ fn all_whisper_trials(voice: Option<&Path>) {
                     payload.join("notices/openai-whisper-MIT.txt")
                 }
             },
-            4,
+            7,
             Some(bundle),
             voice,
         );
@@ -212,6 +223,12 @@ fn trial_recipe(
         voice,
         None,
     );
+}
+
+fn vad_asset(url: &str) -> Option<PathBuf> {
+    if !url.contains("ggml-org/whisper-vad/") && !url.contains("snakers4/silero-vad/") { return None; }
+    let root=PathBuf::from(std::env::var("MON_QA_VAD_ASSETS").expect("fixed Silero VAD model and notices"));
+    Some(root.join(if url.ends_with(".bin") { "ggml-silero-v6.2.0.bin" } else if url.ends_with("README.md") { "silero-vad-model-card.md" } else { "silero-vad-MIT.txt" }))
 }
 
 // The opt-in native fixture uses the same staging, placement and CPU admission
@@ -279,7 +296,7 @@ fn trial_recipe_at(
                     .ok_or("同梱ファイルの事前照合がありません")?
                     .fetch(url, expected_size, expected_hash, output, cancelled);
             }
-            let path = local(url);
+            let path = vad_asset(url).unwrap_or_else(|| local(url));
             let mut source = Source::open(
                 path.parent().unwrap(),
                 path.file_name().unwrap().to_str().unwrap(),
@@ -453,7 +470,7 @@ fn trial_recipe_at(
         if entry.role == crate::model_inspection::Role::Notice && source.archive.is_none() {
             assert_eq!(
                 std::fs::read(models.join(&package).join(&entry.relative_path)).unwrap(),
-                std::fs::read(local(&source.url)).unwrap()
+                std::fs::read(vad_asset(&source.url).unwrap_or_else(||local(&source.url))).unwrap()
             );
         }
     }
@@ -657,6 +674,10 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                     small.clone()
                 } else if url.ends_with("ggml-medium.bin") {
                     extra.join("ggml-medium.bin")
+                } else if url.ends_with("ggml-large-v3.bin") {
+                    extra.join("ggml-large-v3.bin")
+                } else if url.ends_with("ggml-large-v3-turbo.bin") {
+                    extra.join("ggml-large-v3-turbo.bin")
                 } else if url.ends_with("README.md") {
                     payload.join("notices/whisper-model-card.md")
                 } else {
@@ -664,7 +685,7 @@ fn real_seed_stopped_abnormal_native_qa_with_reused_official_assets() {
                     payload.join("notices/openai-whisper-MIT.txt")
                 }
             },
-            4,
+            7,
             Some(bundle),
             None,
             Some((&meetings, &models, &storage)),
@@ -800,6 +821,7 @@ fn real_voiced_transcription(
         executable_path: engine.executable_path.clone().into(),
         model_path: engine.model_path.clone().into(),
         vad_model_path: engine.vad_model_path.clone().map(Into::into),
+        vad_options: engine.vad_options,
         threads: engine.threads,
         use_gpu: engine.use_gpu,
         profile: "standard".into(),

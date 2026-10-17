@@ -7,6 +7,8 @@ pub struct EnginePreferences {
     pub executable_path: String,
     pub model_path: String,
     pub vad_model_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_options: Option<crate::transcription::vad::VadOptions>,
     pub threads: u32,
     pub use_gpu: bool,
 }
@@ -17,6 +19,7 @@ impl Default for EnginePreferences {
             executable_path: String::new(),
             model_path: String::new(),
             vad_model_path: None,
+            vad_options: None,
             threads: 4,
             use_gpu: false,
         }
@@ -82,6 +85,7 @@ impl Storage {
 
 pub(super) fn validate(payload: &AnalysisPreferences) -> Result<(), String> {
     for engine in [&payload.standard, &payload.high_accuracy] {
+        if let Some(options) = engine.vad_options { options.validate()?; }
         if !(1..=64).contains(&engine.threads) {
             return Err("スレッド数は1～64で設定してください".into());
         }

@@ -492,6 +492,7 @@ impl RecorderController {
         meeting_id: &str,
         microphone_uid: Option<&str>,
         scope: &crate::capture_scope::CaptureScope,
+        speaker_counts: &crate::storage::recordings::SpeakerCounts,
     ) -> Result<RecordingSnapshot, String> {
         app.state::<Storage>().require_data_writable()?;
         let inputs = Self::inputs(app)?;
@@ -525,8 +526,12 @@ impl RecorderController {
             microphone_device_uid: microphone_uid.map(str::to_owned),
             target_application_identity: scope.application.clone(),
         };
-        let session =
-            storage.prepare_recording(meeting_id, &config, &Uuid::new_v4().to_string())?;
+        let session = storage.prepare_recording_with_speaker_counts(
+            meeting_id,
+            &config,
+            &Uuid::new_v4().to_string(),
+            speaker_counts,
+        )?;
         let relative = PathBuf::from("meetings")
             .join(meeting_id)
             .join("audio")

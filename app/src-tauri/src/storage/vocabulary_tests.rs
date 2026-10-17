@@ -169,7 +169,9 @@ fn vocabulary_snapshot_selection_is_immutable_idempotent_and_by_value() {
     assert_eq!(snapshot.entries[1].scope, "global");
     assert_eq!(snapshot.stamp, stamp);
     assert!(snapshot.actual_prompt.starts_with("追加\n"));
-    assert!(snapshot.actual_prompt.contains("会議別が優先"));
+    assert_eq!(snapshot.method, "whisper-vocabulary-v2");
+    assert_eq!(snapshot.actual_prompt, "追加\n点検日\nMON");
+    assert!(!snapshot.actual_prompt.contains("会議別が優先"));
     assert!(!snapshot.actual_prompt.contains("無効"));
     assert!(!snapshot.actual_prompt.contains("別会議だけ"));
     storage.save_vocabulary_book(None, 1, vec![]).unwrap();
@@ -317,4 +319,34 @@ fn vocabulary_snapshot_integrity_and_original_job_lineage_are_required() {
             "{change}"
         );
     }
+}
+
+#[test]
+fn vocabulary_v2_renders_terms_and_readings_while_legacy_snapshots_still_validate() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    let m = storage.create_meeting("用語方式の互換性").unwrap().id;
+    let mut e = entry("点検日");
+    e.reading = Some("てんけんび".into());
+    e.note = Some("本文に混入させない補足".into());
+    storage.save_vocabulary_book(None, 0, vec![e]).unwrap();
+    let job = enqueue_terms(&storage, &m, "v2", "追加ヒント", None).unwrap();
+    let spec = storage.fixed_job_input(&job.id).unwrap().0;
+    let mut snapshot: VocabularySnapshot =
+        serde_json::from_value(spec.parameters["vocabulary"].clone()).unwrap();
+    assert_eq!(snapshot.actual_prompt, "追加ヒント\n点検日（てんけんび）");
+    assert!(!snapshot.actual_prompt.contains("補足"));
+    snapshot.validate().unwrap();
+    snapshot.method = "whisper-initial-prompt-v1".into();
+    snapshot.actual_prompt =
+        super::vocabulary::compile(&snapshot.entries, &snapshot.extra_prompt).unwrap();
+    snapshot.content_hash = snapshot.digest().unwrap();
+    assert!(snapshot
+        .actual_prompt
+        .contains("無条件な本文置換ではありません"));
+    assert!(snapshot.actual_prompt.contains("本文に混入させない補足"));
+    snapshot.validate().unwrap();
+    snapshot.method = "unknown".into();
+    snapshot.content_hash = snapshot.digest().unwrap();
+    assert!(snapshot.validate().is_err());
 }

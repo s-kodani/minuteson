@@ -88,6 +88,9 @@ fn fingerprint(proof: &Fingerprint) -> Result<(), String> {
 }
 
 fn validate(parameters: &Parameters) -> Result<&KnownInput, String> {
+    if let Some(runtime) = &parameters.resident_runtime {
+        runtime.accepts("sherpa")?;
+    }
     let known = parameters
         .known_input
         .as_ref()
@@ -190,6 +193,12 @@ pub(crate) fn enqueue(
         &source.manifest_hash,
     )?;
     let mut parameters = Parameters {
+        resident_runtime: crate::local_engine::resident::prepare_job(
+            storage,
+            &request.meeting_id,
+            &request.operation_id,
+            "sherpa",
+        )?,
         source,
         engine,
         tracks,
@@ -540,14 +549,29 @@ pub(super) fn load_output(
     Ok(result)
 }
 
+#[cfg(test)]
 pub(super) fn process(
     storage: &Storage,
     job_id: &str,
     stopping: &impl Fn() -> bool,
     progress: &impl Fn(JobSnapshot),
 ) -> Result<Option<String>, String> {
+    process_observed(storage, job_id, stopping, progress, &|_| {})
+}
+
+pub(super) fn process_observed(
+    storage: &Storage,
+    job_id: &str,
+    stopping: &impl Fn() -> bool,
+    progress: &impl Fn(JobSnapshot),
+    runtime_progress: &impl Fn(super::runtime::Progress),
+) -> Result<Option<String>, String> {
     let (spec, raw) = storage.fixed_job_input(job_id)?;
     let parameters = checked_parameters(storage, &spec, job_id)?;
+    let _resident = crate::local_engine::resident::Scope::enter(
+        storage.root(),
+        parameters.resident_runtime.as_ref(),
+    )?;
     let job = storage.get_job(job_id)?;
     let mut checkpoint = checked_checkpoint(&job, raw)?;
     let cancelled = || {
@@ -583,17 +607,20 @@ pub(super) fn process(
                 return Err("変換した保存区間のフレームが一致しません".into());
             }
             let native_duration = (frames * 1_000_000 / 16000) as i64;
-            let Some(segments) = sherpa::run_track(
+            let observer = super::runtime::Observer::new(&job, index, runtime_progress);
+            let Some(segments) = sherpa::run_track_observed(
                 &runtime,
                 None,
                 &directory,
                 native_duration,
                 Duration::from_secs(24 * 3600),
                 &cancelled,
+                &|value| observer.emit(value, false),
             )?
             else {
                 return Ok(None);
             };
+            observer.emit(10_000, true);
             let wave = Fingerprint::capture(&wave_path, &cancelled)?;
             let mut features = Vec::new();
             for (feature_index, window) in support(&parameters, index, &segments, &cancelled)?
@@ -966,7 +993,8 @@ fn validate_restore(
     before: &Envelope,
     after: &Envelope,
 ) -> Result<(), String> {
-    if before.diarization.engine != after.diarization.engine
+    if before.diarization.resident_runtime != after.diarization.resident_runtime
+        || before.diarization.engine != after.diarization.engine
         || before.diarization.extractor != after.diarization.extractor
         || before.diarization.known_input != after.diarization.known_input
         || before.diarization.matching != after.diarization.matching

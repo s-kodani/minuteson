@@ -242,6 +242,7 @@ fn resolve_with_memory(
             Ok(Some(choice)) => return Ok(Some(choice)),
             Ok(None) => return Ok(None),
             Err(_) => {
+                crate::local_engine::resident::discard_trial();
                 // A CPU-only build or missing device cannot benefit from fewer
                 // layers. Retry only when this runtime actually selected Metal.
                 let log = std::fs::read_to_string(directory.join("stderr.log")).unwrap_or_default();

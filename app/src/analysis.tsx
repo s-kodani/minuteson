@@ -129,7 +129,9 @@ export function AnalysisPanel({ meetingId, meetingTitle, hasTranscript = false, 
   });
   const tools = <section className="analysis-card" aria-label="文字起こし操作">
     <h2>文字起こし</h2><p>全体設定のモデルを使います。完了した結果は発言一覧に保存します。</p>
+    {pending ? <p role="status">{flow?.stage === "diarization" ? "話者分離" : "文字起こし"}{!active ? "の開始を準備しています。" : active.state === "paused" ? "を一時停止しています。" : active.state === "interrupted" ? "が中断しています。" : active.state === "queued" ? "の開始を待っています。" : active.state === "pausing" ? "を停止しています。" : "中です。"}進捗は画面上部で確認できます。</p> : (
     <div className="speaker-count-fields">{countTracks.map(track=><label key={track.id}>{countTracks.length===1?"話者数":track.kind==="mic"?"マイクの話者数":"PC音声の話者数"}<select value={speakerCounts[track.id]??""} disabled={locked || busy || recordingActive || pending || !!regeneration.current} onChange={event=>setSpeakerCounts(current=>({...current,[track.id]:event.target.value}))}><option value="">自動</option>{Array.from({length:100},(_,i)=><option key={i+1} value={i+1}>{i+1}人</option>)}</select></label>)}</div>
+    )}
     <div className="analysis-actions">
       {flow?.replacementReady && <button type="button" disabled={locked || busy || recordingActive} onClick={() => void onReplaceGenerated(flow)}>生成結果に置き換える</button>}
       {!hasTranscript && (!flow || ["configuration", "attention"].includes(flow.stage) && !flow.replacementRequested) && <button type="button" disabled={locked || busy || recordingActive || !recorded} onClick={() => void (flow?.stage === "attention" ? regenerate() : run(async()=>{

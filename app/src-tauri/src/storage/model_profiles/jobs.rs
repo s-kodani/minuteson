@@ -92,6 +92,7 @@ impl Execution<'_> {
                 executable_path: path(&e.executable)?,
                 model_path: path(&e.model)?,
                 vad_model_path: e.vad_model.as_ref().map(path).transpose()?,
+                vad_options: e.vad_options,
                 threads: e.threads,
                 use_gpu: e.use_gpu,
             }),
@@ -110,6 +111,7 @@ impl Execution<'_> {
                     window_shift_milli: e.window_shift_milli,
                     min_duration_on_ms: e.min_duration_on_ms,
                     min_duration_off_ms: e.min_duration_off_ms,
+                    speech_sensitivity_milli: e.speech_sensitivity_milli,
                 })
             }
             Self::Llama(e, prompt_budget) => {
@@ -130,10 +132,16 @@ impl Execution<'_> {
     // has its own immutable vocabulary snapshot in the transcription job.
     fn configuration(&self) -> Value {
         match self {
-            Self::Whisper(e) => json!({"threads":e.threads,"useGpu":e.use_gpu}),
+            Self::Whisper(e) => {
+                let mut value = json!({"threads":e.threads,"useGpu":e.use_gpu});
+                if let Some(options) = e.vad_options { value["vadOptions"] = serde_json::to_value(options).unwrap(); }
+                value
+            },
             Self::Sherpa(e) => {
-                json!({"threads":e.threads,"clusterThresholdMilli":e.cluster_threshold_milli,
-                "windowShiftMilli":e.window_shift_milli,"minDurationOnMs":e.min_duration_on_ms,"minDurationOffMs":e.min_duration_off_ms})
+                let mut value = json!({"threads":e.threads,"clusterThresholdMilli":e.cluster_threshold_milli,
+                "windowShiftMilli":e.window_shift_milli,"minDurationOnMs":e.min_duration_on_ms,"minDurationOffMs":e.min_duration_off_ms});
+                if e.speech_sensitivity_milli != 0 { value["speechSensitivityMilli"] = json!(e.speech_sensitivity_milli); }
+                value
             }
             Self::Llama(e, b) => json!({"threads":e.threads,"contextTokens":e.context_tokens,
                 "predictionTokens":e.prediction_tokens,"gpuLayers":e.gpu_layers,"seed":e.seed,"promptBudget":b}),

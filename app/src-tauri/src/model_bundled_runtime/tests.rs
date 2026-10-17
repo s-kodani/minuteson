@@ -36,24 +36,24 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let catalog =
         serde_json::to_value(crate::model_official_catalog::options_with_bundle(&root).unwrap())
             .unwrap();
-    assert_eq!(catalog.as_array().unwrap().len(), 10);
+    assert_eq!(catalog.as_array().unwrap().len(), 12);
     assert_eq!(catalog[0]["label"], "Whisper tiny（多言語）");
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
-        catalog[4]["review"]["recipeHash"],
+        catalog[6]["review"]["recipeHash"],
         "e4aaf7c71da23a1cadc141d92208d6eac4274eb12fa1901383f7753234f210ba"
     );
     assert_eq!(
-        catalog[5]["review"]["recipeHash"],
+        catalog[7]["review"]["recipeHash"],
         "1389a2b0250673b9b01a534d65f112bdb48cdd40ea3e1d446de5798e7064baee"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
     assert_eq!(review.recipe_schema_version, 3);
-    assert_eq!(review.download_bytes, 487_606_226);
+    assert_eq!(review.download_bytes, 488_492_581);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
-    assert_eq!(review.total_bytes, 487_606_226 + 48);
+    assert_eq!(review.total_bytes, 488_492_581 + 48);
     assert!(!review.installed && !review.ready);
     assert_eq!(review.publisher_authenticity, "not_verified");
     let origin = recipe.origin(&uuid::Uuid::new_v4().to_string()).unwrap();
@@ -72,7 +72,20 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
     let (_temp, root, bytes, _) = fixture();
     let bundle = Bundle::open(&root).unwrap();
     let recipes = bundle.recipes().unwrap();
-    assert_eq!(recipes.len(), 4);
+    assert_eq!(
+        recipes
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v3",
+            "large-v3-turbo"
+        ]
+    );
     let mut hashes = std::collections::BTreeSet::new();
     for (name, recipe) in &recipes {
         bundle.bind(recipe).unwrap();
@@ -97,7 +110,28 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
             recipe.review().unwrap().bundled_bytes,
             Some(bytes.len() as u64)
         );
-        assert!(recipe.transfer_bytes().unwrap() < 2 * 1024 * 1024 * 1024);
+        assert!(recipe.transfer_bytes().unwrap() < 4 * 1024 * 1024 * 1024);
+        // In particular, large-v3 must survive review/IPC above the old 2 GiB cap.
+        let (size, sha) = match name.as_str() {
+            "large-v3" => (
+                3_095_033_483,
+                "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+            ),
+            "large-v3-turbo" => (
+                1_624_555_275,
+                "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+            ),
+            _ => (
+                model.expected_size.unwrap(),
+                model.expected_hash.as_deref().unwrap(),
+            ),
+        };
+        assert_eq!(model.expected_size, Some(size));
+        assert_eq!(model.expected_hash.as_deref(), Some(sha));
+        assert_eq!(Recipe::parse(&recipe.bytes().unwrap()).unwrap(), *recipe);
+        let review = recipe.review().unwrap();
+        assert_eq!(review.download_bytes, size + 4_259 + 886_355);
+        assert_eq!(review.total_bytes, size + 4_259 + 886_355 + 48);
         for shared in [
             "bin/whisper-cli",
             "notices/whisper-MIT.txt",
@@ -138,7 +172,7 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
             .unwrap();
     }
     assert!(bundle.recipe_for("tiny.en").is_err());
-    // The already shipped small recipe keeps its model provenance unchanged.
+    // The small ASR weights retain their original model provenance.
     let small = recipes.iter().find(|(name, _)| name == "small").unwrap();
     assert_eq!(small.1, bundle.recipe().unwrap());
 }

@@ -16,6 +16,7 @@ fn whisper(f: &Fixture) -> WhisperConfig {
         executable: capture(&p.executable_path),
         model: capture(&p.model_path),
         vad_model: p.vad_model_path.as_deref().map(capture),
+        vad_options: p.vad_options,
         threads: p.threads,
         use_gpu: p.use_gpu,
         prompt: String::new(),
@@ -41,6 +42,7 @@ fn sherpa(f: &Fixture) -> SherpaConfig {
         window_shift_milli: p.window_shift_milli,
         min_duration_on_ms: p.min_duration_on_ms,
         min_duration_off_ms: p.min_duration_off_ms,
+        speech_sensitivity_milli: p.speech_sensitivity_milli,
     }
 }
 fn llama(f: &Fixture) -> (LlamaConfig, usize) {
@@ -930,4 +932,85 @@ fn managed_jobs_diarization_and_minutes_runtime_reject_untracked_library_mutatio
             .join("executed.marker")
             .exists());
     }
+}
+
+#[test]
+fn automatic_merge_tuning_keeps_started_flow_conditions_and_new_jobs_use_new_threshold() {
+    let mut f = Fixture::new();
+    ready(&mut f);
+    f.storage.ensure_analysis_flow(&f.meeting).unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
+    let flow = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
+    let original = flow.plan.clone().unwrap();
+    let old = crate::analysis_flow::saved_plan(original.clone(), "standard").unwrap();
+    let package = f
+        .packages
+        .iter()
+        .find(|p| p.record.manifest.engine == Engine::Sherpa)
+        .unwrap();
+    let preview = crate::model_application::preview_with_tuning(
+        &f.storage,
+        &f.models(),
+        ProfileName::Standard,
+        &package.id,
+        &package.record.review_hash,
+        &package.check,
+        None,
+        Some(1300),
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    crate::model_application::apply(
+        &f.storage,
+        &f.models(),
+        &Uuid::new_v4().to_string(),
+        &preview,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let new = crate::analysis_flow::prepare(
+        &f.storage,
+        "standard",
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    assert_eq!(new.sherpa.cluster_threshold_milli, 1300);
+    let mut expected = old.sherpa.clone();
+    expected.cluster_threshold_milli = 1300;
+    assert_eq!(new.sherpa, expected);
+    assert_ne!(new.sherpa_managed, old.sherpa_managed);
+    f.storage.acquire_local_inference_job().unwrap().unwrap();
+    crate::transcription::process(
+        &f.storage,
+        &flow.transcription_job.unwrap().id,
+        &crate::test_support::never_cancelled,
+        &|_| {},
+    )
+    .unwrap()
+    .unwrap();
+    crate::analysis_flow::advance(&f.storage, &crate::test_support::never_cancelled, &|_| {})
+        .unwrap();
+    let next = f.storage.analysis_flow(&f.meeting).unwrap().unwrap();
+    assert_eq!(next.plan, Some(original));
+    let (spec, _) = f
+        .storage
+        .fixed_job_input(&next.diarization_job.unwrap().id)
+        .unwrap();
+    let frozen: SherpaConfig =
+        serde_json::from_value(spec.parameters["diarization"]["engine"].clone()).unwrap();
+    assert_eq!(frozen, old.sherpa);
+    let job = crate::diarization::enqueue(
+        &f.storage,
+        request(&f, &Uuid::new_v4().to_string()),
+        new.sherpa,
+        "standard",
+        tracks(&f),
+    )
+    .unwrap();
+    let (spec, _) = f.storage.fixed_job_input(&job.id).unwrap();
+    assert_eq!(
+        spec.parameters["diarization"]["engine"]["clusterThresholdMilli"],
+        1300
+    );
 }

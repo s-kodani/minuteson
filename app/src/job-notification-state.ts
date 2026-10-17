@@ -11,6 +11,9 @@ export interface JobNotice {
   level: ToastLevel; important: boolean; eventId: string;
 }
 export const jobName = (kind: JobKind) => ({ transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合" })[kind];
+export const jobFailureDetail = (code: string | null) => code === "transcription_quality_failed"
+  ? "ヒントなしで認識しても反復が残ったため停止しました。異常な区間は保存結果へ採用していません。"
+  : code ?? "会議を開いて再開状態を確認してください。";
 export const jobGroup = (job: NotificationJob) => JSON.stringify([job.meetingId, job.kind]);
 const active = new Set(["queued", "running", "pausing", "paused", "interrupted"]);
 const states = new Set([...active, "succeeded", "failed", "cancelled"]);

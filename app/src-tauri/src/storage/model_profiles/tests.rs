@@ -4,8 +4,10 @@ use crate::model_inspection::{PackageFile, PackageManifest, Target};
 use std::os::unix::fs::PermissionsExt;
 
 mod diarization_threads;
+mod diarization_threshold;
 mod jobs;
 mod portable;
+mod vad;
 
 pub(in crate::storage) fn publication_fixture() -> (
     tempfile::TempDir,
@@ -91,6 +93,7 @@ impl Fixture {
             executable_path: engine.executable.path.to_str().unwrap().into(),
             model_path: engine.model.path.to_str().unwrap().into(),
             vad_model_path: None,
+            vad_options: None,
             threads: 7,
             use_gpu: true,
         };
@@ -395,6 +398,7 @@ fn profile_application_three_engines_keep_parameters_other_profiles_meetings_and
         executable_path: selected.executable_path.into(),
         model_path: selected.model_path.into(),
         vad_model_path: selected.vad_model_path.map(Into::into),
+        vad_options: selected.vad_options,
         threads: selected.threads,
         use_gpu: selected.use_gpu,
         profile: "standard".into(),

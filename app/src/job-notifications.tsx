@@ -3,9 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IssueNotice, ToastNotice, toasts } from "./toast";
 import { toastKey } from "./toast-state";
-import { JobNotificationTracker, jobGroup, jobName, verifiedJobOutput, type JobNotice, type NotificationJob } from "./job-notification-state";
+import { JobNotificationTracker, jobFailureDetail, jobGroup, jobName, verifiedJobOutput, type JobNotice, type NotificationJob } from "./job-notification-state";
 import { usePublishJobReadStatus, usePublishProgress } from "./operation-progress";
 import { acceptMinutesRuntime, minutesRuntimeDetail, type MinutesRuntime } from "./minutes-runtime-state";
+import { acceptDiarizationRuntime, diarizationRuntimeProgress, type DiarizationRuntime } from "./diarization-runtime-state";
 import { jobProgress } from "./operation-progress-state";
 import { minutesAdmissions } from "./minutes-generation-admission";
 
@@ -31,8 +32,9 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
   const [jobReadError, setJobReadError] = useState<string | null>(null);
   usePublishJobReadStatus(jobReadError);
   const [runtime, setRuntime] = useState(new Map<string, MinutesRuntime>());
+  const [diarizationRuntime, setDiarizationRuntime] = useState(new Map<string, DiarizationRuntime>());
   const retried = new Set(progressJobs.map(job => job.retryOfJobId));
-  usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? { ...progress, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail } : null; }));
+  usePublishProgress("analysis-jobs", progressJobs.filter(job => !retried.has(job.id)).map(job => { const progress = jobProgress(job, job.meetingTitle, job.meetingId); return progress ? diarizationRuntimeProgress(job, { ...progress, detail: minutesRuntimeDetail(job, runtime.get(job.id)) ?? progress.detail }, diarizationRuntime.get(job.id)) : null; }));
   const [readError, setReadError] = useState("");
   const [listenerError, setListenerError] = useState("");
   const [workerError, setWorkerError] = useState("");
@@ -73,6 +75,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
             }
             setProgressJobs(state.jobs);
             setRuntime(prior => new Map([...prior].filter(([id, value]) => state.jobs.some(job => job.id === id && job.state === "running" && job.attempt === value.attempt && job.specHash === value.specHash && job.completedUnits <= value.unitIndex))));
+            setDiarizationRuntime(prior => new Map([...prior].filter(([id, value]) => state.jobs.some(job => job.id === id && job.state === "running" && job.attempt === value.attempt && job.specHash === value.specHash && job.completedUnits <= value.unitIndex))));
             setJobReadError("");
             setIssues(state.issues);
             const groups = new Set((rows as NotificationJob[]).map(jobGroup));
@@ -115,6 +118,18 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
         return next;
       });
     }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
+    void listen<unknown>("diarization-runtime-progress", event => {
+      if (disposed) return;
+      setDiarizationRuntime(prior => {
+        const id = (event.payload as Partial<DiarizationRuntime> | null)?.jobId;
+        if (typeof id !== "string") return prior;
+        const accepted = acceptDiarizationRuntime(prior.get(id), event.payload);
+        if (!accepted || accepted === prior.get(id)) return prior;
+        const next = new Map(prior); next.set(id, accepted);
+        if (next.size > 128) next.delete(next.keys().next().value!);
+        return next;
+      });
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
     void listen<unknown>("analysis-worker-error", event => {
       if (!disposed) { setWorkerError(typeof event.payload === "string" && event.payload ? event.payload : "解析ワーカーから異常の通知がありました。再起動後にジョブ状態を確認してください。"); void refresh(); }
     }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(cause => { if (!disposed) setListenerError(String(cause)); });
@@ -138,6 +153,6 @@ function JobIssue({job,locked,onOpen,historical}:{job:NotificationJob;locked:boo
   useEffect(()=>()=>toasts.resolve(toastKey("analysis-issues",job.id)),[job.id]);
   return <ToastNotice scope="analysis-issues" type={job.id} level={job.state==="failed"?"error":"warning"} important historyOnly={historical} meetingId={job.meetingId}
     eventId={JSON.stringify([job.id,job.updatedAt,job.state,job.errorCode])}
-    message={`「${job.meetingTitle}」の${jobName(job.kind)}：${job.state==="failed"?"失敗":"中断"}。 ${job.errorCode??"会議を開いて再開状態を確認してください。"}`}
+    message={`「${job.meetingTitle}」の${jobName(job.kind)}：${job.state==="failed"?"失敗":"中断"}。 ${jobFailureDetail(job.errorCode)}`}
     action={{kind:"open",label:"会議を開く",disabled:locked,run:()=>onOpen(job.meetingId)}}/>;
 }

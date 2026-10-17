@@ -22,7 +22,9 @@ fn budget(value: &impl Serialize, used: &mut usize) -> Result<(), String> {
 #[serde(deny_unknown_fields, tag = "engine")]
 enum Configuration {
     #[serde(rename = "whisper.cpp", rename_all = "camelCase")]
-    Whisper { threads: u32, use_gpu: bool },
+    Whisper { threads: u32, use_gpu: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vad_options: Option<crate::transcription::vad::VadOptions> },
     #[serde(rename = "sherpa-onnx", rename_all = "camelCase")]
     Sherpa {
         threads: u32,
@@ -30,6 +32,8 @@ enum Configuration {
         window_shift_milli: u32,
         min_duration_on_ms: u32,
         min_duration_off_ms: u32,
+        #[serde(default, skip_serializing_if = "crate::diarization::sensitivity::is_standard")]
+        speech_sensitivity_milli: i32,
     },
     #[serde(rename = "llama.cpp", rename_all = "camelCase")]
     Llama {
@@ -47,6 +51,7 @@ impl Configuration {
             Settings::Whisper(s) => Self::Whisper {
                 threads: s.threads,
                 use_gpu: s.use_gpu,
+                vad_options: s.vad_options,
             },
             Settings::Sherpa(s) => Self::Sherpa {
                 threads: s.threads,
@@ -54,6 +59,7 @@ impl Configuration {
                 window_shift_milli: s.window_shift_milli,
                 min_duration_on_ms: s.min_duration_on_ms,
                 min_duration_off_ms: s.min_duration_off_ms,
+                speech_sensitivity_milli: s.speech_sensitivity_milli,
             },
             Settings::Llama(s) => Self::Llama {
                 threads: s.threads,
@@ -69,10 +75,11 @@ impl Configuration {
         // Empty paths allow numerical validation by the actual preferences
         // validators. They are not selected model references on this host.
         match *self {
-            Self::Whisper { threads, use_gpu } => {
+            Self::Whisper { threads, use_gpu, vad_options } => {
                 Settings::Whisper(preferences::EnginePreferences {
                     threads,
                     use_gpu,
+                    vad_options,
                     ..Default::default()
                 })
             }
@@ -82,12 +89,14 @@ impl Configuration {
                 window_shift_milli,
                 min_duration_on_ms,
                 min_duration_off_ms,
+                speech_sensitivity_milli,
             } => Settings::Sherpa(diarization_preferences::DiarizationEnginePreferences {
                 threads,
                 cluster_threshold_milli,
                 window_shift_milli,
                 min_duration_on_ms,
                 min_duration_off_ms,
+                speech_sensitivity_milli,
                 ..Default::default()
             }),
             Self::Llama {

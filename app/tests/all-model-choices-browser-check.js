@@ -1,7 +1,7 @@
 async function (page) {
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const choices = [
-    ["文字起こし", "whisper.cpp", ["whisper-synthetic-tiny", "whisper-synthetic-base", "whisper-synthetic-small", "whisper-synthetic-medium"]],
+    ["文字起こし", "whisper.cpp", ["whisper-synthetic-tiny", "whisper-synthetic-base", "whisper-synthetic-small", "whisper-synthetic-medium", "whisper-synthetic-large-v3", "whisper-synthetic-large-v3-turbo"]],
     ["話者分離", "sherpa-onnx", ["sherpa-1138-pyannote3-eres2net-base", "sherpa-1138-pyannote3-int8-eres2net-base"]],
     ["議事録生成", "llama.cpp", ["llama-b11533-qwen25-15b-q4km", "llama-b11533-qwen25-15b-q8", "llama-b11533-qwen3-8b-q4km", "llama-b11533-qwen3-4b-q4km"]],
   ];
@@ -15,7 +15,7 @@ async function (page) {
     }
   }
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").length) === 0, "selection started IO");
-  results.push("all ten model choices are selectable without automatic download or execution");
+  results.push("all twelve model choices are selectable without automatic download or execution");
   const use = async (label, engine, id) => {
     const field = page.getByRole("combobox", { name: `${label}のモデル`, exact: true });
     const row = page.locator('.model-selection-row').filter({ has: field });

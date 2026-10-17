@@ -1,0 +1,91 @@
+async function(page) {
+  const check=(v,m)=>{if(!v)throw Error(m);}, results=[];
+  const model=page.getByRole('combobox',{name:'文字起こしのモデル',exact:true});
+  const row=page.locator('.model-selection-row').filter({has:model});
+  await model.waitFor();
+  await model.selectOption('official:whisper-synthetic-tiny');
+  await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
+  const panel=page.getByRole('region',{name:'発話区間検知（VAD）',exact:true});
+  await panel.waitFor();
+  const toggle=panel.getByRole('checkbox',{name:'発話区間検知（VAD）',exact:true});
+  const details=panel.getByRole('button',{name:'VAD詳細設定',exact:true});
+  const apply=panel.getByRole('button',{name:'VAD設定を適用',exact:true});
+  const reset=panel.getByRole('button',{name:'標準値に戻す',exact:true});
+  const field=label=>panel.getByLabel(label,{exact:true});
+  check(await toggle.isChecked(),'VAD not enabled by default');
+  check(await details.getAttribute('aria-expanded')==='false','details not initially collapsed');
+  await details.click();
+  check(await panel.getByRole('spinbutton').count()===6,'six options missing');
+  check(await field('発話判定の閾値').inputValue()==='0.60','wrong default threshold');
+  check(await field('最小発話時間（ms）').inputValue()==='300','wrong minimum speech default');
+  check(await apply.isDisabled(),'unchanged settings can be applied');
+  await field('発話判定の閾値').fill('');
+  check(await apply.isDisabled(),'blank allowed');
+  await panel.getByRole('alert').waitFor();
+  await reset.click();
+  await field('最大発話区間（秒）').fill('1');
+  await field('最小発話時間（ms）').fill('2000');
+  check(await apply.isDisabled(),'contradictory durations accepted');
+  await reset.click();
+  await field('発話判定の閾値').fill('0.75');
+  await field('最小発話時間（ms）').fill('450');
+  await apply.click();
+  await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli===750);
+  await details.waitFor();
+  if(await details.getAttribute('aria-expanded')==='false')await details.click();
+  check(await field('最小発話時間（ms）').inputValue()==='450','saved value lost');
+  results.push('default-on, six fields, invalid values and explicit integer-valued save');
+  const callsBefore=await page.evaluate(()=>window.modelDownloadFixture.calls.filter(c=>['start_model_download','check_model_compatibility'].includes(c.command)).length);
+  await toggle.uncheck();
+  check(await field('発話判定の閾値').isDisabled(),'off leaves numeric input active');
+  await apply.click();
+  await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.enabled===false);
+  await details.waitFor(); if(await details.getAttribute('aria-expanded')==='false')await details.click();
+  check(await field('発話判定の閾値').inputValue()==='0.75','turning off reset numeric options');
+  await toggle.check(); await apply.click();
+  await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.enabled===true);
+  await details.waitFor(); if(await details.getAttribute('aria-expanded')==='false')await details.click();
+  await reset.click();
+  check(await page.evaluate(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli)===750,'reset saved automatically');
+  await apply.click();
+  await page.waitForFunction(()=>window.modelDownloadFixture.settingsByEngine['whisper.cpp'].vadOptions.thresholdMilli===600);
+  check(await page.evaluate(()=>window.modelDownloadFixture.calls.filter(c=>['start_model_download','check_model_compatibility'].includes(c.command)).length)===callsBefore,'tuning downloaded or reran CPU');
+  results.push('off keeps values, on restores them, reset waits for apply, tuning reuses the model');
+  await model.selectOption('official:whisper-synthetic-base');
+  await row.getByRole('button',{name:'ダウンロードして使用',exact:true}).click();
+  await page.waitForFunction(()=>window.modelDownloadFixture.profiles[0].components[0].modelName==='Whisper base（多言語）');
+  await panel.waitFor();
+  await page.evaluate(()=>window.modelDownloadFixture.setVisible(false)); await panel.waitFor({state:'hidden'});
+  await page.evaluate(()=>window.modelDownloadFixture.setVisible(true)); await panel.waitFor();
+  check(await toggle.isChecked(),'reopening or switching model lost enabled state');
+  if(await details.getAttribute('aria-expanded')==='false')await details.click();
+  for(const width of [1280,390])for(const theme of ['light','dark']){
+    await page.setViewportSize({width,height:1000});
+    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    const metrics=await panel.evaluate(el=>({
+      gap:getComputedStyle(el.querySelector('.vad-fields')).gap,
+      labels:[...el.querySelectorAll('.vad-fields>label')].map(l=>({gap:getComputedStyle(l).gap,r:l.getBoundingClientRect().right})),
+      inputs:[...el.querySelectorAll('input[type=number]')].map(i=>({h:i.getBoundingClientRect().height,font:getComputedStyle(i).fontSize,bg:getComputedStyle(i).backgroundColor})),
+      buttons:[...el.querySelectorAll('button')].map(b=>b.getBoundingClientRect().height),
+      actions:getComputedStyle(el.querySelector('.vad-actions')).gap,
+      overflow:document.documentElement.scrollWidth>innerWidth
+    }));
+    check(metrics.gap==='16px'&&metrics.labels.every(l=>l.gap==='8px'&&l.r<=width),'field spacing differs from existing forms');
+    check(metrics.inputs.every(i=>i.h===40&&i.font==='13px')&&metrics.buttons.every(h=>h>=40)&&metrics.actions==='12px','control metrics differ');
+    check(!metrics.overflow,'form overflows viewport');
+    await page.screenshot({path:`output/playwright/vad-settings-${width}-${theme}.png`,fullPage:true});
+  }
+  results.push('wide and narrow light/dark layouts follow 40px controls and 8/16/12px spacing');
+  // An installed pre-VAD model matches the official display choice, but offers an upgrade.
+  await page.evaluate(()=>{
+    const f=window.modelDownloadFixture;
+    const old=f.entries.find(e=>e.modelName==='Whisper tiny（多言語）');
+    old.modelFiles=old.modelFiles.filter(file=>file.role!=='vad'); old.download.recipeHash='d'.repeat(64);
+    f.setVisible(false);
+  });
+  await panel.waitFor({state:'hidden'}); await page.evaluate(()=>window.modelDownloadFixture.setVisible(true)); await model.waitFor();
+  await model.selectOption('official:whisper-synthetic-tiny');
+  await row.getByRole('button',{name:'VADを追加して使用',exact:true}).waitFor();
+  results.push('installed pre-VAD weights offer an explicit VAD upgrade without duplicate choices');
+  return {passed:results.length,results};
+}

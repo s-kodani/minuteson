@@ -34,7 +34,7 @@ fn read(db: &Connection, id: &str) -> Result<ImportSnapshot, String> {
         error_message: row.6,
     })
 }
-fn read_options(db: &Connection, id: &str) -> Result<ImportOptions, String> {
+pub(super) fn read_options(db: &Connection, id: &str) -> Result<ImportOptions, String> {
     let (json, hash): (String, String) = db
         .query_row(
             "SELECT options_json,options_hash FROM audio_import_options WHERE import_id=?1",

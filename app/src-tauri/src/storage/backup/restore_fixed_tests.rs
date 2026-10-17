@@ -525,8 +525,12 @@ fn fixed_vocabulary_rejects_hash_forgery_and_retains_deleted_global_and_meeting_
     assert!(fixed
         .vocabulary(&meeting, &serde_json::to_value(&bad).unwrap())
         .is_err());
-    bad.actual_prompt =
-        super::super::super::vocabulary::compile(&bad.entries, &bad.extra_prompt).unwrap();
+    bad.actual_prompt = super::super::super::vocabulary::compile_method(
+        &bad.entries,
+        &bad.extra_prompt,
+        &bad.method,
+    )
+    .unwrap();
     bad.content_hash = bad.digest().unwrap();
     bad.validate().unwrap();
     assert!(fixed

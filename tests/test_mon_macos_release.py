@@ -62,6 +62,15 @@ class ReleaseTests(unittest.TestCase):
         runtime.package(self.embedding, self.notice_text, asr_directory)
         for executable in (self.app / "Contents/MacOS/mon-desktop", self.capture / "Contents/MacOS/mon-macos-capture", self.embedding):
             executable.chmod(0o755)
+        workers = self.app / "Contents/Resources/inference-runtime"
+        entries = []
+        for engine, name in zip(("whisper", "llama", "sherpa"), release.WORKER_NAMES):
+            binary = self.file(workers / name, ("synthetic " + name).encode())
+            binary.chmod(0o755)
+            entries.append({"protocol":1,"engine":engine,"name":name,"bytes":binary.stat().st_size,"sha256":release.digest(binary)})
+        self.file(workers / "runtime-index.json", json.dumps(entries).encode())
+        for name in ("whisper-MIT.txt", "llama-MIT.txt", "nlohmann-MIT.txt", "sherpa-Apache-2.0.txt", "build-info.json"):
+            self.file(workers / name)
         self.policy = release.REPOSITORY / "app/src-tauri/release-entitlements"
 
     def file(self, path, value=b"synthetic"):
@@ -93,7 +102,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(index["signingTeamId"], TEAM)
         if "--entitlements" in argv and "--display" in argv:
             target = argv[-1]
-            policy = "embedding.plist" if target.endswith("mon-speaker-embedding") else "capture.plist" if target.endswith("MONCaptureProbe.app") else "main.plist"
+            policy = "embedding.plist" if target.endswith(("mon-speaker-embedding", "mon-sherpa-worker")) else "capture.plist" if target.endswith("MONCaptureProbe.app") else "main.plist"
             return (self.policy / policy).read_bytes(), b"warning: display"
         if "--display" in argv:
             return b"", (f"Authority={IDENTITY}\nTeamIdentifier={TEAM}\nTimestamp=Oct 10 2026\nCodeDirectory v=20500 size=100 flags=0x10000(runtime) hashes=3+2\n").encode()
@@ -267,7 +276,7 @@ class ReleaseTests(unittest.TestCase):
     def test_sign_only_pipeline_is_inside_out_creates_new_dmg_and_never_uploads_staples_or_launches(self):
         output, result = self.pipeline()
         signs = [argv for argv in self.calls if "--sign" in argv]
-        self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", "MONCaptureProbe.app", "mon-speaker-embedding", "mon.app", "mon_0.1.0_aarch64.dmg"])
+        self.assertEqual([Path(argv[-1]).name for argv in signs], ["whisper-cli", *release.WORKER_NAMES, "MONCaptureProbe.app", "mon-speaker-embedding", "mon.app", "mon_0.1.0_aarch64.dmg"])
         self.assertFalse(any("notarytool" in argv or "stapler" in argv or Path(argv[0]).name == "open" for argv in self.calls))
         self.assertEqual(result["notarization"], "not_requested")
         self.assertFalse(result["distributionReady"])
@@ -401,6 +410,21 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(proof["runtimeSigning"], "ad_hoc_only")
         self.assertEqual(proof["developerIdSigning"], "not_verified")
         self.assertEqual(proof["nativeOnboarding"], "not_verified")
+
+    def test_changed_worker_refuses_release_before_any_signing(self):
+        binary = self.app / "Contents/Resources/inference-runtime/mon-whisper-worker"
+        binary.write_bytes(binary.read_bytes() + b"changed")
+        with self.assertRaises(ValueError):
+            self.pipeline()
+        self.assertFalse(any("--sign" in argv for argv in self.calls))
+
+    def test_worker_index_cannot_reference_a_path_outside_resources(self):
+        index = self.app / "Contents/Resources/inference-runtime/runtime-index.json"
+        entries = json.loads(index.read_text())
+        entries[0]["name"] = "../mon-speaker-embedding"
+        index.write_text(json.dumps(entries))
+        with self.assertRaises(ValueError):
+            release.verify_inference_runtime(self.app)
 
     def test_changed_asr_archive_refuses_release_before_sign_or_upload(self):
         archive = self.app / "Contents/Resources/asr-runtime/whisper-runtime.tar"

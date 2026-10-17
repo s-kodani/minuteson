@@ -404,19 +404,19 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .transcript-search input[type=search] { min-height:40px; padding:9px 12px; font-size:13px; line-height:20px; }
 .meeting-form-row { align-items:center; flex-wrap:wrap; }
 .theme-choice { flex-wrap:wrap; }
-.theme-choice select,.common-modal select,.capture-input-selection select,.active-microphone-selection select,.voice-speaker select { min-height:40px; max-width:100%; min-width:0; padding:9px 12px; font:inherit; font-size:13px; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
+.theme-choice select,.common-modal select,.capture-input-selection select,.active-microphone-selection select,.voice-speaker select,.speaker-count-fields select { min-height:40px; max-width:100%; min-width:0; padding:9px 12px; font:inherit; font-size:13px; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 .audio-controls label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
 .audio-controls select { box-sizing:border-box; height:var(--action-height,40px); min-height:var(--action-height,40px); padding:5px 8px; font:inherit; font-size:var(--action-font-size,13px); line-height:var(--action-line-height,20px); border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
 /* WebKit's native select ignores padding/min-height. Retain the native select
    semantics while drawing the field and its theme-aware chevron ourselves. */
-.theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select {
+.theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select,.speaker-count-fields select {
   -webkit-appearance:none; appearance:none; padding-right:32px;
   background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
   background-position:right 16px center,right 11px center;
   background-size:5px 5px; background-repeat:no-repeat;
 }
 @media(forced-colors:active) {
-  .theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select { -webkit-appearance:auto; appearance:auto; background-image:none; }
+  .theme-choice select,.common-modal select,.audio-controls select,.internal-logs-filters select,.capture-input-selection select,.active-microphone-selection select,.model-selection-row select,.voice-speaker select,.speaker-count-fields select { -webkit-appearance:auto; appearance:auto; background-image:none; }
 }
 .vocabulary-list input[type=checkbox] { margin:0; flex:none; }
 .meeting-detail-content .minutes-card { padding:24px 32px; gap:12px; }
@@ -435,7 +435,8 @@ button:disabled { opacity:.5; }
 .heading-with-info { gap:8px; }
 .analysis-card>.heading-with-info h2 { font-size:17px; }
 .speaker-count-fields { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
-.speaker-count-fields>label { display:grid; gap:8px; min-width:140px; max-width:100%; }
+.speaker-count-fields>label { display:grid; gap:8px; min-width:140px; max-width:100%; font-size:13px; line-height:20px; color:var(--secondary-text); }
+.speaker-count-fields select { width:100%; }
 .info-popover-head { align-items:center; }
 .info-popover .info-popover-head h3 { margin:0; }
 .version-row { flex-wrap:wrap; gap:12px; }
@@ -675,3 +676,16 @@ button:disabled { opacity:.5; }
 .transcript-heading-actions > h2 { margin:0 auto 0 0; font-size:17px; }
 .transcript-toolbar > .transcript-actions > span { white-space:nowrap; }
 .transcript-toolbar .transcript-search > label { min-width:0; }
+
+/* VAD follows the model-settings form metrics and the shared theme/actions. */
+.vad-settings { display:grid; gap:16px; margin-block:20px; min-width:0; }
+.vad-settings>p { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+.vad-settings .vad-enabled { display:flex; align-items:center; gap:8px; margin:0; font-size:13px; }
+.vad-enabled input { flex:none; margin:0; }
+.vad-settings .settings-disclosure { margin-top:0; min-width:0; }
+.vad-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0; padding:0; border:0; min-width:0; }
+.vad-fields>label { display:grid; align-content:start; gap:8px; margin:0; min-width:0; font-size:13px; }
+.vad-fields input[type=number] { width:100%; min-width:0; box-sizing:border-box; min-height:40px; padding:9px 12px; font:inherit; line-height:20px; border:1px solid var(--input-border); border-radius:8px; background:var(--surface); color:var(--text); }
+.vad-field-help { color:var(--muted); font-size:13px; line-height:1.5; }
+.vad-actions { display:flex; flex-wrap:wrap; gap:12px; margin:0; }
+@media(max-width:600px) { .vad-fields { grid-template-columns:minmax(0,1fr); } }

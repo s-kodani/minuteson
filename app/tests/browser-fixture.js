@@ -46,6 +46,7 @@ const switchDraft = (nextId) => {
 };
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.emitDiarizationRuntime = payload => emit("diarization-runtime-progress", payload);
 fixture.emitMinutesRuntime = payload => emit("minutes-runtime-progress", payload);
 fixture.emitWorkerError = message => emit("analysis-worker-error", message);
 fixture.emitUiPreferences = () => emit("ui-preferences-changed",fixture.uiPreferences?.lockVersion??0);

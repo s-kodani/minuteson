@@ -97,6 +97,57 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
 }
 
 impl Storage {
+    /// Resolve the choices made before saving audio to its actual track IDs.
+    /// Only the initial pending flow uses these; regeneration has its own input.
+    pub(crate) fn initial_speaker_counts(
+        &self,
+        meeting: &str,
+        tracks: &[super::transcription::TrackPlan],
+    ) -> Result<Vec<crate::diarization::TrackSettings>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        let mut counts = Vec::new();
+        for track in tracks {
+            let (session, import): (Option<String>, Option<String>) = db.query_row(
+                "SELECT session_id,import_id FROM audio_tracks WHERE id=?1 AND meeting_id=?2 AND kind=?3",
+                params![track.id, meeting, track.kind],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).map_err(|e| e.to_string())?;
+            let count = if let Some(import) = import {
+                super::imports::read_options(&db, &import)?.num_speakers
+            } else if let Some(session) = session {
+                let text: String = db.query_row(
+                    "SELECT capture_config_json FROM recording_sessions WHERE id=?1 AND meeting_id=?2",
+                    params![session, meeting], |r| r.get(0),
+                ).map_err(|e| e.to_string())?;
+                let config: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                let selected: super::recordings::SpeakerCounts = config
+                    .get("speakerCounts")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_default();
+                selected.validate()?;
+                match track.kind.as_str() {
+                    "mic" => selected.mic,
+                    "system" => selected.system,
+                    _ => return Err("人数指定の録音トラックが不正です".into()),
+                }
+            } else {
+                return Err("人数指定の保存音声がありません".into());
+            };
+            if count.is_some() {
+                counts.push(crate::diarization::TrackSettings {
+                    track_id: track.id.clone(),
+                    num_speakers: count,
+                });
+            }
+        }
+        crate::analysis_flow::checked_speaker_counts(&counts)
+    }
+
     /// Finish the initial flow and publish its utterances atomically. The
     /// staging ASR output is private to the handoff: no user adoption step.
     /// Existing public text/edit drafts are never replaced by background work.

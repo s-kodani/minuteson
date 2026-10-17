@@ -6,6 +6,7 @@
     "active": true,
     "targets": ["app"],
     "resources": {
+      "../../.cache/inference-runtime/package/": "inference-runtime/",
       "../../probes/macos-capture/.build/MONCaptureProbe.app": "MONCaptureProbe.app",
       "../../probes/speaker-embedding/.build/mon-speaker-embedding": "mon-speaker-embedding",
       "../../.cache/third-party-notices/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt",

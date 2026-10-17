@@ -414,9 +414,14 @@ pub(crate) fn run_unit_observed_on_device(
     let verification = started.elapsed();
     observe(Phase::Starting);
     let spawning = Instant::now();
-    let mut child = launch
-        .spawn()
-        .map_err(|e| format!("llama.cppを起動できません: {e}"))?;
+    let mut child = crate::local_engine::resident::Run::spawn(
+        &mut launch,
+        "llama",
+        &directory,
+        "result.json",
+        "stderr.log",
+    )
+    .map_err(|e| format!("llama.cppを起動できません: {e}"))?;
     // A CPU job may legitimately need longer than 30 minutes. Bound lack of
     // output, not total wall time; --predict and byte limits still bound work.
     // Only result growth counts: a noisy stderr must not keep a stuck job alive.
@@ -452,7 +457,7 @@ pub(crate) fn run_unit_observed_on_device(
             });
             notified = Instant::now();
         }
-        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("llama.cppが失敗しました: {status}"));
             }

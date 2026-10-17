@@ -145,6 +145,9 @@ async fn preview_model_profile_application(
     expected_review_hash: String,
     check_operation_id: String,
     diarization_threads: Option<u32>,
+    diarization_cluster_threshold_milli: Option<u32>,
+    whisper_vad_options: Option<transcription::vad::VadOptions>,
+    diarization_speech_sensitivity_milli: Option<i32>,
 ) -> Result<storage::model_profiles::ApplyPreview, String> {
     if window.label() != "main" {
         return Err("Only the main window can review model application".into());
@@ -162,7 +165,7 @@ async fn preview_model_profile_application(
             Some(&token),
             &|| guard.cancelled(),
             |lease| {
-                model_application::preview_with_threads(
+                model_application::preview_with_sensitivity(
                     &app.state::<Storage>(),
                     &models_root,
                     profile,
@@ -170,6 +173,9 @@ async fn preview_model_profile_application(
                     &expected_review_hash,
                     &check_operation_id,
                     diarization_threads,
+                    diarization_cluster_threshold_milli,
+                    whisper_vad_options,
+                    diarization_speech_sensitivity_milli,
                     &|| guard.cancelled() || lease.cancelled(),
                 )
             },
@@ -1917,11 +1923,14 @@ async fn start_recording(
     microphone_uid: Option<String>,
     capture_scope: capture_scope::CaptureScope,
     new_title: Option<String>,
+    speaker_counts: Option<storage::recordings::SpeakerCounts>,
 ) -> Result<RecordingSnapshot, String> {
     if window.label() != "main" {
         return Err("Only the main window can start recording".into());
     }
     let app = window.app_handle().clone();
+    let speaker_counts = speaker_counts.unwrap_or_default();
+    speaker_counts.validate()?;
     tauri::async_runtime::spawn_blocking(move || {
         RecorderController::with_transition(&app, || {
             app.state::<capture_test::CaptureTests>().require_empty()?;
@@ -1950,6 +1959,7 @@ async fn start_recording(
                     &meeting_id,
                     microphone_uid.as_deref(),
                     &capture_scope,
+                    &speaker_counts,
                 )
             });
             if result.is_err() {

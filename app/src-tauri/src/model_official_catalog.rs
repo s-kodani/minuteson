@@ -79,9 +79,9 @@ pub(crate) fn options_with_bundle(root: &std::path::Path) -> Result<Vec<OptionVi
     let mut whisper = Vec::new();
     for (name, recipe) in crate::model_bundled_runtime::Bundle::open(root)?.recipes()? {
         whisper.push(OptionView {
-            id: format!("whisper-194-{name}-multilingual"),
+            id: format!("whisper-194-{name}-multilingual-vad620"),
             label: format!("Whisper {name}（多言語）"),
-            description: format!("アプリ同梱のCPU・Metal対応エンジンと、固定版Whisper {name}（多言語）を準備します。文字起こしでは利用可能なGPUを使います。品質・速度は正式評価前です。"),
+            description: format!("アプリ同梱のCPU・Metal対応エンジンと、固定版Whisper {name}（多言語）と発話区間検知用のSilero VADを準備します。文字起こしでは利用可能なGPUを使います。品質・速度は正式評価前です。"),
             definition: String::from_utf8(recipe.bytes()?).map_err(|e| e.to_string())?,
             review: recipe.review()?, token_limits: None,
         });

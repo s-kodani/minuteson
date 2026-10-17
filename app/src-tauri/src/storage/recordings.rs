@@ -92,6 +92,25 @@ struct CapturedFile {
 
 const MAX_CAPTURE_MANIFEST_BYTES: u64 = crate::capture_manifest::MAX_BYTES;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct SpeakerCounts {
+    pub mic: Option<u32>,
+    pub system: Option<u32>,
+}
+impl SpeakerCounts {
+    pub(crate) fn validate_count(count: Option<u32>) -> Result<(), String> {
+        if count.is_some_and(|n| !(1..=crate::diarization::sherpa::MAX_SPEAKERS).contains(&n)) {
+            return Err("話者数は1〜100人、または自動で指定してください".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        Self::validate_count(self.mic)?;
+        Self::validate_count(self.system)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingConfig {
     pub mode: String,
@@ -337,11 +356,36 @@ impl Storage {
         config: &RecordingConfig,
         start_operation_id: &str,
     ) -> Result<RecordingSession, String> {
+        self.prepare_recording_with_speaker_counts(
+            meeting_id,
+            config,
+            start_operation_id,
+            &SpeakerCounts::default(),
+        )
+    }
+
+    pub(crate) fn prepare_recording_with_speaker_counts(
+        &self,
+        meeting_id: &str,
+        config: &RecordingConfig,
+        start_operation_id: &str,
+        speaker_counts: &SpeakerCounts,
+    ) -> Result<RecordingSession, String> {
         config.validate()?;
+        speaker_counts.validate()?;
         if start_operation_id.trim().is_empty() || start_operation_id.len() > 128 {
             return Err("録音開始の操作IDが不正です".into());
         }
-        let config_json = serde_json::to_string(config).map_err(|error| error.to_string())?;
+        // Freeze initial analysis choices with the recording admission, so a
+        // restart or a lost response cannot silently restore automatic counts.
+        let config_json = if *speaker_counts == SpeakerCounts::default() {
+            serde_json::to_string(config).map_err(|e| e.to_string())?
+        } else {
+            let mut value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+            value["speakerCounts"] =
+                serde_json::to_value(speaker_counts).map_err(|e| e.to_string())?;
+            serde_json::to_string(&value).map_err(|e| e.to_string())?
+        };
         let mut connection = self
             .connection
             .lock()
@@ -1137,6 +1181,58 @@ pub(in crate::storage) mod tests {
             4,
             &vec![0; 48000 * channels as usize * 4],
         )
+    }
+
+    #[test]
+    fn initial_speaker_counts_are_validated_and_frozen_at_recording_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let s = Storage::open(root.path().into()).unwrap();
+        let m = s.create_meeting("人数指定").unwrap();
+        for count in [0, 101, u32::MAX] {
+            let counts = SpeakerCounts {
+                mic: Some(count),
+                system: None,
+            };
+            assert!(s
+                .prepare_recording_with_speaker_counts(&m.id, &config(), "invalid", &counts)
+                .is_err());
+        }
+        let counts = SpeakerCounts {
+            mic: Some(1),
+            system: Some(5),
+        };
+        let session = s
+            .prepare_recording_with_speaker_counts(&m.id, &config(), "fixed", &counts)
+            .unwrap();
+        assert_eq!(
+            s.prepare_recording_with_speaker_counts(&m.id, &config(), "fixed", &counts)
+                .unwrap()
+                .id,
+            session.id
+        );
+        assert!(s
+            .prepare_recording_with_speaker_counts(
+                &m.id,
+                &config(),
+                "fixed",
+                &SpeakerCounts::default()
+            )
+            .is_err());
+        let text: String = s
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT capture_config_json FROM recording_sessions WHERE id=?1",
+                params![session.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["speakerCounts"],
+            serde_json::json!({"mic":1,"system":5})
+        );
     }
 
     fn config() -> RecordingConfig {

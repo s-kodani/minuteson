@@ -57,3 +57,12 @@ test("lost replies and cancellation retain exact operation and immutable review 
   assert.equal(attempt.receipt().operationId, operationId);
   assert.throws(() => new ReviewedModelRetry(preview, "bad"));
 });
+
+test("VAD settings survive model rebinding review and invalid nested settings are rejected", () => {
+  const {job,entry,preview}=rebindingFixture();
+  const vad={enabled:false,thresholdMilli:750,minSpeechDurationMs:450,minSilenceDurationMs:100,maxSpeechDurationS:30,speechPadMs:30,samplesOverlapMs:100};
+  preview.logicalConditions.configuration.vadOptions=vad;
+  assert.doesNotThrow(()=>assertJobModelPreview(preview,meetingId,job,entry));
+  preview.logicalConditions.configuration.vadOptions={...vad,minSpeechDurationMs:2000,maxSpeechDurationS:1};
+  assert.throws(()=>assertJobModelPreview(preview,meetingId,job,entry));
+});

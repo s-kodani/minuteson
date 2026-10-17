@@ -9,6 +9,8 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+mod progress;
+
 const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const MAX_SPEAKERS: u32 = 100;
@@ -29,6 +31,8 @@ pub(crate) struct SherpaConfig {
     pub window_shift_milli: u32,
     pub min_duration_on_ms: u32,
     pub min_duration_off_ms: u32,
+    #[serde(default, skip_serializing_if = "crate::diarization::sensitivity::is_standard")]
+    pub speech_sensitivity_milli: i32,
 }
 
 impl SherpaConfig {
@@ -54,6 +58,7 @@ impl SherpaConfig {
             || !(1..=1000).contains(&self.window_shift_milli)
             || self.min_duration_on_ms > 60_000
             || self.min_duration_off_ms > 60_000
+            || !super::sensitivity::valid(self.speech_sensitivity_milli)
             || num_speakers.is_some_and(|n| !(1..=MAX_SPEAKERS).contains(&n))
         {
             return Err("話者分離の人数または固定設定が不正です".into());
@@ -295,6 +300,26 @@ pub(crate) fn run_track(
     timeout: Duration,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Option<Vec<Segment>>, String> {
+    run_track_observed(
+        config,
+        num_speakers,
+        directory,
+        duration_us,
+        timeout,
+        cancelled,
+        &|_| {},
+    )
+}
+
+pub(crate) fn run_track_observed(
+    config: &SherpaConfig,
+    num_speakers: Option<u32>,
+    directory: &Path,
+    duration_us: i64,
+    timeout: Duration,
+    cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u32),
+) -> Result<Option<Vec<Segment>>, String> {
     match run_track_inner(
         config,
         num_speakers,
@@ -302,6 +327,7 @@ pub(crate) fn run_track(
         duration_us,
         timeout,
         cancelled,
+        progress,
     ) {
         Err(_) if cancelled() => Ok(None),
         result => result,
@@ -315,6 +341,7 @@ fn run_track_inner(
     duration_us: i64,
     timeout: Duration,
     cancelled: &impl Fn() -> bool,
+    progress: &impl Fn(u32),
 ) -> Result<Option<Vec<Segment>>, String> {
     if cancelled() {
         return Ok(None);
@@ -394,9 +421,32 @@ fn run_track_inner(
             decimal(config.min_duration_off_ms)
         ))
         .arg(&wav);
-    let mut child = launch
-        .spawn()
-        .map_err(|e| format!("sherpa-onnxを起動できません: {e}"))?;
+    if crate::local_engine::resident::enabled() {
+        let libraries: Vec<_> = config
+            .runtime_libraries
+            .iter()
+            .filter(|f| {
+                f.path
+                    .file_name()
+                    .is_some_and(|n| n == "libsherpa-onnx-c-api.dylib")
+            })
+            .collect();
+        if libraries.len() != 1 {
+            return Err("話者分離用C APIランタイムがありません".into());
+        }
+        command.arg("--library").arg(&libraries[0].path);
+    }
+    let mut child = crate::local_engine::resident::Run::spawn(
+        &mut launch,
+        "sherpa",
+        &directory,
+        "stdout.log",
+        "stderr.log",
+    )
+    .map_err(|e| format!("sherpa-onnxを起動できません: {e}"))?;
+    let mut progress_file = File::open(&stderr_path).ok();
+    let mut log_progress = progress::LogProgress::default();
+    progress(0);
     let started = Instant::now();
     loop {
         if cancelled() {
@@ -413,9 +463,15 @@ fn run_track_inner(
                 return Err("話者分離ログが上限を超えました".into());
             }
         }
-        if let Some(status) = child.child.try_wait().map_err(|e| e.to_string())? {
+        if let Some(file) = &mut progress_file {
+            log_progress.poll(file, progress);
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             if !status.success() {
                 return Err(format!("sherpa-onnxが失敗しました: {status}"));
+            }
+            if let Some(file) = &mut progress_file {
+                log_progress.poll(file, progress);
             }
             break;
         }

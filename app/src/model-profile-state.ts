@@ -1,3 +1,4 @@
+import { checkedVadOptions, sameVadOptions, type VadOptions } from "./vad-state.ts";
 import type { EnginePreferences } from "./analysis-state.ts";
 import type { DiarizationEngine } from "./diarization-state.ts";
 import type { MinutesEngine } from "./minutes-state.ts";
@@ -20,8 +21,12 @@ export interface ModelApplicationPreview {
   expectedProfileId: string | null; expectedProfileHash: string | null;
   expectedProfileVersion: number; expectedPreferencesVersion: number;
   before: ModelSettings; after: ModelSettings; reviewDigest: string;
+  whisperVadOptions?: VadOptions;
   diarizationThreads?: number;
+  diarizationClusterThresholdMilli?: number;
 }
+const sameOptionalVad = (a: unknown, b: unknown) => a === undefined || b === undefined
+  ? a === b : sameVadOptions(checkedVadOptions(a), checkedVadOptions(b));
 const id = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const sha = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 const version = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
@@ -67,8 +72,10 @@ export function profileConfigurationLabel(view: ModelProfileView) {
 function settingsEntries(value: ModelSettings): [string, unknown][] {
   if (!value || !Object.hasOwn(keys, value.engine) || !value.settings || typeof value.settings !== "object") fail();
   const entries = Object.entries(value.settings);
-  if (entries.length !== keys[value.engine].length || keys[value.engine].some(k => !Object.hasOwn(value.settings, k))) fail();
-  if (entries.some(([k, v]) => fileKeys.includes(k)
+  const vad = value.engine === "whisper.cpp" ? value.settings.vadOptions : undefined;
+  if (vad !== undefined) checkedVadOptions(vad);
+  if (entries.length !== keys[value.engine].length + Number(vad !== undefined) || keys[value.engine].some(k => !Object.hasOwn(value.settings, k))) fail();
+  if (entries.some(([k, v]) => k === "vadOptions" && value.engine === "whisper.cpp" ? false : fileKeys.includes(k)
     ? (k === "runtimeLibraryPaths" ? !Array.isArray(v) || v.some(p => typeof p !== "string") : k === "vadModelPath" && v === null ? false : typeof v !== "string")
     : k === "useGpu" ? typeof v !== "boolean" : typeof v !== "number" || !Number.isSafeInteger(v) || v < 0)) fail();
   if (value.settings.threads < 1 || value.settings.threads > 64) fail();
@@ -78,20 +85,29 @@ export function applicationChanges(preview: ModelApplicationPreview) {
   const before = new Map(settingsEntries(preview.before));
   return settingsEntries(preview.after).map(([key, after]) => ({ key, before: before.get(key), after, file: fileKeys.includes(key) }));
 }
-export function assertApplicationPreview(preview: ModelApplicationPreview, entry: ModelPlacementEntry, name: ModelProfileName, current: ModelProfileView, diarizationThreads?: number) {
+export function assertApplicationPreview(preview: ModelApplicationPreview, entry: ModelPlacementEntry, name: ModelProfileName, current: ModelProfileView, diarizationThreads?: number, diarizationClusterThresholdMilli?: number, whisperVadOptions?: VadOptions) {
   if (!canReviewApplication(entry) || !preview || preview.schemaVersion !== 1 || preview.profile !== name || current.name !== name
     || preview.packageId !== entry.packageId || preview.reviewHash !== entry.reviewHash || preview.checkOperationId !== entry.compatibility?.operationId
     || !sha(preview.reviewDigest) || !version(preview.expectedPreferencesVersion) || !version(preview.expectedProfileVersion)
     || preview.expectedProfileId !== current.id || preview.expectedProfileVersion !== current.profileVersion
     || (current.id === null ? preview.expectedProfileHash !== null : !sha(preview.expectedProfileHash))
     || preview.before.engine !== entry.engine || preview.after.engine !== entry.engine
+    || !sameOptionalVad(preview.whisperVadOptions, whisperVadOptions)
+    || whisperVadOptions !== undefined && (preview.after.engine !== "whisper.cpp" || !preview.after.settings.vadOptions || !sameVadOptions(checkedVadOptions(whisperVadOptions), checkedVadOptions(preview.after.settings.vadOptions)))
     || preview.diarizationThreads !== diarizationThreads
+    || preview.diarizationClusterThresholdMilli !== diarizationClusterThresholdMilli
+    || diarizationClusterThresholdMilli !== undefined && (preview.after.engine !== "sherpa-onnx" || !Number.isInteger(diarizationClusterThresholdMilli) || diarizationClusterThresholdMilli < 0 || diarizationClusterThresholdMilli > 2000 || preview.after.settings.clusterThresholdMilli !== diarizationClusterThresholdMilli)
     || diarizationThreads !== undefined && (entry.engine !== "sherpa-onnx" || !Number.isInteger(diarizationThreads) || diarizationThreads < 1 || diarizationThreads > 64 || preview.after.settings.threads !== diarizationThreads)) fail();
   assertProfileView(current);
-  if (diarizationThreads !== undefined && !current.components.some(component => component.engine === "sherpa-onnx" && component.packageId === entry.packageId && component.checkOperationId === preview.checkOperationId && component.settingsMatch && component.compatibilityCurrent)) fail();
+  const tuning = diarizationThreads !== undefined || diarizationClusterThresholdMilli !== undefined;
+  if (tuning && !current.components.some(component => component.engine === "sherpa-onnx" && component.packageId === entry.packageId && component.checkOperationId === preview.checkOperationId && component.settingsMatch && component.compatibilityCurrent)) fail();
+  if (preview.before.engine === "whisper.cpp" && preview.after.engine === "whisper.cpp"
+    && preview.before.settings.vadOptions !== undefined && whisperVadOptions === undefined
+    && !sameOptionalVad(preview.before.settings.vadOptions, preview.after.settings.vadOptions)) fail();
+  const hasVad = entry.engine === "whisper.cpp" && entry.modelFiles?.some(f => f.role === "vad");
   for (const change of applicationChanges(preview)) {
-    if (!change.file && change.before !== change.after && !(change.key === "threads" && diarizationThreads !== undefined)) fail();
-    if (diarizationThreads !== undefined && change.file && JSON.stringify(change.before) !== JSON.stringify(change.after)) fail();
+    if (!change.file && JSON.stringify(change.before) !== JSON.stringify(change.after) && !(change.key === "vadOptions" && hasVad && (whisperVadOptions !== undefined || change.before === undefined && sameVadOptions(checkedVadOptions(change.after), { enabled: true, thresholdMilli: 600, minSpeechDurationMs: 300, minSilenceDurationMs: 100, maxSpeechDurationS: 30, speechPadMs: 30, samplesOverlapMs: 100 }))) && !(change.key === "threads" && diarizationThreads !== undefined) && !(change.key === "clusterThresholdMilli" && diarizationClusterThresholdMilli !== undefined)) fail();
+    if (tuning && change.file && JSON.stringify(change.before) !== JSON.stringify(change.after)) fail();
     if (change.file) for (const path of Array.isArray(change.after) ? change.after : change.after === null ? [] : [change.after]) {
       if (typeof path !== "string" || path.length > 4096 || path.includes("\0") || !(/^\//.test(path) || /^[a-z]:[\\/]/i.test(path) || /^\\\\/.test(path))) fail();
     }
@@ -112,5 +128,5 @@ export function assertAppliedPreferences(value: { lockVersion: number; payload: 
   const changed = applicationChanges(preview).some(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
   if (!version(value?.lockVersion) || value.lockVersion < preview.expectedPreferencesVersion + Number(changed) || !actual || typeof actual !== "object"
     || Object.keys(actual).length !== Object.keys(expected).length
-    || Object.entries(expected).some(([k, v]) => JSON.stringify(v) !== JSON.stringify((actual as Record<string, unknown>)[k]))) fail();
+    || Object.entries(expected).some(([k, v]) => k === "vadOptions" ? !sameOptionalVad(v, (actual as Record<string, unknown>)[k]) : JSON.stringify(v) !== JSON.stringify((actual as Record<string, unknown>)[k]))) fail();
 }

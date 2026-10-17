@@ -176,6 +176,15 @@ impl<'a> Metrics<'a> {
                     .filter(|v| v.is_finite() && *v >= 0.0);
             }
         }
+        // Cached model initialization timings are not another model load.
+        if log
+            .lines()
+            .any(|line| line.starts_with("mon_session:") && line.ends_with("reusing model"))
+            && !log.contains("mon_model_load: llama=1")
+        {
+            load_ms = Some(0.0);
+            engine_initialization_ms = None;
+        }
         let metal = metal_evidence(log);
         Self {
             schema_version: 1,
@@ -205,6 +214,44 @@ impl<'a> Metrics<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resident_reuse_is_not_reported_as_a_second_model_load() {
+        let proof = crate::local_engine::Fingerprint {
+            path: "/fixed/model".into(),
+            size: 1,
+            sha256: "a".repeat(64),
+        };
+        let config = LlamaConfig {
+            executable: proof.clone(),
+            model: proof,
+            threads: 1,
+            context_tokens: 2048,
+            prediction_tokens: 64,
+            gpu_layers: 0,
+            seed: 42,
+        };
+        let measured = |log: &str| {
+            Metrics::new(
+                &config,
+                log,
+                0,
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                None,
+                Duration::ZERO,
+            )
+            .native_load_ms
+        };
+        assert_eq!(
+            measured("mon_model_load: llama=1\nload time = 123.0 ms"),
+            Some(123.0)
+        );
+        assert_eq!(
+            measured("mon_session: pid=1 request=2 reusing model\nload time = 123.0 ms"),
+            Some(0.0)
+        );
+    }
     #[test]
     fn parses_only_real_measurements_and_positive_offload() {
         let v = evaluation("llama_perf_context_print: prompt eval time = 738120.00 ms / 14850 tokens (49.70 ms per token, 20.12 tokens per second)").unwrap();

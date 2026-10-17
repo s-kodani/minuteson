@@ -299,6 +299,7 @@ pub(in crate::storage) fn fixture(
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     };
     let rows="0.000 -- 4.000 speaker_00\n2.000 -- 3.000 speaker_01\n5.000 -- 6.000 speaker_01\n7.000 -- 8.000 speaker_00\n";
     let auto = format!("{}\nStarted\n{rows}", config.expected_header(None));
@@ -1202,6 +1203,7 @@ fn real_sherpa_worker_commits_checked_tracks_and_a_candidate_without_replacing_e
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     }
     .enqueue(&s)
     .unwrap();

@@ -24,6 +24,7 @@ fn config(directory: &Path) -> SherpaConfig {
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     }
 }
 
@@ -557,6 +558,7 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
         window_shift_milli: 100,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     };
     let input = proof("MON_SHERPA_INPUT_CAF");
     let verified =
@@ -601,5 +603,86 @@ fn real_sherpa_diarizes_converted_caf_without_disclosing_meeting_text() {
         let timeline = crate::diarization::timeline::Timeline::build(&result, duration).unwrap();
         assert!(!timeline.intervals.is_empty());
         eprintln!("real sherpa native integration: {num_speakers:?}, {} segments, {} ms; CLI SHA {}, segmentation SHA {}, embedding SHA {}, runtime SHAs {:?}", result.len(), started.elapsed().as_millis(), config.executable.sha256, config.segmentation_model.sha256, config.embedding_model.sha256, config.runtime_libraries.iter().map(|p| &p.sha256).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_progress_streams_before_exit_without_completing_or_checkpointing_inference() {
+    use std::cell::RefCell;
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = config(directory.path());
+    let bytes = output(&config, None, "0.000 -- 0.500 speaker_00\n");
+    executable(&mut config, &format!(
+        "printf 'progress 25.00%%\\n' >&2\n/bin/sleep 0.4\nprintf 'progress 12.50%%\\rprogress 75.' >&2\n/bin/sleep 0.2\nprintf '00%%\\r\\nprogress 100.00%%\\n' >&2\nprintf '%s' {}\ntouch finished",
+        shell_quote(std::str::from_utf8(&bytes).unwrap())
+    ));
+    let unit = directory.path().join("unit");
+    std::fs::create_dir(&unit).unwrap();
+    wav(&unit);
+    let seen = RefCell::new(Vec::new());
+    let result = run_track_observed(
+        &config,
+        None,
+        &unit,
+        1_000_000,
+        Duration::from_secs(3),
+        &|| false,
+        &|value| {
+            if value == 2500 {
+                assert!(!unit.join("finished").exists());
+            }
+            seen.borrow_mut().push(value);
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(result.len(), 1);
+    let values = seen.borrow();
+    assert_eq!(values.first(), Some(&0));
+    assert!(values.contains(&2500));
+    assert_eq!(values.last(), Some(&10000));
+    assert!(values.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(std::fs::read_to_string(unit.join("stderr.log"))
+        .unwrap()
+        .contains("progress 25.00%"));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_progress_100_cannot_authorize_failed_output_and_can_still_be_cancelled() {
+    use std::cell::Cell;
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = config(directory.path());
+        executable(
+            &mut config,
+            "printf 'progress 100.00%%\\n' >&2\n/bin/sleep 0.3\nexit 42",
+        );
+        let unit = directory.path().join("unit");
+        std::fs::create_dir(&unit).unwrap();
+        wav(&unit);
+        let stop = Cell::new(false);
+        let seen = Cell::new(false);
+        let result = run_track_observed(
+            &config,
+            None,
+            &unit,
+            1_000_000,
+            Duration::from_secs(3),
+            &|| stop.get(),
+            &|value| {
+                if value == 10000 {
+                    seen.set(true);
+                    stop.set(cancel);
+                }
+            },
+        );
+        assert!(seen.get());
+        if cancel {
+            assert!(result.unwrap().is_none());
+        } else {
+            assert!(result.is_err());
+        }
     }
 }

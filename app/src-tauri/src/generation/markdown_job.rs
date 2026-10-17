@@ -12,6 +12,8 @@ pub(super) mod restore;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     schema_version: u32,
     #[serde(default, skip_serializing_if = "markdown::PromptVersion::is_legacy")]
     prompt_version: markdown::PromptVersion,
@@ -379,6 +381,12 @@ fn enqueue_with_selection(
             prompt_version,
         )
     };
+    let new_runtime = crate::local_engine::resident::prepare_job(
+        storage,
+        &request.meeting_id,
+        &request.operation_id,
+        "llama",
+    )?;
     storage.enqueue_markdown_minutes_job_with_prompts(request, profile, target, |input, db, saved| {
         let prompt_snapshot = if prompt_version == markdown::PromptVersion::CustomPromptsV5 {
             Some(if let Some(saved) = saved {
@@ -398,6 +406,11 @@ fn enqueue_with_selection(
         let plan = plan::build_with_system(input, limit, prompt_version, extract_system)?;
         let total = plan.nodes.len() as i64;
         let mut parameters = serde_json::json!({"schemaVersion":7,"promptVersion":prompt_version,"engine":engine,"capacity":capacity,"promptBudget":prompt_budget,"plan":plan});
+        let resident_runtime = match saved {
+            Some(saved) => saved.get("residentRuntime").cloned(),
+            None => new_runtime.as_ref().map(serde_json::to_value).transpose().map_err(|e| e.to_string())?,
+        };
+        if let Some(runtime) = resident_runtime { parameters["residentRuntime"] = runtime; }
         if let Some(snapshot) = prompt_snapshot { parameters["promptSnapshot"] = serde_json::to_value(snapshot).map_err(|e| e.to_string())?; }
         if let Some(policy) = acceleration_policy { parameters["accelerationPolicy"] = serde_json::to_value(policy).map_err(|e| e.to_string())?; }
         Ok((parameters, Some(total)))
@@ -421,6 +434,10 @@ fn checked_fixed_parameters(
     let envelope: Envelope =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
     let p = envelope.generation;
+    if let Some(runtime) = &p.resident_runtime {
+        runtime.accepts("llama")?;
+    }
+
     p.engine.validate()?;
     validate_capacity(&p)?;
     p.markdown_target.validate()?;
@@ -850,6 +867,8 @@ pub(crate) fn process_observed(
     let (spec, value) = storage.fixed_job_input(job_id)?;
     let input = storage.load_minutes_input(job_id)?;
     let p = checked_parameters(storage, job_id, &spec, &input)?;
+    let _resident =
+        crate::local_engine::resident::Scope::enter(storage.root(), p.resident_runtime.as_ref())?;
     let mut checkpoint = checked_checkpoint(&storage.get_job(job_id)?, &p, value)?;
     let cancelled = || {
         stopping()

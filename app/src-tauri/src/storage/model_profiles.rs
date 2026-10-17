@@ -281,6 +281,12 @@ pub(crate) struct ApplyPreview {
     pub after: Settings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diarization_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diarization_cluster_threshold_milli: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diarization_speech_sensitivity_milli: Option<i32>,
     pub review_digest: String,
 }
 fn heads(db: &Connection) -> Result<(Heads, i64), String> {
@@ -505,6 +511,9 @@ fn preview(
     models_root: &Path,
     check: &str,
     diarization_threads: Option<u32>,
+    diarization_cluster_threshold_milli: Option<u32>,
+    whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
+    diarization_speech_sensitivity_milli: Option<i32>,
 ) -> Result<ApplyPreview, String> {
     let (before, version) = settings(db, name, record.manifest.engine)?;
     let mut binding = Binding {
@@ -515,13 +524,46 @@ fn preview(
         models_root: models_root.into(),
         settings: before.configured(record, models_root)?,
     };
-    if let Some(threads) = diarization_threads {
-        if !(1..=64).contains(&threads) || before != binding.settings {
-            return Err("使用中の話者モデルのCPU使用量だけを変更できます".into());
+    let tuning = diarization_threads.is_some() || diarization_cluster_threshold_milli.is_some() || diarization_speech_sensitivity_milli.is_some();
+    if tuning {
+        if diarization_threads.is_some_and(|n| !(1..=64).contains(&n))
+            || diarization_cluster_threshold_milli.is_some_and(|n| n > 2000)
+            || diarization_speech_sensitivity_milli.is_some_and(|n| !crate::diarization::sensitivity::valid(n))
+            || before != binding.settings
+        {
+            return Err("使用中の話者モデルのCPU使用量・自動統合の強さを確認してください".into());
         }
         match &mut binding.settings {
-            Settings::Sherpa(settings) => settings.threads = threads,
-            _ => return Err("CPU使用量の変更対象は話者分離モデルだけです".into()),
+            Settings::Sherpa(settings) => {
+                if let Some(sensitivity) = diarization_speech_sensitivity_milli { settings.speech_sensitivity_milli = sensitivity; }
+                if let Some(threads) = diarization_threads {
+                    settings.threads = threads;
+                }
+                if let Some(threshold) = diarization_cluster_threshold_milli {
+                    settings.cluster_threshold_milli = threshold;
+                }
+            }
+            _ => return Err("処理設定の変更対象は話者分離モデルだけです".into()),
+        }
+    }
+    if let Some(options) = whisper_vad_options {
+        options.validate()?;
+        if tuning || !record.files.iter().any(|f| f.role == Role::Vad) {
+            return Err("VADを設定する文字起こしモデルを確認してください".into());
+        }
+        match &mut binding.settings {
+            Settings::Whisper(settings) => {
+                if before.configured(record, models_root)? != before { return Err("使用中の文字起こしモデルを確認してください".into()); }
+                settings.vad_options = Some(options);
+            },
+            _ => return Err("VAD設定は文字起こしモデルだけに適用できます".into()),
+        }
+    } else if let Settings::Whisper(settings) = &mut binding.settings {
+        // New official VAD packages default on; historical arbitrary packages
+        // remain byte-for-byte compatible when simply read or reapplied.
+        if settings.vad_options.is_none() && record.files.iter().any(|f| f.role == Role::Vad
+            && f.relative_path == "models/ggml-silero-v6.2.0.bin") {
+            settings.vad_options = Some(Default::default());
         }
     }
     if binding.validate(db)? != *record {
@@ -535,7 +577,7 @@ fn preview(
     let (heads, _) = heads(db)?;
     let head = heads.get(name);
     let stored = head.map(|h| load_profile(db, name, h)).transpose()?;
-    if diarization_threads.is_some()
+    if (tuning || whisper_vad_options.is_some())
         && !stored.as_ref().is_some_and(|profile| {
             profile.bindings.iter().any(|b| {
                 b.package_id == record.package_id
@@ -544,7 +586,7 @@ fn preview(
             })
         })
     {
-        return Err("使用中の話者モデル構成を再確認してください".into());
+        return Err("使用中のモデル構成を再確認してください".into());
     }
     let mut preview = ApplyPreview {
         schema_version: 1,
@@ -559,6 +601,9 @@ fn preview(
         before,
         after: binding.settings,
         diarization_threads,
+        diarization_cluster_threshold_milli,
+        whisper_vad_options,
+        diarization_speech_sensitivity_milli,
         review_digest: String::new(),
     };
     preview.review_digest = digest(&preview)?;
@@ -639,13 +684,30 @@ impl Storage {
             })
             .collect()
     }
-    pub(crate) fn preview_model_profile_with_threads(
+    pub(crate) fn preview_model_profile_with_tuning(
         &self,
         name: ProfileName,
         record: &PlacementRecord,
         directory: &Path,
         check: &str,
         diarization_threads: Option<u32>,
+        diarization_cluster_threshold_milli: Option<u32>,
+    ) -> Result<ApplyPreview, String> {
+        self.preview_model_profile_with_vad(name, record, directory, check, diarization_threads,
+            diarization_cluster_threshold_milli, None)
+    }
+    pub(crate) fn preview_model_profile_with_vad(
+        &self, name: ProfileName, record: &PlacementRecord, directory: &Path, check: &str,
+        diarization_threads: Option<u32>, diarization_cluster_threshold_milli: Option<u32>,
+        whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
+    ) -> Result<ApplyPreview, String> {
+        self.preview_model_profile_with_sensitivity(name, record, directory, check, diarization_threads, diarization_cluster_threshold_milli, whisper_vad_options, None)
+    }
+    pub(crate) fn preview_model_profile_with_sensitivity(
+        &self, name: ProfileName, record: &PlacementRecord, directory: &Path, check: &str,
+        diarization_threads: Option<u32>, diarization_cluster_threshold_milli: Option<u32>,
+        whisper_vad_options: Option<crate::transcription::vad::VadOptions>,
+        diarization_speech_sensitivity_milli: Option<i32>,
     ) -> Result<ApplyPreview, String> {
         let root = directory.parent().ok_or("モデル管理領域がありません")?;
         if directory.file_name().and_then(|p| p.to_str()) != Some(&record.package_id) {
@@ -655,7 +717,17 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        preview(&db, name, record, root, check, diarization_threads)
+        preview(
+            &db,
+            name,
+            record,
+            root,
+            check,
+            diarization_threads,
+            diarization_cluster_threshold_milli,
+            whisper_vad_options,
+            diarization_speech_sensitivity_milli,
+        )
     }
     pub(crate) fn apply_model_profile(
         &self,
@@ -730,6 +802,9 @@ impl Storage {
                 root,
                 &expected.check_operation_id,
                 expected.diarization_threads,
+                expected.diarization_cluster_threshold_milli,
+                expected.whisper_vad_options,
+                expected.diarization_speech_sensitivity_milli,
             )? != *expected
         {
             return Err("確認後にモデル構成・解析設定が変わりました。再確認してください".into());

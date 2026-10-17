@@ -1,9 +1,17 @@
 //! Local whisper.cpp execution. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
+mod guard;
 mod restore;
+pub(crate) mod vad;
 pub(crate) mod wave;
 pub(crate) mod whisper;
 pub(crate) use restore::restore_saved_results;
+pub(crate) const QUALITY_FAILURE_PREFIX: &str = "文字起こしの反復検査: ";
+
+#[cfg(test)]
+pub(crate) fn reference_is_repetitive(segments: &[whisper::Segment]) -> bool {
+    !guard::reasons(segments, None).is_empty()
+}
 
 use crate::storage::model_profiles::jobs::{self as managed, Execution};
 use crate::storage::KnownInput;
@@ -11,7 +19,6 @@ use crate::storage::{
     AnalysisInput, JobKind, JobSnapshot, JobSpec, RecordedAudioPlan, Storage, UtteranceInput,
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use whisper::WhisperConfig;
 
 fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
@@ -90,6 +97,8 @@ pub(crate) struct StartRequest {
     pub executable_path: std::path::PathBuf,
     pub model_path: std::path::PathBuf,
     pub vad_model_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub vad_options: Option<vad::VadOptions>,
     pub threads: u32,
     pub use_gpu: bool,
     pub profile: String,
@@ -116,6 +125,7 @@ impl StartRequest {
                     whisper::Fingerprint::capture(&path, &crate::test_support::never_cancelled)
                 })
                 .transpose()?,
+            vad_options: self.vad_options,
             threads: self.threads,
             use_gpu: self.use_gpu,
             prompt: self.prompt,
@@ -193,18 +203,13 @@ pub(crate) fn retry_preflight(
     verify_sources(storage, spec, &parameters, cancelled)?;
     for output in &decoded.outputs {
         verify_saved_pcm(storage, spec, &parameters, output, cancelled)?;
-        let bytes = storage.read_analysis_result(
-            &spec.meeting_id,
-            &output.json_asset_id,
-            &output.json_hash,
-        )?;
         let unit = parameters
             .units
             .get(output.index)
             .ok_or("再試行区間が範囲外です")?;
         let rate = parameters.source.tracks[unit.track_index].sample_rate;
         let duration = ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
-        whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
+        saved_output(storage, spec, &parameters, output, duration)?;
     }
     if cancelled() {
         return Err("文字起こし再試行の照合を中断しました".into());
@@ -253,6 +258,7 @@ fn verify_saved_pcm(
 #[serde(rename_all = "camelCase")]
 enum RecognitionPolicy {
     SuppressNonSpeechV1,
+    GuardedVocabularyV2,
 }
 
 // Frozen for new jobs only. `use_gpu` requests the engine's GPU backend; when
@@ -274,6 +280,8 @@ impl AccelerationPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Parameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resident_runtime: Option<crate::local_engine::resident::Snapshot>,
     schema_version: u32,
     source: RecordedAudioPlan,
     engine: WhisperConfig,
@@ -314,6 +322,99 @@ struct UnitOutput {
     wav_hash: String,
     json_asset_id: String,
     json_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recognition: Option<RecognitionAudit>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RecognitionAudit {
+    mode: RecognitionMode,
+    reasons: Vec<guard::Reason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rejected: Option<ResultReference>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum RecognitionMode {
+    Hinted,
+    Unhinted,
+    Fallback,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ResultReference {
+    json_asset_id: String,
+    json_hash: String,
+}
+
+fn checked_output(
+    parameters: &Parameters,
+    output: &UnitOutput,
+    bytes: &[u8],
+    rejected: Option<&[u8]>,
+    duration: i64,
+) -> Result<Vec<whisper::Segment>, String> {
+    let segments = whisper::parse_output(bytes, &parameters.engine.model.path, duration)?;
+    if parameters.recognition_policy != Some(RecognitionPolicy::GuardedVocabularyV2) {
+        if output.recognition.is_some() {
+            return Err("旧認識方式に新しい採用記録があります".into());
+        }
+        return Ok(segments);
+    }
+    let audit = output
+        .recognition
+        .as_ref()
+        .ok_or("認識結果の採用記録がありません")?;
+    let hinted = !parameters.engine.prompt.is_empty();
+    let problems = if audit.mode == RecognitionMode::Hinted {
+        guard::hinted_reasons(&segments, parameters.vocabulary.as_ref())
+    } else {
+        guard::reasons(&segments, None)
+    };
+    if !problems.is_empty() {
+        return Err("保存した認識結果に混入・反復があります".into());
+    }
+    match audit.mode {
+        RecognitionMode::Fallback if hinted => {
+            let original = whisper::parse_output(
+                rejected.ok_or("初回認識の成果物がありません")?,
+                &parameters.engine.model.path,
+                duration,
+            )?;
+            let reasons = guard::hinted_reasons(&original, parameters.vocabulary.as_ref());
+            if reasons.is_empty() || reasons != audit.reasons || audit.rejected.is_none() {
+                return Err("再認識の理由と初回成果物が一致しません".into());
+            }
+        }
+        RecognitionMode::Hinted | RecognitionMode::Unhinted
+            if (audit.mode == RecognitionMode::Hinted) == hinted
+                && audit.reasons.is_empty()
+                && audit.rejected.is_none()
+                && rejected.is_none() => {}
+        _ => return Err("認識結果の採用モードが固定条件と一致しません".into()),
+    }
+    Ok(segments)
+}
+
+fn saved_output(
+    storage: &Storage,
+    spec: &JobSpec,
+    p: &Parameters,
+    output: &UnitOutput,
+    duration: i64,
+) -> Result<Vec<whisper::Segment>, String> {
+    let bytes =
+        storage.read_analysis_result(&spec.meeting_id, &output.json_asset_id, &output.json_hash)?;
+    let rejected = output
+        .recognition
+        .as_ref()
+        .and_then(|a| a.rejected.as_ref())
+        .map(|r| storage.read_analysis_result(&spec.meeting_id, &r.json_asset_id, &r.json_hash))
+        .transpose()?;
+    checked_output(p, output, &bytes, rejected.as_deref(), duration)
 }
 
 pub(crate) fn restore_checkpoint_references(
@@ -337,6 +438,17 @@ pub(crate) fn restore_checkpoint_references(
             &output.json_asset_id,
             &output.json_hash,
         )?;
+        if let Some(rejected) = output
+            .recognition
+            .as_mut()
+            .and_then(|a| a.rejected.as_mut())
+        {
+            (rejected.json_asset_id, rejected.json_hash) = map(
+                Role::TranscriptionResult,
+                &rejected.json_asset_id,
+                &rejected.json_hash,
+            )?;
+        }
     }
     serde_json::to_value(checkpoint).map_err(|e| e.to_string())
 }
@@ -357,6 +469,9 @@ fn decode_parameters(
 ) -> Result<Parameters, String> {
     let parameters: Parameters =
         serde_json::from_value(spec.parameters.clone()).map_err(|e| e.to_string())?;
+    if let Some(runtime) = &parameters.resident_runtime {
+        runtime.accepts("whisper")?;
+    }
     if spec.kind != JobKind::Transcription
         || !matches!(parameters.schema_version, 1 | 2 | 3)
         || (parameters.schema_version == 3) != parameters.known_input.is_some()
@@ -372,6 +487,14 @@ fn decode_parameters(
             verify(snapshot)?;
         }
         _ => return Err("固定用語とエンジンへのヒントが一致しません".into()),
+    }
+    if parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2)
+        && parameters
+            .vocabulary
+            .as_ref()
+            .is_none_or(|v| v.method != "whisper-vocabulary-v2")
+    {
+        return Err("新しい認識ポリシーと用語方式が一致しません".into());
     }
     managed::validate(
         &spec.profile_snapshot,
@@ -494,10 +617,12 @@ pub(crate) fn enqueue_with_stamp(
     storage.verify_meeting_asset(meeting_id, &source.manifest_asset_id, &source.manifest_hash)?;
     let units = planned_units(&source, known_input.as_ref())?;
     let total = units.len() as i64;
+    let resident_runtime =
+        crate::local_engine::resident::prepare_job(storage, meeting_id, operation_id, "whisper")?;
     let extra = engine.prompt.clone();
     storage.enqueue_with_vocabulary(meeting_id,operation_id,&extra,expected,move |snapshot| {
         engine.prompt=snapshot.actual_prompt.clone();
-        let parameters=Parameters{schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::SuppressNonSpeechV1),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
+        let parameters=Parameters{resident_runtime,schema_version:if known_input.is_some(){3}else{2},source,engine,units,vocabulary:Some(snapshot),known_input,recognition_policy:Some(RecognitionPolicy::GuardedVocabularyV2),acceleration_policy:cfg!(target_os = "macos").then_some(AccelerationPolicy::AutoMetalV1)};
         Ok(JobSpec { meeting_id: meeting_id.into(), kind: JobKind::Transcription, operation_id: operation_id.into(), input_analysis_id: None, input_hash: parameters.source.manifest_hash.clone(), profile_snapshot: managed::attach(serde_json::json!({"profile":profile,"engine":"whisper.cpp","modelSha256":parameters.engine.model.sha256,"qualityStatus":"unverified"}), selected)?, parameters: serde_json::to_value(parameters).map_err(|e| e.to_string())?, total_units: Some(total) })
     })
 }
@@ -512,6 +637,10 @@ pub(crate) fn process(
 ) -> Result<Option<String>, String> {
     let (spec, checkpoint) = storage.fixed_job_input(job_id)?;
     let parameters = checked_parameters(storage, &spec, job_id)?;
+    let _resident = crate::local_engine::resident::Scope::enter(
+        storage.root(),
+        parameters.resident_runtime.as_ref(),
+    )?;
     let job = storage.get_job(job_id)?;
     let mut checkpoint = checked_checkpoint(&job, checkpoint)?;
     let cancelled = || {
@@ -542,11 +671,6 @@ pub(crate) fn process(
                 return Err("再開情報の区間順が不正です".into());
             }
             verify_saved_pcm(storage, &spec, &parameters, output, &cancelled)?;
-            let bytes = storage.read_analysis_result(
-                &spec.meeting_id,
-                &output.json_asset_id,
-                &output.json_hash,
-            )?;
             let unit = parameters
                 .units
                 .get(index)
@@ -554,7 +678,7 @@ pub(crate) fn process(
             let rate = parameters.source.tracks[unit.track_index].sample_rate;
             let duration =
                 ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
-            whisper::parse_output(&bytes, &parameters.engine.model.path, duration)?;
+            saved_output(storage, &spec, &parameters, output, duration)?;
         }
         verify_sources(storage, &spec, &parameters, &cancelled)?;
         // At most one prepared run, not all gap-separated runs in memory.
@@ -590,18 +714,18 @@ pub(crate) fn process(
                 Execution::Whisper(&parameters.engine),
                 &cancelled,
             )?;
-            if whisper::run_unit_with_suppression(
+            let Some(outcome) = guard::run(
                 &runtime,
                 &directory,
                 duration,
-                Duration::from_secs(1800),
                 parameters.recognition_policy.is_some(),
+                parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2),
+                parameters.vocabulary.as_ref(),
                 &cancelled,
             )?
-            .is_none()
-            {
+            else {
                 return Ok(None);
-            }
+            };
             if cancelled() {
                 return Ok(None);
             }
@@ -615,33 +739,56 @@ pub(crate) fn process(
                 &directory.join("input.wav"),
                 "audio/wav",
             )?;
-            let mut result_path = directory.join("result.json");
-            if runtime.model.path != parameters.engine.model.path {
-                let bytes = crate::restored_processing::read_local(
+            let register_result = |path: &std::path::Path| -> Result<_, String> {
+                let mut result_path = path.to_owned();
+                if runtime.model.path != parameters.engine.model.path {
+                    let bytes =
+                        crate::restored_processing::read_local(path, 8 * 1024 * 1024, &cancelled)?;
+                    let normalized = whisper::logical_output(
+                        &bytes,
+                        &runtime.model.path,
+                        &parameters.engine.model.path,
+                        duration,
+                    )?;
+                    result_path = path.with_file_name("logical-result.json");
+                    crate::restored_processing::write_new(&result_path, &normalized)?;
+                }
+                storage.register_analysis_artifact(
+                    &spec.meeting_id,
                     &result_path,
-                    8 * 1024 * 1024,
-                    &cancelled,
-                )?;
-                let normalized = whisper::logical_output(
-                    &bytes,
-                    &runtime.model.path,
-                    &parameters.engine.model.path,
-                    duration,
-                )?;
-                result_path = directory.join("logical-result.json");
-                crate::restored_processing::write_new(&result_path, &normalized)?;
-            }
-            let json = storage.register_analysis_artifact(
-                &spec.meeting_id,
-                &result_path,
-                "application/json",
-            )?;
+                    "application/json",
+                )
+            };
+            let json = register_result(&outcome.selected)?;
+            let rejected = outcome
+                .rejected
+                .as_deref()
+                .map(register_result)
+                .transpose()?
+                .map(|r| ResultReference {
+                    json_asset_id: r.id,
+                    json_hash: r.content_hash,
+                });
+            let recognition = (parameters.recognition_policy
+                == Some(RecognitionPolicy::GuardedVocabularyV2))
+            .then(|| RecognitionAudit {
+                mode: if rejected.is_some() {
+                    RecognitionMode::Fallback
+                } else if runtime.prompt.is_empty() {
+                    RecognitionMode::Unhinted
+                } else {
+                    RecognitionMode::Hinted
+                },
+                reasons: outcome.reasons,
+                rejected,
+            });
             checkpoint.outputs.push(UnitOutput {
                 index,
                 wav_asset_id: wav.id,
                 wav_hash: wav.content_hash,
                 json_asset_id: json.id,
                 json_hash: json.content_hash,
+                recognition,
             });
             let saved = storage.save_job_checkpoint(
                 job_id,
@@ -685,12 +832,7 @@ pub(crate) fn process(
             let known_end = run.map_or(track.end_us, |run| run.end_us);
             let duration = ((unit.window_end - unit.window_first) * 1_000_000
                 / u64::from(track.sample_rate)) as i64;
-            let bytes = storage.read_analysis_result(
-                &spec.meeting_id,
-                &output.json_asset_id,
-                &output.json_hash,
-            )?;
-            for segment in whisper::parse_output(&bytes, &parameters.engine.model.path, duration)? {
+            for segment in saved_output(storage, &spec, &parameters, output, duration)? {
                 let window_start = unit.window_first * 1_000_000 / u64::from(track.sample_rate);
                 let midpoint = (segment.start_us as u64 + segment.end_us as u64) / 2 + window_start;
                 let core_first = unit.core_first * 1_000_000 / u64::from(track.sample_rate);
@@ -722,6 +864,9 @@ pub(crate) fn process(
         if let Some(policy) = parameters.recognition_policy {
             config["recognitionPolicy"] =
                 serde_json::to_value(policy).map_err(|e| e.to_string())?;
+        }
+        if parameters.recognition_policy == Some(RecognitionPolicy::GuardedVocabularyV2) {
+            config["recognitionAudit"] = serde_json::json!(checkpoint.outputs.iter().map(|o| serde_json::json!({"index":o.index,"mode":o.recognition.as_ref().map(|a|a.mode),"reasons":o.recognition.as_ref().map(|a|&a.reasons)})).collect::<Vec<_>>());
         }
         if let Some(policy) = parameters.acceleration_policy {
             config["accelerationPolicy"] =
@@ -807,6 +952,7 @@ mod recognition_policy_tests {
                 sha256: "b".repeat(64),
             },
             vad_model: None,
+            vad_options: None,
             threads: 4,
             use_gpu: false,
             prompt: "登録用語".into(),

@@ -26,6 +26,7 @@ pub(crate) fn restore_saved_results(
     if old.profile_snapshot != new.profile_snapshot
         || before.schema_version != after.schema_version
         || before.recognition_policy != after.recognition_policy
+        || before.resident_runtime != after.resident_runtime
         || before.acceleration_policy != after.acceleration_policy
         || before.units != after.units
         || before.known_input != after.known_input
@@ -71,35 +72,55 @@ pub(crate) fn restore_saved_results(
         if old_duration != duration(&after)? {
             return Err("復元で文字起こし音声時間が変更されています".into());
         }
-        let bytes = assets.read(
-            Role::TranscriptionResult,
-            &output.json_asset_id,
-            &output.json_hash,
+        let references = std::iter::once((&output.json_asset_id, &output.json_hash)).chain(
+            output
+                .recognition
+                .as_ref()
+                .and_then(|a| a.rejected.as_ref())
+                .map(|r| (&r.json_asset_id, &r.json_hash)),
+        );
+        let mut rewritten = vec![];
+        for (id, hash) in references {
+            let bytes = assets.read(Role::TranscriptionResult, id, hash)?;
+            if bytes.len() as u64 > Role::TranscriptionResult.max_bytes() {
+                return Err("文字起こし成果物が容量上限を超えています".into());
+            }
+            let mut raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            let name = raw["params"]["model"]
+                .as_str()
+                .ok_or("文字起こし結果のモデル名がありません")?;
+            if !model_names.iter().any(|known| known == name) {
+                return Err("文字起こし結果のモデル名が固定SHAの記録と一致しません".into());
+            }
+            let recognized = whisper::parse_output(&bytes, Path::new(name), old_duration)?;
+            raw["params"]["model"] = json!(before.engine.model.path);
+            let logical_before = serde_json::to_vec(&raw).map_err(|e| e.to_string())?;
+            raw["params"]["model"] = json!(after.engine.model.path);
+            let rebuilt = serde_json::to_vec(&raw).map_err(|e| e.to_string())?;
+            if whisper::parse_output(&rebuilt, &after.engine.model.path, old_duration)?
+                != recognized
+            {
+                return Err("再構成で文字起こし結果の本文・時刻が変化しています".into());
+            }
+            rewritten.push((id, hash, logical_before, rebuilt));
+        }
+        checked_output(
+            &before,
+            &output,
+            &rewritten[0].2,
+            rewritten.get(1).map(|v| v.2.as_slice()),
+            old_duration,
         )?;
-        if bytes.len() as u64 > Role::TranscriptionResult.max_bytes() {
-            return Err("文字起こし成果物が容量上限を超えています".into());
-        }
-        let mut raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        let name = raw["params"]["model"]
-            .as_str()
-            .ok_or("文字起こし結果のモデル名がありません")?;
-        if !model_names.iter().any(|known| known == name) {
-            return Err("文字起こし結果のモデル名が固定SHAの記録と一致しません".into());
-        }
-        let recognized = whisper::parse_output(&bytes, Path::new(name), old_duration)?;
-        // Only machine-generated model metadata changes. Keep recognized text,
-        // offsets and all other native metadata, including unknown fields.
-        raw["params"]["model"] = json!(after.engine.model.path);
-        let rebuilt = serde_json::to_vec(&raw).map_err(|e| e.to_string())?;
-        if whisper::parse_output(&rebuilt, &after.engine.model.path, old_duration)? != recognized {
-            return Err("再構成で文字起こし結果の本文・時刻が変化しています".into());
-        }
-        assets.write(
-            Role::TranscriptionResult,
-            &output.json_asset_id,
-            &output.json_hash,
-            &rebuilt,
+        checked_output(
+            &after,
+            &output,
+            &rewritten[0].3,
+            rewritten.get(1).map(|v| v.3.as_slice()),
+            old_duration,
         )?;
+        for (id, hash, _, rebuilt) in rewritten {
+            assets.write(Role::TranscriptionResult, id, hash, &rebuilt)?;
+        }
     }
     if cancelled() {
         return Err("文字起こし成果物の復元が中断されました".into());

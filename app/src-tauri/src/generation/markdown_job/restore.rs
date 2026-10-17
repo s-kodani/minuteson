@@ -118,6 +118,7 @@ pub(in crate::generation) fn checkpoint(
         }
     }
     if old_p.engine != engine
+        || old_p.resident_runtime != new_p.resident_runtime
         || old_p.schema_version != new_p.schema_version
         || old_p.prompt_version != new_p.prompt_version
         || old_p.prompt_snapshot != new_p.prompt_snapshot

@@ -169,10 +169,10 @@ impl Bundle {
             serde_json::from_str(include_str!("../../model-catalog/whisper-variants.json"))
                 .map_err(|_| "文字起こしモデルの候補情報が不正です")?;
         let names: Vec<_> = variants.iter().map(|v| v.name.as_str()).collect();
-        if names != ["tiny", "base", "small", "medium"]
+        if names != ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
             || variants.iter().any(|v| {
                 v.bytes == 0
-                    || v.bytes > 2 * 1024 * 1024 * 1024
+                    || v.bytes > 4 * 1024 * 1024 * 1024
                     || !crate::model_download_ipc::hash(&v.sha256)
             })
         {
@@ -220,13 +220,17 @@ impl Bundle {
                 }),
             });
         }
+        let vad: Network = serde_json::from_str(include_str!("../../model-catalog/whisper-vad-network.json"))
+            .map_err(|_| "VADの固定配布情報が不正です")?;
+        network.files.extend(vad.files);
+        network.sources.extend(vad.sources);
         files.extend(network.files);
         sources.extend(network.sources);
         let recipe = Recipe { schema_version: 3, manifest: PackageManifest {
             schema_version: 1, engine: Engine::Whisper, engine_version: "v1.9.4".into(),
             model_name: format!("Whisper {name}（多言語）"), model_version: "5359861c739e955e79d9a303bcbc70fb988958b1".into(),
             quantization: None, target: Target::MacosAarch64,
-            license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt; model card: notices/whisper-model-card.md; app-built CPU/Metal provenance: build-info.json".into(),
+            license_ref: "MIT: notices/whisper-MIT.txt, notices/openai-whisper-MIT.txt, notices/silero-vad-MIT.txt; VAD card: notices/silero-vad-model-card.md; model card: notices/whisper-model-card.md; app-built CPU/Metal provenance: build-info.json".into(),
             files,
         }, sources };
         recipe.review()?;

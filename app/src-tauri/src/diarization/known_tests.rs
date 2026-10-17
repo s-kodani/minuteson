@@ -112,6 +112,7 @@ fn worker_fixture_rows(
         window_shift_milli: 500,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     };
     let header = r#"for arg do
 case "$arg" in
@@ -414,8 +415,10 @@ fn fixture() -> (tempfile::TempDir, Storage, String, Parameters, JobSpec) {
         window_shift_milli: 500,
         min_duration_on_ms: 0,
         min_duration_off_ms: 0,
+        speech_sensitivity_milli: 0,
     };
     let parameters = Parameters {
+        resident_runtime: None,
         tracks: vec![TrackSettings {
             track_id: source.tracks[0].id.clone(),
             num_speakers: None,

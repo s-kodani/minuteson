@@ -129,6 +129,7 @@ pub(crate) fn engine(storage: &Storage) -> Result<SherpaConfig, String> {
         window_shift_milli: e.window_shift_milli,
         min_duration_on_ms: e.min_duration_on_ms,
         min_duration_off_ms: e.min_duration_off_ms,
+        speech_sensitivity_milli: e.speech_sensitivity_milli,
     };
     engine.validate_settings(None)?;
     Ok(engine)

@@ -10,6 +10,8 @@ import "../src/style.css";
 import "../src/prototype-alignment.css";
 import officialChoices from "../model-catalog/macos.json";
 import whisperNetwork from "../model-catalog/whisper-small-network.json";
+import vadNetwork from "../model-catalog/whisper-vad-network.json";
+import { defaultVadOptions } from "../src/vad-state";
 import whisperVariants from "../model-catalog/whisper-variants.json";
 // Build-specific bundle hashes cannot be a static catalog. Browser-only fake
 // runtime metadata exercises the same review shape; never actual IO/CPU proof.
@@ -19,8 +21,8 @@ const fakeRuntimeFiles = [
   { relativePath: "build-info.json", role: "notice", expectedSize: 32, expectedHash: "a".repeat(64) },
 ];
 const hybridChoice = { id: "whisper-synthetic-bundle", label: "文字起こし", description: "同梱処理の画面検証のみ・実ファイルなし", recipe: {
-  schemaVersion: 3, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files] },
-  sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources],
+  schemaVersion: 3, manifest: { schemaVersion: 1, engine: "whisper.cpp", engineVersion: "v1.9.4", modelName: "Whisper small（UI合成）", modelVersion: "5359861c739e955e79d9a303bcbc70fb988958b1", quantization: null, licenseRef: "synthetic runtime; fixed model metadata; not actual acquisition", target: "macos_aarch64", files: [...fakeRuntimeFiles, ...whisperNetwork.files, ...vadNetwork.files] },
+  sources: [...fakeRuntimeFiles.map(file => ({ relativePath: file.relativePath, url: "mon-bundled://whisper-v1.9.4/whisper-runtime.tar", archive: { format: "tar", expectedSize: 2_478_080, expectedHash: "a".repeat(64), memberPath: file.relativePath } })), ...whisperNetwork.sources, ...vadNetwork.sources],
 } };
 const hybridChoices = whisperVariants.map(variant => {
   const choice = structuredClone(hybridChoice), path = `models/ggml-${variant.name}.bin`;
@@ -66,6 +68,7 @@ export const modelDownloadIPC = async (command: string, args: any) => {
   }
   if (command === "get_model_placements") return structuredClone(f.entries);
   if (command === "get_model_profiles") return structuredClone(f.profiles);
+  if (command === "get_analysis_preferences") return { lockVersion: f.preferenceVersions["whisper.cpp"], payload: { standard: structuredClone(f.settingsByEngine["whisper.cpp"]), highAccuracy: structuredClone(f.settingsByEngine["whisper.cpp"]) } };
   if (command === "get_diarization_preferences") {
     if (f.mode === "threadReadFailure") throw Error("模擬CPU設定読込失敗");
     return { lockVersion: f.preferenceVersions["sherpa-onnx"], payload: { standard: structuredClone(f.settingsByEngine["sherpa-onnx"]), highAccuracy: structuredClone(f.settingsByEngine["sherpa-onnx"]) } };
@@ -85,8 +88,13 @@ export const modelDownloadIPC = async (command: string, args: any) => {
       after.embeddingModelPath = `/synthetic/${entry.packageId}/embedding.onnx`;
       after.runtimeLibraryPaths = [`/synthetic/${entry.packageId}/runtime.dylib`];
     } else after.modelPath = `/synthetic/${entry.packageId}/model`;
+    if (entry.engine === "whisper.cpp" && entry.modelFiles?.some((f: any) => f.role === "vad")) {
+      after.vadModelPath = `/synthetic/${entry.packageId}/vad`;
+      after.vadOptions = args.whisperVadOptions ?? before.vadOptions ?? structuredClone(defaultVadOptions);
+    }
     if (args.diarizationThreads !== undefined) after.threads = args.diarizationThreads;
-    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: f.preferenceVersions[entry.engine], before: { engine: entry.engine, settings: before }, after: { engine: entry.engine, settings: after }, ...(args.diarizationThreads === undefined ? {} : { diarizationThreads: args.diarizationThreads }), reviewDigest: "b".repeat(64) };
+    if (args.diarizationClusterThresholdMilli !== undefined) after.clusterThresholdMilli = args.diarizationClusterThresholdMilli;
+    return { schemaVersion: 1, profile: args.profile, packageId: entry.packageId, reviewHash: entry.reviewHash, checkOperationId: entry.compatibility.operationId, expectedProfileId: profile.id, expectedProfileHash: profile.id ? "c".repeat(64) : null, expectedProfileVersion: profile.profileVersion, expectedPreferencesVersion: f.preferenceVersions[entry.engine], before: { engine: entry.engine, settings: before }, ...(args.whisperVadOptions === undefined ? {} : { whisperVadOptions: args.whisperVadOptions }), after: { engine: entry.engine, settings: after }, ...(args.diarizationThreads === undefined ? {} : { diarizationThreads: args.diarizationThreads }), ...(args.diarizationClusterThresholdMilli === undefined ? {} : { diarizationClusterThresholdMilli: args.diarizationClusterThresholdMilli }), reviewDigest: "b".repeat(64) };
   }
   if (command === "apply_model_profile_application") {
     const preview = args.preview, entry = f.entries.find((item: any) => item.packageId === preview.packageId), profile = f.profiles.find((item: any) => item.name === preview.profile);

@@ -1,0 +1,12 @@
+{
+  "files": [
+    {"relativePath":"models/ggml-silero-v6.2.0.bin","role":"vad","expectedSize":885098,"expectedHash":"2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"},
+    {"relativePath":"notices/silero-vad-MIT.txt","role":"notice","expectedSize":1075,"expectedHash":"2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"},
+    {"relativePath":"notices/silero-vad-model-card.md","role":"notice","expectedSize":182,"expectedHash":"6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e"}
+  ],
+  "sources": [
+    {"relativePath":"models/ggml-silero-v6.2.0.bin","url":"https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin"},
+    {"relativePath":"notices/silero-vad-MIT.txt","url":"https://raw.githubusercontent.com/snakers4/silero-vad/caddb3b7ce1dee88a14d5621a0e9a8fdeb2c2c48/LICENSE"},
+    {"relativePath":"notices/silero-vad-model-card.md","url":"https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md"}
+  ]
+}
